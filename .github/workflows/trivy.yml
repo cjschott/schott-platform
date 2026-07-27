@@ -1,0 +1,36 @@
+# Trivy filesystem scan of the repository for HIGH and CRITICAL findings
+# (misconfigurations, vulnerabilities, and secrets in files). No image scanning
+# yet — images are scanned in a later phase. Reproduce locally with:
+#   trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+name: Trivy
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trivy-fs:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          # Fail the job on any finding at the configured severity.
+          exit-code: "1"
+          ignore-unfixed: "false"
+          # Skip local, non-source caches that are not part of the repository.
+          skip-dirs: backups,logs,models,data

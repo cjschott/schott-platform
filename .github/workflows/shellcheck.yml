@@ -1,0 +1,31 @@
+# Runs ShellCheck against every repository shell script. Warnings are NOT
+# suppressed globally; if a specific finding ever needs an exclusion, add a
+# scoped `# shellcheck disable=SCxxxx` with a justification in the script itself
+# rather than disabling checks here. Reproduce locally with:
+#   shellcheck scripts/*.sh tests/*.sh
+name: ShellCheck
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # shellcheck is preinstalled on ubuntu-latest, so this matches local use.
+      - name: Run ShellCheck on all shell scripts
+        run: |
+          shellcheck --version
+          shellcheck scripts/*.sh tests/*.sh

@@ -1,0 +1,56 @@
+# CodeQL analysis.
+#
+# IMPORTANT LIMITATION: CodeQL has no analyzer for Bash/shell. The only
+# executable code in this repository today is Bash (scripts/*.sh, tests/*.sh),
+# and CodeQL cannot scan it — declaring `languages: bash` would make every run
+# fail with "did not recognize the language 'bash'". Shell static analysis is
+# instead provided by:
+#   - shellcheck.yml (ShellCheck)
+#   - semgrep.yml    (Semgrep default security rules, includes shell rules)
+#
+# This workflow is therefore SCAFFOLDED BUT DISABLED (the analyze job is gated
+# off) until a CodeQL-supported language (e.g. Python, JavaScript/TypeScript,
+# Go) is added to the repository. To enable it then: set the matrix `language`
+# to that supported language and remove the `if: ${{ false }}` guard. Do not add
+# unnecessary language packs.
+name: CodeQL
+
+on:
+  push:
+  pull_request:
+
+# Least privilege; security-events:write is required by CodeQL to upload results
+# once the analyze job is enabled.
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: CodeQL analyze
+    runs-on: ubuntu-latest
+    # Gated off: CodeQL cannot analyze Bash/shell (see header). Enable only when
+    # a CodeQL-supported language is added, then set `language` accordingly.
+    if: ${{ false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Placeholder — replace with a CodeQL-supported language when source in
+        # such a language is added. 'bash' is NOT supported by CodeQL.
+        language: [ 'python' ]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3

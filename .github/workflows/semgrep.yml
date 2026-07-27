@@ -1,0 +1,29 @@
+# Static analysis with Semgrep using its default security rules. Findings fail
+# the job (`--error`). Reproduce locally with:
+#   semgrep scan --config auto --error
+name: Semgrep
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    # Official Semgrep image provides the `semgrep` CLI used locally.
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep (default security rules)
+        run: semgrep scan --config auto --error --verbose

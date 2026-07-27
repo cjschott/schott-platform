@@ -1167,6 +1167,81 @@ assert_contains "README.md" 'security/SECURITY\.md' "README links the security p
 assert_contains "README.md" 'security/hardening-checklist\.md' "README links the hardening checklist"
 
 # ---------------------------------------------------------------------------
+# Task 7: CI / security automation workflows and local-validation docs
+# ---------------------------------------------------------------------------
+
+WF_DIR=".github/workflows"
+CI_WF="${WF_DIR}/ci.yml"
+SHELLCHECK_WF="${WF_DIR}/shellcheck.yml"
+GITLEAKS_WF="${WF_DIR}/gitleaks.yml"
+TRIVY_WF="${WF_DIR}/trivy.yml"
+SEMGREP_WF="${WF_DIR}/semgrep.yml"
+CODEQL_WF="${WF_DIR}/codeql.yml"
+LOCALVAL_DOC="docs/development/local-validation.md"
+
+assert_dir "${WF_DIR}"
+
+# Contracts every workflow must satisfy: a name, explicit least-privilege
+# permissions, declared triggers, pinned actions (no moving @main/@master),
+# and no reference to the real secret file (only ai/.env.example is allowed).
+WORKFLOWS=( "${CI_WF}" "${SHELLCHECK_WF}" "${GITLEAKS_WF}" "${TRIVY_WF}" \
+            "${SEMGREP_WF}" "${CODEQL_WF}" )
+for w in "${WORKFLOWS[@]}"; do
+  assert_file "${w}"
+  assert_contains "${w}" '^name:[[:space:]]*[A-Za-z]' "workflow declares a name: ${w}"
+  assert_contains "${w}" '^permissions:' "workflow declares explicit permissions: ${w}"
+  assert_contains "${w}" '^on:' "workflow declares triggers: ${w}"
+  refute_contains "${w}" 'uses:[^@]*@(main|master)[[:space:]]*$' \
+    "workflow pins action versions (no @main/@master): ${w}"
+  refute_contains "${w}" '/\.env([^.]|$)' \
+    "workflow references only sanitized .env.example (never a real .env): ${w}"
+done
+
+# --- ci.yml automates the existing local validation -------------------------
+assert_contains "${CI_WF}" 'push:' "ci triggers on push"
+assert_contains "${CI_WF}" 'pull_request:' "ci triggers on pull_request"
+assert_contains "${CI_WF}" '^concurrency:' "ci uses concurrency cancellation"
+assert_contains "${CI_WF}" 'bash -n scripts/\*\.sh' "ci runs shell syntax check"
+assert_contains "${CI_WF}" 'bash -n tests/test-static\.sh' "ci syntax-checks the test file"
+assert_contains "${CI_WF}" 'bash tests/test-static\.sh' "ci runs the static test suite"
+assert_contains "${CI_WF}" 'docker compose' "ci validates Docker Compose"
+assert_contains "${CI_WF}" 'ai/\.env\.example' "ci renders compose from ai/.env.example"
+assert_contains "${CI_WF}" 'ai/compose\.yaml' "ci validates the integrated stack"
+assert_contains "${CI_WF}" 'ai/ollama/compose\.yaml' "ci validates the ollama sub-stack"
+assert_contains "${CI_WF}" 'ai/litellm/compose\.yaml' "ci validates the litellm sub-stack"
+
+# --- Tool workflows run the same tools available locally --------------------
+assert_contains "${SHELLCHECK_WF}" 'shellcheck' "shellcheck workflow runs ShellCheck"
+assert_contains "${GITLEAKS_WF}" '[Gg]itleaks' "gitleaks workflow runs Gitleaks"
+assert_contains "${TRIVY_WF}" 'trivy' "trivy workflow runs Trivy"
+assert_contains "${TRIVY_WF}" '(fs|filesystem)' "trivy runs a filesystem scan"
+assert_contains "${TRIVY_WF}" '(HIGH,CRITICAL|CRITICAL,HIGH)' "trivy scans HIGH + CRITICAL"
+assert_contains "${SEMGREP_WF}" 'semgrep' "semgrep workflow runs Semgrep"
+assert_contains "${CODEQL_WF}" '[Cc]ode[Qq][Ll]' "codeql workflow references CodeQL"
+assert_contains "${CODEQL_WF}" 'bash' "codeql workflow addresses bash/shell scope"
+assert_contains "${CODEQL_WF}" '(shell|not support|unsupported|no .* analyzer)' \
+  "codeql workflow documents the shell-language limitation"
+
+# --- README + local validation documentation --------------------------------
+assert_contains "README.md" 'docs/development/local-validation\.md' \
+  "README links the local validation docs"
+
+assert_file "${LOCALVAL_DOC}"
+assert_contains "${LOCALVAL_DOC}" 'bash -n scripts/\*\.sh' "local-validation documents shell syntax check"
+assert_contains "${LOCALVAL_DOC}" 'bash -n tests/test-static\.sh' "local-validation documents test syntax check"
+assert_contains "${LOCALVAL_DOC}" 'bash tests/test-static\.sh' "local-validation documents the static suite"
+assert_contains "${LOCALVAL_DOC}" 'docker compose' "local-validation documents compose config"
+assert_contains "${LOCALVAL_DOC}" 'ai/\.env\.example' "local-validation uses ai/.env.example"
+assert_contains "${LOCALVAL_DOC}" 'shellcheck' "local-validation documents ShellCheck"
+assert_contains "${LOCALVAL_DOC}" '[Gg]itleaks' "local-validation documents Gitleaks"
+assert_contains "${LOCALVAL_DOC}" 'trivy' "local-validation documents Trivy"
+assert_contains "${LOCALVAL_DOC}" 'semgrep' "local-validation documents Semgrep"
+assert_contains "${LOCALVAL_DOC}" 'same result as CI' \
+  "local-validation states local runs match CI"
+refute_contains "${LOCALVAL_DOC}" '/\.env([^.]|$)' \
+  "local-validation references only sanitized .env.example"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

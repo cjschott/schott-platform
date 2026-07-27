@@ -78,3 +78,14 @@ Run the static repository assertions (no VM, Docker daemon, or secrets required)
 ```bash
 bash tests/test-static.sh
 ```
+
+## Development
+
+Continuous integration in `.github/workflows/` automates the same validation
+you can run locally — nothing CI-only. For the full list of local checks
+(shell syntax, static assertions, Compose rendering, ShellCheck, Gitleaks,
+Trivy, Semgrep) and how they map to CI, see:
+
+- [docs/development/local-validation.md](docs/development/local-validation.md)
+
+Passing local validation should produce the same result as CI.
