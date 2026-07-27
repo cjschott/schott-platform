@@ -4,11 +4,27 @@ Docker Compose stacks and configuration for the Schott AI platform.
 
 ## Layout
 
-- `compose.yaml` — the integrated Ollama + LiteLLM production stack _(added in a
-  later task)_.
-- `ollama/` — isolated Ollama service definition _(added in a later task)_.
-- `litellm/` — isolated LiteLLM gateway service and routing config _(added in a
-  later task)_.
+- `compose.yaml` — **the canonical production stack.** The integrated
+  Ollama + LiteLLM deployment for `schai`; deploy this file. It is
+  self-contained (no Compose `extends`), keeps Ollama private, and publishes
+  only LiteLLM on port `4000`.
+- `ollama/` — isolated Ollama service definition, for capturing/troubleshooting
+  Ollama on its own. Not the production stack.
+- `litellm/` — isolated LiteLLM gateway service and routing config
+  (`config.yaml` is reused by the canonical stack). Not the production stack.
+
+## Canonical production stack
+
+`ai/compose.yaml` is the single source of truth for production. Run it with the
+local secrets file:
+
+```bash
+docker compose --env-file ai/.env -f ai/compose.yaml up -d
+```
+
+Copy `ai/.env.example` to `ai/.env` and set a real `LITELLM_MASTER_KEY` first.
+The isolated `ollama/` and `litellm/` stacks are development/troubleshooting
+aids only and must not be used to run production.
 
 ## Model alias contract
 

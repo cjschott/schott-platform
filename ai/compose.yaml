@@ -1,0 +1,97 @@
+# Integrated AI platform stack — THE canonical production deployment for schai.
+#
+# Brings up Ollama (internal inference backend) and LiteLLM (the only
+# application-facing gateway) on one private bridge network. Ollama is NOT
+# published to the host; only LiteLLM's port 4000 is exposed. Applications
+# connect to LiteLLM at http://schai:4000/v1.
+#
+# Self-contained by design: this file does NOT use Compose `extends` against the
+# isolated ai/ollama and ai/litellm service files, so a single
+# `docker compose -f ai/compose.yaml` fully and unambiguously describes
+# production. The service settings below mirror those isolated definitions.
+
+services:
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.4}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Chicago}
+    # No host port: Ollama is reachable only by LiteLLM over the private network.
+    volumes:
+      # Named volume so downloaded models survive container recreation.
+      - ollama-models:/root/.ollama
+    networks:
+      - ai-backend
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # NVIDIA GPU passthrough (Compose v2 device reservation).
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      # Bundled ollama binary (no curl dependency).
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  litellm:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-v1.74.3-stable}
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-America/Chicago}
+      # Fail closed: the master key is required from the environment. The shared
+      # config.yaml enforces authentication via os.environ/LITELLM_MASTER_KEY.
+      # Deployment validation (scripts/) refuses to start with an empty key.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY?LITELLM_MASTER_KEY must be set in ai/.env}
+      # Internal Ollama backend (private network hostname; not an app endpoint).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      LITELLM_LOG: ${LOG_LEVEL:-INFO}
+    command:
+      - "--config"
+      - "/etc/litellm/config.yaml"
+      - "--port"
+      - "4000"
+    ports:
+      # Only application-facing port. Container listens on 4000; host binding
+      # is configurable.
+      - "${LITELLM_BIND_ADDRESS:-0.0.0.0}:${LITELLM_PORT:-4000}:4000"
+    volumes:
+      # Reuse the isolated LiteLLM routing/policy config, mounted read-only.
+      - ./litellm/config.yaml:/etc/litellm/config.yaml:ro
+    networks:
+      - ai-backend
+    healthcheck:
+      # Bundled Python runtime hits the unauthenticated liveliness endpoint.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness').read()"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  ai-backend:
+    driver: bridge
+
+volumes:
+  ollama-models:

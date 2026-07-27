@@ -7,7 +7,7 @@ set -Eeuo pipefail
 # must not require the schai VM, Docker daemon access, or any secret.
 #
 # Scope currently implemented: Task 1 (foundation), Task 2 (Ollama service),
-# Task 3 (LiteLLM gateway).
+# Task 3 (LiteLLM gateway), Task 4 (integrated stack).
 
 # Resolve repository root relative to this script's location.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -337,6 +337,125 @@ assert_contains "ai/litellm/README.md" '/v1/embeddings' \
   "LiteLLM README documents /v1/embeddings"
 assert_contains "ai/litellm/README.md" 'Authorization: Bearer' \
   "LiteLLM README documents bearer-token authentication"
+
+# ---------------------------------------------------------------------------
+# Task 4: Integrated AI stack
+# ---------------------------------------------------------------------------
+
+AI_COMPOSE="ai/compose.yaml"
+
+# Required integrated-stack files.
+assert_file "ai/compose.yaml"
+assert_file "ai/.env.example"
+
+# The sanitized example env must remain tracked.
+assert_not_ignored "ai/.env.example"
+
+# The integrated Compose file must render/parse using the example env.
+assert_compose_parses "ai/.env.example" "${AI_COMPOSE}" \
+  "docker compose config parses: ${AI_COMPOSE}"
+
+# Self-contained: no Compose `extends` across the isolated service files.
+refute_contains "${AI_COMPOSE}" '^[[:space:]]*extends:' \
+  "integrated stack does not use Compose extends"
+
+# Services are named exactly ollama and litellm.
+assert_contains "${AI_COMPOSE}" '^[[:space:]]{2}ollama:[[:space:]]*$' \
+  "integrated stack defines service 'ollama'"
+assert_contains "${AI_COMPOSE}" '^[[:space:]]{2}litellm:[[:space:]]*$' \
+  "integrated stack defines service 'litellm'"
+
+# Ollama is NOT published to the host (no 11434 host mapping anywhere).
+refute_contains "${AI_COMPOSE}" '11434:11434' \
+  "ollama does not publish port 11434 to the host"
+
+# LiteLLM publishes the exact configurable 4000 mapping.
+assert_contains "${AI_COMPOSE}" 'LITELLM_BIND_ADDRESS:-0\.0\.0\.0' \
+  "LiteLLM host bind address is configurable (defaults to 0.0.0.0)"
+assert_contains "${AI_COMPOSE}" 'LITELLM_PORT:-4000\}:4000' \
+  "LiteLLM publishes port 4000 (configurable)"
+
+# LiteLLM depends on Ollama becoming healthy.
+assert_contains "${AI_COMPOSE}" 'condition:[[:space:]]*service_healthy' \
+  "LiteLLM depends on Ollama service_healthy"
+
+# Both services share one private bridge network named ai-backend.
+assert_contains "${AI_COMPOSE}" '^networks:[[:space:]]*$' \
+  "integrated stack declares a networks section"
+assert_contains "${AI_COMPOSE}" '^[[:space:]]{2}ai-backend:[[:space:]]*$' \
+  "the ai-backend network is declared"
+assert_contains "${AI_COMPOSE}" 'driver:[[:space:]]*bridge' \
+  "ai-backend is a bridge network"
+assert_count "${AI_COMPOSE}" '^[[:space:]]*-[[:space:]]*ai-backend[[:space:]]*$' 2 \
+  "both services attach to ai-backend"
+
+# Persistent named volume ollama-models mounted at /root/.ollama.
+assert_contains "${AI_COMPOSE}" 'ollama-models:/root/\.ollama' \
+  "ollama model storage mounted at /root/.ollama"
+assert_contains "${AI_COMPOSE}" '^volumes:[[:space:]]*$' \
+  "integrated stack declares a named volume section"
+assert_contains "${AI_COMPOSE}" '^[[:space:]]{2}ollama-models:' \
+  "ollama-models named volume is declared"
+
+# NVIDIA GPU access preserved for Ollama.
+assert_contains "${AI_COMPOSE}" 'driver:[[:space:]]*nvidia' \
+  "integrated stack declares the nvidia GPU driver"
+assert_contains "${AI_COMPOSE}" 'capabilities:[[:space:]]*\[[[:space:]]*gpu' \
+  "integrated stack declares the gpu capability"
+
+# Rotating logs for BOTH services.
+assert_count "${AI_COMPOSE}" 'driver:[[:space:]]*json-file' 2 \
+  "both services use the json-file logging driver"
+assert_count "${AI_COMPOSE}" 'max-size:' 2 \
+  "both services set a log max-size"
+assert_count "${AI_COMPOSE}" 'max-file:' 2 \
+  "both services set a log max-file"
+
+# Fail-closed master-key handling preserved (key required from env; the shared
+# read-only config enforces auth via os.environ/LITELLM_MASTER_KEY).
+assert_contains "${AI_COMPOSE}" 'LITELLM_MASTER_KEY:[[:space:]]*\$\{LITELLM_MASTER_KEY' \
+  "LiteLLM master key is required from the environment"
+assert_contains "${AI_COMPOSE}" 'litellm/config\.yaml:/etc/litellm/config\.yaml:ro' \
+  "integrated LiteLLM mounts the shared config read-only"
+
+# Ollama backend URL is provided as a Compose env var (config.yaml resolves it
+# via os.environ) — never hard-coded away from the internal hostname.
+assert_contains "${AI_COMPOSE}" 'OLLAMA_BASE_URL:[[:space:]]*\$\{OLLAMA_BASE_URL:-http://ollama:11434\}' \
+  "integrated stack sets OLLAMA_BASE_URL to the internal ollama:11434"
+
+# ai/.env.example: non-secret defaults with an EMPTY master-key placeholder.
+assert_contains "ai/.env.example" '^LITELLM_MASTER_KEY=[[:space:]]*$' \
+  "ai/.env.example ships an empty LITELLM_MASTER_KEY placeholder"
+assert_contains "ai/.env.example" '^OLLAMA_BASE_URL=http://ollama:11434[[:space:]]*$' \
+  "ai/.env.example sets OLLAMA_BASE_URL to ollama:11434"
+assert_contains "ai/.env.example" '^TZ=America/Chicago' \
+  "ai/.env.example sets TZ=America/Chicago"
+refute_contains "ai/.env.example" 'sk-[A-Za-z0-9]{16,}' \
+  "ai/.env.example contains no real key"
+
+# ai/README.md identifies ai/compose.yaml as the canonical production stack.
+assert_contains "ai/README.md" 'canonical' \
+  "ai/README.md identifies the canonical production stack"
+
+# ---------------------------------------------------------------------------
+# Rendered integrated-stack checks (require docker CLI; skipped otherwise)
+# ---------------------------------------------------------------------------
+
+if command -v docker >/dev/null 2>&1; then
+  RENDERED="$(docker compose --env-file "${ROOT}/ai/.env.example" -f "${ROOT}/${AI_COMPOSE}" config 2>/dev/null || true)"
+  if grep -Eq 'published:[[:space:]]*"?4000"?' <<<"${RENDERED}"; then
+    pass "rendered: LiteLLM publishes port 4000"
+  else
+    fail "rendered: LiteLLM does not publish port 4000"
+  fi
+  if grep -Eq 'published:[[:space:]]*"?11434"?' <<<"${RENDERED}"; then
+    fail "rendered: Ollama must not publish a host port"
+  else
+    pass "rendered: Ollama has no published host port"
+  fi
+else
+  printf 'SKIP: rendered integrated-stack checks (docker CLI not available)\n'
+fi
 
 # ---------------------------------------------------------------------------
 # Result
