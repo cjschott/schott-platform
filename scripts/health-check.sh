@@ -92,11 +92,13 @@ else
 fi
 
 # --- 2. Unauthenticated /v1/models is rejected ------------------------------
+# Only an explicit authentication rejection counts. A 000 (no connection), 404,
+# 429, or 5xx is NOT proof that auth rejected the request.
 code="$(get_code "${MAX_TIME}" 0 GET "${BASE_URL}/v1/models")"
-if is_2xx "${code}"; then
-  fail "unauthenticated /v1/models was accepted (${code}) — gateway is not failing closed"
-else
+if [[ "${code}" == "401" || "${code}" == "403" ]]; then
   pass "unauthenticated /v1/models rejected (${code})"
+else
+  fail "unauthenticated /v1/models not rejected by auth (got ${code}; expected 401 or 403)"
 fi
 
 # --- 3. Authenticated /v1/models succeeds -----------------------------------

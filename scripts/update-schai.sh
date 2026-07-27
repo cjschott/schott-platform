@@ -29,17 +29,25 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
-running_image_id() {  # running_image_id <service>
+running_image_id() {  # running_image_id <service> — resolved image ID (sha256:...)
   local svc="$1" cid
   cid="$(compose ps -q "${svc}" 2>/dev/null || true)"
   [[ -n "${cid}" ]] || { printf ''; return 0; }
   docker inspect --format '{{.Image}}' "${cid}" 2>/dev/null || printf ''
 }
 
-# --- Record currently running image IDs -------------------------------------
-declare -A OLD_ID
+configured_image_ref() {  # configured_image_ref <service> — the image reference
+  local svc="$1" cid                     # the Compose service was created with.
+  cid="$(compose ps -q "${svc}" 2>/dev/null || true)"
+  [[ -n "${cid}" ]] || { printf ''; return 0; }
+  docker inspect --format '{{.Config.Image}}' "${cid}" 2>/dev/null || printf ''
+}
+
+# --- Record currently running image IDs and configured refs (before pulling) -
+declare -A OLD_ID CFG_REF
 for svc in "${SERVICES[@]}"; do
   OLD_ID["${svc}"]="$(running_image_id "${svc}")"
+  CFG_REF["${svc}"]="$(configured_image_ref "${svc}")"
 done
 
 # --- Pull, then recreate only changed services ------------------------------
@@ -76,15 +84,24 @@ fi
 
 # --- Health failed: print manual rollback guidance (no auto rollback) -------
 printf 'ERROR: health checks failed after update.\n' >&2
-printf 'No automatic rollback was performed. To roll back manually, re-pin each\n' >&2
-printf 'changed service to its previously running image ID and recreate it:\n' >&2
+printf 'No automatic rollback was performed. To roll back manually, run the\n' >&2
+printf 'commands below to re-pin each changed service to its previously running\n' >&2
+printf 'image and recreate it:\n' >&2
 if (( ${#changed[@]} == 0 )); then
-  printf '  (No service image changed during this update.)\n' >&2
+  printf '  (No service image changed during this update; nothing to roll back.)\n' >&2
 else
   for svc in "${changed[@]}"; do
-    printf '  # %s: previous image ID %s\n' "${svc}" "${OLD_ID[${svc}]:-<unknown>}" >&2
-    printf '  docker tag %s <image-ref-for-%s>\n' "${OLD_ID[${svc}]:-<unknown>}" "${svc}" >&2
-    printf '  docker compose --env-file ai/.env -f ai/compose.yaml up -d --no-deps --force-recreate %s\n' "${svc}" >&2
+    old="${OLD_ID[${svc}]:-}"
+    ref="${CFG_REF[${svc}]:-}"
+    if [[ -n "${old}" && -n "${ref}" ]]; then
+      printf '  # %s — restore previously running image:\n' "${svc}" >&2
+      printf '  docker tag %s %s\n' "${old}" "${ref}" >&2
+      printf '  docker compose --env-file ai/.env -f ai/compose.yaml up -d --no-deps --force-recreate %s\n' "${svc}" >&2
+    else
+      printf '  # WARNING: cannot build a rollback command for %s — ' "${svc}" >&2
+      printf 'previous image ID or configured image reference is unknown ' >&2
+      printf '(service was not running before this update). Recreate it manually from a known-good image.\n' >&2
+    fi
   done
 fi
 exit 1

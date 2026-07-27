@@ -54,21 +54,38 @@ META="${CONTENT}/BACKUP-META"
 mkdir -p "${CONTENT}" "${META}"
 
 # --- Copy tracked configuration / docs / scripts ----------------------------
-# Only config-bearing top-level items are copied; model data, secrets, logs,
-# and backups are never in this list, so they cannot enter the archive.
-for item in ai docs scripts security README.md CHANGELOG.md .gitignore .editorconfig .gitattributes; do
-  [[ -e "${ROOT}/${item}" ]] || continue
-  cp -R "${ROOT}/${item}" "${CONTENT}/" 2>/dev/null || true
-done
+# The archive is built strictly from Git's tracked-file inventory, not from a
+# recursive copy of the working tree. This guarantees that ignored/untracked
+# runtime content (ai/.env, secrets/, models/, data/, logs, model blobs, etc.)
+# can never be swept into the backup. Only approved tracked paths are included.
+if ! command -v git >/dev/null 2>&1; then
+  printf 'ERROR: git is required to enumerate tracked files for a backup.\n' >&2
+  exit 1
+fi
+if ! git -C "${ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf 'ERROR: cannot obtain the tracked-file inventory: %s is not a git working tree.\n' "${ROOT}" >&2
+  printf 'Run backups from a clone of cjschott/schott-platform.\n' >&2
+  exit 1
+fi
 
-# --- Prune anything sensitive that a copied tree might contain ---------------
-#   * real .env files (keep sanitized *.env.example)
-#   * logs
-#   * Ollama model caches
-find "${CONTENT}" -type f -name '.env' -delete 2>/dev/null || true
-find "${CONTENT}" -type f -name '.env.*' ! -name '*.example' -delete 2>/dev/null || true
-find "${CONTENT}" -type f -name '*.log' -delete 2>/dev/null || true
-find "${CONTENT}" -type d -name '.ollama' -prune -exec rm -rf {} + 2>/dev/null || true
+copied=0
+while IFS= read -r -d '' rel; do
+  case "${rel}" in
+    ai/*|docs/*|scripts/*|security/*) ;;
+    README.md|CHANGELOG.md|.gitignore|.editorconfig|.gitattributes) ;;
+    *) continue ;;
+  esac
+  [[ -f "${ROOT}/${rel}" ]] || continue
+  dest="${CONTENT}/${rel}"
+  mkdir -p "$(dirname "${dest}")"
+  cp "${ROOT}/${rel}" "${dest}"
+  copied=$((copied + 1))
+done < <(git -C "${ROOT}" ls-files -z)
+
+if (( copied == 0 )); then
+  printf 'ERROR: no approved tracked configuration files were found to back up.\n' >&2
+  exit 1
+fi
 
 # --- git HEAD ---------------------------------------------------------------
 if HEAD="$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null)"; then

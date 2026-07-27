@@ -561,6 +561,10 @@ assert_contains "scripts/update-schai.sh" 'health-check\.sh' \
   "update runs health checks"
 assert_contains "scripts/update-schai.sh" 'ollback' \
   "update prints rollback guidance on health failure"
+assert_contains "scripts/update-schai.sh" '\.Config\.Image' \
+  "update records each service's configured image reference"
+refute_contains "scripts/update-schai.sh" '<image-ref-for' \
+  "update emits no unresolved image-ref placeholder"
 
 assert_contains "scripts/health-check.sh" '/health/liveliness' \
   "health-check probes LiteLLM liveness"
@@ -576,6 +580,13 @@ assert_contains "scripts/health-check.sh" '\-\-deep' \
   "health-check supports --deep"
 assert_contains "scripts/health-check.sh" '\-\-max-time' \
   "health-check bounds curl with --max-time"
+assert_contains "scripts/health-check.sh" '401.*403|403.*401' \
+  "health-check accepts only 401/403 as an auth rejection"
+
+assert_contains "scripts/backup-config.sh" 'ls-files' \
+  "backup builds its inventory from git ls-files"
+refute_contains "scripts/backup-config.sh" 'cp -R' \
+  "backup does not recursively copy working-tree directories"
 
 assert_contains "scripts/backup-config.sh" 'tar' \
   "backup creates a tar archive"
@@ -771,17 +782,42 @@ t5_b_health_ordering() {
   assert_in "${L[4]:-}" "/v1/embeddings"     "behavior: check 5 is an embedding"
 }
 
-# --- Behavior 6/7: backup excludes secrets/blobs/logs and leaks no key ------
+# --- Behavior 6/7: backup archives only tracked config; excludes runtime -----
 t5_b_backup_exclusions() {
   if [[ ! -f "${ROOT}/scripts/backup-config.sh" ]]; then
     fail "behavior: backup-config.sh absent (backup test skipped)"; return
   fi
+  if ! command -v git >/dev/null 2>&1; then
+    fail "behavior: git unavailable (backup test skipped)"; return
+  fi
   local t; t="$(t5_new_repo)"; t5_write_env "${t}" "${T5_SENTINEL_KEY}"
-  # Decoy artifacts that must never enter the archive.
-  printf 'secret log line\n' > "${t}/ai/service.log"
-  mkdir -p "${t}/models" "${t}/secrets"
-  printf 'BLOB' > "${t}/models/blob.gguf"
-  printf 'token' > "${t}/secrets/token"
+  # Tracked configuration/docs the archive MUST include.
+  printf '# overview\n' > "${t}/docs/overview.md"
+  printf 'readme\n'     > "${t}/README.md"
+  printf 'changelog\n'  > "${t}/CHANGELOG.md"
+  cat > "${t}/.gitignore" <<'G'
+.env
+.env.*
+!.env.example
+secrets/
+models/
+data/
+*.log
+G
+  printf 'root = true\n' > "${t}/.editorconfig"
+  printf '* text=auto\n' > "${t}/.gitattributes"
+  # Ignored / untracked runtime content that MUST NEVER enter the archive.
+  mkdir -p "${t}/ai/secrets" "${t}/ai/models" "${t}/ai/data"
+  printf 'RUNTIME-SECRET-SENTINEL\n'  > "${t}/ai/secrets/sentinel.txt"
+  printf 'RUNTIME-BLOB-SENTINEL\n'    > "${t}/ai/models/sentinel.bin"
+  printf 'RUNTIME-DATA-SENTINEL\n'    > "${t}/ai/data/runtime-sentinel.txt"
+  printf 'log line\n'                 > "${t}/ai/service.log"
+  # Initialize a git repo and track ONLY the approved configuration paths.
+  git -C "${t}" init -q
+  git -C "${t}" add \
+    ai/compose.yaml ai/.env.example ai/litellm/config.yaml \
+    scripts docs/overview.md README.md CHANGELOG.md \
+    .gitignore .editorconfig .gitattributes >/dev/null 2>&1
   # docker stub: `config` prints a rendered file containing the key; ollama down.
   cat >"${t}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -821,6 +857,8 @@ EOF
   fi
   local x="${t}/extract"; mkdir -p "${x}"
   tar xzf "${arch}" -C "${x}" 2>/dev/null || true
+
+  # --- Exclusions: ignored/untracked runtime content never appears ----------
   if find "${x}" -name '.env' -type f | grep -q .; then
     fail "behavior: archive must not contain a real .env file"
   else
@@ -831,10 +869,41 @@ EOF
   else
     pass "behavior: archive excludes log files"
   fi
-  if find "${x}" -name 'blob.gguf' -type f | grep -q .; then
-    fail "behavior: archive must not contain model blobs"
+  if find "${x}" -path '*/ai/secrets/*' | grep -q .; then
+    fail "behavior: archive must not contain ai/secrets content"
   else
-    pass "behavior: archive excludes model blobs"
+    pass "behavior: archive excludes ai/secrets"
+  fi
+  if find "${x}" -path '*/ai/models/*' | grep -q .; then
+    fail "behavior: archive must not contain ai/models blobs"
+  else
+    pass "behavior: archive excludes ai/models blobs"
+  fi
+  if find "${x}" -path '*/ai/data/*' | grep -q .; then
+    fail "behavior: archive must not contain ai/data runtime content"
+  else
+    pass "behavior: archive excludes ai/data runtime content"
+  fi
+  local leaked=0 m
+  for m in RUNTIME-SECRET-SENTINEL RUNTIME-BLOB-SENTINEL RUNTIME-DATA-SENTINEL; do
+    grep -rqF "${m}" "${x}" 2>/dev/null && leaked=1
+  done
+  if (( leaked )); then
+    fail "behavior: archive leaked ignored/untracked runtime content"
+  else
+    pass "behavior: archive contains no ignored/untracked runtime content"
+  fi
+
+  # --- Inclusions: tracked configuration IS present -------------------------
+  if find "${x}" -path '*/ai/.env.example' -type f | grep -q .; then
+    pass "behavior: archive includes tracked ai/.env.example"
+  else
+    fail "behavior: archive is missing tracked ai/.env.example"
+  fi
+  if find "${x}" -path '*/ai/compose.yaml' -type f | grep -q .; then
+    pass "behavior: archive includes tracked ai/compose.yaml"
+  else
+    fail "behavior: archive is missing tracked ai/compose.yaml"
   fi
   if find "${x}" -iname 'manifest*' -type f | grep -q .; then
     pass "behavior: archive includes a manifest"
@@ -846,6 +915,78 @@ EOF
   else
     pass "behavior: archive contains no master-key value"
   fi
+}
+
+# --- Behavior 9: update prints executable rollback on health failure --------
+t5_b_update_rollback() {
+  if [[ ! -f "${ROOT}/scripts/update-schai.sh" || ! -f "${ROOT}/scripts/health-check.sh" ]]; then
+    fail "behavior: update/health scripts absent (rollback test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_write_env "${t}" "${T5_SENTINEL_KEY}"
+  # docker stub: records image IDs; a `pull` flips running image IDs so ollama
+  # is detected as changed. .Config.Image yields the configured reference.
+  cat >"${t}/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+PULLED="${BIN_DIR}/.pulled"
+if [[ "$1" == "compose" ]]; then
+  shift; a=("$@"); sub=""
+  for x in "${a[@]}"; do
+    case "$x" in version|pull|config|up|ps|exec) sub="$x"; break;; esac
+  done
+  case "$sub" in
+    pull) : > "${PULLED}"; exit 0;;
+    ps)   echo "cid-${a[${#a[@]}-1]}"; exit 0;;   # cid-<service>
+    *)    exit 0;;
+  esac
+elif [[ "$1" == "inspect" ]]; then
+  a=("$@"); fmt=""; cid="${a[${#a[@]}-1]}"; svc="${cid#cid-}"
+  for ((i=0;i<${#a[@]};i++)); do
+    [[ "${a[$i]}" == "--format" ]] && fmt="${a[$((i+1))]}"
+  done
+  case "${fmt}" in
+    *Config.Image*)
+      case "${svc}" in
+        ollama)  echo "ollama/ollama:0.11.4";;
+        litellm) echo "ghcr.io/berriai/litellm:main-v1.74.3-stable";;
+        *) echo "unknown:latest";;
+      esac;;
+    *)
+      if [[ -f "${PULLED}" ]]; then echo "sha256:NEW-${svc}"; else echo "sha256:OLD-${svc}"; fi;;
+  esac
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "${t}/bin/docker"
+  # curl stub: always fails so the post-update health check fails deterministically.
+  cat >"${t}/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=""; wfmt=""; a=("$@"); i=0
+while (( i < ${#a[@]} )); do
+  case "${a[$i]}" in -o) i=$((i+1)); out="${a[$i]}";; -w) i=$((i+1)); wfmt="${a[$i]}";; esac
+  i=$((i+1))
+done
+[[ -n "$out" ]] && : > "$out"
+[[ -n "$wfmt" ]] && printf '000'
+exit 0
+EOF
+  chmod +x "${t}/bin/curl"
+  t5_run "${t}" "scripts/update-schai.sh"
+  if (( T5_RC != 0 )); then
+    pass "behavior: update exits nonzero on post-update health failure"
+  else
+    fail "behavior: update must exit nonzero when health fails after update"
+  fi
+  assert_in "${T5_OUT}" "roll back" "behavior: update prints rollback guidance"
+  assert_in "${T5_OUT}" "sha256:OLD-ollama" \
+    "behavior: rollback uses the image ID recorded before pull"
+  assert_in "${T5_OUT}" "docker tag sha256:OLD-ollama ollama/ollama:0.11.4" \
+    "behavior: rollback tags old ID to the exact configured image reference"
+  refute_in "${T5_OUT}" "<image-ref-for" \
+    "behavior: rollback output has no unresolved placeholder"
+  refute_in "${T5_OUT}" "${T5_SENTINEL_KEY}" \
+    "behavior: update output hides the master key"
 }
 
 # --- Behavior 8: deploy refuses a missing ai/.env ---------------------------
@@ -874,6 +1015,7 @@ run_task5_behavior_tests() {
   t5_b_health_ordering
   t5_b_backup_exclusions
   t5_b_deploy_missing_env
+  t5_b_update_rollback
   # Clean up temp dirs while errexit is still disabled so a stray Windows file
   # lock during rm cannot abort the suite.
   local d
