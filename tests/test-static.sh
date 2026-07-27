@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # This test is extended task-by-task. It must be runnable from anywhere and
 # must not require the schai VM, Docker daemon access, or any secret.
 #
-# Scope currently implemented: Task 1 (repository foundation).
+# Scope currently implemented: Task 1 (foundation), Task 2 (Ollama service).
 
 # Resolve repository root relative to this script's location.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,6 +63,43 @@ assert_not_ignored() {
   fi
 }
 
+# assert_contains <relative-path> <ERE> <description>  — file must match regex
+assert_contains() {
+  local rel="$1" re="$2" desc="$3"
+  if [[ -f "${ROOT}/${rel}" ]] && grep -Eq "${re}" "${ROOT}/${rel}"; then
+    pass "${desc}"
+  else
+    fail "${desc} (expected /${re}/ in ${rel})"
+  fi
+}
+
+# refute_contains <relative-path> <ERE> <description>  — file must NOT match regex
+refute_contains() {
+  local rel="$1" re="$2" desc="$3"
+  if [[ -f "${ROOT}/${rel}" ]] && grep -Eq "${re}" "${ROOT}/${rel}"; then
+    fail "${desc} (unexpected /${re}/ in ${rel})"
+  else
+    pass "${desc}"
+  fi
+}
+
+# assert_compose_parses <env-file> <compose-file> <description>
+# Renders the Compose file to confirm it parses. Requires only the docker CLI
+# (no daemon). Skips gracefully where docker is unavailable so the test stays
+# runnable anywhere.
+assert_compose_parses() {
+  local envfile="$1" composefile="$2" desc="$3"
+  if ! command -v docker >/dev/null 2>&1; then
+    printf 'SKIP: %s (docker CLI not available)\n' "${desc}"
+    return 0
+  fi
+  if docker compose --env-file "${ROOT}/${envfile}" -f "${ROOT}/${composefile}" config >/dev/null 2>&1; then
+    pass "${desc}"
+  else
+    fail "${desc}"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Task 1: Repository foundation
 # ---------------------------------------------------------------------------
@@ -109,6 +146,91 @@ assert_ignored "logs/litellm.log"
 assert_ignored "models/blob"
 assert_ignored "data/ollama/blob"
 assert_ignored ".superpowers/state"
+
+# ---------------------------------------------------------------------------
+# Task 2: Captured Ollama service
+# ---------------------------------------------------------------------------
+
+OLLAMA_COMPOSE="ai/ollama/compose.yaml"
+
+# Required Ollama files.
+assert_file "ai/ollama/compose.yaml"
+assert_file "ai/ollama/.env.example"
+assert_file "ai/ollama/README.md"
+
+# The sanitized example env must remain tracked.
+assert_not_ignored "ai/ollama/.env.example"
+
+# The Compose file must render/parse.
+assert_compose_parses "ai/ollama/.env.example" "${OLLAMA_COMPOSE}" \
+  "docker compose config parses: ${OLLAMA_COMPOSE}"
+
+# The service is named 'ollama'.
+assert_contains "${OLLAMA_COMPOSE}" '^[[:space:]]{2}ollama:[[:space:]]*$' \
+  "ollama service is named 'ollama'"
+
+# Image is version-pinned (explicit tag, not 'latest') via an env var with a
+# documented default.
+assert_contains "${OLLAMA_COMPOSE}" 'OLLAMA_IMAGE:-ollama/ollama:[0-9]' \
+  "ollama image is version-pinned with a default"
+refute_contains "${OLLAMA_COMPOSE}" 'ollama/ollama:latest' \
+  "ollama image does not use the 'latest' tag"
+
+# Restart policy.
+assert_contains "${OLLAMA_COMPOSE}" 'restart:[[:space:]]*unless-stopped' \
+  "ollama uses restart: unless-stopped"
+
+# Persistent model storage mounted at /root/.ollama via a named volume.
+assert_contains "${OLLAMA_COMPOSE}" 'ollama-models:/root/\.ollama' \
+  "ollama model storage mounted at /root/.ollama"
+assert_contains "${OLLAMA_COMPOSE}" '^volumes:[[:space:]]*$' \
+  "ollama declares a named volume section"
+assert_contains "${OLLAMA_COMPOSE}" '^[[:space:]]{2}ollama-models:' \
+  "ollama-models named volume is declared"
+
+# NVIDIA GPU access is declared.
+assert_contains "${OLLAMA_COMPOSE}" 'driver:[[:space:]]*nvidia' \
+  "ollama declares the nvidia GPU driver"
+assert_contains "${OLLAMA_COMPOSE}" 'capabilities:[[:space:]]*\[[[:space:]]*gpu' \
+  "ollama declares the gpu capability"
+
+# Health check targets the Ollama tags endpoint.
+assert_contains "${OLLAMA_COMPOSE}" '127\.0\.0\.1:11434/api/tags' \
+  "ollama health check targets /api/tags"
+
+# Port 11434 is bound to localhost only — never all interfaces. The mapping
+# uses the ${OLLAMA_BIND_ADDRESS:-127.0.0.1} default, so the localhost IP sits
+# just before the closing brace of the substitution.
+assert_contains "${OLLAMA_COMPOSE}" ':-127\.0\.0\.1[}]:11434:11434' \
+  "ollama port defaults to localhost binding"
+refute_contains "${OLLAMA_COMPOSE}" '0\.0\.0\.0' \
+  "ollama port is not published to all interfaces"
+
+# JSON-file logging with rotation limits.
+assert_contains "${OLLAMA_COMPOSE}" 'driver:[[:space:]]*json-file' \
+  "ollama uses the json-file logging driver"
+assert_contains "${OLLAMA_COMPOSE}" 'max-size:' \
+  "ollama logging sets max-size"
+assert_contains "${OLLAMA_COMPOSE}" 'max-file:' \
+  "ollama logging sets max-file"
+
+# The env example carries the required non-secret settings.
+assert_contains "ai/ollama/.env.example" '^TZ=America/Chicago' \
+  "ollama .env.example sets TZ=America/Chicago"
+assert_contains "ai/ollama/.env.example" '^OLLAMA_IMAGE=' \
+  "ollama .env.example sets OLLAMA_IMAGE"
+assert_contains "ai/ollama/.env.example" 'OLLAMA_BIND_ADDRESS' \
+  "ollama .env.example documents the optional bind address"
+
+# The README documents the required model pulls and GPU verification.
+assert_contains "ai/ollama/README.md" 'qwen3:8b' \
+  "ollama README documents qwen3:8b pull"
+assert_contains "ai/ollama/README.md" 'qwen3:30b' \
+  "ollama README documents qwen3:30b pull"
+assert_contains "ai/ollama/README.md" 'nomic-embed-text' \
+  "ollama README documents nomic-embed-text pull"
+assert_contains "ai/ollama/README.md" 'nvidia-smi' \
+  "ollama README documents nvidia-smi GPU verification"
 
 # ---------------------------------------------------------------------------
 # Result
