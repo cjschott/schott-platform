@@ -283,9 +283,12 @@ assert_contains "${LITELLM_CONFIG}" 'model:[[:space:]]*ollama/qwen3:30b[[:space:
 assert_contains "${LITELLM_CONFIG}" 'model:[[:space:]]*ollama/nomic-embed-text[[:space:]]*$' \
   "local-embed maps to ollama/nomic-embed-text"
 
-# Ollama base URL is supplied via environment substitution, not hard-coded.
-assert_contains "${LITELLM_CONFIG}" 'api_base:[[:space:]]*\$\{OLLAMA_BASE_URL\}' \
-  "api_base uses \${OLLAMA_BASE_URL} substitution"
+# Ollama base URL is resolved by LiteLLM from its own environment (os.environ/),
+# not the Compose ${VAR} form — Compose does not interpolate a mounted config.
+assert_count "${LITELLM_CONFIG}" 'api_base:[[:space:]]*os\.environ/OLLAMA_BASE_URL' 3 \
+  "all three api_base entries use os.environ/OLLAMA_BASE_URL"
+refute_contains "${LITELLM_CONFIG}" '\$\{OLLAMA_BASE_URL\}' \
+  "config.yaml does not rely on Compose \${OLLAMA_BASE_URL} substitution"
 assert_contains "ai/litellm/.env.example" '^OLLAMA_BASE_URL=http://ollama:11434[[:space:]]*$' \
   "OLLAMA_BASE_URL points to the internal ollama:11434 backend"
 

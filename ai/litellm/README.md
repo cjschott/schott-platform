@@ -24,8 +24,9 @@ Use these aliases, never provider-specific model names:
 ## Files
 
 - `compose.yaml` — isolated LiteLLM service (publishes port `4000`).
-- `config.yaml` — model aliases, backend URLs (via `${OLLAMA_BASE_URL}`), master
-  key from the environment, and logging policy. Mounted read-only.
+- `config.yaml` — model aliases, backend URL (resolved by LiteLLM from
+  `os.environ/OLLAMA_BASE_URL`), master key from the environment, and logging
+  policy. Mounted read-only.
 - `.env.example` — non-secret settings and the required master-key placeholder.
   Copy to a local `.env`; never commit real values.
 
