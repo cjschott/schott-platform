@@ -479,6 +479,414 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Task 5: Operations scripts (validate, deploy, update, health-check, backup)
+# ---------------------------------------------------------------------------
+
+# Literal secret used only inside behavior stubs. It must never appear in any
+# script output. (It is not a real key.)
+T5_SENTINEL_KEY="sk-behaviortest-DO-NOT-LOG-123"
+
+TASK5_SCRIPTS=(
+  "scripts/validate-config.sh"
+  "scripts/deploy-schai.sh"
+  "scripts/update-schai.sh"
+  "scripts/health-check.sh"
+  "scripts/backup-config.sh"
+)
+
+assert_dir "scripts"
+
+# assert_executable <relative-path> — trusts the git index mode (100755) when
+# tracked (portable across platforms where core.fileMode is false), and falls
+# back to a filesystem test for not-yet-committed files.
+assert_executable() {
+  local rel="$1" mode
+  mode="$(git -C "${ROOT}" ls-files -s -- "${rel}" 2>/dev/null | awk '{print $1}')"
+  if [[ "${mode}" == "100755" ]]; then
+    pass "executable (git mode 100755): ${rel}"
+  elif [[ -x "${ROOT}/${rel}" ]]; then
+    pass "executable (filesystem +x): ${rel}"
+  else
+    fail "script is not executable: ${rel} (git mode='${mode:-none}')"
+  fi
+}
+
+# assert_in <haystack> <needle> <description>
+assert_in() {
+  if [[ "$1" == *"$2"* ]]; then pass "$3"; else fail "$3 (missing '$2')"; fi
+}
+
+# refute_in <haystack> <needle> <description>
+refute_in() {
+  if [[ "$1" == *"$2"* ]]; then fail "$3 (found forbidden '$2')"; else pass "$3"; fi
+}
+
+# Per-script structural assertions.
+for s in "${TASK5_SCRIPTS[@]}"; do
+  assert_file "${s}"
+  assert_executable "${s}"
+  assert_contains "${s}" 'BASH_SOURCE\[0\]' \
+    "resolves paths from its own location: ${s}"
+  # A script may READ the master key but must never echo/printf its value.
+  refute_contains "${s}" 'echo[^#]*\$\{?LITELLM_MASTER_KEY' \
+    "does not echo LITELLM_MASTER_KEY value: ${s}"
+  refute_contains "${s}" 'printf[^#]*\$\{?LITELLM_MASTER_KEY' \
+    "does not printf LITELLM_MASTER_KEY value: ${s}"
+done
+
+# Uses the canonical stack and local secret file, never the example for deploy.
+assert_contains "scripts/validate-config.sh" 'ai/compose\.yaml' \
+  "validate-config targets ai/compose.yaml"
+assert_contains "scripts/validate-config.sh" 'ai/\.env' \
+  "validate-config references the local secret file ai/.env"
+assert_contains "scripts/validate-config.sh" 'LITELLM_MASTER_KEY' \
+  "validate-config checks the master key"
+assert_contains "scripts/validate-config.sh" 'bash -n' \
+  "validate-config validates shell syntax"
+
+assert_contains "scripts/deploy-schai.sh" 'validate-config\.sh' \
+  "deploy calls validate-config.sh"
+assert_contains "scripts/deploy-schai.sh" 'pull' \
+  "deploy pulls images"
+assert_contains "scripts/deploy-schai.sh" 'up -d' \
+  "deploy starts services detached"
+assert_contains "scripts/deploy-schai.sh" 'health-check\.sh' \
+  "deploy runs health-check.sh"
+
+assert_contains "scripts/update-schai.sh" 'inspect' \
+  "update inspects running image IDs"
+assert_contains "scripts/update-schai.sh" 'pull' \
+  "update pulls images"
+assert_contains "scripts/update-schai.sh" 'health-check\.sh' \
+  "update runs health checks"
+assert_contains "scripts/update-schai.sh" 'ollback' \
+  "update prints rollback guidance on health failure"
+
+assert_contains "scripts/health-check.sh" '/health/liveliness' \
+  "health-check probes LiteLLM liveness"
+assert_contains "scripts/health-check.sh" '/v1/models' \
+  "health-check queries /v1/models"
+assert_contains "scripts/health-check.sh" '/v1/chat/completions' \
+  "health-check exercises a completion"
+assert_contains "scripts/health-check.sh" '/v1/embeddings' \
+  "health-check exercises an embedding"
+assert_contains "scripts/health-check.sh" 'local-general' \
+  "health-check verifies local-general inventory"
+assert_contains "scripts/health-check.sh" '\-\-deep' \
+  "health-check supports --deep"
+assert_contains "scripts/health-check.sh" '\-\-max-time' \
+  "health-check bounds curl with --max-time"
+
+assert_contains "scripts/backup-config.sh" 'tar' \
+  "backup creates a tar archive"
+assert_contains "scripts/backup-config.sh" 'sha256' \
+  "backup writes a SHA-256 checksum"
+assert_contains "scripts/backup-config.sh" 'rev-parse HEAD' \
+  "backup records git HEAD"
+assert_contains "scripts/backup-config.sh" 'REDACTED' \
+  "backup sanitizes the rendered compose config"
+
+# ---------------------------------------------------------------------------
+# Task 5 behavior tests — stubbed commands + temp dirs; no daemon/secret needed.
+# Guarded by a local errexit disable so a single failing probe cannot abort the
+# whole suite.
+# ---------------------------------------------------------------------------
+
+TASK5_TMP=()
+t5_new_repo() {
+  local t; t="$(mktemp -d)"; TASK5_TMP+=("${t}")
+  mkdir -p "${t}/scripts" "${t}/ai/litellm" "${t}/docs" "${t}/bin"
+  cp "${ROOT}/scripts/"*.sh "${t}/scripts/" 2>/dev/null || true
+  cp "${ROOT}/ai/compose.yaml" "${t}/ai/compose.yaml" 2>/dev/null || true
+  cp "${ROOT}/ai/.env.example" "${t}/ai/.env.example" 2>/dev/null || true
+  cp "${ROOT}/ai/litellm/config.yaml" "${t}/ai/litellm/config.yaml" 2>/dev/null || true
+  printf '%s' "${t}"
+}
+
+t5_write_env() {  # <repo> [key]
+  local t="$1" key="${2-${T5_SENTINEL_KEY}}"
+  cat >"${t}/ai/.env" <<EOF
+TZ=America/Chicago
+OLLAMA_IMAGE=ollama/ollama:0.11.4
+LITELLM_IMAGE=ghcr.io/berriai/litellm:main-v1.74.3-stable
+OLLAMA_BASE_URL=http://ollama:11434
+LITELLM_PORT=4000
+LITELLM_BIND_ADDRESS=0.0.0.0
+LOG_LEVEL=INFO
+LITELLM_MASTER_KEY=${key}
+EOF
+}
+
+# Stub `docker` that succeeds for every subcommand (validate/backup path).
+t5_stub_docker_ok() {  # <repo>
+  cat >"$1/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$1/bin/docker"
+}
+
+# Smart `curl` stub for health-check: logs URL + auth flag, returns canned JSON.
+t5_stub_curl() {  # <repo>
+  cat >"$1/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=""; wfmt=""; url=""; auth=0; data=""
+args=("$@"); i=0
+while (( i < ${#args[@]} )); do
+  a="${args[$i]}"
+  case "$a" in
+    -o) i=$((i+1)); out="${args[$i]}";;
+    -H) i=$((i+1)); [[ "${args[$i]}" == Authorization:* ]] && auth=1;;
+    -d|--data|--data-raw|--data-binary) i=$((i+1)); data="${args[$i]}";;
+    -w) i=$((i+1)); wfmt="${args[$i]}";;
+    http://*|https://*) url="$a";;
+  esac
+  i=$((i+1))
+done
+printf '%s auth=%d\n' "$url" "$auth" >> "${CURL_LOG:-/dev/null}"
+code=200
+case "$url" in
+  */health/liveliness) body='{"status":"connected"}';;
+  */v1/models)
+    if (( auth )); then body='{"data":[{"id":"local-fast"},{"id":"local-general"},{"id":"local-embed"}]}'
+    else body='{"error":"authentication required"}'; code=401; fi;;
+  */v1/chat/completions) body='{"choices":[{"message":{"content":"pong"}}]}';;
+  */v1/embeddings) body='{"data":[{"embedding":[0.11,0.22,0.33]}]}';;
+  *) body='{}'; code=404;;
+esac
+[[ -n "$out" ]] && printf '%s' "$body" > "$out"
+[[ -n "$wfmt" ]] && printf '%s' "$code"
+exit 0
+EOF
+  chmod +x "$1/bin/curl"
+}
+
+t5_run() {  # <repo> <script-rel> <env-assignments...> -- runs and stores rc/out
+  local t="$1" rel="$2"; shift 2
+  T5_OUT="$(PATH="${t}/bin:${PATH}" env "$@" bash "${t}/${rel}" 2>&1)"
+  T5_RC=$?
+}
+
+# --- Behavior 1: validate-config refuses a missing ai/.env ------------------
+t5_b_validate_missing_env() {
+  if [[ ! -f "${ROOT}/scripts/validate-config.sh" ]]; then
+    fail "behavior: validate-config.sh absent (missing-env test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_stub_docker_ok "${t}"
+  t5_run "${t}" "scripts/validate-config.sh"
+  if (( T5_RC != 0 )); then
+    pass "behavior: validate-config fails without ai/.env"
+  else
+    fail "behavior: validate-config must fail without ai/.env"
+  fi
+  assert_in "${T5_OUT}" "ai/.env" "behavior: validate-config error names ai/.env"
+}
+
+# --- Behavior 2: validate-config refuses an empty master key ----------------
+t5_b_validate_empty_key() {
+  if [[ ! -f "${ROOT}/scripts/validate-config.sh" ]]; then
+    fail "behavior: validate-config.sh absent (empty-key test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_stub_docker_ok "${t}"; t5_write_env "${t}" ""
+  t5_run "${t}" "scripts/validate-config.sh"
+  if (( T5_RC != 0 )); then
+    pass "behavior: validate-config fails on empty LITELLM_MASTER_KEY"
+  else
+    fail "behavior: validate-config must fail on empty LITELLM_MASTER_KEY"
+  fi
+  assert_in "${T5_OUT}" "LITELLM_MASTER_KEY" \
+    "behavior: empty-key error names LITELLM_MASTER_KEY"
+}
+
+# --- Behavior 3: supplied key never leaks into script output ----------------
+t5_b_no_key_leak() {
+  if [[ ! -f "${ROOT}/scripts/validate-config.sh" || ! -f "${ROOT}/scripts/health-check.sh" ]]; then
+    fail "behavior: scripts absent (no-key-leak test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_stub_docker_ok "${t}"; t5_stub_curl "${t}"
+  t5_write_env "${t}" "${T5_SENTINEL_KEY}"
+  t5_run "${t}" "scripts/validate-config.sh"
+  refute_in "${T5_OUT}" "${T5_SENTINEL_KEY}" \
+    "behavior: validate-config output hides the master key"
+  t5_run "${t}" "scripts/health-check.sh" "CURL_LOG=${t}/curl.log"
+  refute_in "${T5_OUT}" "${T5_SENTINEL_KEY}" \
+    "behavior: health-check output hides the master key"
+}
+
+# --- Behavior 4: deploy health wait is bounded (does not hang) --------------
+t5_b_deploy_bounded_wait() {
+  if [[ ! -f "${ROOT}/scripts/deploy-schai.sh" ]]; then
+    fail "behavior: deploy-schai.sh absent (bounded-wait test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_write_env "${t}"
+  # docker stub: pull/up/config/version ok; ps returns a cid; inspect never healthy.
+  cat >"${t}/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "compose" ]]; then
+  shift; sub=""
+  while (( $# )); do
+    case "$1" in version|pull|config|up|ps|exec) sub="$1"; break;; esac
+    shift
+  done
+  case "$sub" in
+    ps) echo "cid-not-healthy";;
+    *) : ;;
+  esac
+  exit 0
+elif [[ "$1" == "inspect" ]]; then
+  echo "starting"; exit 0
+fi
+exit 0
+EOF
+  chmod +x "${t}/bin/docker"
+  t5_run "${t}" "scripts/deploy-schai.sh" \
+    "DEPLOY_TIMEOUT_SECONDS=2" "DEPLOY_POLL_SECONDS=1"
+  if (( T5_RC != 0 )); then
+    pass "behavior: deploy fails (bounded) when services never become healthy"
+  else
+    fail "behavior: deploy must fail when health wait times out"
+  fi
+  assert_in "${T5_OUT}" "timed out" \
+    "behavior: deploy reports a bounded health-wait timeout"
+}
+
+# --- Behavior 5: health-check issues the expected ordered requests ----------
+t5_b_health_ordering() {
+  if [[ ! -f "${ROOT}/scripts/health-check.sh" ]]; then
+    fail "behavior: health-check.sh absent (ordering test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_stub_curl "${t}"; t5_write_env "${t}"
+  local log="${t}/curl.log"; : > "${log}"
+  t5_run "${t}" "scripts/health-check.sh" "CURL_LOG=${log}"
+  if (( T5_RC == 0 )); then
+    pass "behavior: health-check passes against stubbed LiteLLM"
+  else
+    fail "behavior: health-check should pass against a healthy stub (rc=${T5_RC})"
+  fi
+  mapfile -t L < "${log}" 2>/dev/null || L=()
+  assert_in "${L[0]:-}" "/health/liveliness" "behavior: check 1 is liveness"
+  assert_in "${L[1]:-}" "/v1/models auth=0"  "behavior: check 2 is unauth /v1/models"
+  assert_in "${L[2]:-}" "/v1/models auth=1"  "behavior: check 3 is auth /v1/models"
+  assert_in "${L[3]:-}" "/v1/chat/completions" "behavior: check 4 is a completion"
+  assert_in "${L[4]:-}" "/v1/embeddings"     "behavior: check 5 is an embedding"
+}
+
+# --- Behavior 6/7: backup excludes secrets/blobs/logs and leaks no key ------
+t5_b_backup_exclusions() {
+  if [[ ! -f "${ROOT}/scripts/backup-config.sh" ]]; then
+    fail "behavior: backup-config.sh absent (backup test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_write_env "${t}" "${T5_SENTINEL_KEY}"
+  # Decoy artifacts that must never enter the archive.
+  printf 'secret log line\n' > "${t}/ai/service.log"
+  mkdir -p "${t}/models" "${t}/secrets"
+  printf 'BLOB' > "${t}/models/blob.gguf"
+  printf 'token' > "${t}/secrets/token"
+  # docker stub: `config` prints a rendered file containing the key; ollama down.
+  cat >"${t}/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "compose" ]]; then
+  shift; sub=""
+  while (( $# )); do
+    case "$1" in version|pull|config|up|ps|exec) sub="$1"; break;; esac
+    shift
+  done
+  case "$sub" in
+    config)
+      printf 'services:\n  litellm:\n    environment:\n      LITELLM_MASTER_KEY: sk-behaviortest-DO-NOT-LOG-123\n';;
+    ps) : ;;          # empty -> ollama not running
+    exec) exit 1;;    # inventory unavailable
+  esac
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "${t}/bin/docker"
+  t5_run "${t}" "scripts/backup-config.sh"
+  if (( T5_RC == 0 )); then
+    pass "behavior: backup succeeds even when Ollama is unavailable"
+  else
+    fail "behavior: backup should succeed with Ollama unavailable (rc=${T5_RC})"
+  fi
+  local arch; arch="$(ls "${t}/backups/"*.tar.gz 2>/dev/null | head -n1 || true)"
+  if [[ -n "${arch}" && -f "${arch}" ]]; then
+    pass "behavior: backup produced an archive"
+  else
+    fail "behavior: backup produced no archive"; return
+  fi
+  if [[ -f "${arch}.sha256" ]]; then
+    pass "behavior: backup wrote a SHA-256 checksum"
+  else
+    fail "behavior: backup did not write a SHA-256 checksum"
+  fi
+  local x="${t}/extract"; mkdir -p "${x}"
+  tar xzf "${arch}" -C "${x}" 2>/dev/null || true
+  if find "${x}" -name '.env' -type f | grep -q .; then
+    fail "behavior: archive must not contain a real .env file"
+  else
+    pass "behavior: archive excludes real .env files"
+  fi
+  if find "${x}" -name '*.log' -type f | grep -q .; then
+    fail "behavior: archive must not contain log files"
+  else
+    pass "behavior: archive excludes log files"
+  fi
+  if find "${x}" -name 'blob.gguf' -type f | grep -q .; then
+    fail "behavior: archive must not contain model blobs"
+  else
+    pass "behavior: archive excludes model blobs"
+  fi
+  if find "${x}" -iname 'manifest*' -type f | grep -q .; then
+    pass "behavior: archive includes a manifest"
+  else
+    fail "behavior: archive is missing a manifest"
+  fi
+  if grep -rqF "${T5_SENTINEL_KEY}" "${x}" 2>/dev/null; then
+    fail "behavior: archive leaks the master key"
+  else
+    pass "behavior: archive contains no master-key value"
+  fi
+}
+
+# --- Behavior 8: deploy refuses a missing ai/.env ---------------------------
+t5_b_deploy_missing_env() {
+  if [[ ! -f "${ROOT}/scripts/deploy-schai.sh" ]]; then
+    fail "behavior: deploy-schai.sh absent (missing-env test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_stub_docker_ok "${t}"
+  t5_run "${t}" "scripts/deploy-schai.sh"
+  if (( T5_RC != 0 )); then
+    pass "behavior: deploy refuses to run without ai/.env"
+  else
+    fail "behavior: deploy must refuse to run without ai/.env"
+  fi
+  assert_in "${T5_OUT}" "ai/.env" "behavior: deploy error names ai/.env"
+}
+
+# Run behavior tests with errexit locally disabled so a probe cannot abort.
+run_task5_behavior_tests() {
+  local had_e=0; case "$-" in *e*) had_e=1;; esac
+  set +e
+  t5_b_validate_missing_env
+  t5_b_validate_empty_key
+  t5_b_no_key_leak
+  t5_b_deploy_bounded_wait
+  t5_b_health_ordering
+  t5_b_backup_exclusions
+  t5_b_deploy_missing_env
+  # Clean up temp dirs while errexit is still disabled so a stray Windows file
+  # lock during rm cannot abort the suite.
+  local d
+  for d in "${TASK5_TMP[@]:-}"; do
+    [[ -n "${d}" && -d "${d}" ]] && rm -rf "${d}" 2>/dev/null || true
+  done
+  (( had_e )) && set -e
+  return 0
+}
+
+run_task5_behavior_tests
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

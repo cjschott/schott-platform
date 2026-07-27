@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# health-check.sh — verify the LiteLLM gateway and model readiness.
+#
+# Checks, in order:
+#   1. LiteLLM liveness.
+#   2. Unauthenticated /v1/models is rejected.
+#   3. Authenticated /v1/models succeeds.
+#   4. local-fast returns a non-empty completion.
+#   5. local-embed returns a non-empty numeric vector.
+#   6. local-general appears in the model inventory.
+#   7. (--deep) local-general returns a bounded completion.
+#
+# The master key is read from ai/.env and never printed. Only concise pass/fail
+# metadata is emitted — never full generated responses. Returns non-zero on any
+# failure. Safe to run repeatedly.
+
+trap 'printf "ERROR: %s failed unexpectedly at line %d\n" "$(basename "$0")" "${LINENO}" >&2' ERR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ENV_FILE="${ROOT}/ai/.env"
+
+DEEP=0
+for arg in "$@"; do
+  case "${arg}" in
+    --deep) DEEP=1 ;;
+    -h|--help)
+      printf 'Usage: %s [--deep]\n' "$(basename "$0")"; exit 0 ;;
+    *) printf 'ERROR: unknown argument: %s\n' "${arg}" >&2; exit 2 ;;
+  esac
+done
+
+# --- Load configuration (key never printed) ---------------------------------
+if [[ ! -f "${ENV_FILE}" ]]; then
+  printf 'ERROR: missing local secret file: ai/.env\n' >&2
+  exit 1
+fi
+
+read_env() {  # read_env <VAR> ; echoes the raw value from ai/.env
+  local v="$1" val
+  val="$(grep -E "^[[:space:]]*${v}=" "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+  val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+  printf '%s' "${val}"
+}
+
+MASTER_KEY="$(read_env LITELLM_MASTER_KEY)"
+if [[ -z "${MASTER_KEY//[[:space:]]/}" ]]; then
+  printf 'ERROR: LITELLM_MASTER_KEY is empty in ai/.env\n' >&2
+  exit 1
+fi
+
+PORT="$(read_env LITELLM_PORT)"; PORT="${PORT:-4000}"
+# For on-host checks connect to loopback; a 0.0.0.0/empty bind is not routable.
+HOST="$(read_env LITELLM_HEALTH_HOST)"; HOST="${HOST:-127.0.0.1}"
+BASE_URL="${LITELLM_URL:-http://${HOST}:${PORT}}"
+
+CONNECT_TIMEOUT=5
+MAX_TIME=20
+DEEP_MAX_TIME=180
+
+failures=0
+pass() { printf 'PASS: %s\n' "$1"; }
+fail() { printf 'FAIL: %s\n' "$1" >&2; failures=$((failures + 1)); }
+
+BODY="$(mktemp)"; MODELS_BODY="$(mktemp)"
+cleanup() { rm -f "${BODY}" "${MODELS_BODY}"; }
+trap cleanup EXIT
+
+# get_code writes the response body to $BODY and echoes the HTTP status code.
+get_code() {  # get_code <max-time> <auth:0|1> <method> <url> [json-data]
+  local mt="$1" auth="$2" method="$3" url="$4" data="${5-}"
+  local -a args=(-sS -o "${BODY}" -w '%{http_code}'
+                 --connect-timeout "${CONNECT_TIMEOUT}" --max-time "${mt}"
+                 -X "${method}")
+  (( auth )) && args+=(-H "Authorization: Bearer ${MASTER_KEY}")
+  if [[ -n "${data}" ]]; then
+    args+=(-H "Content-Type: application/json" --data "${data}")
+  fi
+  curl "${args[@]}" "${url}" 2>/dev/null || printf '000'
+}
+
+is_2xx() { [[ "$1" =~ ^2[0-9][0-9]$ ]]; }
+
+# --- 1. LiteLLM liveness ----------------------------------------------------
+code="$(get_code "${MAX_TIME}" 0 GET "${BASE_URL}/health/liveliness")"
+if is_2xx "${code}"; then
+  pass "LiteLLM liveness (${code})"
+else
+  fail "LiteLLM liveness failed (${code}) at ${BASE_URL}/health/liveliness"
+fi
+
+# --- 2. Unauthenticated /v1/models is rejected ------------------------------
+code="$(get_code "${MAX_TIME}" 0 GET "${BASE_URL}/v1/models")"
+if is_2xx "${code}"; then
+  fail "unauthenticated /v1/models was accepted (${code}) — gateway is not failing closed"
+else
+  pass "unauthenticated /v1/models rejected (${code})"
+fi
+
+# --- 3. Authenticated /v1/models succeeds -----------------------------------
+code="$(get_code "${MAX_TIME}" 1 GET "${BASE_URL}/v1/models")"
+if is_2xx "${code}"; then
+  cp "${BODY}" "${MODELS_BODY}"
+  pass "authenticated /v1/models (${code})"
+else
+  fail "authenticated /v1/models failed (${code})"
+fi
+
+# --- 4. local-fast returns a non-empty completion ---------------------------
+code="$(get_code "${MAX_TIME}" 1 POST "${BASE_URL}/v1/chat/completions" \
+  '{"model":"local-fast","messages":[{"role":"user","content":"ping"}],"max_tokens":16}')"
+if is_2xx "${code}" && grep -Eq '"content"[[:space:]]*:[[:space:]]*"[^"]+"' "${BODY}"; then
+  pass "local-fast completion (${code}, non-empty)"
+else
+  fail "local-fast completion failed (${code}) or returned empty content"
+fi
+
+# --- 5. local-embed returns a non-empty numeric vector ----------------------
+code="$(get_code "${MAX_TIME}" 1 POST "${BASE_URL}/v1/embeddings" \
+  '{"model":"local-embed","input":"ping"}')"
+if is_2xx "${code}" && grep -Eq '"embedding"[[:space:]]*:[[:space:]]*\[[[:space:]]*-?[0-9]' "${BODY}"; then
+  pass "local-embed embedding (${code}, numeric vector)"
+else
+  fail "local-embed embedding failed (${code}) or returned no numeric vector"
+fi
+
+# --- 6. local-general appears in the model inventory ------------------------
+if grep -q 'local-general' "${MODELS_BODY}" 2>/dev/null; then
+  pass "local-general present in model inventory"
+else
+  fail "local-general missing from model inventory"
+fi
+
+# --- 7. (--deep) local-general bounded completion ---------------------------
+if (( DEEP )); then
+  code="$(get_code "${DEEP_MAX_TIME}" 1 POST "${BASE_URL}/v1/chat/completions" \
+    '{"model":"local-general","messages":[{"role":"user","content":"Reply with the single word: ok"}],"max_tokens":32}')"
+  if is_2xx "${code}" && grep -Eq '"content"[[:space:]]*:[[:space:]]*"[^"]+"' "${BODY}"; then
+    pass "local-general deep completion (${code}, non-empty)"
+  else
+    fail "local-general deep completion failed (${code}) or returned empty content"
+  fi
+fi
+
+# --- Result -----------------------------------------------------------------
+if (( failures > 0 )); then
+  printf '\nhealth-check: %d check(s) failed at %s\n' "${failures}" "${BASE_URL}" >&2
+  exit 1
+fi
+printf '\nhealth-check: all checks passed at %s\n' "${BASE_URL}"
