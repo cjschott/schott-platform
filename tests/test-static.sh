@@ -1181,9 +1181,27 @@ LOCALVAL_DOC="docs/development/local-validation.md"
 
 assert_dir "${WF_DIR}"
 
+# assert_uses_sha_pinned <workflow> — every `uses:` action reference must pin a
+# full 40-character commit SHA (immutable), not a movable tag.
+assert_uses_sha_pinned() {
+  local w="$1" f="${ROOT}/${w}" total pinned
+  if [[ ! -f "${f}" ]]; then
+    fail "SHA-pin check: workflow missing: ${w}"; return
+  fi
+  total="$(grep -cE '^[[:space:]]*(- )?uses:' "${f}" 2>/dev/null || true)"; total=${total:-0}
+  pinned="$(grep -E '^[[:space:]]*(- )?uses:' "${f}" 2>/dev/null \
+            | grep -cE '@[0-9a-f]{40}([^0-9a-f]|$)' || true)"; pinned=${pinned:-0}
+  if [[ "${total}" -gt 0 && "${total}" -eq "${pinned}" ]]; then
+    pass "all ${total} action ref(s) pinned to a 40-char commit SHA: ${w}"
+  else
+    fail "not all action refs are SHA-pinned in ${w} (pinned ${pinned}/${total})"
+  fi
+}
+
 # Contracts every workflow must satisfy: a name, explicit least-privilege
-# permissions, declared triggers, pinned actions (no moving @main/@master),
-# and no reference to the real secret file (only ai/.env.example is allowed).
+# permissions, declared triggers, the ubuntu-24.04 runner (never ubuntu-latest),
+# fully SHA-pinned immutable action references (no @main/@master and no movable
+# @vN tags), and no reference to a real secret file (only ai/.env.example).
 WORKFLOWS=( "${CI_WF}" "${SHELLCHECK_WF}" "${GITLEAKS_WF}" "${TRIVY_WF}" \
             "${SEMGREP_WF}" "${CODEQL_WF}" )
 for w in "${WORKFLOWS[@]}"; do
@@ -1191,8 +1209,14 @@ for w in "${WORKFLOWS[@]}"; do
   assert_contains "${w}" '^name:[[:space:]]*[A-Za-z]' "workflow declares a name: ${w}"
   assert_contains "${w}" '^permissions:' "workflow declares explicit permissions: ${w}"
   assert_contains "${w}" '^on:' "workflow declares triggers: ${w}"
-  refute_contains "${w}" 'uses:[^@]*@(main|master)[[:space:]]*$' \
-    "workflow pins action versions (no @main/@master): ${w}"
+  assert_contains "${w}" 'runs-on:[[:space:]]*ubuntu-24\.04' \
+    "workflow pins the runner to ubuntu-24.04: ${w}"
+  refute_contains "${w}" 'ubuntu-latest' "workflow does not use ubuntu-latest: ${w}"
+  assert_uses_sha_pinned "${w}"
+  refute_contains "${w}" '@(main|master)([^A-Za-z0-9]|$)' \
+    "workflow uses no @main/@master ref: ${w}"
+  refute_contains "${w}" 'uses:[^#]*@v[0-9]' \
+    "workflow uses no movable @vN action tag: ${w}"
   refute_contains "${w}" '/\.env([^.]|$)' \
     "workflow references only sanitized .env.example (never a real .env): ${w}"
 done
@@ -1216,11 +1240,28 @@ assert_contains "${GITLEAKS_WF}" '[Gg]itleaks' "gitleaks workflow runs Gitleaks"
 assert_contains "${TRIVY_WF}" 'trivy' "trivy workflow runs Trivy"
 assert_contains "${TRIVY_WF}" '(fs|filesystem)' "trivy runs a filesystem scan"
 assert_contains "${TRIVY_WF}" '(HIGH,CRITICAL|CRITICAL,HIGH)' "trivy scans HIGH + CRITICAL"
+refute_contains "${TRIVY_WF}" '@0\.28\.0' \
+  "trivy no longer references the compromised 0.28.0 release"
+
 assert_contains "${SEMGREP_WF}" 'semgrep' "semgrep workflow runs Semgrep"
+assert_contains "${SEMGREP_WF}" 'semgrep/semgrep:[0-9]' \
+  "semgrep image is pinned to a numbered version"
+assert_contains "${SEMGREP_WF}" '@sha256:[0-9a-f]{64}' \
+  "semgrep image is pinned by an immutable digest"
+refute_contains "${SEMGREP_WF}" 'image:[[:space:]]*semgrep/semgrep[[:space:]]*$' \
+  "semgrep image is not the mutable unversioned tag"
+
+# CodeQL is functional: it scans the GitHub Actions workflows (language:actions),
+# is not gated off, and carries no placeholder Python matrix.
 assert_contains "${CODEQL_WF}" '[Cc]ode[Qq][Ll]' "codeql workflow references CodeQL"
-assert_contains "${CODEQL_WF}" 'bash' "codeql workflow addresses bash/shell scope"
-assert_contains "${CODEQL_WF}" '(shell|not support|unsupported|no .* analyzer)' \
-  "codeql workflow documents the shell-language limitation"
+assert_contains "${CODEQL_WF}" 'languages:[[:space:]]*actions' \
+  "codeql configures the actions language"
+assert_contains "${CODEQL_WF}" 'codeql-action/init' "codeql runs init"
+assert_contains "${CODEQL_WF}" 'codeql-action/analyze' "codeql runs analyze"
+refute_contains "${CODEQL_WF}" 'if:[[:space:]]*\$\{\{[[:space:]]*false' \
+  "codeql analyze job is enabled (not gated off)"
+refute_contains "${CODEQL_WF}" 'python' \
+  "codeql has no placeholder python matrix"
 
 # --- README + local validation documentation --------------------------------
 assert_contains "README.md" 'docs/development/local-validation\.md' \
@@ -1238,6 +1279,12 @@ assert_contains "${LOCALVAL_DOC}" 'trivy' "local-validation documents Trivy"
 assert_contains "${LOCALVAL_DOC}" 'semgrep' "local-validation documents Semgrep"
 assert_contains "${LOCALVAL_DOC}" 'same result as CI' \
   "local-validation states local runs match CI"
+assert_contains "${LOCALVAL_DOC}" 'GitHub Actions workflows' \
+  "local-validation explains CodeQL scans the GitHub Actions workflows"
+assert_contains "${LOCALVAL_DOC}" 'GitHub-hosted' \
+  "local-validation notes CodeQL is GitHub-hosted with no simple local equivalent"
+assert_contains "${LOCALVAL_DOC}" '1\.171\.0' \
+  "local-validation identifies the pinned Semgrep version"
 refute_contains "${LOCALVAL_DOC}" '/\.env([^.]|$)' \
   "local-validation references only sanitized .env.example"
 

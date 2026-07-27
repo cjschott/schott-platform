@@ -19,12 +19,13 @@ concurrency:
 jobs:
   shellcheck:
     name: ShellCheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        # actions/checkout v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      # shellcheck is preinstalled on ubuntu-latest, so this matches local use.
+      # shellcheck is preinstalled on ubuntu-24.04, so this matches local use.
       - name: Run ShellCheck on all shell scripts
         run: |
           shellcheck --version

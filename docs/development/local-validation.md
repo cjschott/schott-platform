@@ -66,18 +66,30 @@ in this baseline.
 
 ### Semgrep — `semgrep.yml`
 
+Semgrep is pinned to **version 1.171.0** by an immutable container digest. Run
+the exact same image locally:
+
 ```bash
-semgrep scan --config auto --error
+docker run --rm -v "$PWD:/src" -w /src \
+  semgrep/semgrep:1.171.0@sha256:bdf7013b2c3634a487671158da77c554f531742326b543a9464d2adf6c433ac8 \
+  semgrep scan --config auto --error
 ```
 
-Default security rules; findings fail the run.
+Default security rules; findings fail the run. (If you have Semgrep installed
+natively at the same version, `semgrep scan --config auto --error` is
+equivalent.)
 
 ### CodeQL — `codeql.yml`
 
-CodeQL has **no analyzer for Bash/shell**, so it cannot be run against this
-repository's current code and there is no local equivalent. `codeql.yml` is
-scaffolded but disabled until a CodeQL-supported language is added; shell static
-analysis is covered by ShellCheck and Semgrep above.
+CodeQL scans the repository's **GitHub Actions workflows** (CodeQL language
+`actions`) for issues such as unpinned actions, script-injection risks, and
+excessive permissions. CodeQL has **no analyzer for Bash/shell**, so the shell
+scripts themselves are covered by **ShellCheck** and **Semgrep** above, not by
+CodeQL.
+
+CodeQL is **GitHub-hosted** analysis that runs in the CI environment; it has no
+simple equivalent local command in this baseline. Review its findings in the
+repository's code-scanning results rather than locally.
 
 ## Required vs optional summary
 
@@ -89,8 +101,8 @@ analysis is covered by ShellCheck and Semgrep above.
 | ShellCheck | `shellcheck` | Optional | `shellcheck.yml` |
 | Gitleaks | `gitleaks` | Optional | `gitleaks.yml` |
 | Trivy (fs) | `trivy` | Optional | `trivy.yml` |
-| Semgrep | `semgrep` | Optional | `semgrep.yml` |
-| CodeQL | — (n/a for shell) | n/a | `codeql.yml` (disabled) |
+| Semgrep | `semgrep` 1.171.0 (pinned) | Optional | `semgrep.yml` |
+| CodeQL (Actions) | GitHub-hosted (no local equiv.) | n/a | `codeql.yml` |
 
 Run the required checks before every push; run the optional tools when changing
 scripts, configuration, or dependencies. If they pass locally, they pass in CI.

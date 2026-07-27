@@ -2,6 +2,10 @@
 # (misconfigurations, vulnerabilities, and secrets in files). No image scanning
 # yet — images are scanned in a later phase. Reproduce locally with:
 #   trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+#
+# trivy-action is pinned to v0.36.0 by commit SHA. Per Aqua's 2026 advisory,
+# trivy-action releases BEFORE 0.35.0 were affected by a supply-chain
+# compromise; 0.36.0 is a safe post-advisory release.
 name: Trivy
 
 on:
@@ -18,13 +22,15 @@ concurrency:
 jobs:
   trivy-fs:
     name: Trivy filesystem scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        # actions/checkout v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Trivy filesystem scan (HIGH,CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        # aquasecurity/trivy-action v0.36.0 (safe release, >= 0.35.0)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           scan-type: fs
           scan-ref: .

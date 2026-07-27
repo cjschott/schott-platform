@@ -19,10 +19,11 @@ concurrency:
 jobs:
   validate:
     name: Static validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        # actions/checkout v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Shell syntax check (scripts and tests)
         run: |
@@ -33,7 +34,7 @@ jobs:
         run: bash tests/test-static.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
-      # ubuntu-latest ships Docker Compose v2 (`docker compose`).
+      # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
         run: |
           docker compose --env-file ai/.env.example -f ai/compose.yaml config >/dev/null
