@@ -1,0 +1,23 @@
+# Local environment files and secrets — never commit real values.
+# Only sanitized *.env.example templates are tracked.
+.env
+.env.*
+!.env.example
+secrets/
+
+# Runtime artifacts
+logs/
+backups/
+*.log
+
+# Model data (Ollama blobs live outside Git, in a Docker volume or host path)
+models/
+data/
+**/.ollama/
+
+# Superpowers tooling state
+.superpowers/
+
+# Generated validation / config output
+validation-output/
+*.rendered.yaml
