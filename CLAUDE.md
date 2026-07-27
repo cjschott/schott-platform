@@ -139,3 +139,13 @@ Every repository shell script must:
 ```bash
 #!/usr/bin/env bash
 set -Eeuo pipefail
+
+=== REVIEW PACKAGE ===
+
+Task:
+Files Changed:
+Tests Executed:
+Commands Run:
+Known Risks:
+Architecture Decisions:
+Questions for Reviewer:
