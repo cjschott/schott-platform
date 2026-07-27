@@ -1029,6 +1029,144 @@ run_task5_behavior_tests() {
 run_task5_behavior_tests
 
 # ---------------------------------------------------------------------------
+# Task 6: Architecture, operations, recovery, and security documentation
+# ---------------------------------------------------------------------------
+
+ARCH_DOC="docs/architecture/ai-platform.md"
+INSTALL_DOC="docs/operations/install.md"
+OPS_DOC="docs/operations/operations.md"
+RECOVERY_DOC="docs/operations/recovery.md"
+NETPOL_DOC="docs/security/network-policy.md"
+SECURITY_DOC="security/SECURITY.md"
+HARDENING_DOC="security/hardening-checklist.md"
+
+for d in "${ARCH_DOC}" "${INSTALL_DOC}" "${OPS_DOC}" "${RECOVERY_DOC}" \
+         "${NETPOL_DOC}" "${SECURITY_DOC}" "${HARDENING_DOC}"; do
+  assert_file "${d}"
+done
+
+# --- Architecture -----------------------------------------------------------
+assert_contains "${ARCH_DOC}" 'http://schai:4000/v1' \
+  "architecture documents the supported endpoint"
+assert_contains "${ARCH_DOC}" 'local-fast'   "architecture documents local-fast alias"
+assert_contains "${ARCH_DOC}" 'local-general' "architecture documents local-general alias"
+assert_contains "${ARCH_DOC}" 'local-embed'  "architecture documents local-embed alias"
+assert_contains "${ARCH_DOC}" 'not an application endpoint' \
+  "architecture states Ollama is not an application endpoint"
+assert_contains "${ARCH_DOC}" 'ai-backend' \
+  "architecture names the private ai-backend network"
+assert_contains "${ARCH_DOC}" 'ollama-models' \
+  "architecture documents the persistent ollama-models volume"
+assert_contains "${ARCH_DOC}" 'only supported application-facing' \
+  "architecture states LiteLLM is the only supported application-facing API"
+assert_contains "${ARCH_DOC}" 'provider-specific' \
+  "architecture explains avoiding provider-specific model names"
+assert_contains "${ARCH_DOC}" 'not logged by default' \
+  "architecture states prompts/responses are not logged by default"
+assert_contains "${ARCH_DOC}" '[Nn]o (commercial|automatic).*fallback' \
+  "architecture states there is no commercial-provider fallback"
+assert_contains "${ARCH_DOC}" 'replace' \
+  "architecture documents the replaceable-services principle"
+
+# --- Install ----------------------------------------------------------------
+assert_contains "${INSTALL_DOC}" '/opt/schott-platform' \
+  "install uses the canonical deployment path"
+assert_contains "${INSTALL_DOC}" 'America/Chicago' "install references America/Chicago"
+assert_contains "${INSTALL_DOC}" 'nvidia-smi' "install verifies the GPU with nvidia-smi"
+assert_contains "${INSTALL_DOC}" 'docker compose version' \
+  "install checks for Docker Compose v2"
+assert_contains "${INSTALL_DOC}" 'scripts/validate-config.sh' "install runs validate-config.sh"
+assert_contains "${INSTALL_DOC}" 'scripts/deploy-schai.sh' "install runs deploy-schai.sh"
+assert_contains "${INSTALL_DOC}" 'scripts/health-check.sh' "install runs health-check.sh"
+assert_contains "${INSTALL_DOC}" 'chmod 600' "install sets ai/.env to mode 600"
+assert_contains "${INSTALL_DOC}" 'ollama pull qwen3:8b' "install documents qwen3:8b pull"
+assert_contains "${INSTALL_DOC}" 'ollama pull qwen3:30b' "install documents qwen3:30b pull"
+assert_contains "${INSTALL_DOC}" 'ollama pull nomic-embed-text' \
+  "install documents nomic-embed-text pull"
+assert_contains "${INSTALL_DOC}" '\-\-deep' "install mentions optional --deep validation"
+assert_contains "${INSTALL_DOC}" '[Rr]untime' \
+  "install separates runtime steps (requiring schai) from static tests"
+
+# --- Operations -------------------------------------------------------------
+assert_contains "${OPS_DOC}" 'docker compose --env-file ai/\.env -f ai/compose\.yaml' \
+  "operations uses ai/.env with ai/compose.yaml"
+assert_contains "${OPS_DOC}" 'scripts/health-check.sh --deep' \
+  "operations documents health-check --deep"
+assert_contains "${OPS_DOC}" 'scripts/update-schai.sh' "operations documents update"
+assert_contains "${OPS_DOC}" 'scripts/backup-config.sh' "operations documents backup"
+assert_contains "${OPS_DOC}" 'sha256sum -c' "operations verifies the backup checksum"
+assert_contains "${OPS_DOC}" 'UNAVAILABLE' \
+  "operations explains an unavailable Ollama inventory"
+assert_contains "${OPS_DOC}" 'America/Chicago' "operations uses America/Chicago"
+assert_contains "${OPS_DOC}" 'ollama pull' "operations documents model pulls"
+assert_contains "${OPS_DOC}" '401' "operations troubleshoots authentication failures"
+assert_contains "${OPS_DOC}" 'nvidia-smi' "operations documents GPU checks"
+assert_contains "${OPS_DOC}" '[Nn]ever delete' \
+  "operations warns against deleting the model volume as a routine fix"
+
+# --- Recovery ---------------------------------------------------------------
+assert_contains "${RECOVERY_DOC}" 'Recovery order' "recovery documents the recovery order"
+assert_contains "${RECOVERY_DOC}" '/opt/schott-platform' "recovery restores the canonical path"
+assert_contains "${RECOVERY_DOC}" 'sha256sum -c' \
+  "recovery verifies the checksum before extraction"
+assert_contains "${RECOVERY_DOC}" 'ollama pull qwen3:8b' "recovery re-pulls qwen3:8b"
+assert_contains "${RECOVERY_DOC}" 'ollama pull qwen3:30b' "recovery re-pulls qwen3:30b"
+assert_contains "${RECOVERY_DOC}" 'ollama pull nomic-embed-text' \
+  "recovery re-pulls nomic-embed-text"
+assert_contains "${RECOVERY_DOC}" 'recreat' \
+  "recovery requires recreating ai/.env separately"
+assert_contains "${RECOVERY_DOC}" 'model blob' \
+  "recovery states model blobs are intentionally excluded"
+assert_contains "${RECOVERY_DOC}" 'update-schai.sh' \
+  "recovery references the update rollback guidance"
+assert_contains "${RECOVERY_DOC}" 'rotat' \
+  "recovery covers secret rotation after compromise"
+assert_contains "${RECOVERY_DOC}" 'cannot be recovered' \
+  "recovery states what cannot be recovered from the archive"
+
+# --- Network policy ---------------------------------------------------------
+assert_contains "${NETPOL_DOC}" 'ufw allow' "network policy documents manual UFW commands"
+assert_contains "${NETPOL_DOC}" '4000/tcp' "network policy restricts port 4000"
+assert_contains "${NETPOL_DOC}" '11434' "network policy addresses Ollama port 11434"
+assert_contains "${NETPOL_DOC}" 'not applied by (any )?repository script' \
+  "network policy states firewall changes are not scripted"
+assert_contains "${NETPOL_DOC}" '(SSH|22/tcp)' "network policy retains SSH access"
+assert_contains "${NETPOL_DOC}" 'approved-subnet' \
+  "network policy uses a clearly marked subnet placeholder"
+assert_contains "${NETPOL_DOC}" 'http://schai:4000/v1' \
+  "network policy names the application endpoint"
+
+# --- Security policy --------------------------------------------------------
+assert_contains "${SECURITY_DOC}" 'ai/\.env' "security references ai/.env handling"
+assert_contains "${SECURITY_DOC}" '[Nn]ever commit' "security says never commit ai/.env"
+assert_contains "${SECURITY_DOC}" 'rotat' "security documents key rotation"
+assert_contains "${SECURITY_DOC}" 'expos' "security documents exposed-key response"
+assert_contains "${SECURITY_DOC}" 'not logged by default' \
+  "security states no full prompt/response logging by default"
+assert_contains "${SECURITY_DOC}" 'sha256' "security documents checksum verification"
+assert_contains "${SECURITY_DOC}" '(401|unauthenticated)' \
+  "security validates unauthenticated rejection after rotation"
+
+# --- Hardening checklist ----------------------------------------------------
+assert_contains "${HARDENING_DOC}" '^- \[ \]' "hardening checklist uses checkboxes"
+assert_contains "${HARDENING_DOC}" '600' "hardening: ai/.env mode 600"
+assert_contains "${HARDENING_DOC}" '4000' "hardening: port 4000 restricted"
+assert_contains "${HARDENING_DOC}" '11434' "hardening: port 11434 not exposed"
+assert_contains "${HARDENING_DOC}" 'rotat' "hardening: key rotation"
+assert_contains "${HARDENING_DOC}" '[Mm]odel (data|blob)' \
+  "hardening: model data excluded from backups"
+assert_contains "${HARDENING_DOC}" '\-\-deep' "hardening: deep validation"
+
+# --- README links to each required document ---------------------------------
+assert_contains "README.md" 'docs/architecture/ai-platform\.md' "README links the architecture doc"
+assert_contains "README.md" 'docs/operations/install\.md' "README links the install doc"
+assert_contains "README.md" 'docs/operations/operations\.md' "README links the operations doc"
+assert_contains "README.md" 'docs/operations/recovery\.md' "README links the recovery doc"
+assert_contains "README.md" 'docs/security/network-policy\.md' "README links the network-policy doc"
+assert_contains "README.md" 'security/SECURITY\.md' "README links the security policy"
+assert_contains "README.md" 'security/hardening-checklist\.md' "README links the hardening checklist"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

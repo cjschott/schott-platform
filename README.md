@@ -48,6 +48,22 @@ The platform deliberately separates what lives where. Never mix these:
 - `security/` — security policy and hardening checklist.
 - `tests/` — repository-level static validation (`tests/test-static.sh`).
 
+## Documentation
+
+Operators should follow the scripts and these guides rather than running long
+procedures by hand:
+
+- Architecture: [docs/architecture/ai-platform.md](docs/architecture/ai-platform.md)
+- Installation: [docs/operations/install.md](docs/operations/install.md)
+- Operations: [docs/operations/operations.md](docs/operations/operations.md)
+- Recovery: [docs/operations/recovery.md](docs/operations/recovery.md)
+- Network policy: [docs/security/network-policy.md](docs/security/network-policy.md)
+- Security policy: [security/SECURITY.md](security/SECURITY.md)
+- Hardening checklist: [security/hardening-checklist.md](security/hardening-checklist.md)
+
+Deploy, update, health-check, and backup are driven by the scripts in
+`scripts/`; see the installation and operations guides for exact usage.
+
 ## Design and plan
 
 The approved design and task-by-task implementation plan are authoritative:
