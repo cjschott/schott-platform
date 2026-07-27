@@ -194,9 +194,11 @@ assert_contains "${OLLAMA_COMPOSE}" 'driver:[[:space:]]*nvidia' \
 assert_contains "${OLLAMA_COMPOSE}" 'capabilities:[[:space:]]*\[[[:space:]]*gpu' \
   "ollama declares the gpu capability"
 
-# Health check targets the Ollama tags endpoint.
-assert_contains "${OLLAMA_COMPOSE}" '127\.0\.0\.1:11434/api/tags' \
-  "ollama health check targets /api/tags"
+# Health check uses the bundled ollama binary (guaranteed present), not curl.
+assert_contains "${OLLAMA_COMPOSE}" 'ollama list' \
+  "ollama health check uses the bundled ollama binary"
+refute_contains "${OLLAMA_COMPOSE}" 'test:.*curl' \
+  "ollama health check command does not depend on curl"
 
 # Port 11434 is bound to localhost only — never all interfaces. The mapping
 # uses the ${OLLAMA_BIND_ADDRESS:-127.0.0.1} default, so the localhost IP sits

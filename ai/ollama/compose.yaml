@@ -28,8 +28,10 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      # Ready when the Ollama tags endpoint responds.
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:11434/api/tags || exit 1"]
+      # Ready when the Ollama server answers the CLI. Uses the bundled `ollama`
+      # binary (guaranteed present in the image) rather than curl, which the
+      # stock image does not ship.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5

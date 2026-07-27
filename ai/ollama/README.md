@@ -64,6 +64,7 @@ host and that the GPU device reservation in `compose.yaml` is honored.
 
 ## Health
 
-The container health check queries the Ollama tags endpoint
-(`http://127.0.0.1:11434/api/tags`). A healthy container means the API is
-serving; individual models may still cold-start on first request.
+The container health check runs `ollama list` using the bundled `ollama`
+binary (the stock image does not include `curl`). A healthy container means the
+Ollama server is answering; individual models may still cold-start on first
+request.
