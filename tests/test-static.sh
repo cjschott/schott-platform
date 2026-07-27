@@ -6,7 +6,8 @@ set -Eeuo pipefail
 # This test is extended task-by-task. It must be runnable from anywhere and
 # must not require the schai VM, Docker daemon access, or any secret.
 #
-# Scope currently implemented: Task 1 (foundation), Task 2 (Ollama service).
+# Scope currently implemented: Task 1 (foundation), Task 2 (Ollama service),
+# Task 3 (LiteLLM gateway).
 
 # Resolve repository root relative to this script's location.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,6 +81,18 @@ refute_contains() {
     fail "${desc} (unexpected /${re}/ in ${rel})"
   else
     pass "${desc}"
+  fi
+}
+
+# assert_count <relative-path> <ERE> <expected-count> <description>
+assert_count() {
+  local rel="$1" re="$2" want="$3" desc="$4" got
+  got=$(grep -Ec "${re}" "${ROOT}/${rel}" 2>/dev/null || true)
+  got=${got:-0}
+  if [[ "${got}" == "${want}" ]]; then
+    pass "${desc}"
+  else
+    fail "${desc} (matched ${got}, want ${want} in ${rel})"
   fi
 }
 
@@ -233,6 +246,94 @@ assert_contains "ai/ollama/README.md" 'nomic-embed-text' \
   "ollama README documents nomic-embed-text pull"
 assert_contains "ai/ollama/README.md" 'nvidia-smi' \
   "ollama README documents nvidia-smi GPU verification"
+
+# ---------------------------------------------------------------------------
+# Task 3: LiteLLM gateway
+# ---------------------------------------------------------------------------
+
+LITELLM_COMPOSE="ai/litellm/compose.yaml"
+LITELLM_CONFIG="ai/litellm/config.yaml"
+
+# Required LiteLLM files.
+assert_file "ai/litellm/compose.yaml"
+assert_file "ai/litellm/config.yaml"
+assert_file "ai/litellm/.env.example"
+assert_file "ai/litellm/README.md"
+
+# The sanitized example env must remain tracked.
+assert_not_ignored "ai/litellm/.env.example"
+
+# The Compose file must render/parse using the example env.
+assert_compose_parses "ai/litellm/.env.example" "${LITELLM_COMPOSE}" \
+  "docker compose config parses: ${LITELLM_COMPOSE}"
+
+# Each of the three aliases is defined exactly once.
+assert_count "${LITELLM_CONFIG}" 'model_name:[[:space:]]*local-fast[[:space:]]*$' 1 \
+  "alias local-fast defined exactly once"
+assert_count "${LITELLM_CONFIG}" 'model_name:[[:space:]]*local-general[[:space:]]*$' 1 \
+  "alias local-general defined exactly once"
+assert_count "${LITELLM_CONFIG}" 'model_name:[[:space:]]*local-embed[[:space:]]*$' 1 \
+  "alias local-embed defined exactly once"
+
+# Aliases map to the exact backend model names.
+assert_contains "${LITELLM_CONFIG}" 'model:[[:space:]]*ollama/qwen3:8b[[:space:]]*$' \
+  "local-fast maps to ollama/qwen3:8b"
+assert_contains "${LITELLM_CONFIG}" 'model:[[:space:]]*ollama/qwen3:30b[[:space:]]*$' \
+  "local-general maps to ollama/qwen3:30b"
+assert_contains "${LITELLM_CONFIG}" 'model:[[:space:]]*ollama/nomic-embed-text[[:space:]]*$' \
+  "local-embed maps to ollama/nomic-embed-text"
+
+# Ollama base URL is supplied via environment substitution, not hard-coded.
+assert_contains "${LITELLM_CONFIG}" 'api_base:[[:space:]]*\$\{OLLAMA_BASE_URL\}' \
+  "api_base uses \${OLLAMA_BASE_URL} substitution"
+assert_contains "ai/litellm/.env.example" '^OLLAMA_BASE_URL=http://ollama:11434[[:space:]]*$' \
+  "OLLAMA_BASE_URL points to the internal ollama:11434 backend"
+
+# Master key is referenced from the environment and never hard-coded.
+assert_contains "${LITELLM_CONFIG}" 'master_key:[[:space:]]*os\.environ/LITELLM_MASTER_KEY' \
+  "master key is read from the environment"
+refute_contains "${LITELLM_CONFIG}" 'sk-[A-Za-z0-9]{16,}' \
+  "no hard-coded key-like secret in config"
+
+# Authentication fails closed when the master key is unset.
+assert_contains "${LITELLM_COMPOSE}" 'LITELLM_MASTER_KEY:\?' \
+  "LiteLLM fails closed without a master key"
+
+# Full prompt/response logging is disabled by default.
+assert_contains "${LITELLM_CONFIG}" 'turn_off_message_logging:[[:space:]]*true' \
+  "full prompt/response logging is disabled by default"
+
+# Port 4000 is configurable and published.
+assert_contains "${LITELLM_COMPOSE}" 'LITELLM_PORT:-4000' \
+  "LiteLLM port is configurable (defaults to 4000)"
+assert_contains "${LITELLM_COMPOSE}" ':4000"' \
+  "LiteLLM publishes container port 4000"
+
+# Config is mounted read-only and the image is version-pinned.
+assert_contains "${LITELLM_COMPOSE}" 'config\.yaml:/etc/litellm/config\.yaml:ro' \
+  "LiteLLM config is mounted read-only"
+assert_contains "${LITELLM_COMPOSE}" 'LITELLM_IMAGE:-ghcr\.io/berriai/litellm:' \
+  "LiteLLM image is version-pinned with a default"
+refute_contains "${LITELLM_COMPOSE}" 'berriai/litellm:main-latest' \
+  "LiteLLM image does not use the moving 'main-latest' tag"
+
+# Logs rotate.
+assert_contains "${LITELLM_COMPOSE}" 'driver:[[:space:]]*json-file' \
+  "LiteLLM uses the json-file logging driver"
+assert_contains "${LITELLM_COMPOSE}" 'max-size:' \
+  "LiteLLM logging sets max-size"
+assert_contains "${LITELLM_COMPOSE}" 'max-file:' \
+  "LiteLLM logging sets max-file"
+
+# The README documents authenticated client usage.
+assert_contains "ai/litellm/README.md" '/v1/models' \
+  "LiteLLM README documents /v1/models"
+assert_contains "ai/litellm/README.md" '/v1/chat/completions' \
+  "LiteLLM README documents /v1/chat/completions"
+assert_contains "ai/litellm/README.md" '/v1/embeddings' \
+  "LiteLLM README documents /v1/embeddings"
+assert_contains "ai/litellm/README.md" 'Authorization: Bearer' \
+  "LiteLLM README documents bearer-token authentication"
 
 # ---------------------------------------------------------------------------
 # Result

@@ -1,0 +1,47 @@
+# Isolated LiteLLM gateway — the only supported application-facing endpoint.
+#
+# Exposes an OpenAI-compatible API on port 4000 and routes stable aliases to the
+# internal Ollama backend. Authentication fails closed via LITELLM_MASTER_KEY.
+# This isolated stack references Ollama by its network hostname (ollama:11434);
+# run the integrated stack (ai/compose.yaml, added in a later task) to bring up
+# LiteLLM and Ollama together on a shared private network.
+
+services:
+  litellm:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-v1.74.3-stable}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Chicago}
+      # Fail closed: refuse to start without an administrative master key.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in a local .env}
+      # Internal Ollama backend (private Docker network hostname, not an app endpoint).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      LITELLM_LOG: ${LOG_LEVEL:-INFO}
+    command:
+      - "--config"
+      - "/etc/litellm/config.yaml"
+      - "--port"
+      - "4000"
+    ports:
+      # Container always listens on 4000; the host binding is configurable.
+      - "${LITELLM_BIND_ADDRESS:-0.0.0.0}:${LITELLM_PORT:-4000}:4000"
+    volumes:
+      # Read-only so the running container cannot alter its own routing/policy.
+      - ./config.yaml:/etc/litellm/config.yaml:ro
+    healthcheck:
+      # Use the bundled Python runtime (guaranteed present in the image) to hit
+      # the unauthenticated liveliness endpoint — avoids depending on curl.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness').read()"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
