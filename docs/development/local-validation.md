@@ -91,6 +91,13 @@ CodeQL is **GitHub-hosted** analysis that runs in the CI environment; it has no
 simple equivalent local command in this baseline. Review its findings in the
 repository's code-scanning results rather than locally.
 
+### Dependabot — `.github/dependabot.yml`
+
+Dependabot is **GitHub-hosted** and also has no local command. It runs monthly
+and opens grouped pull requests for GitHub Actions pins (in `.github/workflows`)
+and for the Docker Compose image references under `ai/`. Review and merge those
+PRs manually — nothing here auto-merges.
+
 ## Required vs optional summary
 
 | Check | Tooling | Local | CI workflow |

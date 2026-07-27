@@ -1288,6 +1288,36 @@ assert_contains "${LOCALVAL_DOC}" '1\.171\.0' \
 refute_contains "${LOCALVAL_DOC}" '/\.env([^.]|$)' \
   "local-validation references only sanitized .env.example"
 
+# --- Dependabot version updates (.github/dependabot.yml) --------------------
+# compose.yaml files are handled by the `docker-compose` ecosystem (not the
+# Dockerfile-only `docker` ecosystem), and Dependabot scans only the named
+# directory (no recursion) — so each compose directory is listed explicitly.
+DEPENDABOT=".github/dependabot.yml"
+assert_file "${DEPENDABOT}"
+assert_contains "${DEPENDABOT}" '^version:[[:space:]]*2[[:space:]]*$' \
+  "dependabot uses schema version 2"
+assert_contains "${DEPENDABOT}" 'package-ecosystem:[[:space:]]*"?github-actions"?' \
+  "dependabot configures the github-actions ecosystem"
+assert_contains "${DEPENDABOT}" 'package-ecosystem:[[:space:]]*"?docker(-compose)?"?' \
+  "dependabot configures the docker/compose ecosystem"
+assert_count "${DEPENDABOT}" 'interval:[[:space:]]*"?monthly"?' 2 \
+  "both ecosystems use a monthly schedule"
+assert_contains "${DEPENDABOT}" 'open-pull-requests-limit:[[:space:]]*[1-9]' \
+  "dependabot sets an open-pull-requests-limit"
+assert_contains "${DEPENDABOT}" 'groups:' "dependabot groups related updates"
+assert_contains "${DEPENDABOT}" '"/ai"' \
+  "dependabot covers ai/ (ai/compose.yaml)"
+assert_contains "${DEPENDABOT}" '"/ai/ollama"' \
+  "dependabot covers ai/ollama (ai/ollama/compose.yaml)"
+assert_contains "${DEPENDABOT}" '"/ai/litellm"' \
+  "dependabot covers ai/litellm (ai/litellm/compose.yaml)"
+refute_contains "${DEPENDABOT}" '[Aa]uto-?merge' \
+  "dependabot config has no auto-merge"
+refute_contains "${DEPENDABOT}" '(registries:|password|[Tt]oken|[Ss]ecret)' \
+  "dependabot embeds no registry credentials or secrets"
+refute_contains "${DEPENDABOT}" '(reviewers:|assignees:)' \
+  "dependabot adds no reviewers or assignees"
+
 # ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
