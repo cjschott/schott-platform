@@ -411,10 +411,31 @@ assert_count "${AI_COMPOSE}" 'max-size:' 2 \
 assert_count "${AI_COMPOSE}" 'max-file:' 2 \
   "both services set a log max-file"
 
-# Fail-closed master-key handling preserved (key required from env; the shared
-# read-only config enforces auth via os.environ/LITELLM_MASTER_KEY).
-assert_contains "${AI_COMPOSE}" 'LITELLM_MASTER_KEY:[[:space:]]*\$\{LITELLM_MASTER_KEY' \
-  "LiteLLM master key is required from the environment"
+# Fail-closed master-key handling: the key passes through for static rendering
+# (empty-renderable), and the container itself refuses to start when it is empty
+# — the guard runs before LiteLLM launches. No fallback/predictable key.
+assert_contains "${AI_COMPOSE}" 'LITELLM_MASTER_KEY:[[:space:]]*\$\{LITELLM_MASTER_KEY-\}' \
+  "master key passes through from the environment (empty-renderable)"
+assert_contains "${AI_COMPOSE}" '\-z "\$\$LITELLM_MASTER_KEY"' \
+  "startup guard checks LITELLM_MASTER_KEY is non-empty inside the container"
+assert_contains "${AI_COMPOSE}" 'exit 1' \
+  "startup guard exits non-zero when the master key is empty"
+assert_contains "${AI_COMPOSE}" 'exec litellm' \
+  "startup execs LiteLLM after the guard"
+refute_contains "${AI_COMPOSE}" 'LITELLM_MASTER_KEY-[^}]' \
+  "no predictable fallback master key is substituted"
+
+# The guard (and its non-zero exit) must precede the exec of LiteLLM.
+guard_line=$(grep -n -- '-z "\$\$LITELLM_MASTER_KEY"' "${ROOT}/${AI_COMPOSE}" | head -1 | cut -d: -f1)
+exit_line=$(grep -n 'exit 1' "${ROOT}/${AI_COMPOSE}" | head -1 | cut -d: -f1)
+exec_line=$(grep -n 'exec litellm' "${ROOT}/${AI_COMPOSE}" | head -1 | cut -d: -f1)
+if [[ -n "${guard_line}" && -n "${exit_line}" && -n "${exec_line}" \
+      && "${guard_line}" -lt "${exec_line}" && "${exit_line}" -lt "${exec_line}" ]]; then
+  pass "master-key guard and non-zero exit precede exec of LiteLLM"
+else
+  fail "master-key guard/exit must precede exec of LiteLLM (guard=${guard_line:-?} exit=${exit_line:-?} exec=${exec_line:-?})"
+fi
+
 assert_contains "${AI_COMPOSE}" 'litellm/config\.yaml:/etc/litellm/config\.yaml:ro' \
   "integrated LiteLLM mounts the shared config read-only"
 

@@ -26,6 +26,15 @@ Copy `ai/.env.example` to `ai/.env` and set a real `LITELLM_MASTER_KEY` first.
 The isolated `ollama/` and `litellm/` stacks are development/troubleshooting
 aids only and must not be used to run production.
 
+### Fail closed on an empty master key
+
+The LiteLLM container **refuses to start when `LITELLM_MASTER_KEY` is empty**. A
+startup guard inside the container checks the key before launching LiteLLM and
+exits non-zero if it is blank, so running `docker compose -f ai/compose.yaml up`
+directly with an unset/blank key fails fast rather than starting an
+unauthenticated gateway. No fallback or default key is ever substituted. The
+empty value in `ai/.env.example` is a template only.
+
 ## Model alias contract
 
 LiteLLM exposes stable aliases; applications must use these names rather than

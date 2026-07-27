@@ -51,18 +51,26 @@ services:
         condition: service_healthy
     environment:
       TZ: ${TZ:-America/Chicago}
-      # Fail closed: the master key is required from the environment. The shared
-      # config.yaml enforces authentication via os.environ/LITELLM_MASTER_KEY.
-      # Deployment validation (scripts/) refuses to start with an empty key.
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY?LITELLM_MASTER_KEY must be set in ai/.env}
+      # Passed through for static rendering (allows an empty ai/.env.example).
+      # The startup guard below rejects an empty value INSIDE the container, so
+      # the gateway fails closed. No fallback/default key is ever substituted.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY-}
       # Internal Ollama backend (private network hostname; not an app endpoint).
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       LITELLM_LOG: ${LOG_LEVEL:-INFO}
+    # Fail closed: refuse to start with an empty master key, then exec LiteLLM.
+    # The doubled `$$` keeps the check inside the container rather than being
+    # interpolated by Compose.
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - "--config"
-      - "/etc/litellm/config.yaml"
-      - "--port"
-      - "4000"
+      - |
+        if [ -z "$$LITELLM_MASTER_KEY" ]; then
+          echo "ERROR: LITELLM_MASTER_KEY must be non-empty" >&2
+          exit 1
+        fi
+        exec litellm \
+          --config /etc/litellm/config.yaml \
+          --port 4000
     ports:
       # Only application-facing port. Container listens on 4000; host binding
       # is configurable.
