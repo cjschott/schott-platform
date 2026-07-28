@@ -1,13 +1,19 @@
 # Acceptance Results — AI Platform Baseline
 
-**STATUS: TASK 8A COMPLETE — FIREWALL VALIDATION PENDING.**
+**STATUS: COMPLETE.**
 
-Task 8A runtime acceptance passed on `schai`. The canonical integrated stack was
-deployed against the pre-existing 23 GB Ollama model volume, all API, GPU,
-persistence, logging, and backup checks passed, and no rollback was needed.
+Both acceptance tasks passed on `schai`:
 
-Task 8B (firewall) is not started. `0.1.0` is **not** marked complete.
-`CHANGELOG.md` is unmodified.
+- **Task 8A** (2026-07-28, 08:04–08:23 CDT) — the canonical integrated stack was
+  deployed against the pre-existing 23 GB Ollama model volume; all API, GPU,
+  persistence, logging, and backup checks passed with no rollback.
+- **Task 8B** (2026-07-28, 09:05–09:21 CDT) — the UFW transition was applied,
+  the legacy `11434/tcp` allowance was removed, LiteLLM was validated from an
+  approved LAN client, and the legacy container was retired.
+
+`0.1.0` is marked complete in `CHANGELOG.md`. One accepted limitation is
+recorded: UFW does not reliably filter Docker-published port `4000`
+(see [Task 8B](#task-8b--firewall-validation)).
 
 ## Validation context
 
@@ -40,7 +46,7 @@ Task 8B (firewall) is not started. `0.1.0` is **not** marked complete.
 | 8 — Persistence test | PASS |
 | 9 — Logging validation | PASS |
 | 10 — Sanitized backup | PASS |
-| 11 — Firewall (Task 8B) | **PENDING — not started** |
+| 11 — Firewall (Task 8B) | PASS — see [Task 8B](#task-8b--firewall-validation) |
 
 ### Static validation
 
@@ -229,27 +235,160 @@ temporary extraction directory was removed after inspection.
 
 ## Rollback status
 
-**Not used.** Deployment succeeded on the first attempt. The rollback path
-remains intact: the legacy container `ollama` (`ef423000e7c4`,
-`ollama/ollama:latest`, server 0.32.4) is stopped-but-present and can be
-restarted with `docker start ollama` after stopping the canonical stack. The
-model volume is untouched and shared by both paths.
+**Not used.** Deployment succeeded on the first attempt. The legacy container
+served as the rollback path throughout Task 8A and was retired during Task 8B
+only after every firewall and runtime check passed
+(see [Legacy container disposition](#legacy-container-disposition)).
 
-## Firewall — PENDING
+## Task 8B — firewall validation
 
-**Not performed.** No `ufw`, `iptables`, or `nft` command was run. Access to
-ports `11434` and `4000` is unchanged.
+**Date:** 2026-07-28, 09:05–09:21 CDT (America/Chicago).
 
-Notes for Task 8B planning:
+### Approved source ranges
 
-- The canonical stack **no longer publishes 11434 at all** — the only host-facing
-  port is LiteLLM `0.0.0.0:4000`, a net reduction in exposure versus the legacy
-  container, which published `11434` on all interfaces.
-- The stopped legacy container still carries an `0.0.0.0:11434` mapping in its
-  configuration. It is inert while stopped, but starting it would re-expose that
-  port. Retiring it is a pending decision.
-- `docs/security/network-policy.md` restricts `4000/tcp` to an approved subnet;
-  that transition is Task 8B.
+Set by explicit platform-owner decision for the current flat homelab LAN, and
+recorded in `docs/security/network-policy.md` (replacing the previous
+`<approved-subnet>` / `<management-subnet>` placeholders):
+
+| Purpose | Range |
+|---|---|
+| Approved application range (LiteLLM `4000/tcp`) | `192.168.86.0/24` |
+| Approved management range (SSH `22/tcp`) | `192.168.86.0/24` |
+
+Both are identical only because the LAN is flat today; the policy document
+requires narrowing them when VLANs or additional routed networks are introduced.
+This was an owner decision, **not** an inference from the former Ollama rule.
+
+### UFW before
+
+```
+[ 1] OpenSSH        ALLOW IN  Anywhere
+[ 2] 11434/tcp      ALLOW IN  192.168.86.0/24
+[ 3] OpenSSH (v6)   ALLOW IN  Anywhere (v6)
+```
+
+### UFW changes applied
+
+All `sudo`-requiring commands were executed manually by the operator; no
+repository script and no assistant-run command touched the firewall. No
+`iptables` or `nft` command was run at any point.
+
+```bash
+sudo ufw allow from 192.168.86.0/24 to any port 22 proto tcp \
+  comment 'SSH from trusted LAN'
+sudo ufw allow from 192.168.86.0/24 to any port 4000 proto tcp \
+  comment 'LiteLLM from trusted LAN'
+sudo ufw delete 2          # the legacy 11434/tcp allowance
+```
+
+### UFW after
+
+```
+Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+[ 1] OpenSSH        ALLOW IN  Anywhere
+[ 2] 22/tcp         ALLOW IN  192.168.86.0/24   # SSH from trusted LAN
+[ 3] 4000/tcp       ALLOW IN  192.168.86.0/24   # LiteLLM from trusted LAN
+[ 4] OpenSSH (v6)   ALLOW IN  Anywhere (v6)
+```
+
+No `11434/tcp` rule remains.
+
+### SSH preservation
+
+SSH was allowed from the approved range **before** the 11434 rule was removed,
+and the pre-existing `OpenSSH ALLOW IN Anywhere` rules were left untouched
+throughout, so no window existed in which management access could be lost. The
+operator's session (`192.168.86.170` → `192.168.86.3:22`) remained connected
+across every change; three established sessions were present throughout.
+
+### Host-side validation
+
+| Check | Result |
+|---|---|
+| `./scripts/health-check.sh --deep` | PASS — 8/8 |
+| Authenticated `/v1/models` on `127.0.0.1:4000` | 200 — three aliases |
+| Unauthenticated `/v1/models` | 401 — fails closed |
+| Invalid API key | 400 — rejected, never `2xx` |
+| Host listener on `11434` | none |
+| `127.0.0.1:11434` / `192.168.86.3:11434` | connection refused |
+| `docker ps` published ports | `ai-ollama-1` none; `ai-litellm-1` `0.0.0.0:4000->4000/tcp` |
+| Authenticated `/v1/models` via `http://192.168.86.3:4000` | 200 |
+| Authenticated `local-fast` via `http://schai:4000` | 200, `ollama/qwen3:8b`, non-empty |
+
+### Approved LAN-client validation
+
+Performed from `MAINPC` (WSL), an approved client inside `192.168.86.0/24`:
+
+| Check | Result |
+|---|---|
+| `getent hosts schai` | `192.168.86.3  schai.home.arpa` — resolves |
+| `nc -vz 192.168.86.3 4000` | **succeeded** |
+| Authenticated `GET /v1/models` | **HTTP 200** — `local-embed`, `local-fast`, `local-general` |
+| Authenticated `POST /v1/chat/completions` (`local-fast`) | **HTTP 200** — `ollama/qwen3:8b`, non-empty |
+| `nc -vz 192.168.86.3 11434` | **Connection refused** |
+| `curl http://192.168.86.3:11434/api/tags` | **Couldn't connect** |
+| SSH from the approved range | reachable (operator session active throughout) |
+
+Port `11434` was rejected by two independent methods. Its protection does not
+depend on UFW at all: `ai/compose.yaml` publishes no Ollama host port, so no
+Docker chain can expose it.
+
+### Outside-approved-range test
+
+**NOT PERFORMED.** No routed client outside `192.168.86.0/24` is available on
+this flat homelab network. Negative confirmation from outside the approved range
+is therefore not part of this acceptance record.
+
+### Docker / UFW filtering limitation — accepted for v0.1.0
+
+UFW does **not** reliably filter Docker-published ports: Docker's `DOCKER-USER`
+and `DOCKER` chains are evaluated before UFW's `ufw-user-input` chain, so the
+`4000/tcp` rule above documents intent but may not by itself block an
+out-of-range host.
+
+This is a **recorded, accepted limitation** for this release because:
+
+- the host has **no public IPv4 address**, and **no public/NAT exposure is
+  configured as part of this host task** — the only global IPv6 address is an
+  `fd00::/8` unique local address, which is not internet-routable;
+- port `4000` is therefore reachable only from the local LAN regardless of the
+  UFW rule, and the LAN is the approved range;
+- port `11434` is not published at all, so it is unaffected.
+
+A persistent `DOCKER-USER` policy that enforces the approved range at the packet
+level is **deferred to a separately designed network-hardening enhancement** and
+is out of scope for `v0.1.0`.
+
+### Legacy container disposition
+
+Retired after all firewall and runtime checks passed.
+
+| Property | Value |
+|---|---|
+| Container / ID | `ollama` / `ef423000e7c4c7dbbb4e62d2bfdb5e1fbc4d3684a032047756f7704fa21cf9c7` |
+| Image / image ID | `ollama/ollama:latest` / `sha256:10c13eb515db…` |
+| State before removal | `exited`, code 0, stopped 2026-07-28T13:17:02Z |
+| Action | `docker rm ollama` — container only |
+
+Post-removal verification: canonical containers healthy; `ollama_ollama-data`
+still present; all three models available; manifest tree SHA-256 still
+`a5ddc9d76b97…`; no `11434` listener; LiteLLM healthy. The
+`ollama/ollama:latest` image was retained. Neither `ollama_ollama-data`,
+`/opt/schott-platform-pre-git-backup`, nor any Docker volume was deleted.
+
+### Final state
+
+| Item | Value |
+|---|---|
+| `ai-ollama-1` | `ollama/ollama:0.11.4`, healthy, no published host port |
+| `ai-litellm-1` | `litellm:main-v1.74.3-stable`, healthy, `0.0.0.0:4000->4000/tcp` |
+| Volumes | `ollama_ollama-data` (external, adopted) |
+| Models | `qwen3:8b`, `qwen3:30b`, `nomic-embed-text` |
+| Disk | 96 G total, **41 G free** (56% used) |
 
 ## Known risks
 
@@ -260,14 +399,24 @@ Notes for Task 8B planning:
    occurred. But the pin is far behind what this host was running, and a future
    `ollama pull` under 0.11.4 may fetch differently-formatted artifacts. The pin
    deserves a deliberate review.
-2. **`down -v` remains destructive.** With the default
-   `OLLAMA_VOLUME_EXTERNAL=false`, `docker compose down -v` would delete the
-   volume. This host has not yet opted into `OLLAMA_VOLUME_EXTERNAL=true`
-   (see below). Nothing in the repository runs `down -v`.
-3. **Reasoning-model output.** `qwen3` emits `<think>` reasoning traces in
+2. **UFW does not filter Docker-published port 4000.** Accepted for `v0.1.0`;
+   mitigated by the absence of any public address or NAT exposure. Persistent
+   `DOCKER-USER` policy is deferred to a separate network-hardening enhancement.
+   See [the Task 8B limitation](#docker--ufw-filtering-limitation--accepted-for-v010).
+3. **SSH is still allowed from `Anywhere`.** UFW rules `[1]` and `[4]`
+   (`OpenSSH` IPv4 and IPv6) predate this work and were deliberately left in
+   place as unrelated valid rules; the approved-range rule `[2]` was added
+   alongside them. Real-world exposure is nil today (no public IPv4; IPv6 is a
+   ULA), but this is broader than the documented management range. Tightening it
+   is a follow-up decision — note that rule `[2]` is IPv4-only, so removing the
+   IPv6 `OpenSSH` rule would break IPv6 SSH.
+4. **Reasoning-model output.** `qwen3` emits `<think>` reasoning traces in
    completion content. Responses were non-empty and valid, but applications
    consuming `local-fast`/`local-general` will receive thinking text unless they
    strip it. An integration consideration, not a deployment defect.
+5. **No outside-approved-range negative test.** No routed client outside
+   `192.168.86.0/24` exists on this flat network, so blocking from outside the
+   approved range was never empirically confirmed.
 
 ## Deviations
 
@@ -308,13 +457,17 @@ Applied after Task 8A was approved, on top of `1c72dce`:
   and failing hard on any `2xx`, with the `400 "No connected db."` behavior
   documented in `operations.md` and `SECURITY.md`.
 
-### Open item for this host
+### Host adoption switch — applied
 
-`ai/.env` on `schai` still has `OLLAMA_VOLUME_EXTERNAL` unset (effectively
-`false`) while adopting `ollama_ollama-data`. Setting it to `true` was verified
-safe against the real volume via `docker compose up --dry-run` but was **not
-applied** — it is an operational change requiring operator approval. Until it is
-set, the adopted 23 GB remains deletable by `down -v`.
+`ai/.env` on `schai` now sets `OLLAMA_VOLUME_EXTERNAL=true` alongside
+`OLLAMA_VOLUME_NAME=ollama_ollama-data` (applied by the operator before Task
+8B). Verified during Task 8B preflight: the rendered configuration shows
+`external: true` on the adopted volume, and the Compose project-ownership
+warning is gone. The adopted 23 GB is no longer removable by
+`docker compose down -v`.
+
+`ai/.env` remains mode `600`, owner `cschott:cschott`, git-ignored, with a
+non-empty `LITELLM_MASTER_KEY`. No secret value was displayed at any point.
 
 ## History
 
