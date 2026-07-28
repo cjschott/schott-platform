@@ -12,7 +12,7 @@
 
 services:
   ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.4}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.32.1}
     restart: unless-stopped
     environment:
       TZ: ${TZ:-America/Chicago}
@@ -44,7 +44,7 @@ services:
         max-file: "3"
 
   litellm:
-    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-v1.74.3-stable}
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-v1.83.14-stable}
     restart: unless-stopped
     depends_on:
       ollama:
