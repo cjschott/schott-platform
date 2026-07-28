@@ -1,0 +1,33 @@
+# LiteLLM gateway routing and policy.
+#
+# Applications call LiteLLM at http://schai:4000/v1 using the stable aliases
+# below. LiteLLM resolves each alias to an internal Ollama model; Ollama is
+# never addressed directly by applications. The alias names and their backend
+# mappings are load-bearing and must not change.
+
+model_list:
+  - model_name: local-fast
+    litellm_params:
+      model: ollama/qwen3:8b
+      api_base: os.environ/OLLAMA_BASE_URL
+  - model_name: local-general
+    litellm_params:
+      model: ollama/qwen3:30b
+      api_base: os.environ/OLLAMA_BASE_URL
+  - model_name: local-embed
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: os.environ/OLLAMA_BASE_URL
+
+general_settings:
+  # Fail closed: the gateway requires this administrative key for every request.
+  # It is read from the environment and never hard-coded. Without a valid key
+  # LiteLLM rejects requests.
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  # Do not persist full prompts or responses in logs. Request metadata (model
+  # alias, latency, token counts, success/failure) is still emitted.
+  turn_off_message_logging: true
+  # Structured logs so request metadata is machine-readable.
+  json_logs: true

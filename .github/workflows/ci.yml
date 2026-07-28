@@ -1,0 +1,42 @@
+# Primary validation workflow. Automates the SAME checks a developer runs
+# locally (see docs/development/local-validation.md) — it invents no CI-only
+# behavior. Every step here is reproducible on a workstation.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Least privilege: this workflow only reads the repository.
+permissions:
+  contents: read
+
+# Cancel superseded runs for the same ref to avoid duplicate work.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Static validation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        # actions/checkout v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Shell syntax check (scripts and tests)
+        run: |
+          bash -n scripts/*.sh
+          bash -n tests/test-static.sh
+
+      - name: Static repository assertions
+        run: bash tests/test-static.sh
+
+      # Compose rendering uses the sanitized template only — never a real secret.
+      # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
+      - name: Validate Docker Compose configurations
+        run: |
+          docker compose --env-file ai/.env.example -f ai/compose.yaml config >/dev/null
+          docker compose --env-file ai/ollama/.env.example -f ai/ollama/compose.yaml config >/dev/null
+          docker compose --env-file ai/litellm/.env.example -f ai/litellm/compose.yaml config >/dev/null

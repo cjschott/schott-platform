@@ -1,0 +1,33 @@
+# Static analysis with Semgrep using its default security rules. Findings fail
+# the job (`--error`). Semgrep is pinned to version 1.171.0 by an immutable
+# container digest. Reproduce locally with the SAME pinned image:
+#   docker run --rm -v "$PWD:/src" -w /src \
+#     semgrep/semgrep:1.171.0@sha256:bdf7013b2c3634a487671158da77c554f531742326b543a9464d2adf6c433ac8 \
+#     semgrep scan --config auto --error
+name: Semgrep
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-24.04
+    # Official Semgrep image (v1.171.0), pinned by immutable digest.
+    container:
+      image: semgrep/semgrep:1.171.0@sha256:bdf7013b2c3634a487671158da77c554f531742326b543a9464d2adf6c433ac8
+    steps:
+      - name: Check out repository
+        # actions/checkout v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Run Semgrep (default security rules)
+        run: semgrep scan --config auto --error --verbose

@@ -1,0 +1,43 @@
+# CodeQL analysis of this repository's GitHub Actions workflows.
+#
+# CodeQL has no analyzer for Bash/shell, so it cannot scan scripts/*.sh directly
+# — that shell coverage is provided by shellcheck.yml (ShellCheck) and
+# semgrep.yml (Semgrep). CodeQL DOES support the `actions` language, so this
+# workflow scans the workflow definitions under .github/workflows for issues
+# such as unpinned actions, injection risks, and excessive permissions.
+name: CodeQL
+
+on:
+  push:
+  pull_request:
+
+# Least privilege for CodeQL: read the repo/workflows and upload results.
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: CodeQL analyze (actions)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        # actions/checkout v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Initialize CodeQL
+        # github/codeql-action/init v4.37.3
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81
+        with:
+          # CodeQL supports scanning GitHub Actions workflows via `actions`.
+          # Bash/shell is not a CodeQL language; no other language pack is added.
+          languages: actions
+
+      - name: Perform CodeQL analysis
+        # github/codeql-action/analyze v4.37.3
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81

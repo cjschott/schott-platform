@@ -1,0 +1,54 @@
+# Isolated Ollama service — internal inference backend.
+#
+# Purpose: capture and troubleshoot Ollama on its own. Here the API port is
+# bound to localhost ONLY. The integrated production stack (ai/compose.yaml,
+# added in a later task) does not publish Ollama at all; LiteLLM reaches it
+# over a private Docker network. Ollama is never a supported application
+# endpoint.
+
+services:
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.4}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Chicago}
+    # Localhost-only publish for isolated troubleshooting. Do NOT bind to all
+    # interfaces here; the integrated stack keeps Ollama fully private.
+    ports:
+      - "${OLLAMA_BIND_ADDRESS:-127.0.0.1}:11434:11434"
+    volumes:
+      # Named volume so downloaded models survive container recreation.
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # NVIDIA GPU passthrough (Compose v2 device reservation).
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      # Ready when the Ollama server answers the CLI. Uses the bundled `ollama`
+      # binary (guaranteed present in the image) rather than curl, which the
+      # stock image does not ship.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  ollama-models:
+    # Same explicit name as the integrated stack, so isolated troubleshooting
+    # inspects the same model data. Override with OLLAMA_VOLUME_NAME in the
+    # local .env to adopt an existing volume; never hardcode a host-specific
+    # name here. See docs/operations/install.md.
+    name: ${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}
+    # Adoption safety switch — see ai/compose.yaml for the rationale. Default
+    # false so clean installs still create the volume on demand.
+    external: ${OLLAMA_VOLUME_EXTERNAL:-false}

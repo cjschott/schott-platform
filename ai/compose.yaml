@@ -1,0 +1,116 @@
+# Integrated AI platform stack — THE canonical production deployment for schai.
+#
+# Brings up Ollama (internal inference backend) and LiteLLM (the only
+# application-facing gateway) on one private bridge network. Ollama is NOT
+# published to the host; only LiteLLM's port 4000 is exposed. Applications
+# connect to LiteLLM at http://schai:4000/v1.
+#
+# Self-contained by design: this file does NOT use Compose `extends` against the
+# isolated ai/ollama and ai/litellm service files, so a single
+# `docker compose -f ai/compose.yaml` fully and unambiguously describes
+# production. The service settings below mirror those isolated definitions.
+
+services:
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.4}
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Chicago}
+    # No host port: Ollama is reachable only by LiteLLM over the private network.
+    volumes:
+      # Named volume so downloaded models survive container recreation.
+      - ollama-models:/root/.ollama
+    networks:
+      - ai-backend
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # NVIDIA GPU passthrough (Compose v2 device reservation).
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      # Bundled ollama binary (no curl dependency).
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  litellm:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-v1.74.3-stable}
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-America/Chicago}
+      # Passed through for static rendering (allows an empty ai/.env.example).
+      # The startup guard below rejects an empty value INSIDE the container, so
+      # the gateway fails closed. No fallback/default key is ever substituted.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY-}
+      # Internal Ollama backend (private network hostname; not an app endpoint).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      LITELLM_LOG: ${LOG_LEVEL:-INFO}
+    # Fail closed: refuse to start with an empty master key, then exec LiteLLM.
+    # The doubled `$$` keeps the check inside the container rather than being
+    # interpolated by Compose.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$$LITELLM_MASTER_KEY" ]; then
+          echo "ERROR: LITELLM_MASTER_KEY must be non-empty" >&2
+          exit 1
+        fi
+        exec litellm \
+          --config /etc/litellm/config.yaml \
+          --port 4000
+    ports:
+      # Only application-facing port. Container listens on 4000; host binding
+      # is configurable.
+      - "${LITELLM_BIND_ADDRESS:-0.0.0.0}:${LITELLM_PORT:-4000}:4000"
+    volumes:
+      # Reuse the isolated LiteLLM routing/policy config, mounted read-only.
+      - ./litellm/config.yaml:/etc/litellm/config.yaml:ro
+    networks:
+      - ai-backend
+    healthcheck:
+      # Bundled Python runtime hits the unauthenticated liveliness endpoint.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness').read()"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  ai-backend:
+    driver: bridge
+
+volumes:
+  ollama-models:
+    # Explicit Docker volume name so the stack is portable: a clean install gets
+    # the platform default, while an existing/migrated host adopts its current
+    # model volume by setting OLLAMA_VOLUME_NAME in the local ai/.env. Never
+    # hardcode a host-specific name here. See docs/operations/install.md.
+    name: ${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}
+    # Adoption safety switch. Default false: Compose creates the volume if it is
+    # missing, so clean installs are unaffected. Set OLLAMA_VOLUME_EXTERNAL=true
+    # when adopting a pre-existing volume — Compose then refuses to create one,
+    # so a wrong OLLAMA_VOLUME_NAME fails loudly instead of silently starting
+    # against an empty volume, and `down -v` cannot delete the adopted models.
+    external: ${OLLAMA_VOLUME_EXTERNAL:-false}

@@ -1,0 +1,50 @@
+# Dependabot version updates (schema version 2).
+#
+# Monthly updates, grouped to reduce PR noise. Dependabot opens pull requests
+# only; merges are performed manually after review. No private registry
+# credentials, reviewers, or assignees are configured here.
+#
+# Docker Compose files (compose.yaml) are handled by the `docker-compose`
+# ecosystem — the `docker` ecosystem is for Dockerfiles, of which this repo has
+# none. Dependabot scans only the named directory (it does not recurse), so each
+# Compose file's directory is listed explicitly via the `directories` key:
+#   /ai         -> ai/compose.yaml
+#   /ai/ollama  -> ai/ollama/compose.yaml
+#   /ai/litellm -> ai/litellm/compose.yaml
+#
+# For GitHub Actions, Dependabot updates the SHA pins in .github/workflows and
+# keeps the human-readable release comment (e.g. "# v4.4.0") in sync.
+version: 2
+updates:
+  # GitHub Actions referenced by the workflows in .github/workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # Wait before proposing a newly published version. A release can be
+    # malicious or withdrawn within days of publication; this delay keeps such
+    # versions out of automated update PRs.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Docker Compose image references across the AI stacks.
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/ai"
+      - "/ai/ollama"
+      - "/ai/litellm"
+    schedule:
+      interval: "monthly"
+    # Same publication delay as above — see the github-actions entry.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      docker-compose:
+        patterns:
+          - "*"
