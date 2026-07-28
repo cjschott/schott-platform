@@ -1,0 +1,19 @@
+# Gitleaks false-positive allowlist.
+#
+# Each entry is a fingerprint pinned to <commit>:<file>:<rule>:<line>, so it can
+# only ever suppress that one finding in that one immutable commit. It cannot
+# mask a new or different secret, in this file or any other.
+#
+# Nothing here is a real credential. Add an entry ONLY for a historical commit
+# that cannot be corrected forward, and always fix the current tree instead when
+# that is possible.
+
+# Commit de8f48a introduced the health-check invalid-key probe as
+# `INVALID_KEY="sk-invalid-health-probe-000"`. The value is deliberately fake —
+# a non-functional token whose only purpose is to prove the gateway REJECTS an
+# invalid key — but its `sk-` prefix and entropy match the generic-api-key rule.
+#
+# The current tree no longer contains a credential-like value: the probe was
+# renamed to `invalid-health-probe-token`. History is not rewritten (no amend,
+# no force-push), so this one past occurrence is allowlisted by fingerprint.
+de8f48a65f0b22e925edea73f7614fdecb93ca25:scripts/health-check.sh:generic-api-key:118

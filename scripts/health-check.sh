@@ -115,7 +115,10 @@ fi
 #         non-master key and returns "No connected db." Access is still denied.
 # The load-bearing assertion is that the response is NOT 2xx; the accepted codes
 # below are a secondary check that auth (not a timeout or 5xx) did the rejecting.
-INVALID_KEY="sk-invalid-health-probe-000"
+# Deliberately fake and obviously non-secret: a well-formed bearer value that is
+# not the master key. Kept free of credential-like shapes (no `sk-` prefix, low
+# entropy) so secret scanners do not flag this file.
+INVALID_KEY="invalid-health-probe-token"
 code="$(get_code "${MAX_TIME}" "${INVALID_KEY}" GET "${BASE_URL}/v1/models")"
 if is_2xx "${code}"; then
   fail "invalid API key was ACCEPTED (${code}) — authentication is NOT failing closed"

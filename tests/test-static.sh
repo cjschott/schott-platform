@@ -416,6 +416,7 @@ assert_count "${AI_COMPOSE}" 'max-file:' 2 \
 # — the guard runs before LiteLLM launches. No fallback/predictable key.
 assert_contains "${AI_COMPOSE}" 'LITELLM_MASTER_KEY:[[:space:]]*\$\{LITELLM_MASTER_KEY-\}' \
   "master key passes through from the environment (empty-renderable)"
+# shellcheck disable=SC2016  # '$$' is Compose's literal escape, matched as text
 assert_contains "${AI_COMPOSE}" '\-z "\$\$LITELLM_MASTER_KEY"' \
   "startup guard checks LITELLM_MASTER_KEY is non-empty inside the container"
 assert_contains "${AI_COMPOSE}" 'exit 1' \
@@ -426,6 +427,7 @@ refute_contains "${AI_COMPOSE}" 'LITELLM_MASTER_KEY-[^}]' \
   "no predictable fallback master key is substituted"
 
 # The guard (and its non-zero exit) must precede the exec of LiteLLM.
+# shellcheck disable=SC2016  # '$$' is Compose's literal escape, matched as text
 guard_line=$(grep -n -- '-z "\$\$LITELLM_MASTER_KEY"' "${ROOT}/${AI_COMPOSE}" | head -1 | cut -d: -f1)
 exit_line=$(grep -n 'exit 1' "${ROOT}/${AI_COMPOSE}" | head -1 | cut -d: -f1)
 exec_line=$(grep -n 'exec litellm' "${ROOT}/${AI_COMPOSE}" | head -1 | cut -d: -f1)
@@ -587,6 +589,14 @@ assert_contains "scripts/health-check.sh" '401.*403|403.*401' \
 # fail-closed — but a 2xx must always fail the check.
 assert_contains "scripts/health-check.sh" 'invalid API key' \
   "health-check probes an invalid API key"
+# The probe token is deliberately fake. It must not LOOK like a credential, or
+# secret scanners flag it — an `sk-` prefix with high entropy trips Gitleaks'
+# generic-api-key rule. Keep it well-formed as a bearer value but obviously
+# non-secret.
+assert_contains "scripts/health-check.sh" 'INVALID_KEY="invalid-health-probe-token"' \
+  "invalid-key probe uses an obviously non-secret value"
+refute_contains "scripts/health-check.sh" 'INVALID_KEY="sk-' \
+  "invalid-key probe does not use a credential-like sk- prefix"
 assert_contains "scripts/health-check.sh" '"400".*"401".*"403"' \
   "health-check accepts 400/401/403 as an invalid-key rejection"
 assert_contains "scripts/health-check.sh" 'is_2xx "\$\{code\}"; then' \
@@ -659,7 +669,7 @@ while (( i < ${#args[@]} )); do
     -H) i=$((i+1))
         if [[ "${args[$i]}" == Authorization:* ]]; then
           # auth=1 the real master key, auth=2 the invalid-key probe.
-          if [[ "${args[$i]}" == *sk-invalid-health-probe-* ]]; then auth=2; else auth=1; fi
+          if [[ "${args[$i]}" == *invalid-health-probe-token* ]]; then auth=2; else auth=1; fi
         fi;;
     -d|--data|--data-raw|--data-binary) i=$((i+1)); data="${args[$i]}";;
     -w) i=$((i+1)); wfmt="${args[$i]}";;
@@ -904,7 +914,15 @@ EOF
   else
     fail "behavior: backup should succeed with Ollama unavailable (rc=${T5_RC})"
   fi
-  local arch; arch="$(ls "${t}/backups/"*.tar.gz 2>/dev/null | head -n1 || true)"
+  # Glob directly instead of parsing `ls` (SC2012). nullglob leaves the array
+  # empty when nothing matches; glob expansion is sorted, so [0] is the same
+  # entry the previous `ls | head -n1` selected.
+  local arch=""
+  local -a archives=()
+  shopt -s nullglob
+  archives=("${t}/backups/"*.tar.gz)
+  shopt -u nullglob
+  (( ${#archives[@]} )) && arch="${archives[0]}"
   if [[ -n "${arch}" && -f "${arch}" ]]; then
     pass "behavior: backup produced an archive"
   else
@@ -1263,7 +1281,12 @@ assert_dir "${WF_DIR}"
 # assert_uses_sha_pinned <workflow> — every `uses:` action reference must pin a
 # full 40-character commit SHA (immutable), not a movable tag.
 assert_uses_sha_pinned() {
-  local w="$1" f="${ROOT}/${w}" total pinned
+  # Split deliberately: bash expands every word of a `local` declaration before
+  # assigning any of them, so a single combined declaration would resolve ${w}
+  # from the CALLER's scope, not from $1 (SC2318).
+  local w="$1"
+  local f="${ROOT}/${w}"
+  local total pinned
   if [[ ! -f "${f}" ]]; then
     fail "SHA-pin check: workflow missing: ${w}"; return
   fi
@@ -1299,6 +1322,23 @@ for w in "${WORKFLOWS[@]}"; do
   refute_contains "${w}" '/\.env([^.]|$)' \
     "workflow references only sanitized .env.example (never a real .env): ${w}"
 done
+
+# Regression (SC2318): assert_uses_sha_pinned must resolve its path from its own
+# argument, never from a caller variable that happens to be named `w`. Bash
+# expands every word of a `local` declaration before assigning any of them, so
+# `local w="$1" f="${ROOT}/${w}"` reads the OUTER w. The loop above masked that
+# because its variable is also `w` holding the same value. Here a decoy `w` is
+# in scope and the loop variable has a different name: if the helper is still
+# dynamically scoped it resolves the decoy, fails to find the file, and reports
+# "workflow missing".
+sha_pin_scoping_regression() {
+  local w="workflows/DECOY-MUST-NOT-BE-USED.yml"   # decoy; must be ignored
+  local target
+  for target in "${CI_WF}" "${CODEQL_WF}"; do
+    assert_uses_sha_pinned "${target}"
+  done
+}
+sha_pin_scoping_regression
 
 # --- ci.yml automates the existing local validation -------------------------
 assert_contains "${CI_WF}" 'push:' "ci triggers on push"
@@ -1396,6 +1436,30 @@ refute_contains "${DEPENDABOT}" '(registries:|password|[Tt]oken|[Ss]ecret)' \
   "dependabot embeds no registry credentials or secrets"
 refute_contains "${DEPENDABOT}" '(reviewers:|assignees:)' \
   "dependabot adds no reviewers or assignees"
+
+# Cooldown: never propose a dependency the moment it is published. A newly
+# published version may be malicious or withdrawn within days, so each ecosystem
+# waits before opening an update PR.
+assert_count "${DEPENDABOT}" '^[[:space:]]*cooldown:[[:space:]]*$' 2 \
+  "both ecosystems declare a cooldown"
+assert_count "${DEPENDABOT}" '^[[:space:]]*default-days:[[:space:]]*[0-9]+[[:space:]]*$' 2 \
+  "both cooldowns set default-days"
+
+# Every declared default-days must be at least 7.
+dependabot_cooldown_days_ok() {
+  local file="${ROOT}/${DEPENDABOT}" days found=0 bad=0
+  while read -r days; do
+    found=$((found + 1))
+    (( days < 7 )) && bad=$((bad + 1))
+  done < <(grep -Eo '^[[:space:]]*default-days:[[:space:]]*[0-9]+' "${file}" 2>/dev/null \
+           | grep -Eo '[0-9]+$')
+  if (( found == 2 && bad == 0 )); then
+    pass "every dependabot cooldown default-days is >= 7 (found ${found})"
+  else
+    fail "dependabot cooldown default-days must all be >= 7 (found ${found}, below-minimum ${bad})"
+  fi
+}
+dependabot_cooldown_days_ok
 
 # ---------------------------------------------------------------------------
 # Task 8: Configurable Ollama model volume (adopt an existing Docker volume)
