@@ -183,6 +183,26 @@ lacked a valid `Authorization: Bearer <key>` header or the key does not match
 Confirm the client is using the current key; rotate the key per
 [../../security/SECURITY.md](../../security/SECURITY.md) if it may be exposed.
 
+A **`400` with `"No connected db."`** is also a rejection, not a success. This
+baseline runs LiteLLM without a key database, so the master key is the only key
+it can verify; any other well-formed token cannot be looked up and is refused
+with `400` instead of `401`. Access is still denied — no model data is returned.
+Treat it exactly like a `401`: the client is using the wrong key.
+
+Rejection codes by request shape:
+
+| Request | Code | Meaning |
+|---|---|---|
+| No `Authorization` header | `401` | `Authentication Error, No api key passed in.` |
+| Malformed header or empty bearer | `401` | `Malformed API Key passed in.` |
+| Well-formed but wrong key | `400` | `No connected db.` — cannot verify, refused |
+| Correct master key | `200` | Authorized |
+
+`health-check.sh` asserts both paths: an unauthenticated request must return
+`401`/`403`, and an invalid key must return `400`/`401`/`403`. Any `2xx` for an
+invalid key is a hard failure — that would mean authentication is not failing
+closed.
+
 ### Model-not-found failures
 
 If a request for `local-fast`, `local-general`, or `local-embed` fails with a

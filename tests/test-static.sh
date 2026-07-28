@@ -581,7 +581,16 @@ assert_contains "scripts/health-check.sh" '\-\-deep' \
 assert_contains "scripts/health-check.sh" '\-\-max-time' \
   "health-check bounds curl with --max-time"
 assert_contains "scripts/health-check.sh" '401.*403|403.*401' \
-  "health-check accepts only 401/403 as an auth rejection"
+  "health-check treats 401/403 as the unauthenticated rejection"
+# An invalid key must also be rejected. 400 is accepted because this baseline
+# runs with no key database (LiteLLM answers "No connected db."), which is still
+# fail-closed — but a 2xx must always fail the check.
+assert_contains "scripts/health-check.sh" 'invalid API key' \
+  "health-check probes an invalid API key"
+assert_contains "scripts/health-check.sh" '"400".*"401".*"403"' \
+  "health-check accepts 400/401/403 as an invalid-key rejection"
+assert_contains "scripts/health-check.sh" 'is_2xx "\$\{code\}"; then' \
+  "health-check fails when an invalid key is accepted (2xx)"
 
 assert_contains "scripts/backup-config.sh" 'ls-files' \
   "backup builds its inventory from git ls-files"
@@ -647,7 +656,11 @@ while (( i < ${#args[@]} )); do
   a="${args[$i]}"
   case "$a" in
     -o) i=$((i+1)); out="${args[$i]}";;
-    -H) i=$((i+1)); [[ "${args[$i]}" == Authorization:* ]] && auth=1;;
+    -H) i=$((i+1))
+        if [[ "${args[$i]}" == Authorization:* ]]; then
+          # auth=1 the real master key, auth=2 the invalid-key probe.
+          if [[ "${args[$i]}" == *sk-invalid-health-probe-* ]]; then auth=2; else auth=1; fi
+        fi;;
     -d|--data|--data-raw|--data-binary) i=$((i+1)); data="${args[$i]}";;
     -w) i=$((i+1)); wfmt="${args[$i]}";;
     http://*|https://*) url="$a";;
@@ -659,7 +672,8 @@ code=200
 case "$url" in
   */health/liveliness) body='{"status":"connected"}';;
   */v1/models)
-    if (( auth )); then body='{"data":[{"id":"local-fast"},{"id":"local-general"},{"id":"local-embed"}]}'
+    if (( auth == 1 )); then body='{"data":[{"id":"local-fast"},{"id":"local-general"},{"id":"local-embed"}]}'
+    elif (( auth == 2 )); then body='{"error":{"message":"No connected db.","code":"400"}}'; code=400
     else body='{"error":"authentication required"}'; code=401; fi;;
   */v1/chat/completions) body='{"choices":[{"message":{"content":"pong"}}]}';;
   */v1/embeddings) body='{"data":[{"embedding":[0.11,0.22,0.33]}]}';;
@@ -777,9 +791,55 @@ t5_b_health_ordering() {
   mapfile -t L < "${log}" 2>/dev/null || L=()
   assert_in "${L[0]:-}" "/health/liveliness" "behavior: check 1 is liveness"
   assert_in "${L[1]:-}" "/v1/models auth=0"  "behavior: check 2 is unauth /v1/models"
-  assert_in "${L[2]:-}" "/v1/models auth=1"  "behavior: check 3 is auth /v1/models"
-  assert_in "${L[3]:-}" "/v1/chat/completions" "behavior: check 4 is a completion"
-  assert_in "${L[4]:-}" "/v1/embeddings"     "behavior: check 5 is an embedding"
+  assert_in "${L[2]:-}" "/v1/models auth=2"  "behavior: check 2b probes an invalid key"
+  assert_in "${L[3]:-}" "/v1/models auth=1"  "behavior: check 3 is auth /v1/models"
+  assert_in "${L[4]:-}" "/v1/chat/completions" "behavior: check 4 is a completion"
+  assert_in "${L[5]:-}" "/v1/embeddings"     "behavior: check 5 is an embedding"
+}
+
+# --- Behavior 5b: health-check rejects a gateway that ACCEPTS an invalid key -
+# Guards the widened 400/401/403 acceptance from silently permitting a 2xx.
+t5_b_health_invalid_key_accepted() {
+  if [[ ! -f "${ROOT}/scripts/health-check.sh" ]]; then
+    fail "behavior: health-check.sh absent (invalid-key test skipped)"; return
+  fi
+  local t; t="$(t5_new_repo)"; t5_stub_curl "${t}"; t5_write_env "${t}"
+  # Re-stub curl so ANY bearer token — including the invalid probe — returns 200.
+  cat >"${t}/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out=""; wfmt=""; url=""; auth=0; a=("$@"); i=0
+while (( i < ${#a[@]} )); do
+  case "${a[$i]}" in
+    -o) i=$((i+1)); out="${a[$i]}";;
+    -H) i=$((i+1)); [[ "${a[$i]}" == Authorization:* ]] && auth=1;;
+    -w) i=$((i+1)); wfmt="${a[$i]}";;
+    http://*|https://*) url="${a[$i]}";;
+  esac
+  i=$((i+1))
+done
+code=200
+case "$url" in
+  */health/liveliness) body='{"status":"connected"}';;
+  */v1/models)
+    if (( auth )); then body='{"data":[{"id":"local-fast"},{"id":"local-general"},{"id":"local-embed"}]}'
+    else body='{"error":"authentication required"}'; code=401; fi;;
+  */v1/chat/completions) body='{"choices":[{"message":{"content":"pong"}}]}';;
+  */v1/embeddings) body='{"data":[{"embedding":[0.11,0.22]}]}';;
+  *) body='{}'; code=404;;
+esac
+[[ -n "$out" ]] && printf '%s' "$body" > "$out"
+[[ -n "$wfmt" ]] && printf '%s' "$code"
+exit 0
+EOF
+  chmod +x "${t}/bin/curl"
+  t5_run "${t}" "scripts/health-check.sh"
+  if (( T5_RC != 0 )); then
+    pass "behavior: health-check fails when an invalid key is accepted (200)"
+  else
+    fail "behavior: health-check MUST fail when an invalid key returns 200"
+  fi
+  assert_in "${T5_OUT}" "invalid API key was ACCEPTED" \
+    "behavior: health-check names the fail-closed violation"
 }
 
 # --- Behavior 6/7: backup archives only tracked config; excludes runtime -----
@@ -1013,6 +1073,7 @@ run_task5_behavior_tests() {
   t5_b_no_key_leak
   t5_b_deploy_bounded_wait
   t5_b_health_ordering
+  t5_b_health_invalid_key_accepted
   t5_b_backup_exclusions
   t5_b_deploy_missing_env
   t5_b_update_rollback
@@ -1344,6 +1405,12 @@ for c in "${AI_COMPOSE}" "${OLLAMA_COMPOSE}"; do
   # No host-specific volume name is baked into the repository.
   refute_contains "${c}" "${LEGACY_VOLUME}" \
     "no host-specific legacy volume name hardcoded: ${c}"
+  # Adoption safety switch, defaulting to false so clean installs still create
+  # the volume. An unconditional `external: true` would break fresh hosts.
+  assert_contains "${c}" 'external:[[:space:]]*\$\{OLLAMA_VOLUME_EXTERNAL:-false\}' \
+    "volume external flag is configurable and defaults to false: ${c}"
+  refute_contains "${c}" '^[[:space:]]*external:[[:space:]]*true[[:space:]]*$' \
+    "no unconditional 'external: true' (would break clean installs): ${c}"
 done
 
 # Env examples carry the default so a clean install needs no edits, and they
@@ -1353,6 +1420,8 @@ for e in "ai/.env.example" "ai/ollama/.env.example"; do
     "env example sets the default volume name: ${e}"
   refute_contains "${e}" "${LEGACY_VOLUME}" \
     "env example hardcodes no host-specific volume name: ${e}"
+  assert_contains "${e}" '^OLLAMA_VOLUME_EXTERNAL=false[[:space:]]*$' \
+    "env example defaults the adoption switch to false: ${e}"
 done
 
 # --- Rendered behavior: default and override (requires docker CLI) ----------
@@ -1398,6 +1467,26 @@ if command -v docker >/dev/null 2>&1; then
       pass "rendered: built-in default applies with an empty env file (${c})"
     else
       fail "rendered: built-in default should apply with an empty env file, got '${got}' (${c})"
+    fi
+
+    # Clean install must NOT render `external: true` — Compose has to be free to
+    # create the volume, otherwise `up` fails with "external volume not found".
+    if docker compose --env-file "${base_env}" -f "${ROOT}/${c}" config 2>/dev/null \
+         | awk '/^volumes:/{v=1;next} v&&/^[^ ]/{v=0} v' | grep -Eq 'external:[[:space:]]*true'; then
+      fail "rendered: clean install must not mark the volume external (${c})"
+    else
+      pass "rendered: clean install leaves the volume Compose-managed (${c})"
+    fi
+
+    # Opting in flips the volume to external so an adopted volume is never
+    # created-if-missing and cannot be removed by `down -v`.
+    ext_env="${T8_TMP}/ext.env"
+    { cat "${base_env}"; printf '\nOLLAMA_VOLUME_EXTERNAL=true\n'; } > "${ext_env}"
+    if docker compose --env-file "${ext_env}" -f "${ROOT}/${c}" config 2>/dev/null \
+         | awk '/^volumes:/{v=1;next} v&&/^[^ ]/{v=0} v' | grep -Eq 'external:[[:space:]]*true'; then
+      pass "rendered: OLLAMA_VOLUME_EXTERNAL=true marks the volume external (${c})"
+    else
+      fail "rendered: OLLAMA_VOLUME_EXTERNAL=true should mark the volume external (${c})"
     fi
   done
   rm -rf "${T8_TMP}" 2>/dev/null || true

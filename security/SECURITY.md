@@ -51,8 +51,12 @@ If the master key may have been exposed (committed, logged, pasted, or shared):
    ```bash
    ./scripts/health-check.sh
    ```
-   The check confirms unauthenticated `/v1/models` returns `401`/`403`
-   (unauthenticated access is rejected) and authenticated access succeeds.
+   The check confirms unauthenticated `/v1/models` returns `401`/`403`, that an
+   invalid key is refused (`400`/`401`/`403` — never `2xx`), and that
+   authenticated access with the new key succeeds. A `400 "No connected db."`
+   for a wrong key is a rejection, not a success: with no key database
+   configured, LiteLLM can only verify the master key. The check fails hard if
+   any invalid key is ever answered with `2xx`.
 6. **Update all clients** to the new key and remove the old value from any
    store.
 

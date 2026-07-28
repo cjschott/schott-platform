@@ -91,7 +91,10 @@ closed.
   `${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}`, so the same Compose
   files serve a clean install and a host adopting an existing Ollama volume —
   keeping storage a replaceable implementation detail behind a stable mount.
-  See [../operations/install.md](../operations/install.md) for migration.
+  `OLLAMA_VOLUME_EXTERNAL` (default `false`) controls whether Compose may create
+  that volume; adopters set it to `true` so an existing store is never
+  shadowed by an empty one. See
+  [../operations/install.md](../operations/install.md) for migration.
 
 ## Logging and failure behavior
 

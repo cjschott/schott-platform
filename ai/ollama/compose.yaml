@@ -49,3 +49,6 @@ volumes:
     # local .env to adopt an existing volume; never hardcode a host-specific
     # name here. See docs/operations/install.md.
     name: ${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}
+    # Adoption safety switch — see ai/compose.yaml for the rationale. Default
+    # false so clean installs still create the volume on demand.
+    external: ${OLLAMA_VOLUME_EXTERNAL:-false}

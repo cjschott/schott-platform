@@ -108,3 +108,9 @@ volumes:
     # model volume by setting OLLAMA_VOLUME_NAME in the local ai/.env. Never
     # hardcode a host-specific name here. See docs/operations/install.md.
     name: ${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}
+    # Adoption safety switch. Default false: Compose creates the volume if it is
+    # missing, so clean installs are unaffected. Set OLLAMA_VOLUME_EXTERNAL=true
+    # when adopting a pre-existing volume — Compose then refuses to create one,
+    # so a wrong OLLAMA_VOLUME_NAME fails loudly instead of silently starting
+    # against an empty volume, and `down -v` cannot delete the adopted models.
+    external: ${OLLAMA_VOLUME_EXTERNAL:-false}

@@ -33,7 +33,9 @@ The Docker volume behind that mount is
 identical to the integrated stack's `ai/.env` so isolated troubleshooting
 inspects the same models. To adopt the volume of an existing/legacy Ollama
 deployment instead of re-downloading, set `OLLAMA_VOLUME_NAME` in the local
-`.env` — see
+`.env` — and set `OLLAMA_VOLUME_EXTERNAL=true` so Compose adopts the volume
+rather than creating one, which makes a wrong name fail loudly instead of
+starting against an empty volume. Leave it `false` on a clean install. See
 [../../docs/operations/install.md](../../docs/operations/install.md).
 
 ## Required models

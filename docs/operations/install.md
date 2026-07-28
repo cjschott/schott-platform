@@ -115,15 +115,32 @@ set it in the protected local `ai/.env` instead.
    docker inspect -f '{{ range .Mounts }}{{ .Name }} -> {{ .Destination }}{{ end }}' <container>
    ```
 
-3. Point the stack at it in `ai/.env` (never in a committed file):
+3. Point the stack at it in `ai/.env` (never in a committed file), and turn on
+   the adoption safety switch:
 
    ```bash
    # in ai/.env — example legacy name; use the one you confirmed above
    OLLAMA_VOLUME_NAME=ollama_ollama-data
+   OLLAMA_VOLUME_EXTERNAL=true
    ```
 
-   Set the same value in `ai/ollama/.env` if you also use the isolated
+   Set the same values in `ai/ollama/.env` if you also use the isolated
    troubleshooting stack, so both inspect the same model data.
+
+   `OLLAMA_VOLUME_EXTERNAL=true` marks the volume as externally managed. It is
+   strongly recommended whenever you adopt an existing volume, because it:
+
+   - **fails loudly on a typo.** Compose refuses to create the volume, so a
+     misspelled `OLLAMA_VOLUME_NAME` errors with `external volume "…" not found`
+     instead of silently starting against an empty volume and appearing to have
+     lost every model.
+   - **protects the data from `down -v`.** Compose will not delete a volume it
+     does not manage.
+   - **silences the project-ownership warning** Compose otherwise prints on every
+     `up` when the volume was created by a different Compose project.
+
+   Leave it `false` (the default) on a clean install — Compose must be free to
+   create the volume the first time.
 
 4. Stop the legacy Ollama deployment **before** deploying this stack. Two Ollama
    servers must never write to the same volume concurrently:
@@ -142,10 +159,11 @@ set it in the protected local `ai/.env` instead.
 After deployment, `ollama list` should show the pre-existing models with no
 re-download, and step 6's pulls become no-ops.
 
-> **Warning — an adopted volume is deleted by `docker compose down -v`.**
-> Because the volume carries an explicit name rather than a Compose-managed
-> project-prefixed one, `down -v` (and `docker volume rm`) destroys the adopted
-> model data just as readily as platform-created data. Use `down` without `-v`.
+> **Warning — `docker compose down -v` destroys model data.** With
+> `OLLAMA_VOLUME_EXTERNAL=false` (the default, and every clean install), the
+> volume is Compose-managed and `down -v` deletes it, forcing a full
+> re-download. Setting `OLLAMA_VOLUME_EXTERNAL=true` prevents Compose from
+> removing it, but `docker volume rm` still can. Use `down` without `-v`.
 > Nothing in this repository ever runs `down -v`.
 
 ## 4. Validate configuration (static)

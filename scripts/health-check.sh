@@ -6,6 +6,7 @@ set -Eeuo pipefail
 # Checks, in order:
 #   1. LiteLLM liveness.
 #   2. Unauthenticated /v1/models is rejected.
+#  2b. An invalid API key is rejected (authentication fails closed).
 #   3. Authenticated /v1/models succeeds.
 #   4. local-fast returns a non-empty completion.
 #   5. local-embed returns a non-empty numeric vector.
@@ -69,12 +70,17 @@ cleanup() { rm -f "${BODY}" "${MODELS_BODY}"; }
 trap cleanup EXIT
 
 # get_code writes the response body to $BODY and echoes the HTTP status code.
-get_code() {  # get_code <max-time> <auth:0|1> <method> <url> [json-data]
+# <auth> is 0 (no header), 1 (the real master key), or a literal token to send.
+get_code() {  # get_code <max-time> <auth:0|1|token> <method> <url> [json-data]
   local mt="$1" auth="$2" method="$3" url="$4" data="${5-}"
   local -a args=(-sS -o "${BODY}" -w '%{http_code}'
                  --connect-timeout "${CONNECT_TIMEOUT}" --max-time "${mt}"
                  -X "${method}")
-  (( auth )) && args+=(-H "Authorization: Bearer ${MASTER_KEY}")
+  case "${auth}" in
+    0) ;;
+    1) args+=(-H "Authorization: Bearer ${MASTER_KEY}") ;;
+    *) args+=(-H "Authorization: Bearer ${auth}") ;;
+  esac
   if [[ -n "${data}" ]]; then
     args+=(-H "Content-Type: application/json" --data "${data}")
   fi
@@ -99,6 +105,24 @@ if [[ "${code}" == "401" || "${code}" == "403" ]]; then
   pass "unauthenticated /v1/models rejected (${code})"
 else
   fail "unauthenticated /v1/models not rejected by auth (got ${code}; expected 401 or 403)"
+fi
+
+# --- 2b. An invalid API key is rejected -------------------------------------
+# A request carrying a well-formed but wrong bearer token must never succeed.
+# The rejection code varies with deployment shape and both are fail-closed:
+#   401 — the key is absent or malformed, or a key database rejected it.
+#   400 — this baseline runs with no key database, so LiteLLM cannot look up a
+#         non-master key and returns "No connected db." Access is still denied.
+# The load-bearing assertion is that the response is NOT 2xx; the accepted codes
+# below are a secondary check that auth (not a timeout or 5xx) did the rejecting.
+INVALID_KEY="sk-invalid-health-probe-000"
+code="$(get_code "${MAX_TIME}" "${INVALID_KEY}" GET "${BASE_URL}/v1/models")"
+if is_2xx "${code}"; then
+  fail "invalid API key was ACCEPTED (${code}) — authentication is NOT failing closed"
+elif [[ "${code}" == "400" || "${code}" == "401" || "${code}" == "403" ]]; then
+  pass "invalid API key rejected (${code})"
+else
+  fail "invalid API key not rejected by auth (got ${code}; expected 400, 401, or 403)"
 fi
 
 # --- 3. Authenticated /v1/models succeeds -----------------------------------
