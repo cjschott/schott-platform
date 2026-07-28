@@ -1099,7 +1099,11 @@ run_task5_behavior_tests() {
   # lock during rm cannot abort the suite.
   local d
   for d in "${TASK5_TMP[@]:-}"; do
-    [[ -n "${d}" && -d "${d}" ]] && rm -rf "${d}" 2>/dev/null || true
+    # Explicit if/then rather than A && B || C, which is not if-then-else:
+    # the `|| true` would also run when the test succeeds but rm fails (SC2015).
+    if [[ -n "${d}" && -d "${d}" ]]; then
+      rm -rf "${d}" 2>/dev/null || true
+    fi
   done
   (( had_e )) && set -e
   return 0

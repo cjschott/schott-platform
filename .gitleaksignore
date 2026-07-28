@@ -7,13 +7,17 @@
 # Nothing here is a real credential. Add an entry ONLY for a historical commit
 # that cannot be corrected forward, and always fix the current tree instead when
 # that is possible.
-
-# Commit de8f48a introduced the health-check invalid-key probe as
-# `INVALID_KEY="sk-invalid-health-probe-000"`. The value is deliberately fake —
-# a non-functional token whose only purpose is to prove the gateway REJECTS an
-# invalid key — but its `sk-` prefix and entropy match the generic-api-key rule.
 #
-# The current tree no longer contains a credential-like value: the probe was
-# renamed to `invalid-health-probe-token`. History is not rewritten (no amend,
-# no force-push), so this one past occurrence is allowlisted by fingerprint.
+# NOTE: never quote a flagged literal in these comments. The scanner reads this
+# file too, and reproducing the value here creates a fresh finding.
+
+# Commit de8f48a introduced the health-check invalid-key probe with a value that
+# carried a credential-like prefix and enough entropy to match the
+# generic-api-key rule. The value was always fake: a non-functional token whose
+# only purpose is to prove the gateway REJECTS an invalid key.
+#
+# The current tree no longer contains a credential-like value — the probe was
+# renamed to a plainly non-secret token (see scripts/health-check.sh). History is
+# not rewritten (no amend, no force-push), so this single past occurrence is
+# allowlisted by fingerprint.
 de8f48a65f0b22e925edea73f7614fdecb93ca25:scripts/health-check.sh:generic-api-key:118
