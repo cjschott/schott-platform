@@ -79,6 +79,75 @@ ls -l ai/.env    # expect -rw------- and correct ownership
 Do not print the key, commit `ai/.env`, or paste the key into chat, tickets, or
 command history. See [../../security/SECURITY.md](../../security/SECURITY.md).
 
+### Migrating from a legacy Ollama deployment (existing hosts only)
+
+**Clean installs: skip this section.** The default in `ai/.env.example` already
+creates the platform volume `schott-platform-ollama-models`, and no file needs
+editing.
+
+A host that already ran Ollama — a standalone `docker run`, a hand-written
+Compose file, or an earlier project directory — keeps its downloaded models in
+an existing Docker volume under a different, host-specific name. Deploying
+without adopting it starts Ollama against a **new, empty** volume and forces a
+full re-download of every model. The repository never hardcodes such a name;
+set it in the protected local `ai/.env` instead.
+
+1. Find the existing volume:
+
+   ```bash
+   docker volume ls
+   ```
+
+   A legacy standalone deployment in a directory named `ollama` typically
+   produces `ollama_ollama-data`.
+
+2. Confirm it is the one holding the model blobs before adopting it:
+
+   ```bash
+   docker volume inspect <volume-name>
+   sudo du -sh "$(docker volume inspect -f '{{ .Mountpoint }}' <volume-name>)"
+   ```
+
+   Expect a mountpoint containing `models/blobs` and a size in the tens of GB.
+   You can also confirm which volume the running legacy container uses:
+
+   ```bash
+   docker inspect -f '{{ range .Mounts }}{{ .Name }} -> {{ .Destination }}{{ end }}' <container>
+   ```
+
+3. Point the stack at it in `ai/.env` (never in a committed file):
+
+   ```bash
+   # in ai/.env — example legacy name; use the one you confirmed above
+   OLLAMA_VOLUME_NAME=ollama_ollama-data
+   ```
+
+   Set the same value in `ai/ollama/.env` if you also use the isolated
+   troubleshooting stack, so both inspect the same model data.
+
+4. Stop the legacy Ollama deployment **before** deploying this stack. Two Ollama
+   servers must never write to the same volume concurrently:
+
+   ```bash
+   docker stop <legacy-container>       # and disable whatever restarts it
+   ```
+
+5. Verify the rendered volume name resolves as intended, then continue with
+   validation below:
+
+   ```bash
+   docker compose --env-file ai/.env -f ai/compose.yaml config | grep -A2 '^volumes:'
+   ```
+
+After deployment, `ollama list` should show the pre-existing models with no
+re-download, and step 6's pulls become no-ops.
+
+> **Warning — an adopted volume is deleted by `docker compose down -v`.**
+> Because the volume carries an explicit name rather than a Compose-managed
+> project-prefixed one, `down -v` (and `docker volume rm`) destroys the adopted
+> model data just as readily as platform-created data. Use `down` without `-v`.
+> Nothing in this repository ever runs `down -v`.
+
 ## 4. Validate configuration (static)
 
 ```bash

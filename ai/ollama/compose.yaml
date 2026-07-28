@@ -44,3 +44,8 @@ services:
 
 volumes:
   ollama-models:
+    # Same explicit name as the integrated stack, so isolated troubleshooting
+    # inspects the same model data. Override with OLLAMA_VOLUME_NAME in the
+    # local .env to adopt an existing volume; never hardcode a host-specific
+    # name here. See docs/operations/install.md.
+    name: ${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}

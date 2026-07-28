@@ -1319,6 +1319,116 @@ refute_contains "${DEPENDABOT}" '(reviewers:|assignees:)' \
   "dependabot adds no reviewers or assignees"
 
 # ---------------------------------------------------------------------------
+# Task 8: Configurable Ollama model volume (adopt an existing Docker volume)
+# ---------------------------------------------------------------------------
+#
+# The stack must be portable across clean installs, pre-existing Ollama
+# installations, and migrated hosts WITHOUT editing any Compose file. The
+# Compose volume key stays `ollama-models`; only the underlying Docker volume
+# name is configurable, via OLLAMA_VOLUME_NAME.
+
+VOLUME_DEFAULT="schott-platform-ollama-models"
+# An example legacy name from a pre-existing standalone Ollama deployment. It is
+# host-specific and must never appear in Compose or env files — only in docs.
+LEGACY_VOLUME="ollama_ollama-data"
+
+for c in "${AI_COMPOSE}" "${OLLAMA_COMPOSE}"; do
+  # The named volume carries an explicit, env-overridable Docker volume name
+  # with a host-agnostic platform default.
+  assert_contains "${c}" \
+    'name:[[:space:]]*\$\{OLLAMA_VOLUME_NAME:-schott-platform-ollama-models\}' \
+    "volume name is configurable via OLLAMA_VOLUME_NAME with a default: ${c}"
+  # The service still mounts the same Compose volume key at /root/.ollama.
+  assert_contains "${c}" 'ollama-models:/root/\.ollama' \
+    "model storage still mounts at /root/.ollama: ${c}"
+  # No host-specific volume name is baked into the repository.
+  refute_contains "${c}" "${LEGACY_VOLUME}" \
+    "no host-specific legacy volume name hardcoded: ${c}"
+done
+
+# Env examples carry the default so a clean install needs no edits, and they
+# never hardcode a host-specific name.
+for e in "ai/.env.example" "ai/ollama/.env.example"; do
+  assert_contains "${e}" "^OLLAMA_VOLUME_NAME=${VOLUME_DEFAULT}[[:space:]]*\$" \
+    "env example sets the default volume name: ${e}"
+  refute_contains "${e}" "${LEGACY_VOLUME}" \
+    "env example hardcodes no host-specific volume name: ${e}"
+done
+
+# --- Rendered behavior: default and override (requires docker CLI) ----------
+if command -v docker >/dev/null 2>&1; then
+  t8_rendered_volume() {  # <env-file-abs> <compose-rel> -> prints rendered name
+    docker compose --env-file "$1" -f "${ROOT}/$2" config 2>/dev/null \
+      | awk '/^volumes:/{v=1; next} v && /^[^ ]/{v=0} v && /name:/{gsub(/^[ ]*name:[ ]*/,""); gsub(/"/,""); print; exit}'
+  }
+
+  T8_TMP="$(mktemp -d)"
+  for c in "${AI_COMPOSE}" "${OLLAMA_COMPOSE}"; do
+    if [[ "${c}" == "${OLLAMA_COMPOSE}" ]]; then
+      base_env="${ROOT}/ai/ollama/.env.example"
+    else
+      base_env="${ROOT}/ai/.env.example"
+    fi
+
+    # Clean install: the example env renders the platform default, with no
+    # Compose project prefix.
+    got="$(t8_rendered_volume "${base_env}" "${c}")"
+    if [[ "${got}" == "${VOLUME_DEFAULT}" ]]; then
+      pass "rendered: default volume name is ${VOLUME_DEFAULT} (${c})"
+    else
+      fail "rendered: default volume name should be ${VOLUME_DEFAULT}, got '${got}' (${c})"
+    fi
+
+    # Existing installation: OLLAMA_VOLUME_NAME adopts an already-present
+    # Docker volume without editing the Compose file.
+    override_env="${T8_TMP}/override.env"
+    { cat "${base_env}"; printf '\nOLLAMA_VOLUME_NAME=%s\n' "${LEGACY_VOLUME}"; } > "${override_env}"
+    got="$(t8_rendered_volume "${override_env}" "${c}")"
+    if [[ "${got}" == "${LEGACY_VOLUME}" ]]; then
+      pass "rendered: OLLAMA_VOLUME_NAME adopts an existing volume (${c})"
+    else
+      fail "rendered: OLLAMA_VOLUME_NAME override should yield ${LEGACY_VOLUME}, got '${got}' (${c})"
+    fi
+
+    # No env file at all (bare `docker compose config`): the built-in default
+    # still applies, so a clean install truly requires no configuration.
+    : > "${T8_TMP}/empty.env"
+    got="$(t8_rendered_volume "${T8_TMP}/empty.env" "${c}")"
+    if [[ "${got}" == "${VOLUME_DEFAULT}" ]]; then
+      pass "rendered: built-in default applies with an empty env file (${c})"
+    else
+      fail "rendered: built-in default should apply with an empty env file, got '${got}' (${c})"
+    fi
+  done
+  rm -rf "${T8_TMP}" 2>/dev/null || true
+else
+  printf 'SKIP: rendered volume-name checks (docker CLI not available)\n'
+fi
+
+# --- Documentation: migration from a legacy Ollama deployment ---------------
+MIGRATION_DOC="docs/operations/install.md"
+
+assert_contains "${MIGRATION_DOC}" 'OLLAMA_VOLUME_NAME' \
+  "install documents the OLLAMA_VOLUME_NAME setting"
+assert_contains "${MIGRATION_DOC}" "${LEGACY_VOLUME}" \
+  "install shows a concrete legacy volume name example"
+assert_contains "${MIGRATION_DOC}" 'docker volume ls' \
+  "install shows how to discover the existing volume"
+assert_contains "${MIGRATION_DOC}" 'docker volume inspect' \
+  "install shows how to confirm the existing volume holds model data"
+assert_contains "${MIGRATION_DOC}" '[Mm]igrat' \
+  "install has a migration section for legacy Ollama deployments"
+assert_contains "${MIGRATION_DOC}" 'down -v' \
+  "install warns that down -v destroys an adopted volume"
+
+assert_contains "${ARCH_DOC}" 'OLLAMA_VOLUME_NAME' \
+  "architecture documents the configurable model volume name"
+assert_contains "docs/operations/operations.md" 'OLLAMA_VOLUME_NAME' \
+  "operations documents the configurable model volume name"
+assert_contains "ai/ollama/README.md" 'OLLAMA_VOLUME_NAME' \
+  "ollama README documents the configurable model volume name"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

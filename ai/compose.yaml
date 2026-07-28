@@ -103,3 +103,8 @@ networks:
 
 volumes:
   ollama-models:
+    # Explicit Docker volume name so the stack is portable: a clean install gets
+    # the platform default, while an existing/migrated host adopts its current
+    # model volume by setting OLLAMA_VOLUME_NAME in the local ai/.env. Never
+    # hardcode a host-specific name here. See docs/operations/install.md.
+    name: ${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}

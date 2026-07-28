@@ -87,7 +87,11 @@ closed.
 - **Model data** — downloaded models persist in the named `ollama-models`
   Docker volume mounted at `/root/.ollama`, so they survive container
   recreation. Model blobs are outside Git and are intentionally excluded from
-  configuration backups in this baseline.
+  configuration backups in this baseline. The underlying Docker volume name is
+  `${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}`, so the same Compose
+  files serve a clean install and a host adopting an existing Ollama volume —
+  keeping storage a replaceable implementation detail behind a stable mount.
+  See [../operations/install.md](../operations/install.md) for migration.
 
 ## Logging and failure behavior
 

@@ -28,6 +28,14 @@ Downloaded models live in the named volume `ollama-models`, mounted at
 `/root/.ollama`. Model data therefore **survives container recreation**. Model
 blobs are stored outside Git and are not backed up in this baseline.
 
+The Docker volume behind that mount is
+`${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}`. Keep this value
+identical to the integrated stack's `ai/.env` so isolated troubleshooting
+inspects the same models. To adopt the volume of an existing/legacy Ollama
+deployment instead of re-downloading, set `OLLAMA_VOLUME_NAME` in the local
+`.env` — see
+[../../docs/operations/install.md](../../docs/operations/install.md).
+
 ## Required models
 
 Pull the exact models the platform depends on (these names are load-bearing —

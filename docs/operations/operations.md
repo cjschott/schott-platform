@@ -125,7 +125,7 @@ before pulling models:
 ```bash
 df -h /
 docker system df
-docker volume ls                 # find the ollama-models volume (project-prefixed)
+docker volume ls                 # model volume: ${OLLAMA_VOLUME_NAME:-schott-platform-ollama-models}
 docker compose --env-file ai/.env -f ai/compose.yaml exec ollama du -sh /root/.ollama
 ```
 
