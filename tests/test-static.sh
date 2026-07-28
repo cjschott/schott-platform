@@ -1192,8 +1192,26 @@ assert_contains "${NETPOL_DOC}" '11434' "network policy addresses Ollama port 11
 assert_contains "${NETPOL_DOC}" 'not applied by (any )?repository script' \
   "network policy states firewall changes are not scripted"
 assert_contains "${NETPOL_DOC}" '(SSH|22/tcp)' "network policy retains SSH access"
-assert_contains "${NETPOL_DOC}" 'approved-subnet' \
-  "network policy uses a clearly marked subnet placeholder"
+# The approved ranges are an explicit platform-owner decision (recorded during
+# Task 8B), not an inference — so the doc carries concrete values rather than a
+# placeholder, together with the caveat that they must be narrowed later.
+assert_contains "${NETPOL_DOC}" '192\.168\.86\.0/24' \
+  "network policy records the approved source range"
+assert_contains "${NETPOL_DOC}" '[Aa]pproved application range' \
+  "network policy names the approved application range"
+assert_contains "${NETPOL_DOC}" '[Aa]pproved management range' \
+  "network policy names the approved management range"
+assert_contains "${NETPOL_DOC}" '[Nn]arrow these values' \
+  "network policy requires narrowing the range when VLANs are introduced"
+refute_contains "${NETPOL_DOC}" '<(approved|management)-subnet>' \
+  "network policy no longer carries unresolved subnet placeholders"
+# The Docker/UFW bypass is a recorded, accepted v0.1.0 limitation.
+assert_contains "${NETPOL_DOC}" 'DOCKER-USER' \
+  "network policy records the Docker chain that bypasses UFW"
+assert_contains "${NETPOL_DOC}" 'does not reliably filter Docker-published' \
+  "network policy states UFW may not filter Docker-published ports"
+assert_contains "${NETPOL_DOC}" 'deferred to a separately designed' \
+  "network policy defers persistent DOCKER-USER policy to a later enhancement"
 assert_contains "${NETPOL_DOC}" 'http://schai:4000/v1' \
   "network policy names the application endpoint"
 
