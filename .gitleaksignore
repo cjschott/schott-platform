@@ -21,3 +21,13 @@
 # not rewritten (no amend, no force-push), so this single past occurrence is
 # allowlisted by fingerprint.
 de8f48a65f0b22e925edea73f7614fdecb93ca25:scripts/health-check.sh:generic-api-key:118
+
+# Commit 5cb85d4 is the fix for the entry above, but its version of THIS file
+# quoted the flagged literal while explaining it — so the allowlist file itself
+# became a finding. The comment was rewritten in the next commit to describe the
+# value instead of reproducing it (see the NOTE at the top).
+#
+# Only the pull_request-event scan surfaces this: it walks every commit in the
+# PR range, while the push-event scan looks at the tip alone. History is not
+# rewritten, so the intermediate commit is allowlisted by fingerprint.
+5cb85d452856fb10940400b59c9f17d8086518b3:.gitleaksignore:generic-api-key:12
