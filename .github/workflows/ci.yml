@@ -76,6 +76,13 @@ jobs:
       - name: Collector framework tests
         run: bash tests/test-collector-framework.sh
 
+      # Fixture-driven. Builds temporary git repositories and Compose files in
+      # a temp directory; contacts no host, uses no SSH, starts no container.
+      # The real repository Compose files are rendered read-only via
+      # `docker compose config`, which the Compose validation step already does.
+      - name: Initial read-only collector tests
+        run: bash tests/test-initial-collectors.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
