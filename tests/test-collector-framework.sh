@@ -161,9 +161,13 @@ assert_file "${COLLECTORS}/README.md"
 assert_absent_in "${COLLECTORS}" \
   '\b(import[[:space:]]+(socket|requests|urllib|http\.client|paramiko|ftplib|telnetlib)|from[[:space:]]+(socket|requests|urllib|paramiko)[[:space:]]+import)' \
   "collector framework imports no network module"
+# v0.6.0 narrows rather than relaxes the v0.5.0 prohibition: subprocess is
+# permitted only inside command_runner.py, a single audited chokepoint enforcing
+# shell=False, an executable allowlist, a mandatory timeout, bounded output, and
+# a sanitized environment. Plugin code still never calls it directly.
 assert_absent_in "${COLLECTORS}" \
   '(import[[:space:]]+subprocess|from[[:space:]]+subprocess[[:space:]]+import|subprocess\.[a-zA-Z_]|os\.system\(|os\.popen\(|os\.exec)' \
-  "collector framework invokes no subprocess"
+  "collector framework invokes no subprocess outside command_runner.py" "command_runner.py"
 # Writes are the capability that turns a wrong observation into a wrong record.
 assert_absent_in "${COLLECTORS}" \
   "(open\\([^)]*['\"](w|a|x)|\\.write_text\\(|\\.write_bytes\\(|shutil\\.(copy|move|rmtree)|os\\.(remove|unlink|rename|mkdir|makedirs))" \

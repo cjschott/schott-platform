@@ -141,6 +141,13 @@ BRANCH_STANDARDS=(
   "docs/standards/collector-plugin-standard.md"
 )
 
+# Per-collector documentation introduced in v0.6.0.
+COLLECTOR_DOCS=(
+  "docs/collectors/git-repository.md"
+  "docs/collectors/configuration-render.md"
+  "docs/collectors/manual-attestation.md"
+)
+
 for document in "${REQUIRED_DOCS[@]}"; do
   assert_file "${document}"
 done
@@ -394,6 +401,20 @@ assert_contains "${VERIFY_STANDARD}" 'Stale evidence cannot' \
   "verification standard forbids verified state from stale evidence"
 assert_contains "${VERIFY_STANDARD}" 'advisory' \
   "verification standard marks recommended actions advisory"
+
+# Each collector document must state its safety boundaries explicitly, so a
+# reader cannot infer capabilities the collector does not have.
+for collector_doc in "${COLLECTOR_DOCS[@]}"; do
+  name="$(basename "${collector_doc}" .md)"
+  assert_file "${collector_doc}"
+  assert_contains "${collector_doc}" '^# ' "${name} doc has a title"
+  assert_contains "${collector_doc}" '[Nn]ot [Cc]ollected' "${name} doc states what is not collected"
+  assert_contains "${collector_doc}" '[Ss]ecret' "${name} doc documents secret handling"
+  assert_contains "${collector_doc}" '[Ff]ailure' "${name} doc documents failure modes"
+  assert_contains "${collector_doc}" 'no persistence|not persist|never persists' "${name} doc states it does not persist"
+  assert_contains "${collector_doc}" 'EVID' "${name} doc states it assigns no evidence id"
+  assert_contains "${collector_doc}" 'remediat' "${name} doc states it performs no remediation"
+done
 
 # Operational metadata standard requirements.
 #
