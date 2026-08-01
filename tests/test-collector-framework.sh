@@ -187,14 +187,14 @@ done
 
 # --- Behavioural validation via Python ------------------------------------
 if python3 -c 'import yaml' >/dev/null 2>&1; then
-  PY_OUTPUT="$(cd "${ROOT}" && python3 - <<'PY' 2>&1 || true
+  PY_OUTPUT="$(python3 - "${ROOT}" <<'PY' 2>&1 || true
 import re
 import sys
 from pathlib import Path
 
 import yaml
 
-root = Path(".")
+root = Path(sys.argv[1])
 failures = 0
 
 
