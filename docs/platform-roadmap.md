@@ -144,11 +144,30 @@ Explicitly not delivered:
   what becomes a record.
 - No automatic remediation, at any layer.
 
-### v0.6.0 — Git Repository, Configuration Render, and Manual Attestation Collectors
+### v0.6.0 — Initial Read-Only Collectors
 
-Reserved. The first real collectors, chosen because none of them needs host
+**Delivered.** The first three real collectors, chosen because none needs host
 access: repository state, rendered Compose configuration, and operator
-attestation can all be gathered from the working tree.
+attestation are all gathered locally.
+
+- `git-repository` — read-only git inspection; remote URLs sanitized, never contacted
+- `configuration-render` — `docker compose config` only; environment names, never values
+- `manual-attestation` — structured human input; no file, network, or subprocess access
+- `command_runner.py` — the single audited subprocess chokepoint
+- `redaction.py` — applied before output *and* before fingerprinting
+- A collector CLI emitting deterministic JSON and persisting nothing
+
+Explicitly not delivered:
+
+- **No evidence persistence.** Collectors return results; no `EVID` record is
+  written, because the orchestrator that would assign identity does not exist.
+- **No remote observation.** Collection is local only; the model still describes
+  ten hosts nothing has contacted.
+- **No runtime state.** Configuration render reports what Compose *would* do,
+  not what is running.
+
+Platform awareness is not complete. Evidence Collection advances from
+`foundation` to `partial`, not `operational`.
 
 ### v0.7.0 — Read-Only SSH Collector
 

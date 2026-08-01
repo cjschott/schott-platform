@@ -2,7 +2,9 @@
 
 Read-only plugins that observe platform sources and return normalized data.
 
-**No live collector exists in v0.5.0.** The only plugin is a synthetic fixture that observes nothing and refuses to run outside a test context. This increment defines the contract; collectors arrive from v0.6.0.
+**v0.6.0 adds three real collectors**, all local and read-only: `git-repository`, `configuration-render`, and `manual-attestation`. Each has its own document under [`docs/collectors/`](../../docs/collectors/). The synthetic fixture plugin remains for contract testing.
+
+Nothing here contacts a remote host, uses SSH, inspects a running container, or calls a Docker runtime API.
 
 ## Why the contract came first
 
@@ -44,6 +46,12 @@ Stages that deliberately do not exist: `persist`, `remediate`, `mutate`, `approv
 ## Permissions
 
 **Approved:** `read-declared-model`, `read-repository-files`, `synthetic-fixture-only`.
+
+### Subprocess access
+
+v0.5.0 forbade subprocess access outright. v0.6.0 **narrows** rather than relaxes that: subprocess is permitted only through [`command_runner.py`](command_runner.py), a single audited chokepoint enforcing `shell=False`, an executable allowlist, a mandatory timeout, bounded output, and a minimal environment. Plugin code never calls `subprocess` directly, and a static test asserts it appears nowhere else in the package.
+
+`network_access` remains `false` for every plugin, without exception.
 
 **Forbidden:** `write-platform-model`, `write-evidence-store`, `modify-runtime`, `execute-remediation`, `manage-secrets`, `network-admin`, `host-admin`.
 
