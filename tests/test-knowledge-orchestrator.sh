@@ -113,9 +113,19 @@ assert_absent_in "${OBS}" "['\"][^'\"]*ai/\\.env['\"]" \
 assert_absent_in "${OBS}" \
   '(def[[:space:]]+(delete|remove|purge|update|overwrite|edit)_(evidence|verification|event|record))' \
   "no evidence delete or update method exists"
-assert_absent_in "${OBS}" \
-  '(shutil\.rmtree|os\.remove\(|os\.unlink\(|\.unlink\(\))' \
-  "no observation code deletes files" "cli.py"
+assert_absent_in "${OBS}" '(shutil\.rmtree|os\.remove\(|os\.removedirs\()' \
+  "no observation code removes a directory tree or an arbitrary path"
+
+# Temp-file cleanup during an atomic write is legitimate; deleting a persisted
+# record is not. Rather than exempting a whole file, require every deletion
+# call site to be annotated as temp cleanup, so a record deletion cannot be
+# added without also removing the annotation.
+undeclared_unlinks="$(grep -rInE '\.unlink\(' "${ROOT}/${OBS}" | grep -viE 'temp' || true)"
+if [[ -z "${undeclared_unlinks}" ]]; then
+  pass "every deletion call site is temp-file cleanup, never record deletion"
+else
+  fail "deletion outside temp-file cleanup: $(printf '%s' "${undeclared_unlinks}" | head -2 | tr '\n' ' ')"
+fi
 
 # No remediation anywhere in the package.
 assert_absent_in "${OBS}" \
@@ -302,11 +312,21 @@ with tempfile.TemporaryDirectory() as tmp:
             bad(f"store refuses {label} as a store root")
         except StoreError:
             ok(f"store refuses {label} as a store root")
+    # Opt-in is exercised against a synthetic repository, never the real one:
+    # constructing a store creates directories, and a test that pointed at
+    # platform-model would scatter them through tracked source on every run.
+    synthetic = Path(tmp) / "synthetic-repo"
+    (synthetic / ".git").mkdir(parents=True)
     try:
-        EvidenceStore(root / "platform-model", allow_repository_root=True)
+        EvidenceStore(synthetic / "store", allow_repository_root=True)
         ok("a test fixture may explicitly opt in to a repository path")
     except StoreError:
         bad("a test fixture may explicitly opt in to a repository path")
+    try:
+        EvidenceStore(synthetic / "store")
+        bad("a repository path is refused without the explicit opt-in")
+    except StoreError:
+        ok("a repository path is refused without the explicit opt-in")
 
 # --- Deduplication ---------------------------------------------------------
 with tempfile.TemporaryDirectory() as tmp:
