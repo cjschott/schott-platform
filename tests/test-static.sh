@@ -1370,6 +1370,32 @@ assert_contains "${CI_WF}" 'bash tests/test-static\.sh' "ci runs the static test
 assert_contains "${CI_WF}" 'bash tests/test-docs-static\.sh' "ci runs the documentation test suite"
 assert_contains "${CI_WF}" 'bash tests/test-platform-model\.sh' "ci runs the platform model test suite"
 assert_contains "${CI_WF}" "import yaml" "ci verifies PyYAML before model validation"
+# --- Pinned CI Python dependency --------------------------------------------
+# The platform model validator needs PyYAML. Installing it unpinned would make
+# CI depend on whatever PyPI serves that day, so the version and artifact hashes
+# are pinned and pip is required to verify them.
+CI_REQUIREMENTS="requirements-ci.txt"
+assert_file "${CI_REQUIREMENTS}"
+assert_contains "${CI_REQUIREMENTS}" '^pyyaml==6\.0\.3' \
+  "ci requirements pin PyYAML to an exact version"
+assert_contains "${CI_REQUIREMENTS}" '\-\-hash=sha256:[0-9a-f]{64}' \
+  "ci requirements carry sha256 artifact hashes"
+# --require-hashes fails unless every requirement is hash-pinned, so an
+# unrelated dependency cannot be added without also pinning it. Keep the file
+# to PyYAML alone. Enumerate the requirement names rather than using a negative
+# regex, so a missing file fails rather than silently passing.
+ci_requirement_names="$( { grep -oE '^[a-zA-Z][a-zA-Z0-9_.-]*==' "${ROOT}/${CI_REQUIREMENTS}" 2>/dev/null || true; } \
+  | sed 's/==$//' | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+if [[ "${ci_requirement_names}" == "pyyaml" ]]; then
+  pass "ci requirements introduce no other Python dependency"
+else
+  fail "ci requirements list unexpected packages: '${ci_requirement_names}'"
+fi
+assert_contains "${CI_WF}" 'python3 -m pip install --require-hashes -r requirements-ci\.txt' \
+  "ci installs the pinned requirements with hash verification"
+assert_contains "${CI_WF}" 'requirements-ci\.txt' \
+  "ci references the pinned requirements file"
+
 assert_contains "${CI_WF}" 'docker compose' "ci validates Docker Compose"
 assert_contains "${CI_WF}" 'ai/\.env\.example' "ci renders compose from ai/.env.example"
 assert_contains "${CI_WF}" 'ai/compose\.yaml' "ci validates the integrated stack"
