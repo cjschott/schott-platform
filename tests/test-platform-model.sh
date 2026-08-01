@@ -410,6 +410,12 @@ for path, edge in relationship_records:
         bad(f"duplicate relationship id {edge_id} in {rel(path)}")
     seen_relationship_ids.add(edge_id)
 
+    # Relationship ids use the same four-digit format as entity ids.
+    if re.fullmatch(r"REL-\d{4}", str(edge_id)):
+        ok(f"relationship id uses the four-digit format: {edge_id}")
+    else:
+        bad(f"relationship id is not a four-digit identifier: {edge_id}")
+
     if relationship in relationship_types:
         ok(f"{edge_id} uses a defined relationship type: {relationship}")
     else:
@@ -450,6 +456,19 @@ for edge in REQUIRED_EDGES:
         ok("declared relationship present: {} {} {}".format(*edge))
     else:
         bad("declared relationship missing: {} {} {}".format(*edge))
+
+# Edge-id references inside entity records must resolve to declared edges.
+# Without this, a partial id migration would leave dangling references that
+# every other check would happily ignore.
+for entity_id, (path, record) in entities.items():
+    block = record.get("relationships")
+    if not isinstance(block, dict):
+        continue
+    for referenced in block.get("declared") or []:
+        if referenced in seen_relationship_ids:
+            ok(f"{entity_id} references an existing relationship: {referenced}")
+        else:
+            bad(f"{entity_id} references an unknown relationship id: {referenced}")
 
 # Entity-specific operational facts.
 litellm = (entities.get("SVC-0002") or (None, {}))[1]
