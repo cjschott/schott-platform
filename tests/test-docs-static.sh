@@ -322,7 +322,7 @@ for state in draft declared verification-pending verified managed deprecated arc
 done
 # "observed" is provenance, never a lifecycle state. Asserting its absence from
 # the state list is the whole point of separating the two vocabularies.
-assert_not_contains "${LIFECYCLE_STANDARD}" '^\|[[:space:]]*`observed`[[:space:]]*\|' \
+assert_not_contains "${LIFECYCLE_STANDARD}" "^\|[[:space:]]*\`observed\`[[:space:]]*\|" \
   "lifecycle standard does not list observed as a lifecycle state"
 assert_contains "${LIFECYCLE_STANDARD}" 'verified -> verification-pending' \
   "lifecycle standard permits regression when evidence goes stale"
