@@ -115,6 +115,8 @@ REQUIRED_DOCS=(
   "docs/standards/linux-server-security-standard.md"
   "docs/standards/service-exposure-standard.md"
   "docs/decisions/ADR-0001-schai-reference-host.md"
+  "docs/decisions/ADR-0002-evidence-first-architecture.md"
+  "docs/decisions/ADR-0003-provider-agnostic-ai-architecture.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -135,6 +137,8 @@ BRANCH_STANDARDS=(
   "docs/standards/entity-lifecycle-standard.md"
   "docs/standards/evidence-standard.md"
   "docs/standards/verification-drift-standard.md"
+  "docs/standards/capability-model-standard.md"
+  "docs/standards/collector-plugin-standard.md"
 )
 
 for document in "${REQUIRED_DOCS[@]}"; do
