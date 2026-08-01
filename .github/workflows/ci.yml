@@ -67,6 +67,15 @@ jobs:
       - name: Evidence validator behaviour tests
         run: bash tests/test-evidence-validator.sh
 
+      # Repository-only: reads manifests and imports plugin modules to confirm
+      # they implement the contract. No network access, no SSH, no subprocess,
+      # no filesystem write, and no live collection.
+      - name: Collector plugin validation
+        run: python3 tools/collectors/validate_plugins.py --root .
+
+      - name: Collector framework tests
+        run: bash tests/test-collector-framework.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
