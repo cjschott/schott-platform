@@ -494,6 +494,40 @@ for path, edge in relationship_records:
     else:
         bad(f"{edge_id} has missing or invalid provenance class: {provenance_class}")
 
+# Edges must respect the allowed_sources and allowed_targets the ontology
+# declares for their relationship type. Without this the vocabulary is
+# decorative: any entity kind could be joined to any other.
+for path, edge in relationship_records:
+    edge_id = edge.get("id", "<unidentified>")
+    definition = relationship_types.get(edge.get("relationship"))
+    if not definition:
+        continue
+    source_entity = entities.get(edge.get("source"))
+    target_entity = entities.get(edge.get("target"))
+    if not source_entity or not target_entity:
+        continue
+
+    source_type = source_entity[1].get("type")
+    target_type = target_entity[1].get("type")
+    allowed_sources = definition.get("allowed_sources") or []
+    allowed_targets = definition.get("allowed_targets") or []
+
+    if source_type in allowed_sources:
+        ok(f"{edge_id} source type {source_type} is allowed for {edge.get('relationship')}")
+    else:
+        bad(
+            f"{edge_id}: {edge.get('relationship')} does not allow source type "
+            f"{source_type} (allowed: {', '.join(allowed_sources)})"
+        )
+
+    if target_type in allowed_targets:
+        ok(f"{edge_id} target type {target_type} is allowed for {edge.get('relationship')}")
+    else:
+        bad(
+            f"{edge_id}: {edge.get('relationship')} does not allow target type "
+            f"{target_type} (allowed: {', '.join(allowed_targets)})"
+        )
+
 edge_set = {
     (edge.get("source"), edge.get("relationship"), edge.get("target"))
     for _, edge in relationship_records

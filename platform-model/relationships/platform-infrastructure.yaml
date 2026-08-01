@@ -1,0 +1,383 @@
+---
+# Canonical declared relationships for platform hosts, networks, storage, and
+# backup coverage.
+#
+# Every edge here is declared. Inferred edges are never written to this file;
+# they are produced at query time by ontology/inference-rules.yaml.
+#
+# Governed by: docs/standards/platform-ontology-standard.md
+
+api_version: schott-platform/v1
+kind: RelationshipSet
+
+scope: platform-wide
+
+provenance:
+  class: declared
+  source: docs/superpowers/plans/2026-08-01-platform-model-expansion.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+relationships:
+
+  - id: REL-1001
+    source: HOST-0002
+    relationship: BELONGS_TO
+    target: ROLE-0002
+    description: schmgmt is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1002
+    source: HOST-0003
+    relationship: BELONGS_TO
+    target: ROLE-0003
+    description: schoxmox1 is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1003
+    source: HOST-0004
+    relationship: BELONGS_TO
+    target: ROLE-0003
+    description: schoxmox2 is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1004
+    source: HOST-0005
+    relationship: BELONGS_TO
+    target: ROLE-0004
+    description: schpbs is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1005
+    source: HOST-0006
+    relationship: BELONGS_TO
+    target: ROLE-0007
+    description: schdownload is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1006
+    source: HOST-0007
+    relationship: BELONGS_TO
+    target: ROLE-0006
+    description: schweb1 is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1007
+    source: HOST-0008
+    relationship: BELONGS_TO
+    target: ROLE-0006
+    description: schweb2 is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1008
+    source: HOST-0009
+    relationship: BELONGS_TO
+    target: ROLE-0007
+    description: schplex is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1009
+    source: HOST-0010
+    relationship: BELONGS_TO
+    target: ROLE-0002
+    description: schraspi is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1010
+    source: HOST-0011
+    relationship: BELONGS_TO
+    target: ROLE-0002
+    description: schotectli is classified under this platform role.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1011
+    source: HOST-0001
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schai attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1012
+    source: HOST-0002
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schmgmt attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1013
+    source: HOST-0003
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schoxmox1 attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1014
+    source: HOST-0004
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schoxmox2 attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1015
+    source: HOST-0005
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schpbs attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1016
+    source: HOST-0006
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schdownload attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1017
+    source: HOST-0007
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schweb1 attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1018
+    source: HOST-0008
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schweb2 attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1019
+    source: HOST-0009
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schplex attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1020
+    source: HOST-0010
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schraspi attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1021
+    source: HOST-0011
+    relationship: CONNECTS_TO
+    target: NET-0001
+    description: schotectli attaches to the routed homelab LAN.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1022
+    source: HOST-0001
+    relationship: CONNECTS_TO
+    target: NET-0004
+    description: schai hosts the private AI backend Docker network.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1023
+    source: SVC-0003
+    relationship: STORES_DATA_ON
+    target: STOR-0001
+    description: Ollama persists model weights on the model volume.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1024
+    source: HOST-0005
+    relationship: STORES_DATA_ON
+    target: STOR-0002
+    description: The backup platform host holds the local backup datastore.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1025
+    source: HOST-0003
+    relationship: BACKED_UP_BY
+    target: BKP-0001
+    description: Declared backup coverage for this criticality tier.
+    review_required: true
+    review_note: >-
+      Coverage is declared intent. The policy's schedule and retention are
+      themselves review_required and no restore has been verified.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1026
+    source: HOST-0004
+    relationship: BACKED_UP_BY
+    target: BKP-0001
+    description: Declared backup coverage for this criticality tier.
+    review_required: true
+    review_note: >-
+      Coverage is declared intent. The policy's schedule and retention are
+      themselves review_required and no restore has been verified.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1027
+    source: HOST-0005
+    relationship: BACKED_UP_BY
+    target: BKP-0001
+    description: Declared backup coverage for this criticality tier.
+    review_required: true
+    review_note: >-
+      Coverage is declared intent. The policy's schedule and retention are
+      themselves review_required and no restore has been verified.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1028
+    source: HOST-0001
+    relationship: BACKED_UP_BY
+    target: BKP-0002
+    description: Declared backup coverage for this criticality tier.
+    review_required: true
+    review_note: >-
+      Coverage is declared intent. The policy's schedule and retention are
+      themselves review_required and no restore has been verified.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1029
+    source: HOST-0002
+    relationship: BACKED_UP_BY
+    target: BKP-0002
+    description: Declared backup coverage for this criticality tier.
+    review_required: true
+    review_note: >-
+      Coverage is declared intent. The policy's schedule and retention are
+      themselves review_required and no restore has been verified.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1030
+    source: STOR-0001
+    relationship: BACKED_UP_BY
+    target: BKP-0003
+    description: AI configuration is protected; model weights are excluded as reconstructable.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1031
+    source: STOR-0002
+    relationship: BACKED_UP_BY
+    target: BKP-0005
+    description: The local datastore is replicated off-site.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1032
+    source: BKP-0004
+    relationship: CONNECTS_TO
+    target: STOR-0002
+    description: Proxmox guest backups are written to the local datastore.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1033
+    source: BKP-0005
+    relationship: CONNECTS_TO
+    target: STOR-0003
+    description: Off-site replication targets the remote datastore.
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01
+
+  - id: REL-1034
+    source: BKP-0004
+    relationship: DEPENDS_ON
+    target: HOST-0005
+    description: Guest backup depends on the backup platform host being available.
+    dependency_class: hard
+    impact: recovery-risk
+    provenance:
+      class: declared
+      source: docs/standards/platform-role-host-classification-standard.md
+      recorded_at: 2026-08-01

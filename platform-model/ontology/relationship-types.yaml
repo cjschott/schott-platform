@@ -50,8 +50,13 @@ relationship_types:
   DEPENDS_ON:
     name: Depends On
     description: The source requires the target to function correctly.
-    allowed_sources: [service, application, container, api]
-    allowed_targets: [service, application, container, api, storage, network, model, gpu]
+    # host is an allowed target because inference rule INF-001 derives an
+    # indirect service-to-host dependency; without it the ontology forbids an
+    # edge its own inference rules produce.
+    # backup-policy is an allowed source because a policy cannot execute when
+    # the host holding its datastore is unavailable.
+    allowed_sources: [service, application, container, api, backup-policy]
+    allowed_targets: [service, application, container, api, storage, network, model, gpu, host]
     transitive: true
     inverse: null
     operational_impact: Loss of the target may degrade or disable the source.
@@ -77,8 +82,11 @@ relationship_types:
   CONNECTS_TO:
     name: Connects To
     description: The source attaches to the target network segment or endpoint.
-    allowed_sources: [host, virtual-machine, container, service]
-    allowed_targets: [network, service, api]
+    # backup-policy and storage are permitted so a policy can name the
+    # datastore it writes to. This is attachment, not data ownership:
+    # STORES_DATA_ON remains the relationship for a workload's own persistence.
+    allowed_sources: [host, virtual-machine, container, service, backup-policy]
+    allowed_targets: [network, service, api, storage]
     transitive: false
     inverse: null
     operational_impact: Determines reachability and firewall policy relevance.
