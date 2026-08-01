@@ -289,3 +289,45 @@ relationship_types:
     inverse: null
     operational_impact: Preserves correction history without destroying the original observation.
 
+  # --- Capability model ----------------------------------------------------
+  # A capability describes what the platform can do. None of these edges grants
+  # authority to do anything: capability is a description, not a permission.
+
+  IMPLEMENTED_BY:
+    name: Implemented By
+    description: The source capability is realised by the target component.
+    allowed_sources: [capability]
+    allowed_targets: [service, application, repository, playbook, api, standard]
+    transitive: false
+    inverse: PROVIDES_CAPABILITY
+    operational_impact: A capability with no implementation cannot be operational, whatever its record claims.
+
+  PROVIDES_CAPABILITY:
+    name: Provides Capability
+    description: The source component realises the target capability.
+    allowed_sources: [service, application, repository, playbook, api, host, platform-role]
+    allowed_targets: [capability]
+    transitive: false
+    inverse: IMPLEMENTED_BY
+    operational_impact: Identifies what would be lost if the source were removed.
+
+  REQUIRES_CAPABILITY:
+    name: Requires Capability
+    description: The source depends on the target capability being available.
+    allowed_sources: [capability, service, application]
+    allowed_targets: [capability]
+    transitive: true
+    inverse: null
+    operational_impact: A capability may be no more mature than the capabilities it requires.
+
+  APPROVED_BY:
+    name: Approved By
+    description: >-
+      The source required and received explicit human approval recorded in the
+      target. Records that approval happened; confers no authority to act.
+    allowed_sources: [capability, verification, drift-rule]
+    allowed_targets: [standard, architecture-decision, runbook]
+    transitive: false
+    inverse: null
+    operational_impact: Absence on a high-impact capability means nothing gated it.
+

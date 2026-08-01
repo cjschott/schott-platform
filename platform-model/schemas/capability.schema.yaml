@@ -1,0 +1,91 @@
+---
+# Declarative schema for capability records.
+#
+# Repository-owned. Enforced by tests/test-platform-model.sh and
+# tests/test-collector-framework.sh.
+#
+# Governed by: docs/standards/capability-model-standard.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability
+
+provenance:
+  class: declared
+  source: docs/standards/capability-model-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+id_pattern: '^CAP-[0-9]{4}$'
+
+required_fields:
+  - id
+  - type
+  - name
+  - description
+  - lifecycle
+  - owner
+  - maturity
+  - risk
+  - inputs
+  - outputs
+  - dependencies
+  - implemented_by
+  - validated_by
+  - documented_by
+  - approval_required
+  - provenance
+  - review_required
+
+constant_fields:
+  type: capability
+
+enums:
+  # Maturity is a claim about implementation, not intent. Schemas and tests
+  # alone are "foundation"; "partial" requires that something real has flowed
+  # through.
+  maturity:
+    - planned
+    - foundation
+    - partial
+    - operational
+    - optimized
+    - retired
+  # Risk is the consequence of the capability being wrong or wrongly trusted,
+  # not a measure of build difficulty.
+  risk:
+    - low
+    - medium
+    - high
+    - critical
+  provenance_class:
+    - declared
+
+boolean_fields:
+  - approval_required
+  - review_required
+
+# An empty implementation list and operational maturity are contradictory: a
+# capability nothing implements cannot be operational.
+conditional_requirements:
+  - when_field: maturity
+    when_value_in: [operational, optimized]
+    require_non_empty: [implemented_by, validated_by]
+    rationale: >-
+      Operational maturity asserts the platform relies on this capability. It
+      must therefore name what implements it and what proves it works.
+
+forbidden_fields:
+  - remediation_command
+  - auto_remediate
+  - execute
+  - command_to_run
+
+forbidden_secret_keys:
+  - password
+  - api_key
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token

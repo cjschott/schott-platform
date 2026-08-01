@@ -1,0 +1,59 @@
+---
+# Human Approval Workflow capability.
+#
+# Maturity is a claim about implementation, not intent. See the rationale
+# below for why this value was chosen.
+#
+# Governed by: docs/standards/capability-model-standard.md
+
+api_version: schott-platform/v1
+kind: Capability
+
+id: CAP-0008
+type: capability
+name: Human Approval Workflow
+slug: human-approval-workflow
+lifecycle: active
+owner: platform-engineering
+maturity: planned
+risk: critical
+approval_required: true
+review_required: true
+
+provenance:
+  class: declared
+  source: docs/standards/capability-model-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+description: >-
+  Require and record explicit human approval before any high-impact action.
+
+maturity_rationale: >-
+  Planned: approval is currently a documented human process with no system support. Critical risk because it is the gate protecting every other automated capability.
+
+review_note: >-
+  Planned: approval is currently a documented human process with no system support. Critical risk because it is the gate protecting every other automated capability.
+
+inputs:
+  - Change plans
+  - Findings requiring approval
+
+outputs:
+  - Approval records
+
+dependencies:
+  []
+
+implemented_by:
+  []
+
+validated_by:
+  []
+
+documented_by:
+  - docs/standards/definition-of-done-standard.md
+  - docs/decisions/ADR-0002-evidence-first-architecture.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-capabilities.yaml

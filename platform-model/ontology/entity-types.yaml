@@ -162,3 +162,10 @@ entity_types:
     description: Declarative definition of a comparison between declared intent and observed fact.
     id_prefix: DRIFT
     lifecycle_supported: [draft, declared, verification-pending, verified, managed, deprecated, archived]
+
+  capability:
+    name: Capability
+    description: Something the platform can intentionally provide, recorded with an honest implementation maturity.
+    id_prefix: CAP
+    lifecycle_supported: [draft, declared, verification-pending, verified, managed, active, deprecated, archived]
+

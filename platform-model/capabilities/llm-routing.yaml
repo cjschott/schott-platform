@@ -1,0 +1,58 @@
+---
+# LLM Routing capability.
+#
+# Maturity is a claim about implementation, not intent. See the rationale
+# below for why this value was chosen.
+#
+# Governed by: docs/standards/capability-model-standard.md
+
+api_version: schott-platform/v1
+kind: Capability
+
+id: CAP-0006
+type: capability
+name: LLM Routing
+slug: llm-routing
+lifecycle: active
+owner: platform-engineering
+maturity: partial
+risk: medium
+approval_required: false
+review_required: false
+
+provenance:
+  class: declared
+  source: docs/standards/capability-model-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+description: >-
+  Present a stable AI gateway interface and route requests to appropriate backends behind stable aliases.
+
+maturity_rationale: >-
+  Partial rather than operational: LiteLLM routes real traffic behind stable aliases, which is more than foundation. But policy-based routing on privacy, cost, quota, latency, and capability is not implemented, so the capability described by ADR-0003 is only partly delivered.
+
+inputs:
+  - Application requests
+  - Routing policy
+
+outputs:
+  - Model responses
+  - Routing decisions
+
+dependencies:
+  []
+
+implemented_by:
+  - ai/compose.yaml
+  - ai/litellm/config.yaml
+
+validated_by:
+  - tests/test-static.sh
+
+documented_by:
+  - docs/decisions/ADR-0003-provider-agnostic-ai-architecture.md
+  - docs/standards/service-exposure-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-capabilities.yaml

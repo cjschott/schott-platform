@@ -1,0 +1,60 @@
+---
+# Automation Planning capability.
+#
+# Maturity is a claim about implementation, not intent. See the rationale
+# below for why this value was chosen.
+#
+# Governed by: docs/standards/capability-model-standard.md
+
+api_version: schott-platform/v1
+kind: Capability
+
+id: CAP-0007
+type: capability
+name: Automation Planning
+slug: automation-planning
+lifecycle: active
+owner: platform-engineering
+maturity: planned
+risk: critical
+approval_required: true
+review_required: true
+
+provenance:
+  class: declared
+  source: docs/standards/capability-model-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+description: >-
+  Produce reviewable change plans from verified findings, for human approval before execution.
+
+maturity_rationale: >-
+  Planned: no implementation exists. Critical risk because a wrong plan acted upon changes production; automation remains opt-in and gated on approval.
+
+review_note: >-
+  Planned: no implementation exists. Critical risk because a wrong plan acted upon changes production; automation remains opt-in and gated on approval.
+
+inputs:
+  - Verified findings
+  - Approved policy
+
+outputs:
+  - Change plans
+
+dependencies:
+  - CAP-0003
+  - CAP-0008
+
+implemented_by:
+  []
+
+validated_by:
+  []
+
+documented_by:
+  - docs/decisions/ADR-0002-evidence-first-architecture.md
+  - docs/standards/platform-automation-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-capabilities.yaml

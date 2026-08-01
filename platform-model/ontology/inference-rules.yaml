@@ -146,3 +146,23 @@ inference_rules:
       Must not present an aged verification as a statement of current state,
       and must not claim the platform is healthy now.
 
+  - id: INF-006
+    name: Capability maturity bounded by dependencies
+    description: >-
+      A capability can be no more mature in practice than the capabilities it
+      requires, because it inherits their gaps.
+    inputs:
+      - relationship: REQUIRES_CAPABILITY
+        from: capability-a
+        to: capability-b
+    output:
+      assessment: capability-a may be less mature in practice than its record claims when capability-b is less mature
+      qualifier: may
+      provenance_class: inferred
+    evidence_requirement: >-
+      Derived from declared maturity values only. This is a modelling
+      observation, not a measurement of either capability.
+    prohibited: >-
+      Must not automatically rewrite a capability's declared maturity, and must
+      not be reported as a defect in either capability.
+
