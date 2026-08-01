@@ -1,0 +1,141 @@
+---
+# Core platform drift rules.
+#
+# These are DEFINITIONS, not results. Nothing here has been executed: no
+# collector exists, no evidence has been gathered, and no entity has been
+# evaluated against these rules.
+#
+# Every rule is advisory or manual-approval-required. None permits automatic
+# remediation, and the schema rejects that value outright.
+#
+# evidence_max_age is null wherever no committed document establishes an
+# operational frequency. A null with review_required is an unresolved question
+# kept visible; an invented number would look authoritative and be wrong.
+#
+# Governed by: docs/standards/verification-drift-standard.md
+
+api_version: schott-platform/v1
+kind: DriftRuleSet
+
+provenance:
+  class: declared
+  source: docs/superpowers/plans/2026-08-01-evidence-verification-layer.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+drift_rules:
+  - id: DRIFT-0001
+    name: Host primary platform role matches declared role
+    description: >-
+      The role a host actually fulfils should match its declared platform_role.
+      A mismatch is role drift, which the classification standard treats as a
+      condition requiring documentation rather than silent acceptance.
+    target_entity_types: [host]
+    declared_path: platform_role
+    observed_fact: platform_role
+    comparator: equals
+    evidence_max_age: null
+    review_required: true
+    severity: medium
+    missing_evidence_result: missing_observation
+    mismatch_result: mismatch
+    enabled: true
+    remediation_mode: advisory
+    notes: >-
+      A mismatch does not establish which side is wrong. The host may have
+      drifted, or the declaration may be stale.
+
+  - id: DRIFT-0002
+    name: Service deployment host matches declared RUNS_ON relationship
+    description: >-
+      A service's deployment.host must agree with its canonical RUNS_ON edge.
+      Disagreement means the model contradicts itself, independent of runtime.
+    target_entity_types: [service]
+    declared_path: deployment.host
+    observed_fact: deployment_host
+    comparator: equals
+    evidence_max_age: null
+    review_required: true
+    severity: high
+    missing_evidence_result: missing_observation
+    mismatch_result: mismatch
+    enabled: true
+    remediation_mode: advisory
+
+  - id: DRIFT-0003
+    name: Private service has no host-published port
+    description: >-
+      A service classified private must not publish a host port. This is the
+      control that keeps the inference backend unreachable from the LAN, so a
+      mismatch is a security-relevant finding rather than a tidiness issue.
+    target_entity_types: [service]
+    declared_path: network.published_ports
+    observed_fact: published_ports
+    comparator: absent
+    evidence_max_age: null
+    review_required: true
+    severity: critical
+    missing_evidence_result: missing_observation
+    mismatch_result: mismatch
+    enabled: true
+    remediation_mode: manual-approval-required
+    notes: >-
+      Critical severity requires human review. No automatic port change is
+      possible through this layer, and closing a published port is a runtime
+      action outside its scope.
+
+  - id: DRIFT-0004
+    name: Tier 0 and Tier 1 entities have a backup policy or review_required
+    description: >-
+      Critical entities must carry backup coverage or an explicit
+      review_required flag. An unprotected critical entity with neither is an
+      unrecorded risk.
+    target_entity_types: [host, service, storage]
+    declared_path: criticality
+    observed_fact: backup_coverage
+    comparator: exists
+    evidence_max_age: null
+    review_required: true
+    severity: high
+    missing_evidence_result: missing_observation
+    mismatch_result: mismatch
+    enabled: true
+    remediation_mode: advisory
+
+  - id: DRIFT-0005
+    name: Evidence is not older than the rule's approved maximum age
+    description: >-
+      Evidence supporting a verification must fall within the evaluating rule's
+      evidence_max_age. Beyond it the correct result is stale_evidence, never
+      verified.
+    target_entity_types: [host, service, network, storage, backup-policy]
+    declared_path: provenance.last_reviewed
+    observed_fact: collected_at
+    comparator: numeric_range
+    evidence_max_age: null
+    review_required: true
+    severity: medium
+    missing_evidence_result: missing_observation
+    mismatch_result: mismatch
+    enabled: true
+    remediation_mode: advisory
+    notes: >-
+      This rule cannot be enforced until a maximum age is committed. It is
+      enabled so its coverage gap stays visible rather than being forgotten.
+
+  - id: DRIFT-0006
+    name: Entity references resolve
+    description: >-
+      Every referenced entity id must exist. A dangling reference makes any
+      finding built on it meaningless.
+    target_entity_types: [host, service, network, storage, backup-policy, platform-role]
+    declared_path: relationships.declared
+    observed_fact: resolvable_references
+    comparator: exists
+    evidence_max_age: null
+    review_required: true
+    severity: high
+    missing_evidence_result: missing_observation
+    mismatch_result: mismatch
+    enabled: true
+    remediation_mode: advisory
