@@ -142,3 +142,23 @@ entity_types:
     description: A managed collection of data used by platform or AI workloads.
     id_prefix: DS
     lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  evidence:
+    name: Evidence
+    description: Immutable, timestamped support for an observed fact about an entity.
+    id_prefix: EVID
+    # Evidence is never revised in place; a correction supersedes it. There is
+    # no "verified" evidence, because evidence is what verification consumes.
+    lifecycle_supported: [declared, deprecated, archived]
+
+  verification:
+    name: Verification
+    description: Read-only result of comparing a declared fact against collected evidence.
+    id_prefix: VER
+    lifecycle_supported: [declared, deprecated, archived]
+
+  drift-rule:
+    name: Drift Rule
+    description: Declarative definition of a comparison between declared intent and observed fact.
+    id_prefix: DRIFT
+    lifecycle_supported: [draft, declared, verification-pending, verified, managed, deprecated, archived]

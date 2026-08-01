@@ -161,3 +161,76 @@ validation_rules:
     severity: information
     applies_to: [roles, hosts, services]
     remediation: Set provenance.last_reviewed.
+
+  # --- Evidence and verification layer ------------------------------------
+
+  - id: VAL-021
+    name: Evidence carries a collection timestamp
+    description: Every evidence record must declare collected_at with timezone information.
+    severity: error
+    applies_to: [evidence]
+    remediation: Add an RFC 3339 collected_at value with an explicit offset.
+
+  - id: VAL-022
+    name: Evidence contains no secret values
+    description: Evidence may record secret metadata such as secret_present, never a secret value.
+    severity: error
+    applies_to: [evidence]
+    remediation: Replace the value with a presence indicator and a secret_source reference.
+
+  - id: VAL-023
+    name: Failed collection explains itself
+    description: Evidence with status failed or unavailable must carry a non-secret error summary.
+    severity: error
+    applies_to: [evidence]
+    remediation: Add error_summary describing the failure without secret content.
+
+  - id: VAL-024
+    name: Verification references resolvable evidence
+    description: Every evidence id referenced by a verification record must exist.
+    severity: error
+    applies_to: [verifications]
+    remediation: Correct the reference or add the missing evidence record.
+
+  - id: VAL-025
+    name: Verified state requires evidence
+    description: A verification in the verified state must reference at least one evidence record.
+    severity: error
+    applies_to: [verifications]
+    remediation: Attach supporting evidence or change the state to pending or unknown.
+
+  - id: VAL-026
+    name: Stale evidence cannot produce verified state
+    description: A verified state must not rest on evidence older than the rule's approved maximum age.
+    severity: error
+    applies_to: [verifications]
+    remediation: Report stale_evidence instead of verified.
+
+  - id: VAL-027
+    name: Remediation is never automatic
+    description: Drift rules may declare remediation_mode advisory or manual-approval-required only.
+    severity: error
+    applies_to: [drift-rules]
+    remediation: Change remediation_mode; automatic is not an accepted value.
+
+  - id: VAL-028
+    name: Verification records carry no executable action
+    description: Verification records must not contain fields describing high-impact actions to run.
+    severity: error
+    applies_to: [verifications]
+    remediation: Move the suggestion into the advisory recommended_action text.
+
+  - id: VAL-029
+    name: Critical findings require approval
+    description: A verification with critical severity must set approval_required.
+    severity: error
+    applies_to: [verifications]
+    remediation: Set approval_required to true.
+
+  - id: VAL-030
+    name: Drift rules without a committed cadence are flagged
+    description: A rule with a null evidence_max_age must set review_required so the gap stays visible.
+    severity: warning
+    applies_to: [drift-rules]
+    remediation: Set review_required, or record a committed maximum age.
+
