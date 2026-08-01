@@ -95,6 +95,31 @@ Objectives:
 - Stable automation pipeline
 - Production-quality operational standards
 
+### Sprint 4 — Evidence and Verification Layer
+
+**Schema and validation foundation only.** This increment defines how observation
+enters the model; it collects nothing.
+
+Delivered:
+
+- Entity lifecycle standard separating maturity from provenance and runtime health
+- Evidence standard: immutable, timestamped support for observed facts
+- Verification and drift standard: read-only comparison with no remediation
+- Ontology additions for `evidence`, `verification`, and `drift-rule`
+- Machine-readable schemas for all three record kinds
+- Initial drift rule definitions
+- A repository-only validator enforcing the contract
+
+Explicitly not delivered, and not implied:
+
+- No runtime collection. Nothing contacts a host, and no evidence record exists.
+- No automatic remediation, at any severity, under any configuration.
+- No operational health reporting. Nothing here can say whether the platform is
+  working right now, and the schemas are shaped so nothing can appear to.
+
+Evidence collection is future work. Building the contract first means a collector
+cannot invent its own vocabulary later.
+
 ## Reserved Release Gates
 
 Two sprints are reserved outside the normal feature sequence. They are numbered
