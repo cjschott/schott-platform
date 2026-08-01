@@ -35,6 +35,7 @@ platform-model/
 ├── evidence/                     # Immutable observed-fact records
 ├── verifications/                # Read-only comparison results
 ├── drift-rules/                  # Declarative drift definitions
+├── capabilities/                 # What the platform can intentionally provide
 └── README.md
 ```
 
@@ -90,6 +91,7 @@ Identifiers are immutable and are never reused after retirement.
 | Evidence | `EVID` | `EVID-0001` |
 | Verification | `VER` | `VER-0001` |
 | Drift rule | `DRIFT` | `DRIFT-0001` |
+| Capability | `CAP` | `CAP-0001` |
 | Relationship | `REL` | `REL-0006` |
 
 Relationship ids are allocated in blocks so independent edge lists never
@@ -199,6 +201,12 @@ python3 tools/platform_model/validate_evidence.py --root platform-model
 **No runtime collection exists.** The `evidence/` and `verifications/` directories ship with guidance and no records, because inventing an evidence record would defeat the purpose of an evidence layer.
 
 **No automatic remediation exists.** `remediation_mode` accepts only `advisory` or `manual-approval-required`; `automatic` is rejected by the validator. Detection and correction stay permanently separate.
+
+## Capabilities
+
+`capabilities/` records what the platform can intentionally provide, with a maturity value that is a claim about **implementation**, not intent. Only `CAP-0001` Platform Modeling is `operational`; the evidence, verification, and drift capabilities are `foundation` because nothing real has yet flowed through them.
+
+Collectors that will eventually produce evidence are defined in `tools/collectors/` and governed by [ADR-0002](../docs/decisions/ADR-0002-evidence-first-architecture.md). No live collector exists.
 
 ## Ontology Conformance
 
