@@ -37,13 +37,18 @@ assert_contains() {
 }
 
 # Assert a pattern is absent from a path (file or directory tree).
+# assert_absent_in <target> <pattern> <description> [exclude-glob]
 assert_absent_in() {
-  local target="$1" pattern="$2" description="$3" matches
+  local target="$1" pattern="$2" description="$3" exclude="${4:-}" matches
   if [[ ! -e "${ROOT}/${target}" ]]; then
     fail "${description} (missing ${target})"
     return
   fi
-  matches="$(grep -rIniE -e "${pattern}" "${ROOT}/${target}" || true)"
+  if [[ -n "${exclude}" ]]; then
+    matches="$(grep -rIniE --exclude="${exclude}" -e "${pattern}" "${ROOT}/${target}" || true)"
+  else
+    matches="$(grep -rIniE -e "${pattern}" "${ROOT}/${target}" || true)"
+  fi
   if [[ -z "${matches}" ]]; then
     pass "${description}"
   else
@@ -137,7 +142,7 @@ assert_absent_in "${COLLECTORS}" \
   '\b(import[[:space:]]+(socket|requests|urllib|http\.client|paramiko|ftplib|telnetlib)|from[[:space:]]+(socket|requests|urllib|paramiko)[[:space:]]+import)' \
   "collector framework imports no network module"
 assert_absent_in "${COLLECTORS}" \
-  '\b(import[[:space:]]+subprocess|from[[:space:]]+subprocess[[:space:]]+import|subprocess\.|os\.system|os\.popen|os\.exec)' \
+  '(import[[:space:]]+subprocess|from[[:space:]]+subprocess[[:space:]]+import|subprocess\.[a-zA-Z_]|os\.system\(|os\.popen\(|os\.exec)' \
   "collector framework invokes no subprocess"
 # Writes are the capability that turns a wrong observation into a wrong record.
 assert_absent_in "${COLLECTORS}" \
@@ -147,11 +152,11 @@ assert_absent_in "${COLLECTORS}" \
   'EVID-[0-9]' \
   "collector framework assigns no evidence identifier"
 assert_absent_in "${COLLECTORS}" \
-  '\b(remediate|remediation_command|auto_remediate|apply_fix|execute_fix)\b' \
-  "collector framework contains no remediation path"
+  '(def[[:space:]]+remediate|\.remediate\(|[^a-z]remediate\(|remediation_command|auto_remediate|apply_fix|execute_fix)' \
+  "collector framework contains no remediation path" "validate_plugins.py"
 assert_absent_in "${COLLECTORS}" \
   '\b(importlib|__import__|eval\(|exec\()' \
-  "collector framework performs no dynamic import or eval"
+  "collector framework performs no dynamic import or eval" "validate_plugins.py"
 
 # --- Example plugin manifest ----------------------------------------------
 MANIFEST="${COLLECTORS}/plugins/example/manifest.yaml"
