@@ -45,7 +45,10 @@ from tools.collectors.models import (  # noqa: E402
     PERMITTED_SECRET_METADATA_KEYS,
     CollectionContext,
 )
+from tools.collectors.plugins.configuration_render.collector import ConfigurationRenderCollector  # noqa: E402
 from tools.collectors.plugins.example.collector import ExampleSyntheticCollector  # noqa: E402
+from tools.collectors.plugins.git_repository.collector import GitRepositoryCollector  # noqa: E402
+from tools.collectors.plugins.manual_attestation.collector import ManualAttestationCollector  # noqa: E402
 from tools.collectors.registry import CollectorRegistry  # noqa: E402
 
 COLLECTOR_ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -59,7 +62,12 @@ REQUIRED_MANIFEST_FIELDS = (
 
 # Registered plugin classes. Explicit, not discovered: a plugin that appears by
 # being dropped on disk is a plugin nobody reviewed.
-KNOWN_PLUGINS = {"example-synthetic": ExampleSyntheticCollector}
+KNOWN_PLUGINS = {
+    "example-synthetic": ExampleSyntheticCollector,
+    "git-repository": GitRepositoryCollector,
+    "configuration-render": ConfigurationRenderCollector,
+    "manual-attestation": ManualAttestationCollector,
+}
 
 
 class Findings:
@@ -107,9 +115,18 @@ def check_manifest(path: Path, manifest: dict, capability_ids: set[str], finding
         elif permission not in APPROVED_PERMISSIONS:
             findings.error(location, f"permission '{permission}' is not approved")
 
-    for flag in ("network_access", "subprocess_access", "filesystem_access"):
-        if manifest.get(flag) is not False:
-            findings.error(location, f"'{flag}' must be false in this increment")
+    # Network access is refused unconditionally. Subprocess and read-only
+    # filesystem access are declarable from v0.6.0, but only in the narrowed
+    # forms the framework enforces.
+    if manifest.get("network_access") is not False:
+        findings.error(location, "'network_access' must be false; collectors are local and read-only")
+    if manifest.get("subprocess_access") not in (True, False):
+        findings.error(location, "'subprocess_access' must be a boolean")
+    if manifest.get("filesystem_access") not in (False, "read-only"):
+        findings.error(
+            location,
+            "'filesystem_access' must be false or 'read-only'; write access is not permitted",
+        )
 
     for capability in manifest.get("capabilities") or []:
         if capability_ids and capability not in capability_ids:

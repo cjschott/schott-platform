@@ -411,7 +411,7 @@ for collector_doc in "${COLLECTOR_DOCS[@]}"; do
   assert_contains "${collector_doc}" '[Nn]ot [Cc]ollected' "${name} doc states what is not collected"
   assert_contains "${collector_doc}" '[Ss]ecret' "${name} doc documents secret handling"
   assert_contains "${collector_doc}" '[Ff]ailure' "${name} doc documents failure modes"
-  assert_contains "${collector_doc}" 'no persistence|not persist|never persists' "${name} doc states it does not persist"
+  assert_contains "${collector_doc}" '[Nn]o persistence|not persist|never persists' "${name} doc states it does not persist"
   assert_contains "${collector_doc}" 'EVID' "${name} doc states it assigns no evidence id"
   assert_contains "${collector_doc}" 'remediat' "${name} doc states it performs no remediation"
 done

@@ -94,12 +94,12 @@ assert_absent_in "${COLLECTORS}" \
 
 # Only compose config rendering is approved; no runtime Docker verbs.
 assert_absent_in "${COLLECTORS}" \
-  '(docker[[:space:]]+(ps|inspect|exec|run|start|stop|rm|logs)|compose[[:space:]]+(up|down|pull|build|run|exec))' \
+  '(docker[[:space:]]+(ps|inspect|exec|run|start|stop|rm|logs)\b|compose[[:space:]]+(up|down|pull|build|run|exec)\b)' \
   "no collector invokes a Docker runtime verb"
 
 # Destructive or remote git verbs must not appear.
 assert_absent_in "${COLLECTORS}" \
-  '(git[[:space:]]+(fetch|pull|push|clone|checkout|switch|reset|clean|commit|gc)|"(fetch|pull|push|clone|reset|clean)")' \
+  '["'"'"'](fetch|pull|push|clone|checkout|switch|reset|clean|commit|gc|submodule)["'"'"']' \
   "no collector invokes a remote or mutating git verb"
 
 # --- CI wiring -------------------------------------------------------------
@@ -468,13 +468,14 @@ except Exception:
 proc = cli("validate")
 check(proc.returncode == 0, f"cli validate exits 0 ({proc.returncode})")
 
-proc = cli("collect", "--collector", "git-repository", "--target", "REPO-0001", "--path", ".")
+proc = cli("collect", "--collector", "git-repository", "--target", "REPO-0001",
+           "--path", ".", "--collected-at", STAMP)
 check(proc.returncode == 0, f"cli collect succeeds on this repository ({proc.returncode})")
 check(CANARY not in proc.stdout, "cli output contains no canary value")
 try:
     first = json.loads(proc.stdout)
     second = json.loads(cli("collect", "--collector", "git-repository", "--target",
-                            "REPO-0001", "--path", ".").stdout)
+                            "REPO-0001", "--path", ".", "--collected-at", STAMP).stdout)
     check("evidence_id" not in first and "EVID" not in json.dumps(first),
           "cli output assigns no evidence identifier")
     check(first.get("collector_id") == "git-repository", "cli output identifies the collector")

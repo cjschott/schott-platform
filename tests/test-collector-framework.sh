@@ -298,11 +298,21 @@ for manifest_path in sorted(plugin_root.rglob("manifest.yaml")) if plugin_root.i
     else:
         bad(f"{identifier} source type is not approved: {manifest.get('source_type')}")
 
-    for flag in ("network_access", "subprocess_access", "filesystem_access"):
-        if manifest.get(flag) is False:
-            ok(f"{identifier} declares {flag}: false")
-        else:
-            bad(f"{identifier} must declare {flag}: false in this increment")
+    # Network access is refused unconditionally: a collector that can reach the
+    # network is no longer a local read-only observer. Subprocess and read-only
+    # filesystem access are declarable from v0.6.0; write access never is.
+    if manifest.get("network_access") is False:
+        ok(f"{identifier} declares network_access: false")
+    else:
+        bad(f"{identifier} must declare network_access: false")
+    if manifest.get("subprocess_access") in (True, False):
+        ok(f"{identifier} declares a boolean subprocess_access")
+    else:
+        bad(f"{identifier} subprocess_access must be a boolean")
+    if manifest.get("filesystem_access") in (False, "read-only"):
+        ok(f"{identifier} declares non-write filesystem_access")
+    else:
+        bad(f"{identifier} filesystem_access must be false or read-only")
 
 # Framework behaviour.
 sys.path.insert(0, str(root.resolve()))
