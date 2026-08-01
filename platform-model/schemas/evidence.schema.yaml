@@ -1,0 +1,127 @@
+---
+# Declarative schema for evidence records.
+#
+# Repository-owned and enforced by tools/platform_model/validate_evidence.py.
+# Deliberately not JSON Schema: that would add an external dependency for a
+# contract this small, and the validator already needs bespoke checks (secret
+# detection, timezone-aware timestamps) that a generic validator cannot express.
+#
+# Governed by: docs/standards/evidence-standard.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: evidence
+
+provenance:
+  class: declared
+  source: docs/standards/evidence-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+id_pattern: '^EVID-[0-9]{4}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - source_type
+  - collector
+  - collected_at
+  - status
+  - facts
+  - provenance
+  - sensitivity
+  - retention
+  - content_fingerprint
+  - redaction
+  - references
+
+constant_fields:
+  type: evidence
+
+# Fields naming another entity; the validator checks that each resolves.
+entity_reference_fields:
+  - target
+
+enums:
+  source_type:
+    - manual-attestation
+    - command-output
+    - ssh-command
+    - api-response
+    - file-inspection
+    - configuration-render
+    - health-check
+    - backup-report
+    - monitoring-query
+    - git-repository
+  status:
+    - success
+    - partial
+    - failed
+    - unavailable
+  sensitivity:
+    - public
+    - internal
+    - restricted
+    - secret-metadata
+  provenance_class:
+    - observed
+
+timestamp_fields:
+  - collected_at
+
+# Evidence provenance is always observed, so observed_at is always required.
+provenance_requirements:
+  required_class: observed
+  required_timestamp: observed_at
+
+conditional_requirements:
+  - when_field: status
+    when_value_in: [failed, unavailable]
+    require_fields: [error_summary]
+    rationale: >-
+      A failure with no explanation is indistinguishable from a broken
+      collector, and both need to be visible.
+
+# Keys that would carry a secret value. Presence of any of these is an error,
+# and the validator reports the key without echoing its value.
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+# Secret metadata is permitted: knowing a credential exists and is referenced
+# is useful for verification; knowing its value is a liability with no benefit.
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+permitted_fact_value_types:
+  - string
+  - integer
+  - float
+  - boolean
+  - null
+  - list
+  - mapping
+
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - raw_output
