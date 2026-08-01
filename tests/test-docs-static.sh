@@ -120,7 +120,7 @@ REQUIRED_DOCS=(
 )
 
 # Standards introduced on the v0.2.0 foundation branch. Every one of these must
-# exist and satisfy the shared structural contract asserted below.
+# exist and satisfy the shared structural contract checked below.
 BRANCH_STANDARDS=(
   "docs/standards/platform-filesystem-observability-standard.md"
   "docs/standards/platform-role-host-classification-standard.md"
