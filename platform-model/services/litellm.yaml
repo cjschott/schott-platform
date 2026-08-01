@@ -1,0 +1,159 @@
+---
+# LiteLLM — the only application-facing AI endpoint.
+#
+# Applications connect to http://schai:4000/v1 using the stable model aliases
+# below. Ollama is never addressed directly by applications.
+#
+# Governed by:
+#   docs/standards/service-catalog-standard.md
+#   docs/standards/service-exposure-standard.md
+
+api_version: schott-platform/v1
+kind: Service
+
+id: SVC-0002
+type: service
+name: LiteLLM
+slug: litellm
+lifecycle: production
+owner: platform-engineering
+platform_role: ROLE-0001
+
+provenance:
+  class: declared
+  source: docs/architecture/ai-platform.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+description: >-
+  Authenticated OpenAI-compatible gateway that routes application requests to
+  internal inference backends behind stable model aliases.
+
+classification:
+  criticality: tier-1
+  environment: production
+  data_classification: internal
+  exposure: application
+  backup: not-required
+  monitoring: required
+  stateful: false
+  rationale: >-
+    The gateway holds no authoritative state. Its configuration is
+    repository-managed and its secret is sourced from a local environment file.
+
+deployment:
+  method: docker-compose
+  host: HOST-0001
+  compose_project: ai
+  compose_file: ai/compose.yaml
+  service_name: litellm
+  service_directory: /opt/schott-platform/ai
+  configuration: ai/litellm/config.yaml
+  environment_file: ai/.env
+  image_source: ai/compose.yaml
+  persistent_data: none
+  notes: >-
+    The image reference is defined in the Compose file and is not duplicated
+    here. Container and image identifiers are runtime facts and are not
+    declared.
+
+network:
+  exposure: application
+  protocol: tcp
+  listening_port: 4000
+  published_ports:
+    - 4000/tcp
+  bind_address_source: ai/.env
+  source_scope: 192.168.86.0/24
+  application_endpoint: http://schai:4000/v1
+  container_network: ai-backend
+  upstream_backend: http://ollama:11434
+  tls_termination: none
+  notes: >-
+    Port 4000 is the only application-facing port on this host. The upstream
+    backend address is internal container networking and must never be
+    published as an application endpoint.
+
+api:
+  style: openai-compatible
+  authentication: required
+  base_path: /v1
+  liveliness_endpoint: /health/liveliness
+  model_aliases:
+    local-fast: ollama/qwen3:8b
+    local-general: ollama/qwen3:30b
+    local-embed: ollama/nomic-embed-text
+  alias_note: >-
+    Alias names and their backend mappings are load-bearing and must not change.
+
+observability:
+  authoritative_logs: docker
+  log_command: docker compose --env-file ai/.env -f ai/compose.yaml logs --tail=200 litellm
+  health_check_command: ./scripts/health-check.sh
+  container_health_check: python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness').read()"
+  status_command: docker compose --env-file ai/.env -f ai/compose.yaml ps
+  metrics_endpoint: not-deployed
+  dashboards: []
+  alerts: []
+  log_rotation: json-file max-size 10m, max-file 3
+  prompt_logging: disabled
+  prompt_logging_note: >-
+    Full prompts and responses are not persisted. Request metadata only.
+
+operations:
+  start: docker compose --env-file ai/.env -f ai/compose.yaml up -d
+  stop: docker compose --env-file ai/.env -f ai/compose.yaml down
+  restart: docker compose --env-file ai/.env -f ai/compose.yaml restart litellm
+  validate: ./scripts/validate-config.sh
+  update_reference: scripts/update-schai.sh
+  deploy_reference: scripts/deploy-schai.sh
+  recovery_reference: docs/operations/recovery.md
+  runbook_reference: docs/operations/operations.md
+  recovery_priority: 2
+  startup_constraint: >-
+    Starts only after its inference backend reports healthy.
+
+security:
+  authentication: required
+  authentication_method: administrative-key
+  authorization: gateway-key
+  secret_source: ai/.env
+  secret_note: >-
+    The gateway key is read from the environment at runtime. It is never
+    committed and never recorded in this model.
+  fail_closed: true
+  fail_closed_note: >-
+    The container refuses to start when the required key is empty.
+  privileged: false
+  exposure_classification: application
+  approved_source_scope: 192.168.86.0/24
+  commercial_provider_fallback: prohibited
+  exceptions: []
+
+dependencies:
+  requires:
+    - SVC-0003
+  optional: []
+  failure_mode: >-
+    Requests that need local inference may fail while the backend is
+    unavailable.
+
+documentation:
+  architecture: docs/architecture/ai-platform.md
+  operations: docs/operations/operations.md
+  install: docs/operations/install.md
+  acceptance: docs/operations/acceptance-results.md
+  network_policy: docs/security/network-policy.md
+
+standards:
+  - docs/standards/service-catalog-standard.md
+  - docs/standards/service-exposure-standard.md
+  - docs/standards/docker-platform-standard.md
+  - docs/standards/operational-metadata-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/ai-platform.yaml
+  declared:
+    - REL-0002
+    - REL-0004
+    - REL-0006

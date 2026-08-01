@@ -1,0 +1,106 @@
+---
+# Inference rules for the Schott Platform knowledge model.
+#
+# Inference derives new facts from declared relationships. It must never
+# manufacture certainty. Every derived fact is labeled inferred, carries the
+# rule id and its inputs, and remains distinguishable from declared and
+# observed facts.
+#
+# This initial set is deliberately conservative. Adding a rule requires a
+# documented ontology change.
+#
+# Governed by:
+#   docs/standards/platform-ontology-standard.md
+#   docs/standards/operational-metadata-standard.md
+
+api_version: schott-platform/v1
+kind: InferenceRuleSet
+
+provenance:
+  class: declared
+  source: docs/standards/platform-ontology-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+global_constraints:
+  - Inferred facts must be labeled with provenance class inferred.
+  - Inferred facts must record derived_from with the rule id and input entity ids.
+  - Inference must not claim live state without runtime evidence.
+  - Inference must not trigger write actions, configuration changes, or firewall changes.
+  - Inference must not expose secret values.
+  - Impact statements must remain qualified and must not be escalated to certainty.
+
+inference_rules:
+  - id: INF-001
+    name: Indirect host dependency
+    description: >-
+      A service that depends on another service also depends indirectly on the
+      host running that dependency.
+    inputs:
+      - relationship: DEPENDS_ON
+        from: service-a
+        to: service-b
+      - relationship: RUNS_ON
+        from: service-b
+        to: host-c
+    output:
+      relationship: DEPENDS_ON
+      from: service-a
+      to: host-c
+      qualifier: indirect
+      provenance_class: inferred
+    evidence_requirement: >-
+      Both input relationships must be declared. The derived edge describes
+      structural dependency only and does not assert that either service is
+      currently running.
+    prohibited: >-
+      Must not be presented as a declared relationship or as evidence of live
+      availability.
+
+  - id: INF-002
+    name: Role association through host membership
+    description: >-
+      A service running on a host may be associated with that host's platform
+      role when the service does not declare its own role.
+    inputs:
+      - relationship: RUNS_ON
+        from: service-a
+        to: host-b
+      - relationship: BELONGS_TO
+        from: host-b
+        to: role-c
+    output:
+      relationship: BELONGS_TO
+      from: service-a
+      to: role-c
+      qualifier: candidate
+      provenance_class: inferred
+    evidence_requirement: >-
+      Explicit service platform_role metadata always takes precedence. This
+      rule produces a candidate classification only when the service declares
+      no role of its own.
+    prohibited: >-
+      Must not overwrite a declared platform_role or be used to reassign
+      role-based policy without review.
+
+  - id: INF-003
+    name: Possible impact from an unavailable dependency
+    description: >-
+      When a service depends on another service, the dependent service may be
+      impacted if the dependency becomes unavailable.
+    inputs:
+      - relationship: DEPENDS_ON
+        from: service-a
+        to: service-b
+      - condition: service-b reported unavailable by a runtime observation
+    output:
+      assessment: service-a may be impacted while service-b is unavailable
+      qualifier: may
+      provenance_class: inferred
+    evidence_requirement: >-
+      Requires a runtime observation carrying observed_at for service-b. Without
+      that evidence the assessment must be reported as unknown rather than as
+      impact.
+    prohibited: >-
+      Must not state that the dependent service is down, degraded, or failing.
+      The assessment is a possibility, not a measurement.

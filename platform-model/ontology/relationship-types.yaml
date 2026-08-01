@@ -1,0 +1,228 @@
+---
+# Controlled relationship vocabulary for the Schott Platform knowledge model.
+#
+# Relationships are directed edges between two existing entities. Synonyms must
+# not be added when an existing relationship already expresses the meaning.
+#
+# `inverse` names the reciprocal relationship. Only one direction is stored as
+# canonical; the inverse may be derived. `transitive` indicates whether the
+# relationship may be chained during inference.
+#
+# Governed by: docs/standards/platform-ontology-standard.md
+
+api_version: schott-platform/v1
+kind: RelationshipTypeCatalog
+
+provenance:
+  class: declared
+  source: docs/standards/platform-ontology-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+relationship_types:
+  BELONGS_TO:
+    name: Belongs To
+    description: The source entity is classified under the target grouping.
+    allowed_sources: [host, virtual-machine, service, application, container]
+    allowed_targets: [platform-role, platform]
+    transitive: false
+    inverse: HOSTS
+    operational_impact: Determines role-based automation, monitoring, and policy targeting.
+
+  RUNS_ON:
+    name: Runs On
+    description: The source workload executes on the target deployment target.
+    allowed_sources: [service, application, container, virtual-machine]
+    allowed_targets: [host, virtual-machine, container]
+    transitive: true
+    inverse: HOSTS
+    operational_impact: Loss of the target removes the source workload.
+
+  HOSTS:
+    name: Hosts
+    description: The source deployment target runs the target workload.
+    allowed_sources: [host, virtual-machine, container, platform-role]
+    allowed_targets: [service, application, container, virtual-machine]
+    transitive: true
+    inverse: RUNS_ON
+    operational_impact: Identifies blast radius when the source is restarted or lost.
+
+  DEPENDS_ON:
+    name: Depends On
+    description: The source requires the target to function correctly.
+    allowed_sources: [service, application, container, api]
+    allowed_targets: [service, application, container, api, storage, network, model, gpu]
+    transitive: true
+    inverse: null
+    operational_impact: Loss of the target may degrade or disable the source.
+
+  PROVIDES:
+    name: Provides
+    description: The source offers the target interface or capability.
+    allowed_sources: [service, application, host]
+    allowed_targets: [api, model, storage, dataset]
+    transitive: false
+    inverse: CONSUMES
+    operational_impact: Identifies which consumers are affected by source changes.
+
+  CONSUMES:
+    name: Consumes
+    description: The source uses the target interface or capability.
+    allowed_sources: [service, application, api]
+    allowed_targets: [api, model, storage, dataset]
+    transitive: false
+    inverse: PROVIDES
+    operational_impact: Identifies upstream contracts the source relies on.
+
+  CONNECTS_TO:
+    name: Connects To
+    description: The source attaches to the target network segment or endpoint.
+    allowed_sources: [host, virtual-machine, container, service]
+    allowed_targets: [network, service, api]
+    transitive: false
+    inverse: null
+    operational_impact: Determines reachability and firewall policy relevance.
+
+  STORES_DATA_ON:
+    name: Stores Data On
+    description: The source persists data on the target storage entity.
+    allowed_sources: [service, application, container, host]
+    allowed_targets: [storage, dataset]
+    transitive: false
+    inverse: null
+    operational_impact: Loss of the target risks data loss for the source.
+
+  MONITORED_BY:
+    name: Monitored By
+    description: The source is observed by the target dashboard or monitoring surface.
+    allowed_sources: [service, application, host, virtual-machine, container]
+    allowed_targets: [dashboard, service]
+    transitive: false
+    inverse: null
+    operational_impact: Absence indicates an observability gap.
+
+  LOGGED_TO:
+    name: Logged To
+    description: The source sends logs to the target destination.
+    allowed_sources: [service, application, host, virtual-machine, container]
+    allowed_targets: [service, storage]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies where diagnostic evidence is retrievable.
+
+  TRACED_BY:
+    name: Traced By
+    description: The source emits distributed traces to the target system.
+    allowed_sources: [service, application, api]
+    allowed_targets: [service]
+    transitive: false
+    inverse: null
+    operational_impact: Supports latency and dependency-path analysis.
+
+  ALERTED_BY:
+    name: Alerted By
+    description: The source has alerting coverage from the target alert rule.
+    allowed_sources: [service, application, host, virtual-machine]
+    allowed_targets: [alert]
+    transitive: false
+    inverse: null
+    operational_impact: Absence means failures may go unnoticed.
+
+  BACKED_UP_BY:
+    name: Backed Up By
+    description: The source is protected by the target backup policy.
+    allowed_sources: [service, application, host, virtual-machine, storage, dataset]
+    allowed_targets: [backup-policy]
+    transitive: false
+    inverse: PROTECTED_BY
+    operational_impact: Absence on a Tier 0 or Tier 1 stateful entity is a coverage gap.
+
+  RECOVERED_BY:
+    name: Recovered By
+    description: The source is restored using the target procedure.
+    allowed_sources: [service, application, host, virtual-machine, storage]
+    allowed_targets: [runbook, playbook, backup-policy]
+    transitive: false
+    inverse: null
+    operational_impact: Defines the approved recovery path and ordering.
+
+  DEPLOYED_BY:
+    name: Deployed By
+    description: The source is installed or configured by the target automation.
+    allowed_sources: [service, application, container, host, virtual-machine]
+    allowed_targets: [playbook, repository]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies the authoritative change mechanism.
+
+  GOVERNED_BY:
+    name: Governed By
+    description: The source must comply with the target standard or decision.
+    allowed_sources: [platform, platform-role, host, virtual-machine, service, application, network, storage, container, api]
+    allowed_targets: [standard, architecture-decision]
+    transitive: false
+    inverse: null
+    operational_impact: Defines the compliance criteria applied during review.
+
+  DOCUMENTED_BY:
+    name: Documented By
+    description: The source has operational documentation in the target.
+    allowed_sources: [platform-role, host, virtual-machine, service, application, network, storage]
+    allowed_targets: [runbook, standard, architecture-decision, repository]
+    transitive: false
+    inverse: null
+    operational_impact: Absence on a production service is a compliance failure.
+
+  AUTOMATED_BY:
+    name: Automated By
+    description: The source is managed by the target automation asset.
+    allowed_sources: [host, virtual-machine, service, application, network]
+    allowed_targets: [playbook, repository]
+    transitive: false
+    inverse: null
+    operational_impact: Indicates whether changes are reproducible.
+
+  VALIDATED_BY:
+    name: Validated By
+    description: The source is verified by the target test or compliance check.
+    allowed_sources: [platform, platform-role, host, virtual-machine, service, application, network]
+    allowed_targets: [playbook, repository, runbook]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies the evidence supporting a compliance claim.
+
+  PROTECTED_BY:
+    name: Protected By
+    description: The source is safeguarded by the target control or policy.
+    allowed_sources: [host, virtual-machine, service, application, network, storage, dataset]
+    allowed_targets: [standard, backup-policy, service, network]
+    transitive: false
+    inverse: BACKED_UP_BY
+    operational_impact: Identifies the control reducing exposure or data-loss risk.
+
+  OWNS:
+    name: Owns
+    description: The source is accountable for the target entity outcome.
+    allowed_sources: [platform-role, platform]
+    allowed_targets: [host, virtual-machine, service, application, storage, network, dataset]
+    transitive: false
+    inverse: null
+    operational_impact: Establishes accountability for operational decisions.
+
+  MANAGES:
+    name: Manages
+    description: The source performs administrative control over the target.
+    allowed_sources: [host, virtual-machine, service, playbook]
+    allowed_targets: [host, virtual-machine, service, container, network]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies control-plane reach and privilege boundaries.
+
+  REQUIRES:
+    name: Requires
+    description: The source needs the target resource to operate.
+    allowed_sources: [service, application, container, host, virtual-machine]
+    allowed_targets: [gpu, storage, network, model, dataset]
+    transitive: false
+    inverse: null
+    operational_impact: Loss of the target prevents the source from operating.

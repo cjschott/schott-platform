@@ -1,0 +1,148 @@
+---
+# Ollama — internal inference backend.
+#
+# Ollama is a private backend, not an application endpoint. It has no
+# host-published port and must never be documented as one. Applications reach
+# local models only through the LiteLLM gateway.
+#
+# Governed by:
+#   docs/standards/service-catalog-standard.md
+#   docs/standards/service-exposure-standard.md
+
+api_version: schott-platform/v1
+kind: Service
+
+id: SVC-0003
+type: service
+name: Ollama
+slug: ollama
+lifecycle: production
+owner: platform-engineering
+platform_role: ROLE-0001
+
+provenance:
+  class: declared
+  source: docs/architecture/ai-platform.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+description: >-
+  GPU-backed model-serving backend that loads local models and answers
+  inference requests from the gateway over private container networking.
+
+purpose: model-serving
+
+classification:
+  criticality: tier-1
+  environment: production
+  data_classification: internal
+  exposure: private
+  backup: not-required
+  monitoring: required
+  stateful: true
+  rationale: >-
+    Model weights are persistent but reconstructable from upstream registries,
+    so routine backup is intentionally not required.
+
+deployment:
+  method: docker-compose
+  host: HOST-0001
+  compose_project: ai
+  compose_file: ai/compose.yaml
+  service_name: ollama
+  service_directory: /opt/schott-platform/ai
+  environment_file: ai/.env
+  image_source: ai/compose.yaml
+  gpu_reservation: nvidia-all
+  notes: >-
+    Container and image identifiers are runtime facts and are not declared.
+
+network:
+  exposure: private
+  protocol: tcp
+  listening_port: 11434
+  published_ports: []
+  host_published: false
+  container_network: ai-backend
+  internal_address: http://ollama:11434
+  approved_callers:
+    - SVC-0002
+  notes: >-
+    Port 11434 is reachable only from the private container network. It must
+    never be published to the host or documented as an application endpoint.
+
+storage:
+  persistent_volume: ollama-models
+  mount_path: /root/.ollama
+  volume_name_source: ai/.env
+  contents: model weights
+  data_classification: reconstructable
+  notes: >-
+    Referenced by logical volume name only. Model blobs, digests, sizes, and
+    the current on-disk inventory are runtime facts and are not recorded here.
+    Retrieve the inventory with the command under observability.
+
+observability:
+  authoritative_logs: docker
+  log_command: docker compose --env-file ai/.env -f ai/compose.yaml logs --tail=200 ollama
+  health_check_command: ./scripts/health-check.sh
+  container_health_check: ollama list
+  status_command: docker compose --env-file ai/.env -f ai/compose.yaml ps
+  gpu_command: docker compose --env-file ai/.env -f ai/compose.yaml exec ollama nvidia-smi
+  inventory_command: docker compose --env-file ai/.env -f ai/compose.yaml exec ollama ollama list
+  metrics_endpoint: not-deployed
+  dashboards: []
+  alerts: []
+  log_rotation: json-file max-size 10m, max-file 3
+
+operations:
+  start: docker compose --env-file ai/.env -f ai/compose.yaml up -d
+  stop: docker compose --env-file ai/.env -f ai/compose.yaml down
+  restart: docker compose --env-file ai/.env -f ai/compose.yaml restart ollama
+  validate: ./scripts/validate-config.sh
+  update_reference: scripts/update-schai.sh
+  deploy_reference: scripts/deploy-schai.sh
+  recovery_reference: docs/operations/recovery.md
+  runbook_reference: docs/operations/operations.md
+  recovery_priority: 1
+  startup_constraint: >-
+    Must report healthy before the gateway starts.
+
+security:
+  authentication: none
+  authentication_rationale: >-
+    The backend is unauthenticated by design and is protected by network
+    isolation rather than credentials. This is why it must never be published.
+  authorization: network-isolation
+  secret_source: none
+  privileged: false
+  exposure_classification: private
+  wildcard_publishing: prohibited
+  exceptions: []
+
+dependencies:
+  requires: []
+  optional: []
+  required_by:
+    - SVC-0002
+  failure_mode: >-
+    Local inference is unavailable while this backend is down.
+
+documentation:
+  architecture: docs/architecture/ai-platform.md
+  operations: docs/operations/operations.md
+  install: docs/operations/install.md
+  acceptance: docs/operations/acceptance-results.md
+  network_policy: docs/security/network-policy.md
+
+standards:
+  - docs/standards/service-catalog-standard.md
+  - docs/standards/service-exposure-standard.md
+  - docs/standards/docker-platform-standard.md
+  - docs/standards/operational-metadata-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/ai-platform.yaml
+  declared:
+    - REL-0003
+    - REL-0005

@@ -1,0 +1,163 @@
+---
+# Validation rules for the Schott Platform knowledge model.
+#
+# Severity meanings:
+#   error       - the model is invalid; CI must fail.
+#   warning     - the model is usable but incomplete; review required.
+#   information - advisory signal for future work; does not block.
+#
+# Rule identifiers are stable. Retiring a rule must not reuse its identifier.
+#
+# Governed by:
+#   docs/standards/platform-ontology-standard.md
+#   docs/standards/operational-metadata-standard.md
+
+api_version: schott-platform/v1
+kind: ValidationRuleSet
+
+provenance:
+  class: declared
+  source: docs/standards/platform-ontology-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+validation_rules:
+  - id: VAL-001
+    name: Unique entity identifiers
+    description: Every entity id must be unique across the entire model.
+    severity: error
+    applies_to: [roles, hosts, services]
+    remediation: Assign a new unstated identifier; never reuse a retired one.
+
+  - id: VAL-002
+    name: Filename matches content id
+    description: An entity filename must begin with the entity id it contains.
+    severity: error
+    applies_to: [roles, hosts, services]
+    remediation: Rename the file to "<ID>-<slug>.yaml" or correct the id field.
+
+  - id: VAL-003
+    name: References resolve
+    description: Every relationship source and target must reference an existing entity.
+    severity: error
+    applies_to: [relationships]
+    remediation: Create the missing entity or remove the dangling relationship.
+
+  - id: VAL-004
+    name: Approved entity types
+    description: Every entity type must be defined in entity-types.yaml.
+    severity: error
+    applies_to: [roles, hosts, services]
+    remediation: Use an approved type or propose an ontology change.
+
+  - id: VAL-005
+    name: Approved relationship types
+    description: Every relationship must use a type defined in relationship-types.yaml.
+    severity: error
+    applies_to: [relationships]
+    remediation: Use an approved relationship or propose an ontology change.
+
+  - id: VAL-006
+    name: Service belongs to one platform role
+    description: Every service must declare exactly one primary platform role.
+    severity: error
+    applies_to: [services]
+    remediation: Set platform_role to a single existing role id.
+
+  - id: VAL-007
+    name: Deployed service runs on a deployment target
+    description: Every deployed service must declare a host, virtual machine, or container target.
+    severity: error
+    applies_to: [services]
+    remediation: Set deployment.host to an existing deployment target.
+
+  - id: VAL-008
+    name: Critical services declare an owner and recovery reference
+    description: Tier 0 and Tier 1 services must name an owner and an approved recovery procedure.
+    severity: error
+    applies_to: [services, hosts]
+    remediation: Set owner and operations.recovery_reference.
+
+  - id: VAL-009
+    name: Remotely exposed services carry a security classification
+    description: Any service reachable beyond its host must declare exposure, authentication, and approved source scope.
+    severity: error
+    applies_to: [services]
+    remediation: Complete the security and network blocks per the Service Exposure Standard.
+
+  - id: VAL-010
+    name: Private services must not publish wildcard host ports
+    description: A service classified private must not declare a host-published port or a wildcard bind address.
+    severity: error
+    applies_to: [services]
+    remediation: Remove the published port or reclassify the exposure with approval.
+
+  - id: VAL-011
+    name: Observed facts carry observed_at
+    description: Any fact with provenance class observed must include an observed_at timestamp.
+    severity: error
+    applies_to: [roles, hosts, services, relationships]
+    remediation: Add an RFC 3339 observed_at value or reclassify the fact as declared.
+
+  - id: VAL-012
+    name: Inferred facts are not represented as observed
+    description: A fact derived by inference must be labeled inferred and carry derived_from.
+    severity: error
+    applies_to: [roles, hosts, services, relationships]
+    remediation: Set provenance.class to inferred and record the source rule and inputs.
+
+  - id: VAL-013
+    name: No secret values
+    description: The model must never contain passwords, keys, tokens, or real environment values.
+    severity: error
+    applies_to: [roles, hosts, services, relationships, ontology]
+    remediation: Replace the value with a secret_source reference.
+
+  - id: VAL-014
+    name: No volatile runtime values as declared facts
+    description: Kernel versions, container ids, image digests, uptime, disk usage, and lease state must not be declared.
+    severity: error
+    applies_to: [hosts, services]
+    remediation: Record a retrieval command, or store the value as an observed fact.
+
+  - id: VAL-015
+    name: Production services are documented
+    description: Every production service should reference a runbook or approved operational document.
+    severity: warning
+    applies_to: [services]
+    remediation: Add a DOCUMENTED_BY relationship or an operations documentation reference.
+
+  - id: VAL-016
+    name: Stateful critical services declare backup coverage
+    description: Tier 0 and Tier 1 stateful services should declare a backup policy or a documented exception.
+    severity: warning
+    applies_to: [services]
+    remediation: Add a BACKED_UP_BY relationship or record an approved exception.
+
+  - id: VAL-017
+    name: Services declare observability coverage
+    description: Every service should name an authoritative log source and a health check.
+    severity: warning
+    applies_to: [services]
+    remediation: Complete the observability block.
+
+  - id: VAL-018
+    name: No self-dependency
+    description: An entity must not declare a dependency on itself.
+    severity: error
+    applies_to: [relationships]
+    remediation: Remove the self-referencing relationship.
+
+  - id: VAL-019
+    name: Relationships are not duplicated across files
+    description: A logical edge should be declared once in the canonical relationship list.
+    severity: warning
+    applies_to: [relationships]
+    remediation: Remove the duplicate and reference the canonical relationship id.
+
+  - id: VAL-020
+    name: Entities record a last review date
+    description: Entities should record when a human last confirmed their declared facts.
+    severity: information
+    applies_to: [roles, hosts, services]
+    remediation: Set provenance.last_reviewed.

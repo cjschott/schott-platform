@@ -28,10 +28,36 @@ jobs:
       - name: Shell syntax check (scripts and tests)
         run: |
           bash -n scripts/*.sh
-          bash -n tests/test-static.sh
+          bash -n tests/*.sh
 
       - name: Static repository assertions
         run: bash tests/test-static.sh
+
+      - name: Static documentation assertions
+        run: bash tests/test-docs-static.sh
+
+      # Install PyYAML from a pinned, hash-verified requirements file so the
+      # model validator does not depend on whatever PyPI serves that day.
+      # PIP_BREAK_SYSTEM_PACKAGES is set because Ubuntu 24.04 marks its system
+      # Python as externally managed (PEP 668); it is a no-op where that marker
+      # is absent.
+      - name: Install pinned CI Python dependencies
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: "1"
+        run: python3 -m pip install --require-hashes -r requirements-ci.txt
+
+      # The platform model validator degrades to structure-only checks when
+      # PyYAML is absent. Fail loudly instead, so CI can never report green
+      # while silently skipping reference resolution and field validation.
+      - name: Verify PyYAML is available
+        run: |
+          python3 -c 'import yaml' || {
+            echo "PyYAML is required for platform model structural validation." >&2
+            exit 1
+          }
+
+      - name: Platform model validation
+        run: bash tests/test-platform-model.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).

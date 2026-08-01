@@ -1,0 +1,144 @@
+---
+# Controlled entity vocabulary for the Schott Platform knowledge model.
+#
+# Type values use kebab-case and must match the Platform Ontology Standard.
+# Adding a type requires a documented ontology change. Do not represent the
+# same concept with two competing type names.
+#
+# Governed by: docs/standards/platform-ontology-standard.md
+
+api_version: schott-platform/v1
+kind: EntityTypeCatalog
+
+provenance:
+  class: declared
+  source: docs/standards/platform-ontology-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+entity_types:
+  platform:
+    name: Platform
+    description: The overall Schott Platform as a single governed system.
+    id_prefix: PLAT
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  platform-role:
+    name: Platform Role
+    description: A functional classification that groups hosts and services by purpose.
+    id_prefix: ROLE
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  host:
+    name: Host
+    description: A physical or virtual machine that runs platform workloads.
+    id_prefix: HOST
+    lifecycle_supported: [planned, provisioning, active, maintenance, degraded, retiring, decommissioned]
+
+  virtual-machine:
+    name: Virtual Machine
+    description: A guest machine running on a compute platform host.
+    id_prefix: VM
+    lifecycle_supported: [planned, provisioning, active, maintenance, degraded, retiring, decommissioned]
+
+  container:
+    name: Container
+    description: A container instance that runs as part of a service deployment.
+    id_prefix: CTR
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  service:
+    name: Service
+    description: A long-lived operational workload with its own catalog record.
+    id_prefix: SVC
+    lifecycle_supported: [proposed, development, test, production, maintenance, deprecated, retired]
+
+  application:
+    name: Application
+    description: A user-facing product built on top of platform services.
+    id_prefix: APP
+    lifecycle_supported: [proposed, development, test, production, maintenance, deprecated, retired]
+
+  repository:
+    name: Repository
+    description: A source control repository holding platform or application code.
+    id_prefix: REPO
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  playbook:
+    name: Playbook
+    description: An automation playbook that configures or validates platform state.
+    id_prefix: PB
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  runbook:
+    name: Runbook
+    description: A human operational procedure for a service, host, or recovery task.
+    id_prefix: RB
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  dashboard:
+    name: Dashboard
+    description: A visualization surface presenting service or host telemetry.
+    id_prefix: DASH
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  alert:
+    name: Alert
+    description: A monitoring rule that notifies operators of a condition.
+    id_prefix: ALERT
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  backup-policy:
+    name: Backup Policy
+    description: A defined protection scope, schedule, and retention for platform data.
+    id_prefix: BKP
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
+
+  network:
+    name: Network
+    description: A logical network segment, zone, or trust boundary.
+    id_prefix: NET
+    lifecycle_supported: [planned, active, deprecated, retired]
+
+  storage:
+    name: Storage
+    description: A persistent storage location such as a volume, dataset, or share.
+    id_prefix: STOR
+    lifecycle_supported: [planned, active, deprecated, retired]
+
+  standard:
+    name: Standard
+    description: A governing platform standard document.
+    id_prefix: STD
+    lifecycle_supported: [proposed, active, deprecated, retired]
+
+  architecture-decision:
+    name: Architecture Decision
+    description: A recorded architectural decision and its consequences.
+    id_prefix: ADR
+    lifecycle_supported: [proposed, active, deprecated, retired]
+
+  api:
+    name: API
+    description: A network interface contract exposed or consumed by a service.
+    id_prefix: API
+    lifecycle_supported: [proposed, development, test, production, deprecated, retired]
+
+  model:
+    name: Model
+    description: An AI model artifact served by an inference backend.
+    id_prefix: MODEL
+    lifecycle_supported: [proposed, development, test, production, deprecated, retired]
+
+  gpu:
+    name: GPU
+    description: A graphics processing unit available for accelerated workloads.
+    id_prefix: GPU
+    lifecycle_supported: [planned, active, maintenance, degraded, retired]
+
+  dataset:
+    name: Dataset
+    description: A managed collection of data used by platform or AI workloads.
+    id_prefix: DS
+    lifecycle_supported: [proposed, development, active, deprecated, retired]
