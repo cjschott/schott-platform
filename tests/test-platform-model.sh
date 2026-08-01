@@ -75,10 +75,10 @@ assert_file "${MODEL}/ontology/validation-rules.yaml"
 assert_file "${MODEL}/ontology/inference-rules.yaml"
 
 # Required entity files.
-assert_file "${MODEL}/roles/ROLE-001-ai-platform.yaml"
-assert_file "${MODEL}/hosts/HOST-001-schai.yaml"
-assert_file "${MODEL}/services/SVC-002-litellm.yaml"
-assert_file "${MODEL}/services/SVC-003-ollama.yaml"
+assert_file "${MODEL}/roles/ai-platform.yaml"
+assert_file "${MODEL}/hosts/schai.yaml"
+assert_file "${MODEL}/services/litellm.yaml"
+assert_file "${MODEL}/services/ollama.yaml"
 
 # Required relationship file.
 assert_file "${MODEL}/relationships/ai-platform.yaml"
@@ -108,6 +108,7 @@ assert_absent ':[[:space:]]*(now|today|latest|current|currently|recently)[[:spac
 # Python-based structural validation.
 if python3 -c 'import yaml' >/dev/null 2>&1; then
   PY_OUTPUT="$(python3 - "${ROOT}" <<'PY' 2>&1 || true
+import re
 import sys
 from pathlib import Path
 
@@ -116,7 +117,7 @@ import yaml
 root = Path(sys.argv[1])
 model = root / "platform-model"
 
-PROVENANCE_CLASSES = {"declared", "observed", "inferred", "unknown"}
+PROVENANCE_CLASSES = {"declared", "observed", "inferred"}
 
 REQUIRED_SERVICE_FIELDS = [
     "id", "type", "name", "lifecycle", "owner", "platform_role",
@@ -288,10 +289,19 @@ for directory in ("roles", "hosts", "services"):
         else:
             entities[entity_id] = (path, record)
 
-        if path.name.startswith(f"{entity_id}-"):
-            ok(f"filename matches entity id: {rel(path)}")
+        # Canonical entity files are named for the bare slug, not the id, so a
+        # renumbering never forces a rename. The slug is the join key.
+        slug = record.get("slug")
+        if slug and path.stem == slug:
+            ok(f"filename matches entity slug: {rel(path)}")
         else:
-            bad(f"filename does not match entity id {entity_id}: {rel(path)}")
+            bad(f"filename {path.name} does not match entity slug {slug!r}")
+
+        # Identifiers are four digits so ordering stays stable past 999.
+        if re.fullmatch(r"[A-Z]+-\d{4}", str(entity_id)):
+            ok(f"entity id uses the four-digit format: {entity_id}")
+        else:
+            bad(f"entity id is not a four-digit identifier: {entity_id}")
 
         entity_type = record.get("type")
         if entity_type in entity_types:
@@ -323,6 +333,33 @@ for entity_id, (path, record) in entities.items():
             bad(f"host {entity_id} missing required fields: {', '.join(missing)}")
         else:
             ok(f"host {entity_id} carries all required fields")
+
+# Relationships stay canonical. An entity record may reference edge ids and name
+# the canonical source, but must never restate source, relationship, or target.
+EDGE_DEFINITION_KEYS = {"source", "relationship", "target"}
+for entity_id, (path, record) in entities.items():
+    block = record.get("relationships")
+    if block is None:
+        continue
+
+    if not isinstance(block, dict):
+        bad(f"{entity_id}: relationships must be a mapping, not a list of edges")
+        continue
+
+    if not block.get("canonical_source"):
+        bad(f"{entity_id}: relationships block does not name canonical_source")
+    else:
+        ok(f"{entity_id} references the canonical relationship source")
+
+    duplicated = EDGE_DEFINITION_KEYS.intersection(block.keys())
+    nested = [
+        item for item in (block.get("declared") or [])
+        if isinstance(item, dict) and EDGE_DEFINITION_KEYS.intersection(item.keys())
+    ]
+    if duplicated or nested:
+        bad(f"{entity_id}: relationships block duplicates edge definitions")
+    else:
+        ok(f"{entity_id} does not duplicate edge definitions")
 
 # Every observed fact must carry observed_at; inferred facts must be labeled.
 def walk_provenance(node, path_label, entity_id):
@@ -401,12 +438,12 @@ edge_set = {
 }
 
 REQUIRED_EDGES = [
-    ("HOST-001", "BELONGS_TO", "ROLE-001"),
-    ("SVC-002", "BELONGS_TO", "ROLE-001"),
-    ("SVC-003", "BELONGS_TO", "ROLE-001"),
-    ("SVC-002", "RUNS_ON", "HOST-001"),
-    ("SVC-003", "RUNS_ON", "HOST-001"),
-    ("SVC-002", "DEPENDS_ON", "SVC-003"),
+    ("HOST-0001", "BELONGS_TO", "ROLE-0001"),
+    ("SVC-0002", "BELONGS_TO", "ROLE-0001"),
+    ("SVC-0003", "BELONGS_TO", "ROLE-0001"),
+    ("SVC-0002", "RUNS_ON", "HOST-0001"),
+    ("SVC-0003", "RUNS_ON", "HOST-0001"),
+    ("SVC-0002", "DEPENDS_ON", "SVC-0003"),
 ]
 for edge in REQUIRED_EDGES:
     if edge in edge_set:
@@ -415,10 +452,10 @@ for edge in REQUIRED_EDGES:
         bad("declared relationship missing: {} {} {}".format(*edge))
 
 # Entity-specific operational facts.
-litellm = (entities.get("SVC-002") or (None, {}))[1]
-ollama = (entities.get("SVC-003") or (None, {}))[1]
-schai = (entities.get("HOST-001") or (None, {}))[1]
-role = (entities.get("ROLE-001") or (None, {}))[1]
+litellm = (entities.get("SVC-0002") or (None, {}))[1]
+ollama = (entities.get("SVC-0003") or (None, {}))[1]
+schai = (entities.get("HOST-0001") or (None, {}))[1]
+role = (entities.get("ROLE-0001") or (None, {}))[1]
 
 
 def check(condition, message):
@@ -427,8 +464,8 @@ def check(condition, message):
 
 if litellm:
     network = litellm.get("network") or {}
-    check(litellm.get("platform_role") == "ROLE-001", "LiteLLM belongs to ROLE-001")
-    check((litellm.get("deployment") or {}).get("host") == "HOST-001", "LiteLLM runs on HOST-001")
+    check(litellm.get("platform_role") == "ROLE-0001", "LiteLLM belongs to ROLE-0001")
+    check((litellm.get("deployment") or {}).get("host") == "HOST-0001", "LiteLLM runs on HOST-0001")
     check(network.get("listening_port") == 4000, "LiteLLM exposes port 4000")
     check(str(network.get("protocol", "")).lower() == "tcp", "LiteLLM uses TCP")
     check(network.get("exposure") == "application", "LiteLLM uses application exposure")
@@ -437,14 +474,14 @@ if litellm:
         "LiteLLM identifies Docker as its authoritative log source",
     )
     check(
-        ("SVC-002", "DEPENDS_ON", "SVC-003") in edge_set,
-        "LiteLLM depends on SVC-003",
+        ("SVC-0002", "DEPENDS_ON", "SVC-0003") in edge_set,
+        "LiteLLM depends on SVC-0003",
     )
 
 if ollama:
     network = ollama.get("network") or {}
-    check(ollama.get("platform_role") == "ROLE-001", "Ollama belongs to ROLE-001")
-    check((ollama.get("deployment") or {}).get("host") == "HOST-001", "Ollama runs on HOST-001")
+    check(ollama.get("platform_role") == "ROLE-0001", "Ollama belongs to ROLE-0001")
+    check((ollama.get("deployment") or {}).get("host") == "HOST-0001", "Ollama runs on HOST-0001")
     check(network.get("listening_port") == 11434, "Ollama uses port 11434 internally")
     check(network.get("exposure") == "private", "Ollama remains private")
     check(
@@ -458,9 +495,13 @@ if ollama:
 
 if schai:
     check(schai.get("hostname") == "schai", "schai uses hostname schai")
-    check(schai.get("platform_role") == "ROLE-001", "schai belongs to ROLE-001")
+    check(schai.get("platform_role") == "ROLE-0001", "schai belongs to ROLE-0001")
     check(schai.get("criticality") == "tier-1", "schai uses Tier 1 criticality")
     check(schai.get("environment") == "production", "schai uses production environment")
+    # Host lifecycle uses the host vocabulary from the Platform Role and Host
+    # Classification Standard, where running hosts are "active". "production" is
+    # an environment, not a host lifecycle state.
+    check(schai.get("lifecycle") == "active", "schai uses the active host lifecycle state")
     check(
         "Tesla P4" in yaml.safe_dump(schai.get("hardware") or {}),
         "schai identifies the Tesla P4 GPU",
@@ -471,7 +512,7 @@ if role:
         "purpose", "responsibilities", "prohibited_workloads", "default_tier",
         "required_monitoring", "required_backup", "standards",
     ):
-        check(field in role, f"ROLE-001 defines {field}")
+        check(field in role, f"ROLE-0001 defines {field}")
 
 print(f"__FAILURES__={failures}")
 PY

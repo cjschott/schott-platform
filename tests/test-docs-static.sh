@@ -49,6 +49,20 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local rel="$1"
+  local pattern="$2"
+  local description="$3"
+
+  if [[ ! -f "${ROOT}/${rel}" ]]; then
+    fail "${description} (missing file ${rel})"
+  elif grep -Eq "${pattern}" "${ROOT}/${rel}"; then
+    fail "${description} (unexpected /${pattern}/ in ${rel})"
+  else
+    pass "${description}"
+  fi
+}
+
 assert_markdown_links() {
   local file="$1"
   local file_dir
@@ -292,12 +306,16 @@ assert_contains "${METADATA_STANDARD}" '`observed`' \
   "operational metadata standard defines the observed provenance class"
 assert_contains "${METADATA_STANDARD}" '`inferred`' \
   "operational metadata standard defines the inferred provenance class"
-assert_contains "${METADATA_STANDARD}" '`unknown`' \
-  "operational metadata standard defines the unknown provenance class"
 assert_contains "${METADATA_STANDARD}" 'observed_at' \
   "operational metadata standard requires observed_at on observed facts"
-assert_contains "${METADATA_STANDARD}" 'asserted' \
-  "operational metadata standard aligns declared with the ontology asserted class"
+# The provenance vocabulary is exactly three classes. "asserted" was an alias
+# for "declared" and has been removed so the model has one term per concept.
+assert_not_contains "${METADATA_STANDARD}" 'asserted' \
+  "operational metadata standard does not use the asserted alias"
+assert_not_contains "${ONTOLOGY_STANDARD}" 'asserted' \
+  "ontology standard does not use the asserted alias"
+assert_contains "${METADATA_STANDARD}" 'exactly three' \
+  "operational metadata standard states the vocabulary is exactly three classes"
 assert_contains "${METADATA_STANDARD}" 'stale|Stale|freshness|Freshness' \
   "operational metadata standard defines freshness or staleness handling"
 assert_contains "${METADATA_STANDARD}" 'platform-model/' \
