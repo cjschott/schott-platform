@@ -59,6 +59,14 @@ jobs:
       - name: Platform model validation
         run: bash tests/test-platform-model.sh
 
+      # Repository-only: reads model files and reports findings. No network
+      # access, SSH, subprocess collection, model mutation, or remediation.
+      - name: Evidence and drift definition validation
+        run: python3 tools/platform_model/validate_evidence.py --root platform-model
+
+      - name: Evidence validator behaviour tests
+        run: bash tests/test-evidence-validator.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
