@@ -1,0 +1,82 @@
+---
+# Compute Platform role.
+#
+# Declared classification only. No host in this role has been contacted and no
+# runtime state is recorded here.
+#
+# Governed by: docs/standards/platform-role-host-classification-standard.md
+
+api_version: schott-platform/v1
+kind: PlatformRole
+
+id: ROLE-0003
+type: platform-role
+name: Compute Platform
+slug: compute-platform
+lifecycle: active
+owner: platform-engineering
+default_tier: tier-0
+
+provenance:
+  class: declared
+  source: docs/standards/platform-role-host-classification-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+purpose: >-
+  Provide virtualization and container compute capacity for guest workloads.
+
+responsibilities:
+  - Proxmox VE virtualization
+  - Virtual machine lifecycle
+  - Container hosting
+  - PCI passthrough
+  - Cluster or standalone compute services
+
+prohibited_workloads:
+  - Application services that belong inside managed guests
+  - Ad hoc host-level workloads without documentation
+
+observability_requirements:
+  host_metrics:
+    - cpu
+    - memory
+    - disk
+    - network
+  required_logs:
+    - host-system-logs
+    - host-authentication-logs
+  labels:
+    - host
+    - role
+    - criticality
+    - environment
+    - lifecycle_state
+  notes: >-
+    Centralized metrics and log shipping are not yet deployed. Until the
+    Monitoring Platform exists, host-local logs are the authoritative source.
+
+backup_expectations:
+  configuration: required
+  data: review_required
+  expectation: >-
+    Hosts in this role must have a documented backup and restore path, or a
+    recorded exception explaining why their data is reconstructable.
+  review_required: true
+  review_note: >-
+    Backup scope and cadence for this role are not established by committed
+    documentation and must not be invented. Confirm before automation relies
+    on them.
+
+standards:
+  - docs/standards/platform-role-host-classification-standard.md
+  - docs/standards/linux-server-security-standard.md
+  - docs/standards/platform-filesystem-observability-standard.md
+  - docs/standards/operational-metadata-standard.md
+  - docs/standards/definition-of-done-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-roles.yaml
+  notes: >-
+    Edges involving this role are declared once in the canonical relationship
+    lists. They are not duplicated here.

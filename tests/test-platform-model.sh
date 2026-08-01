@@ -326,6 +326,21 @@ for directory in ("roles", "hosts", "services", "networks", "storage", "backup-p
         else:
             bad(f"{entity_id} uses undefined entity type: {entity_type}")
 
+        # Lifecycle must be drawn from the vocabulary its own entity type
+        # declares. A value valid for one type is not automatically valid for
+        # another: "production" is a service state, "active" is a host state.
+        supported = (entity_types.get(entity_type) or {}).get("lifecycle_supported") or []
+        lifecycle = record.get("lifecycle")
+        if not supported:
+            pass  # Unknown type is already reported above.
+        elif lifecycle in supported:
+            ok(f"{entity_id} lifecycle '{lifecycle}' is valid for type {entity_type}")
+        else:
+            bad(
+                f"{entity_id} lifecycle '{lifecycle}' is not supported by type "
+                f"{entity_type} (allowed: {', '.join(supported)})"
+            )
+
         provenance = record.get("provenance") or {}
         provenance_class = provenance.get("class")
         if provenance_class in PROVENANCE_CLASSES:
