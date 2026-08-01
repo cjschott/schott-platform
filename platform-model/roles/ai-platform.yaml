@@ -10,7 +10,7 @@
 api_version: schott-platform/v1
 kind: PlatformRole
 
-id: ROLE-001
+id: ROLE-0001
 type: platform-role
 name: AI Platform
 slug: ai-platform

@@ -256,7 +256,7 @@ Referencing a secret file by path is permitted. Committing that file, or any val
 ## Canonical Example
 
 ```yaml
-id: SVC-002
+id: SVC-0002
 type: service
 name: LiteLLM
 
@@ -298,8 +298,8 @@ impact:
     class: inferred
     source: INF-003
     derived_from:
-      - SVC-002
-      - SVC-003
+      - SVC-0002
+      - SVC-0003
     recorded_at: 2026-08-01
   statement: LiteLLM may be impacted when Ollama is unavailable.
 ```

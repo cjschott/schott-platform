@@ -94,8 +94,8 @@ Recommended prefixes:
 
 | Entity type | Prefix | Example |
 |---|---|---|
-| Host | `HOST` | `HOST-001` |
-| Platform role | `ROLE` | `ROLE-001` |
+| Host | `HOST` | `HOST-0001` |
+| Platform role | `ROLE` | `ROLE-0001` |
 | Service | `SVC` | `SVC-001` |
 | Application | `APP` | `APP-001` |
 | Network | `NET` | `NET-001` |
@@ -131,7 +131,7 @@ Illustrative record:
 ```yaml
 source: SVC-001
 relationship: DEPENDS_ON
-target: SVC-002
+target: SVC-0002
 dependency_class: hard
 impact: service-unavailable
 ```
@@ -185,8 +185,8 @@ Relationship direction must be consistent.
 Examples:
 
 ```text
-SVC-001 RUNS_ON HOST-001
-HOST-001 HOSTS SVC-001
+SVC-001 RUNS_ON HOST-0001
+HOST-0001 HOSTS SVC-001
 SVC-001 DOCUMENTED_BY RB-AI-001
 DASH-001 MONITORS SVC-001
 ```
@@ -272,15 +272,15 @@ When sources conflict, consumers must report the conflict rather than choosing a
 ## Example AI Platform Graph
 
 ```text
-ROLE-001  AI Platform
+ROLE-0001  AI Platform
    |
-   +-- HOST-001  schai
+   +-- HOST-0001  schai
           |
-          +-- SVC-002  LiteLLM
+          +-- SVC-0002  LiteLLM
           |      |
-          |      +-- DEPENDS_ON --> SVC-003  Ollama
+          |      +-- DEPENDS_ON --> SVC-0003  Ollama
           |
-          +-- SVC-003  Ollama
+          +-- SVC-0003  Ollama
                  |
                  +-- REQUIRES --> GPU-001  Tesla P4
                  +-- STORES_DATA_ON --> STOR-001  Ollama model volume
@@ -289,10 +289,10 @@ ROLE-001  AI Platform
 Operational relationships may extend the graph:
 
 ```text
-SVC-002 DOCUMENTED_BY RB-AI-001
-SVC-002 MONITORED_BY DASH-001
-SVC-003 BACKED_UP_BY BKP-001
-SVC-002 GOVERNED_BY STD-EXPOSURE-001
+SVC-0002 DOCUMENTED_BY RB-AI-001
+SVC-0002 MONITORED_BY DASH-001
+SVC-0003 BACKED_UP_BY BKP-001
+SVC-0002 GOVERNED_BY STD-EXPOSURE-001
 ```
 
 ## Knowledge Traversal

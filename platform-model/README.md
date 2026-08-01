@@ -73,22 +73,22 @@ Identifiers are immutable and are never reused after retirement.
 
 | Entity type | Prefix | Example |
 |---|---|---|
-| Platform role | `ROLE` | `ROLE-001` |
-| Host | `HOST` | `HOST-001` |
-| Service | `SVC` | `SVC-002` |
+| Platform role | `ROLE` | `ROLE-0001` |
+| Host | `HOST` | `HOST-0001` |
+| Service | `SVC` | `SVC-0002` |
 | Relationship | `REL` | `REL-006` |
 
 Full prefix assignments live in `ontology/entity-types.yaml`.
 
 Renaming a service does not change its id. Moving a service to a different host does not change its id. Replacing a service with a functionally different system creates a new id and marks the old one deprecated or retired.
 
-Filenames must begin with the id they contain: `SVC-002-litellm.yaml`. Validation enforces this.
+Filenames are the bare slug: `litellm.yaml`. The slug is the join key between the filename and the record, so renumbering an id never forces a rename. Validation enforces that the filename matches the record's `slug` and that ids are four digits.
 
 ## How to Add an Entity
 
 1. Choose the correct entity type from `ontology/entity-types.yaml`. If none fits, propose an ontology change rather than inventing a type.
 2. Allocate the next unused id for that prefix. Never reuse a retired id.
-3. Create the file in the matching directory, named `<ID>-<slug>.yaml`.
+3. Create the file in the matching directory, named `<slug>.yaml`, and set the matching `slug` field.
 4. Add a `provenance` block with `class: declared`, a `source`, and `recorded_at`.
 5. Fill the required fields for the entity kind:
    - **Services:** `id`, `type`, `name`, `lifecycle`, `owner`, `platform_role`, `deployment`, `observability`, `security`, `relationships`
@@ -119,7 +119,7 @@ Inferred edges are never written to these files. They are produced at query time
 bash tests/test-platform-model.sh
 ```
 
-This validates structure, required files, prohibited content, and — when PyYAML is available — parses every document to check id uniqueness, filename-to-id agreement, reference resolution, required fields, vocabulary compliance, and the provenance contract.
+This validates structure, required files, prohibited content, and — when PyYAML is available — parses every document to check id uniqueness, four-digit id format, filename-to-slug agreement, reference resolution, required fields, vocabulary compliance, and the provenance contract.
 
 To parse the YAML directly:
 
@@ -157,10 +157,10 @@ Current entities:
 
 | ID | Type | Name |
 |---|---|---|
-| `ROLE-001` | platform-role | AI Platform |
-| `HOST-001` | host | schai |
-| `SVC-002` | service | LiteLLM |
-| `SVC-003` | service | Ollama |
+| `ROLE-0001` | platform-role | AI Platform |
+| `HOST-0001` | host | schai |
+| `SVC-0002` | service | LiteLLM |
+| `SVC-0003` | service | Ollama |
 
 LiteLLM is the only application-facing AI endpoint, reachable at `http://schai:4000/v1`. Ollama is an internal backend with no host-published port and must never be documented as an application endpoint.
 

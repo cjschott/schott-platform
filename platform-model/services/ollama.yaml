@@ -12,13 +12,13 @@
 api_version: schott-platform/v1
 kind: Service
 
-id: SVC-003
+id: SVC-0003
 type: service
 name: Ollama
 slug: ollama
 lifecycle: production
 owner: platform-engineering
-platform_role: ROLE-001
+platform_role: ROLE-0001
 
 provenance:
   class: declared
@@ -46,7 +46,7 @@ classification:
 
 deployment:
   method: docker-compose
-  host: HOST-001
+  host: HOST-0001
   compose_project: ai
   compose_file: ai/compose.yaml
   service_name: ollama
@@ -66,7 +66,7 @@ network:
   container_network: ai-backend
   internal_address: http://ollama:11434
   approved_callers:
-    - SVC-002
+    - SVC-0002
   notes: >-
     Port 11434 is reachable only from the private container network. It must
     never be published to the host or documented as an application endpoint.
@@ -124,7 +124,7 @@ dependencies:
   requires: []
   optional: []
   required_by:
-    - SVC-002
+    - SVC-0002
   failure_mode: >-
     Local inference is unavailable while this backend is down.
 

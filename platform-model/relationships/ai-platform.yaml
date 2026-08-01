@@ -15,7 +15,7 @@
 api_version: schott-platform/v1
 kind: RelationshipSet
 
-scope: ROLE-001
+scope: ROLE-0001
 
 provenance:
   class: declared
@@ -25,9 +25,9 @@ provenance:
 
 relationships:
   - id: REL-001
-    source: HOST-001
+    source: HOST-0001
     relationship: BELONGS_TO
-    target: ROLE-001
+    target: ROLE-0001
     description: schai is classified as an AI Platform host.
     provenance:
       class: declared
@@ -38,9 +38,9 @@ relationships:
       - docs/decisions/ADR-0001-schai-reference-host.md
 
   - id: REL-002
-    source: SVC-002
+    source: SVC-0002
     relationship: BELONGS_TO
-    target: ROLE-001
+    target: ROLE-0001
     description: LiteLLM is an AI Platform service.
     provenance:
       class: declared
@@ -50,9 +50,9 @@ relationships:
       - docs/standards/service-catalog-standard.md
 
   - id: REL-003
-    source: SVC-003
+    source: SVC-0003
     relationship: BELONGS_TO
-    target: ROLE-001
+    target: ROLE-0001
     description: Ollama is an AI Platform service.
     provenance:
       class: declared
@@ -62,9 +62,9 @@ relationships:
       - docs/standards/service-catalog-standard.md
 
   - id: REL-004
-    source: SVC-002
+    source: SVC-0002
     relationship: RUNS_ON
-    target: HOST-001
+    target: HOST-0001
     description: LiteLLM is deployed on schai through the ai Compose project.
     dependency_class: hard
     impact: service-unavailable
@@ -78,9 +78,9 @@ relationships:
       - docs/operations/acceptance-results.md
 
   - id: REL-005
-    source: SVC-003
+    source: SVC-0003
     relationship: RUNS_ON
-    target: HOST-001
+    target: HOST-0001
     description: Ollama is deployed on schai through the ai Compose project.
     dependency_class: hard
     impact: service-unavailable
@@ -94,9 +94,9 @@ relationships:
       - docs/operations/acceptance-results.md
 
   - id: REL-006
-    source: SVC-002
+    source: SVC-0002
     relationship: DEPENDS_ON
-    target: SVC-003
+    target: SVC-0003
     description: >-
       LiteLLM routes local model requests to the Ollama backend over private
       container networking and starts only after it reports healthy.

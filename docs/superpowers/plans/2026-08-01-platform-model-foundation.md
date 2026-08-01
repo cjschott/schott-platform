@@ -13,8 +13,9 @@
 - This increment is documentation and data only. No containers, firewall rules, SSH configuration, services, or Docker volumes are touched.
 - Entity type values use kebab-case, matching the Platform Ontology Standard.
 - YAML field names use snake_case.
-- Stable IDs are `ROLE-001`, `HOST-001`, `SVC-002`, `SVC-003`.
-- Owner is `platform-engineering`. Environment and lifecycle are `production`.
+- Stable IDs are `ROLE-0001`, `HOST-0001`, `SVC-0002`, `SVC-0003`.
+- Owner is `platform-engineering`. Environment is `production`. Service lifecycle is
+  `production`; host lifecycle is `active`, per the host vocabulary.
 - LiteLLM is the only application-facing AI endpoint. Ollama stays private with no host-published port.
 - No secrets, API keys, passwords, bearer tokens, or real environment values.
 - No volatile runtime values recorded as declared facts.
@@ -41,10 +42,10 @@ Do not implement in this increment:
 - `platform-model/ontology/relationship-types.yaml`: controlled relationship vocabulary.
 - `platform-model/ontology/validation-rules.yaml`: rule IDs, descriptions, and severities.
 - `platform-model/ontology/inference-rules.yaml`: conservative derivation rules.
-- `platform-model/roles/ROLE-001-ai-platform.yaml`: AI Platform role definition.
-- `platform-model/hosts/HOST-001-schai.yaml`: `schai` host entity.
-- `platform-model/services/SVC-002-litellm.yaml`: LiteLLM service entity.
-- `platform-model/services/SVC-003-ollama.yaml`: Ollama service entity.
+- `platform-model/roles/ai-platform.yaml`: AI Platform role definition.
+- `platform-model/hosts/schai.yaml`: `schai` host entity.
+- `platform-model/services/litellm.yaml`: LiteLLM service entity.
+- `platform-model/services/ollama.yaml`: Ollama service entity.
 - `platform-model/relationships/ai-platform.yaml`: canonical declared relationship list.
 - `platform-model/README.md`: model layout, provenance rules, and contribution procedure.
 - `tests/test-platform-model.sh`: static and YAML validation for the model.
@@ -72,7 +73,7 @@ Require the four ontology files, the four entity files, the relationship file, a
 
 - [ ] **Step 3: Assert entity and relationship integrity**
 
-Require unique IDs, filename-to-ID agreement, resolvable source and target references, relationship types defined in `relationship-types.yaml`, and entity types defined in `entity-types.yaml`.
+Require unique IDs, four-digit id format, filename-to-slug agreement, resolvable source and target references, relationship types defined in `relationship-types.yaml`, and entity types defined in `entity-types.yaml`.
 
 - [ ] **Step 4: Assert required fields**
 
@@ -80,7 +81,7 @@ Services require `id`, `type`, `name`, `lifecycle`, `owner`, `platform_role`, `d
 
 - [ ] **Step 5: Assert service-specific facts**
 
-LiteLLM runs on `HOST-001`, belongs to `ROLE-001`, depends on `SVC-003`, exposes TCP 4000, uses application exposure, and names Docker as its authoritative log source. Ollama runs on `HOST-001`, belongs to `ROLE-001`, is private, uses TCP 11434 internally, declares no host-published port, and names Docker as its authoritative log source. `schai` uses hostname `schai`, belongs to `ROLE-001`, is Tier 1, production, and identifies the Tesla P4 GPU.
+LiteLLM runs on `HOST-0001`, belongs to `ROLE-0001`, depends on `SVC-0003`, exposes TCP 4000, uses application exposure, and names Docker as its authoritative log source. Ollama runs on `HOST-0001`, belongs to `ROLE-0001`, is private, uses TCP 11434 internally, declares no host-published port, and names Docker as its authoritative log source. `schai` uses hostname `schai`, belongs to `ROLE-0001`, is Tier 1, is in the production environment with lifecycle `active`, and identifies the Tesla P4 GPU.
 
 - [ ] **Step 6: Assert safety rules**
 
@@ -121,7 +122,7 @@ Each type carries `name`, `description`, `allowed_sources`, `allowed_targets`, `
 
 - [ ] **Step 3: Define validation rules**
 
-Each rule carries an identifier and a severity of `error`, `warning`, or `information`. Cover unique IDs, filename-ID agreement, reference resolution, role membership, deployment targets, Tier 0/1 owner and recovery references, security classification for remotely exposed services, wildcard publishing prohibition for private services, `observed_at` requirements, and the prohibition on representing inferred facts as observed.
+Each rule carries an identifier and a severity of `error`, `warning`, or `information`. Cover unique IDs, filename-slug agreement, reference resolution, role membership, deployment targets, Tier 0/1 owner and recovery references, security classification for remotely exposed services, wildcard publishing prohibition for private services, `observed_at` requirements, and the prohibition on representing inferred facts as observed.
 
 - [ ] **Step 4: Define inference rules**
 
@@ -143,35 +144,35 @@ git commit -m "feat: add platform ontology definitions"
 ### Task 3: AI Platform Entities and Relationships
 
 **Files:**
-- Create: `platform-model/roles/ROLE-001-ai-platform.yaml`
-- Create: `platform-model/hosts/HOST-001-schai.yaml`
-- Create: `platform-model/services/SVC-002-litellm.yaml`
-- Create: `platform-model/services/SVC-003-ollama.yaml`
+- Create: `platform-model/roles/ai-platform.yaml`
+- Create: `platform-model/hosts/schai.yaml`
+- Create: `platform-model/services/litellm.yaml`
+- Create: `platform-model/services/ollama.yaml`
 - Create: `platform-model/relationships/ai-platform.yaml`
 
 **Interfaces:**
 - Consumes: the ontology from Task 2.
 - Produces: the first populated slice of the platform graph.
 
-- [ ] **Step 1: Create ROLE-001**
+- [ ] **Step 1: Create ROLE-0001**
 
 Define purpose, responsibilities, prohibited workloads, default tier, required monitoring, required backup expectations, and standards references.
 
-- [ ] **Step 2: Create HOST-001**
+- [ ] **Step 2: Create HOST-0001**
 
-Define hostname `schai`, role `ROLE-001`, Tier 1 criticality, Ubuntu platform, `America/Chicago` timezone, Tesla P4 GPU, management classification, authoritative host log sources, and references to standards and acceptance documentation. Record declared facts only; use retrieval commands instead of volatile values.
+Define hostname `schai`, role `ROLE-0001`, Tier 1 criticality, Ubuntu platform, `America/Chicago` timezone, Tesla P4 GPU, management classification, authoritative host log sources, and references to standards and acceptance documentation. Record declared facts only; use retrieval commands instead of volatile values.
 
-- [ ] **Step 3: Create SVC-002 LiteLLM**
+- [ ] **Step 3: Create SVC-0002 LiteLLM**
 
-Define role, host, Compose project `ai`, TCP 4000, application exposure, source scope `192.168.86.0/24`, authenticated OpenAI-compatible API, Docker authoritative logs, health-check command reference, and dependency on `SVC-003`. No secrets.
+Define role, host, Compose project `ai`, TCP 4000, application exposure, source scope `192.168.86.0/24`, authenticated OpenAI-compatible API, Docker authoritative logs, health-check command reference, and dependency on `SVC-0003`. No secrets.
 
-- [ ] **Step 4: Create SVC-003 Ollama**
+- [ ] **Step 4: Create SVC-0003 Ollama**
 
 Define role, host, TCP 11434 internal, private exposure, no host-published port, Docker authoritative logs, model-serving purpose, and the persistent model volume by logical name only. No model blobs, digests, or inventory treated as live state.
 
 - [ ] **Step 5: Create the canonical relationship list**
 
-Declare `HOST-001 BELONGS_TO ROLE-001`, `SVC-002 BELONGS_TO ROLE-001`, `SVC-003 BELONGS_TO ROLE-001`, `SVC-002 RUNS_ON HOST-001`, `SVC-003 RUNS_ON HOST-001`, `SVC-002 DEPENDS_ON SVC-003`. Reference the network policy, Docker standard, Linux security standard, and acceptance results where appropriate. Keep one canonical list; do not duplicate edges across files.
+Declare `HOST-0001 BELONGS_TO ROLE-0001`, `SVC-0002 BELONGS_TO ROLE-0001`, `SVC-0003 BELONGS_TO ROLE-0001`, `SVC-0002 RUNS_ON HOST-0001`, `SVC-0003 RUNS_ON HOST-0001`, `SVC-0002 DEPENDS_ON SVC-0003`. Reference the network policy, Docker standard, Linux security standard, and acceptance results where appropriate. Keep one canonical list; do not duplicate edges across files.
 
 - [ ] **Step 6: Run tests**
 

@@ -78,7 +78,7 @@ Dependencies must reference stable entity identifiers rather than display names 
 Examples:
 
 ```text
-HOST-001
+HOST-0001
 SVC-AI-001
 ROLE-AI-001
 NET-001
@@ -373,7 +373,7 @@ Examples:
 ```text
 RB-AI-001 DOCUMENTS SVC-AI-001
 STD-DOCKER-001 USES_STANDARD relationship for Docker services
-ADR-0001 DOCUMENTS HOST-001 reference-host decision
+ADR-0001 DOCUMENTS HOST-0001 reference-host decision
 ```
 
 The relationship direction should remain semantically clear. A service is `DOCUMENTED_BY` a runbook; a runbook `DOCUMENTS` a service.
@@ -385,7 +385,7 @@ Automation must identify what it manages or deploys.
 Examples:
 
 ```text
-ROLE-ANSIBLE-COMMON MANAGES HOST-001
+ROLE-ANSIBLE-COMMON MANAGES HOST-0001
 PLAYBOOK-AI DEPLOYS SVC-AI-001
 COMPOSE-AI IMPLEMENTS SVC-AI-002
 ```
@@ -397,7 +397,7 @@ This enables impact analysis before changing an Ansible role, playbook, or Compo
 ```text
 ROLE-AI-001 AI Platform
         |
-        +-- BELONGS_TO_ROLE <-- HOST-001 schai
+        +-- BELONGS_TO_ROLE <-- HOST-0001 schai
         |
         +-- contains SVC-AI-001 Kyri
         +-- contains SVC-AI-002 LiteLLM
@@ -410,11 +410,11 @@ SVC-AI-001 Kyri
 
 SVC-AI-002 LiteLLM
         +-- DEPENDS_ON --> SVC-AI-003 Ollama
-        +-- RUNS_ON --> HOST-001 schai
+        +-- RUNS_ON --> HOST-0001 schai
         +-- EXPOSED_THROUGH --> NET-APP-001 port 4000
 
 SVC-AI-003 Ollama
-        +-- RUNS_ON --> HOST-001 schai
+        +-- RUNS_ON --> HOST-0001 schai
         +-- STORES_DATA_ON --> STORE-AI-001 model volume
         +-- CONNECTS_TO --> GPU-001 Tesla P4
 ```
