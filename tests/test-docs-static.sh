@@ -103,6 +103,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0001-schai-reference-host.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
+  "docs/standards/operational-metadata-standard.md"
 )
 
 for document in "${REQUIRED_DOCS[@]}"; do
@@ -152,6 +153,42 @@ assert_contains "${EXPOSURE_STANDARD}" 'Ollama' \
   "Service exposure standard classifies Ollama"
 assert_contains "${EXPOSURE_STANDARD}" 'LiteLLM' \
   "Service exposure standard classifies LiteLLM"
+
+# Operational metadata standard requirements.
+#
+# The Platform Ontology Standard requires every entity to carry "Operational
+# metadata" but does not define it. This standard supplies that definition and
+# governs how declared, observed, and inferred facts are distinguished in
+# platform-model records.
+METADATA_STANDARD="docs/standards/operational-metadata-standard.md"
+assert_contains "${METADATA_STANDARD}" '^# Operational Metadata Standard' \
+  "operational metadata standard has the expected title"
+assert_contains "${METADATA_STANDARD}" '^## Purpose' \
+  "operational metadata standard states a purpose"
+assert_contains "${METADATA_STANDARD}" '^## Scope' \
+  "operational metadata standard states a scope"
+assert_contains "${METADATA_STANDARD}" '`declared`' \
+  "operational metadata standard defines the declared provenance class"
+assert_contains "${METADATA_STANDARD}" '`observed`' \
+  "operational metadata standard defines the observed provenance class"
+assert_contains "${METADATA_STANDARD}" '`inferred`' \
+  "operational metadata standard defines the inferred provenance class"
+assert_contains "${METADATA_STANDARD}" '`unknown`' \
+  "operational metadata standard defines the unknown provenance class"
+assert_contains "${METADATA_STANDARD}" 'observed_at' \
+  "operational metadata standard requires observed_at on observed facts"
+assert_contains "${METADATA_STANDARD}" 'asserted' \
+  "operational metadata standard aligns declared with the ontology asserted class"
+assert_contains "${METADATA_STANDARD}" 'stale|Stale|freshness|Freshness' \
+  "operational metadata standard defines freshness or staleness handling"
+assert_contains "${METADATA_STANDARD}" 'platform-model/' \
+  "operational metadata standard applies to the platform model"
+assert_contains "${METADATA_STANDARD}" 'secret|Secret' \
+  "operational metadata standard prohibits secret values"
+assert_contains "${METADATA_STANDARD}" 'Platform Ontology Standard' \
+  "operational metadata standard references the ontology standard"
+assert_contains "${METADATA_STANDARD}" '^## Compliance' \
+  "operational metadata standard defines compliance criteria"
 
 # Network policy alignment.
 NETWORK_POLICY="docs/security/network-policy.md"
