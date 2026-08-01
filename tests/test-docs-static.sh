@@ -310,44 +310,6 @@ done
 assert_contains "${DOD_STANDARD}" '[Ww]hen applicable' \
   "definition of done scopes gates to applicability"
 
-# Reserved release gates required before v1.0.0.
-assert_contains "${ROADMAP}" 'Sprint 98' \
-  "roadmap reserves Sprint 98"
-assert_contains "${ROADMAP}" 'Sprint 99' \
-  "roadmap reserves Sprint 99"
-assert_contains "${ROADMAP}" 'Documentation Lockdown' \
-  "roadmap names the Sprint 98 documentation lockdown gate"
-assert_contains "${ROADMAP}" 'Performance & Engineering Excellence' \
-  "roadmap names the Sprint 99 engineering excellence gate"
-for item in \
-  'User documentation' \
-  'Administrator guide' \
-  'Developer guide' \
-  'Command reference' \
-  'Troubleshooting' \
-  'Operations manual' \
-  'Architecture diagrams' \
-  'Capability and limitation'; do
-  assert_contains "${ROADMAP}" "${item}" \
-    "Sprint 98 covers ${item}"
-done
-for item in \
-  'Architecture review' \
-  'Dead-code and dependency review' \
-  'CPU/RAM/GPU/disk/network profiling' \
-  'API and inference latency benchmarking' \
-  'Token/context/prompt efficiency review' \
-  'Container and image review' \
-  'Database/query review' \
-  'Observability review' \
-  'Security review' \
-  'Final code-quality review'; do
-  assert_contains "${ROADMAP}" "${item}" \
-    "Sprint 99 covers ${item}"
-done
-assert_contains "${ROADMAP}" 'required before v1\.0\.0' \
-  "roadmap states both gates are required before v1.0.0"
-
 # Operational metadata standard requirements.
 #
 # The Platform Ontology Standard requires every entity to carry "Operational
@@ -423,6 +385,45 @@ assert_contains "${ROADMAP}" 'v1\.0' \
   "roadmap defines the v1.0 target"
 assert_contains "${ROADMAP}" 'Manual once\. Automated forever\.' \
   "roadmap preserves the automation principle"
+
+# Reserved release gates required before v1.0.0.
+assert_contains "${ROADMAP}" 'Sprint 98' \
+  "roadmap reserves Sprint 98"
+assert_contains "${ROADMAP}" 'Sprint 99' \
+  "roadmap reserves Sprint 99"
+assert_contains "${ROADMAP}" 'Documentation Lockdown' \
+  "roadmap names the Sprint 98 documentation lockdown gate"
+assert_contains "${ROADMAP}" 'Performance & Engineering Excellence' \
+  "roadmap names the Sprint 99 engineering excellence gate"
+for item in \
+  'User documentation' \
+  'Administrator guide' \
+  'Developer guide' \
+  'Command reference' \
+  'Troubleshooting' \
+  'Operations manual' \
+  'Architecture diagrams' \
+  'Capability and limitation'; do
+  assert_contains "${ROADMAP}" "${item}" \
+    "Sprint 98 covers ${item}"
+done
+for item in \
+  'Architecture review' \
+  'Dead-code and dependency review' \
+  'CPU/RAM/GPU/disk/network profiling' \
+  'API and inference latency benchmarking' \
+  'Token/context/prompt efficiency review' \
+  'Container and image review' \
+  'Database/query review' \
+  'Observability review' \
+  'Security review' \
+  'Final code-quality review'; do
+  assert_contains "${ROADMAP}" "${item}" \
+    "Sprint 99 covers ${item}"
+done
+assert_contains "${ROADMAP}" 'required before v1\.0\.0' \
+  "roadmap states both gates are required before v1.0.0"
+
 
 # Validate relative Markdown links in the new governance documents.
 for document in "${REQUIRED_DOCS[@]}"; do
