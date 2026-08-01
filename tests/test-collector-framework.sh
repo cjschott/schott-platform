@@ -56,6 +56,26 @@ assert_absent_in() {
   fi
 }
 
+# Count files in a directory whose names start with a prefix.
+#
+# A glob rather than `ls | grep`: parsing ls output misbehaves on filenames
+# containing newlines or unusual characters. An unmatched glob expands to the
+# literal pattern, which the -e test rejects, so an absent prefix returns 0
+# without needing nullglob.
+count_matching_files() {
+  local directory="$1"
+  local prefix="$2"
+  local path
+  local count=0
+
+  for path in "${directory}/${prefix}"*; do
+    [[ -e "${path}" ]] || continue
+    count=$((count + 1))
+  done
+
+  printf '%d\n' "${count}"
+}
+
 # --- Architecture decisions ------------------------------------------------
 ADR2="docs/decisions/ADR-0002-evidence-first-architecture.md"
 ADR3="docs/decisions/ADR-0003-provider-agnostic-ai-architecture.md"
@@ -67,12 +87,12 @@ assert_contains "${ADR3}" '^# ADR-0003:' "ADR-0003 has the expected title"
 assert_contains "${ADR3}" '\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0003 is Accepted"
 
 # ADR numbering must not collide with the existing reference-host decision.
-if [[ "$(ls "${ROOT}/docs/decisions" | grep -c '^ADR-0002')" -eq 1 ]]; then
+if [[ "$(count_matching_files "${ROOT}/docs/decisions" "ADR-0002")" -eq 1 ]]; then
   pass "exactly one ADR-0002 exists"
 else
   fail "ADR-0002 numbering is duplicated or missing"
 fi
-if [[ "$(ls "${ROOT}/docs/decisions" | grep -c '^ADR-0003')" -eq 1 ]]; then
+if [[ "$(count_matching_files "${ROOT}/docs/decisions" "ADR-0003")" -eq 1 ]]; then
   pass "exactly one ADR-0003 exists"
 else
   fail "ADR-0003 numbering is duplicated or missing"
