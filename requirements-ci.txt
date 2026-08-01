@@ -1,0 +1,27 @@
+# Python dependencies for CI validation only.
+#
+# The platform model validator (tests/test-platform-model.sh) uses PyYAML to
+# parse platform-model/**.yaml. Installing it unpinned would make CI depend on
+# whatever PyPI serves that day, so both the version and the artifact hashes are
+# pinned here and pip is required to verify them:
+#
+#   python3 -m pip install --require-hashes -r requirements-ci.txt
+#
+# --require-hashes refuses to install any requirement that is not hash-pinned,
+# so a transitive or accidental dependency cannot slip in unverified. PyYAML
+# declares no runtime dependencies of its own.
+#
+# Hashes are the official sha256 digests published in the PyPI release metadata
+# for PyYAML 6.0.3 (https://pypi.org/pypi/PyYAML/json), independently confirmed
+# by downloading each artifact and recomputing its digest.
+#
+# Two artifacts are listed:
+#   - the cp312 manylinux x86_64 wheel, which is what ubuntu-24.04 runners use
+#   - the source distribution, as a fallback if the runner Python changes
+#
+# To update: fetch the new release metadata, verify the digests by download,
+# and replace both the version and the hashes. Never hand-edit a hash.
+
+pyyaml==6.0.3 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f

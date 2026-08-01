@@ -36,6 +36,16 @@ jobs:
       - name: Static documentation assertions
         run: bash tests/test-docs-static.sh
 
+      # Install PyYAML from a pinned, hash-verified requirements file so the
+      # model validator does not depend on whatever PyPI serves that day.
+      # PIP_BREAK_SYSTEM_PACKAGES is set because Ubuntu 24.04 marks its system
+      # Python as externally managed (PEP 668); it is a no-op where that marker
+      # is absent.
+      - name: Install pinned CI Python dependencies
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: "1"
+        run: python3 -m pip install --require-hashes -r requirements-ci.txt
+
       # The platform model validator degrades to structure-only checks when
       # PyYAML is absent. Fail loudly instead, so CI can never report green
       # while silently skipping reference resolution and field validation.
