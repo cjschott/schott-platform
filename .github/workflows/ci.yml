@@ -83,6 +83,30 @@ jobs:
       - name: Initial read-only collector tests
         run: bash tests/test-initial-collectors.sh
 
+      # Every store root the suite creates lives in a temp directory and is
+      # removed. Nothing is written into the repository, no production path is
+      # touched, and no network, SSH, Docker runtime, or secret is involved.
+      - name: Knowledge orchestrator tests
+        run: bash tests/test-knowledge-orchestrator.sh
+
+      # Fails the build if a run left generated records behind under
+      # platform-model. The suite asserts this itself; this is the backstop for
+      # anything else that might write there.
+      - name: Confirm no generated records were committed
+        run: |
+          if git ls-files 'platform-model/evidence/EVID-*' \
+                          'platform-model/verifications/VER-*' \
+                          'platform-model/knowledge-events/MEM-*' \
+                          'platform-model/observations/OBS-*' | grep -q .; then
+            echo "Generated runtime records must not be committed under platform-model." >&2
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain platform-model)" ]; then
+            echo "The test suite modified platform-model; it must be read-only to tests." >&2
+            git status --porcelain platform-model >&2
+            exit 1
+          fi
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
