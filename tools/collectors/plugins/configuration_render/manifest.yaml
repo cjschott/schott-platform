@@ -1,0 +1,63 @@
+---
+# Configuration render collector — local and read-only.
+#
+# Runs only `docker compose config`. No runtime verb (up, down, pull, build,
+# run, exec, ps, inspect) exists in any code path, and no Docker API is called.
+# Reports what Compose would do, never what is running.
+#
+# Governed by: docs/standards/collector-plugin-standard.md
+
+api_version: schott-platform/v1
+kind: CollectorManifest
+
+id: configuration-render
+name: Configuration Render Collector
+version: 0.1.0
+source_type: configuration-render
+description: >-
+  Renders declared Docker Compose configuration and reports service, port,
+  volume, network, and environment-variable-name facts. Environment values are
+  never emitted.
+
+capabilities:
+  - CAP-0002
+
+supported_targets:
+  - service
+  - repository
+
+permissions:
+  - read-repository-files
+
+network_access: false
+subprocess_access: true
+filesystem_access: read-only
+
+approved_commands:
+  - docker compose --env-file <approved>.env.example -f <compose-file> config
+
+approved_environment_files:
+  - ai/.env.example
+  - ai/ollama/.env.example
+  - ai/litellm/.env.example
+
+secret_requirements: []
+
+output_contract:
+  - compose_file
+  - service_names
+  - images
+  - published_ports
+  - volumes
+  - networks
+  - restart_policies
+  - healthcheck_services
+  - environment_variable_names
+
+lifecycle: production
+
+provenance:
+  class: declared
+  source: docs/collectors/configuration-render.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01

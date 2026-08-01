@@ -1,0 +1,63 @@
+---
+# Git repository collector — local and read-only.
+#
+# Runs only the approved read-only inspection commands. fetch, pull, push,
+# clone, checkout, reset, and clean are absent from the approved set, so there
+# is no code path that mutates the repository or reaches the network.
+#
+# Governed by: docs/standards/collector-plugin-standard.md
+
+api_version: schott-platform/v1
+kind: CollectorManifest
+
+id: git-repository
+name: Git Repository Collector
+version: 0.1.0
+source_type: git-repository
+description: >-
+  Observes local git repository state through read-only inspection commands.
+  Never contacts a remote and never collects file contents.
+
+capabilities:
+  - CAP-0002
+
+supported_targets:
+  - repository
+
+permissions:
+  - read-repository-files
+
+network_access: false
+subprocess_access: true
+filesystem_access: read-only
+
+approved_commands:
+  - git rev-parse --show-toplevel
+  - git rev-parse HEAD
+  - git symbolic-ref --quiet --short HEAD
+  - git status --porcelain=v1 --untracked-files=all
+  - git tag --points-at HEAD
+  - git remote -v
+  - git ls-files
+
+secret_requirements: []
+
+output_contract:
+  - repository_root
+  - head_sha
+  - branch
+  - detached
+  - is_dirty
+  - tracked_file_count
+  - modified_file_count
+  - untracked_file_count
+  - tags_at_head
+  - remotes
+
+lifecycle: production
+
+provenance:
+  class: declared
+  source: docs/collectors/git-repository.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01

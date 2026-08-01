@@ -206,7 +206,9 @@ python3 tools/platform_model/validate_evidence.py --root platform-model
 
 `capabilities/` records what the platform can intentionally provide, with a maturity value that is a claim about **implementation**, not intent. Only `CAP-0001` Platform Modeling is `operational`; the evidence, verification, and drift capabilities are `foundation` because nothing real has yet flowed through them.
 
-Collectors that will eventually produce evidence are defined in `tools/collectors/` and governed by [ADR-0002](../docs/decisions/ADR-0002-evidence-first-architecture.md). No live collector exists.
+Collectors are defined in `tools/collectors/` and governed by [ADR-0002](../docs/decisions/ADR-0002-evidence-first-architecture.md). v0.6.0 adds three local read-only collectors — git repository, Compose configuration render, and manual attestation — documented under [`docs/collectors/`](../docs/collectors/).
+
+They return `CollectorResult` objects. **No evidence record is persisted**: the orchestrator that would turn an observation into an `EVID` record does not exist yet, so `evidence/` remains empty by design.
 
 ## Ontology Conformance
 

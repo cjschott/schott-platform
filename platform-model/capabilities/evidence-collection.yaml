@@ -15,7 +15,7 @@ name: Evidence Collection
 slug: evidence-collection
 lifecycle: active
 owner: platform-engineering
-maturity: foundation
+maturity: partial
 risk: high
 approval_required: false
 review_required: true
@@ -30,10 +30,18 @@ description: >-
   Collect immutable, timestamped observations from platform sources and return them as normalized data.
 
 maturity_rationale: >-
-  Foundation, not partial: contracts, schemas, framework, and a synthetic fixture plugin exist, but nothing real has flowed through. No live collector exists and no evidence record has been produced.
+  Partial, not operational: three real collectors now observe live local
+  sources — git repository state, rendered Compose configuration, and human
+  attestation — so real input flows through the framework for the first time.
+  It remains partial because collection is local only, nothing observes a
+  remote host, and no evidence record is persisted: collectors return
+  CollectorResult objects and the orchestrator that would turn them into
+  evidence does not exist yet.
 
 review_note: >-
-  Foundation, not partial: contracts, schemas, framework, and a synthetic fixture plugin exist, but nothing real has flowed through. No live collector exists and no evidence record has been produced.
+  Advanced from foundation to partial in v0.6.0. Confirm the maturity claim
+  once an orchestrator persists evidence records; until then no EVID record
+  exists despite real collection occurring.
 
 inputs:
   - Collection context
@@ -48,10 +56,14 @@ dependencies:
 
 implemented_by:
   - tools/collectors/
+  - tools/collectors/plugins/git_repository/
+  - tools/collectors/plugins/configuration_render/
+  - tools/collectors/plugins/manual_attestation/
   - platform-model/schemas/evidence.schema.yaml
 
 validated_by:
   - tests/test-collector-framework.sh
+  - tests/test-initial-collectors.sh
   - tests/test-evidence-validator.sh
 
 documented_by:

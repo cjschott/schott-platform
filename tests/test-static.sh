@@ -1397,6 +1397,8 @@ assert_contains "${CI_WF}" 'validate_plugins\.py --root \.' \
   "ci runs the collector plugin validator"
 assert_contains "${CI_WF}" 'bash tests/test-collector-framework\.sh' \
   "ci runs the collector framework tests"
+assert_contains "${CI_WF}" 'bash tests/test-initial-collectors\.sh' \
+  "ci runs the initial read-only collector tests"
 assert_contains "${CI_WF}" "import yaml" "ci verifies PyYAML before model validation"
 # --- Pinned CI Python dependency --------------------------------------------
 # The platform model validator needs PyYAML. Installing it unpinned would make

@@ -82,3 +82,28 @@ class CollectorRegistry:
 
     def __len__(self) -> int:
         return len(self._plugins)
+
+
+def build_default_registry() -> CollectorRegistry:
+    """Return a registry holding every approved collector.
+
+    Registration is explicit and enumerated here. There is no filesystem scan
+    and no entry-point discovery: a collector that can appear by being dropped
+    on disk is a collector nobody reviewed.
+    """
+    # Imported here rather than at module scope so importing the registry does
+    # not drag in every plugin as a side effect.
+    from .plugins.configuration_render.collector import ConfigurationRenderCollector
+    from .plugins.example.collector import ExampleSyntheticCollector
+    from .plugins.git_repository.collector import GitRepositoryCollector
+    from .plugins.manual_attestation.collector import ManualAttestationCollector
+
+    registry = CollectorRegistry()
+    for plugin_class in (
+        ExampleSyntheticCollector,
+        GitRepositoryCollector,
+        ConfigurationRenderCollector,
+        ManualAttestationCollector,
+    ):
+        registry.register(plugin_class)
+    return registry
