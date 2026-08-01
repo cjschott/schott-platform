@@ -35,6 +35,8 @@ platform-model/
 ├── evidence/                     # Immutable observed-fact records
 ├── verifications/                # Read-only comparison results
 ├── drift-rules/                  # Declarative drift definitions
+├── observations/                 # Observation schema definition (README only)
+├── knowledge-events/             # Knowledge event definition (README only)
 ├── capabilities/                 # What the platform can intentionally provide
 └── README.md
 ```
@@ -88,8 +90,10 @@ Identifiers are immutable and are never reused after retirement.
 | Network | `NET` | `NET-0001` |
 | Storage | `STOR` | `STOR-0001` |
 | Backup policy | `BKP` | `BKP-0001` |
-| Evidence | `EVID` | `EVID-0001` |
-| Verification | `VER` | `VER-0001` |
+| Evidence | `EVID` | `EVID-000001` |
+| Verification | `VER` | `VER-000001` |
+| Observation | `OBS` | `OBS-000001` |
+| Knowledge event | `MEM` | `MEM-000001` |
 | Drift rule | `DRIFT` | `DRIFT-0001` |
 | Capability | `CAP` | `CAP-0001` |
 | Relationship | `REL` | `REL-0006` |
@@ -102,7 +106,18 @@ Full prefix assignments live in `ontology/entity-types.yaml`.
 
 Renaming a service does not change its id. Moving a service to a different host does not change its id. Replacing a service with a functionally different system creates a new id and marks the old one deprecated or retired.
 
-Filenames are the bare slug: `litellm.yaml`. The slug is the join key between the filename and the record, so renumbering an id never forces a rename. Validation enforces that the filename matches the record's `slug` and that ids are four digits.
+Filenames are the bare slug: `litellm.yaml`. The slug is the join key between the filename and the record, so renumbering an id never forces a rename. Validation enforces that the filename matches the record's `slug` and that ids match their declared width.
+
+Identifier widths differ by who authors the record. Human-authored entities —
+roles, hosts, services, drift rules, capabilities — use **four digits**: they
+grow slowly, one per decision. Machine-generated records — evidence,
+verifications, observations, and knowledge events — use **six digits** from
+v0.7.0, because they accumulate once per collection and a four-digit space
+exhausts in under a year of routine work.
+
+Generated records are never committed. They live in an observation store at an
+explicit data root outside the repository; `observations/` and
+`knowledge-events/` hold definitions and READMEs only.
 
 ## How to Add an Entity
 

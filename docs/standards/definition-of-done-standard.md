@@ -122,6 +122,19 @@ The change is discoverable by someone reading history.
 - Breaking changes are called out explicitly.
 - Known limitations and deferred work are listed.
 
+### Evidence integrity
+
+Work that produces or consumes evidence preserves the ADR-0004 guarantees.
+
+- Evidence is written once; no change adds an update or delete path.
+- Identifiers are allocated by the orchestrator, never by a collector.
+- Generated records stay out of `platform-model/`.
+- Missing evidence is reported as absence of observation, never as drift.
+- Collection failure is reported as collection failure, never as target failure.
+- Stale evidence lowers confidence and does not support a verified state.
+- Every conclusion names the evidence identifiers supporting it.
+- No secret reaches a record, an index, a fingerprint, or an error message.
+
 ### Reviewer approval
 
 A second person has agreed the work is complete.
