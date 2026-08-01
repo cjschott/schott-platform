@@ -1,0 +1,68 @@
+---
+# Manual attestation collector — structured human input only.
+#
+# Opens no file, reads no environment variable, spawns no process, and touches
+# no network. Never generates its own timestamp and never infers the actor: an
+# attestation is a claim by a specific person at a specific time, and a
+# collector supplying either would assert something nobody said.
+#
+# Governed by: docs/standards/collector-plugin-standard.md
+
+api_version: schott-platform/v1
+kind: CollectorManifest
+
+id: manual-attestation
+name: Manual Attestation Collector
+version: 0.1.0
+source_type: manual-attestation
+description: >-
+  Accepts structured human attestations supplied through the collection
+  context. Performs no file, network, or subprocess access and never implies
+  verification.
+
+capabilities:
+  - CAP-0002
+
+supported_targets:
+  - host
+  - service
+  - storage
+  - network
+  - backup-policy
+
+permissions:
+  - read-declared-model
+
+network_access: false
+subprocess_access: false
+filesystem_access: false
+
+required_attestation_inputs:
+  - actor
+  - attested_at
+  - source_description
+  - facts
+
+approved_confidence_values:
+  - low
+  - medium
+  - high
+
+secret_requirements: []
+
+output_contract:
+  - attestation_source
+  - attested_by
+  - attested_at
+  - source_description
+  - confidence
+  - review_required
+  - verification_implied
+
+lifecycle: production
+
+provenance:
+  class: declared
+  source: docs/collectors/manual-attestation.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
