@@ -103,11 +103,37 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0001-schai-reference-host.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
+)
+
+# Standards introduced on the v0.2.0 foundation branch. Every one of these must
+# exist and satisfy the shared structural contract asserted below.
+BRANCH_STANDARDS=(
+  "docs/standards/platform-filesystem-observability-standard.md"
+  "docs/standards/platform-role-host-classification-standard.md"
+  "docs/standards/docker-platform-standard.md"
+  "docs/standards/platform-automation-standard.md"
+  "docs/standards/service-catalog-standard.md"
+  "docs/standards/runbook-standard.md"
+  "docs/standards/dependency-mapping-standard.md"
   "docs/standards/operational-metadata-standard.md"
+  "docs/standards/platform-ontology-standard.md"
 )
 
 for document in "${REQUIRED_DOCS[@]}"; do
   assert_file "${document}"
+done
+
+# Shared structural contract for every branch standard: it must exist, carry a
+# title, and define its purpose, scope, and compliance criteria. A standard
+# without compliance criteria cannot be audited against.
+for standard in "${BRANCH_STANDARDS[@]}"; do
+  name="$(basename "${standard}" .md)"
+  assert_file "${standard}"
+  assert_contains "${standard}" '^# ' "${name} has a title"
+  assert_contains "${standard}" '^## Purpose' "${name} defines a purpose"
+  assert_contains "${standard}" '^## Scope' "${name} defines a scope"
+  assert_contains "${standard}" '^## Compliance' "${name} defines compliance criteria"
+  assert_markdown_links "${standard}"
 done
 
 # Architecture Decision Record requirements.
@@ -153,6 +179,99 @@ assert_contains "${EXPOSURE_STANDARD}" 'Ollama' \
   "Service exposure standard classifies Ollama"
 assert_contains "${EXPOSURE_STANDARD}" 'LiteLLM' \
   "Service exposure standard classifies LiteLLM"
+
+# Minimum content contracts per branch standard. These assert the load-bearing
+# concepts each standard exists to define, not merely that the file is present.
+
+FS_STANDARD="docs/standards/platform-filesystem-observability-standard.md"
+assert_contains "${FS_STANDARD}" 'Canonical Filesystem Layout' \
+  "filesystem standard defines the canonical layout"
+assert_contains "${FS_STANDARD}" 'Structured Logging' \
+  "filesystem standard requires structured logging"
+assert_contains "${FS_STANDARD}" 'Prometheus' \
+  "filesystem standard names the metrics system"
+assert_contains "${FS_STANDARD}" 'Loki' \
+  "filesystem standard names the log aggregation system"
+assert_contains "${FS_STANDARD}" '[Rr]etention' \
+  "filesystem standard defines retention"
+
+ROLE_STANDARD="docs/standards/platform-role-host-classification-standard.md"
+assert_contains "${ROLE_STANDARD}" 'AI Platform' \
+  "role standard defines the AI Platform role"
+assert_contains "${ROLE_STANDARD}" 'Tier 0' \
+  "role standard defines Tier 0 criticality"
+assert_contains "${ROLE_STANDARD}" 'Tier 1' \
+  "role standard defines Tier 1 criticality"
+assert_contains "${ROLE_STANDARD}" 'schai' \
+  "role standard assigns schai to a role"
+assert_contains "${ROLE_STANDARD}" '[Rr]ole [Dd]rift' \
+  "role standard defines role drift"
+
+DOCKER_STANDARD="docs/standards/docker-platform-standard.md"
+assert_contains "${DOCKER_STANDARD}" 'Compose' \
+  "Docker standard covers Compose"
+assert_contains "${DOCKER_STANDARD}" 'Image Versioning' \
+  "Docker standard defines image versioning"
+assert_contains "${DOCKER_STANDARD}" 'Port Exposure' \
+  "Docker standard defines port exposure"
+assert_contains "${DOCKER_STANDARD}" 'Health Check' \
+  "Docker standard requires health checks"
+assert_contains "${DOCKER_STANDARD}" 'max-size' \
+  "Docker standard requires log rotation limits"
+
+AUTOMATION_STANDARD="docs/standards/platform-automation-standard.md"
+assert_contains "${AUTOMATION_STANDARD}" 'Ansible' \
+  "automation standard names the automation tool"
+assert_contains "${AUTOMATION_STANDARD}" 'Idempotency' \
+  "automation standard requires idempotency"
+assert_contains "${AUTOMATION_STANDARD}" 'Inventory Design' \
+  "automation standard defines inventory design"
+assert_contains "${AUTOMATION_STANDARD}" 'Secrets Management' \
+  "automation standard defines secrets management"
+assert_contains "${AUTOMATION_STANDARD}" 'Check Mode' \
+  "automation standard requires check mode"
+
+CATALOG_STANDARD="docs/standards/service-catalog-standard.md"
+assert_contains "${CATALOG_STANDARD}" 'platform-model/services' \
+  "service catalog standard names the canonical record location"
+assert_contains "${CATALOG_STANDARD}" 'SVC-' \
+  "service catalog standard defines the service id prefix"
+assert_contains "${CATALOG_STANDARD}" 'Lifecycle States' \
+  "service catalog standard defines lifecycle states"
+assert_contains "${CATALOG_STANDARD}" '[Aa]uthoritative log' \
+  "service catalog standard requires an authoritative log source"
+
+RUNBOOK_STANDARD="docs/standards/runbook-standard.md"
+assert_contains "${RUNBOOK_STANDARD}" 'RB-' \
+  "runbook standard defines the runbook id prefix"
+assert_contains "${RUNBOOK_STANDARD}" 'Front Matter' \
+  "runbook standard requires front matter"
+assert_contains "${RUNBOOK_STANDARD}" 'Required Sections' \
+  "runbook standard defines required sections"
+assert_contains "${RUNBOOK_STANDARD}" 'Lifecycle States' \
+  "runbook standard defines lifecycle states"
+
+DEPENDENCY_STANDARD="docs/standards/dependency-mapping-standard.md"
+assert_contains "${DEPENDENCY_STANDARD}" 'Dependency Classes' \
+  "dependency standard defines dependency classes"
+assert_contains "${DEPENDENCY_STANDARD}" '^### Hard' \
+  "dependency standard defines the hard dependency class"
+assert_contains "${DEPENDENCY_STANDARD}" '^### Soft' \
+  "dependency standard defines the soft dependency class"
+assert_contains "${DEPENDENCY_STANDARD}" 'DEPENDS_ON' \
+  "dependency standard uses the controlled relationship vocabulary"
+
+ONTOLOGY_STANDARD="docs/standards/platform-ontology-standard.md"
+assert_contains "${ONTOLOGY_STANDARD}" 'entity-types.yaml' \
+  "ontology standard names the entity type catalog"
+assert_contains "${ONTOLOGY_STANDARD}" 'relationship-types.yaml' \
+  "ontology standard names the relationship type catalog"
+assert_contains "${ONTOLOGY_STANDARD}" 'Stable Identifier' \
+  "ontology standard defines stable identifiers"
+assert_contains "${ONTOLOGY_STANDARD}" 'BELONGS_TO' \
+  "ontology standard defines the BELONGS_TO relationship"
+assert_contains "${ONTOLOGY_STANDARD}" 'RUNS_ON' \
+  "ontology standard defines the RUNS_ON relationship"
 
 # Operational metadata standard requirements.
 #
