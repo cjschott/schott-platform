@@ -169,3 +169,16 @@ entity_types:
     id_prefix: CAP
     lifecycle_supported: [draft, declared, verification-pending, verified, managed, active, deprecated, archived]
 
+  observation:
+    name: Observation
+    description: A validated, redacted, normalized collector result, before it is given a persistent identity.
+    id_prefix: OBS
+    # An observation is a moment, not a thing with a life. It is created,
+    # possibly superseded, and never revised.
+    lifecycle_supported: [declared, deprecated, archived]
+
+  knowledge-event:
+    name: Knowledge Event
+    description: An append-only record that something happened to the platform's understanding of an entity.
+    id_prefix: MEM
+    lifecycle_supported: [declared, archived]

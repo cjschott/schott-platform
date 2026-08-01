@@ -150,7 +150,7 @@ def check_common(record, schema, location, findings, kind) -> None:
     if pattern and not (isinstance(identifier, str) and re.match(pattern, identifier)):
         findings.error(
             location,
-            f"id '{identifier}' must be a four-digit identifier matching {pattern}",
+            f"id '{identifier}' does not match the required pattern {pattern}",
         )
 
     for field, allowed in (schema.get("enums") or {}).items():
