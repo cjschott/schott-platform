@@ -1,0 +1,38 @@
+---
+# Management Address Pool.
+#
+# Declared network policy, not discovered runtime state. No address assignment,
+# lease, or reachability result is recorded here.
+#
+# Governed by: docs/architecture/network-architecture.md
+
+api_version: schott-platform/v1
+kind: Network
+
+id: NET-0002
+type: network
+name: Management Address Pool
+slug: management-address-pool
+lifecycle: active
+scope: management
+range: 192.168.86.2-192.168.86.99
+
+provenance:
+  class: declared
+  source: docs/architecture/network-architecture.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+purpose: >-
+  Administrative systems and infrastructure services. Administrative access must originate from an explicitly approved host in this pool; membership in the broader /24 does not by itself authorize SSH.
+
+notes: >-
+  UFW cannot express this pool as a single source expression. Per-host rules are required until a management VLAN provides a dedicated CIDR. This record declares policy intent and does not modify firewall rules.
+
+references:
+  - docs/architecture/network-architecture.md
+  - docs/security/network-policy.md
+  - docs/standards/service-exposure-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-networks.yaml

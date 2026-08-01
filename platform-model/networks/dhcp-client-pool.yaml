@@ -1,0 +1,34 @@
+---
+# DHCP Client Pool.
+#
+# Declared network policy, not discovered runtime state. No address assignment,
+# lease, or reachability result is recorded here.
+#
+# Governed by: docs/architecture/network-architecture.md
+
+api_version: schott-platform/v1
+kind: Network
+
+id: NET-0003
+type: network
+name: DHCP Client Pool
+slug: dhcp-client-pool
+lifecycle: active
+scope: client
+range: 192.168.86.150-192.168.86.254
+
+provenance:
+  class: declared
+  source: docs/architecture/network-architecture.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+purpose: >-
+  General client devices. Not an approved source for administrative access.
+
+references:
+  - docs/architecture/network-architecture.md
+  - docs/security/network-policy.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-networks.yaml

@@ -1,0 +1,63 @@
+---
+# schdownload — Tier 3 host.
+#
+# Declared classification only. This host has not been contacted; no runtime
+# state is recorded. Volatile values such as kernel, uptime, disk usage, lease
+# state, container ids, and image ids are deliberately absent.
+#
+# Governed by: docs/standards/platform-role-host-classification-standard.md
+
+api_version: schott-platform/v1
+kind: Host
+
+id: HOST-0006
+type: host
+name: schdownload
+hostname: schdownload
+slug: schdownload
+lifecycle: active
+owner: platform-engineering
+platform_role: ROLE-0007
+environment: production
+criticality: tier-3
+
+provenance:
+  class: declared
+  source: docs/standards/platform-role-host-classification-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+classification:
+  primary_role: ROLE-0007
+  secondary_functions: []
+  role_note: >-
+    Download and media automation.
+
+observability:
+  authoritative_logs: host-local
+  metrics_endpoint: not-deployed
+  dashboards: []
+  alerts: []
+  review_required: true
+  notes: >-
+    Log retrieval commands and health checks for this host are not established
+    by committed documentation. Centralized metrics and log shipping are not
+    yet deployed. Confirm before relying on this record for diagnostics.
+
+security:
+  hardening_standard: docs/standards/linux-server-security-standard.md
+  administrative_access: ssh-key-only
+  approved_management_source: 192.168.86.2-192.168.86.99
+  review_required: true
+  notes: >-
+    The Linux Server Security Standard applies to this host as declared intent.
+    Its applied configuration has not been verified and no firewall or SSH
+    change is implied by this record.
+
+standards:
+  - docs/standards/platform-role-host-classification-standard.md
+  - docs/standards/linux-server-security-standard.md
+  - docs/standards/operational-metadata-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-hosts.yaml

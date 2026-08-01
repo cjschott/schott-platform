@@ -27,6 +27,9 @@ platform-model/
 ├── roles/                        # Platform role definitions
 ├── hosts/                        # Host entities
 ├── services/                     # Service entities
+├── networks/                     # Declared network policy
+├── storage/                      # Logical storage entities
+├── backup-policies/              # Protection scope and retention
 ├── relationships/                # Canonical declared edge lists
 └── README.md
 ```
@@ -77,7 +80,14 @@ Identifiers are immutable and are never reused after retirement.
 | Platform role | `ROLE` | `ROLE-0001` |
 | Host | `HOST` | `HOST-0001` |
 | Service | `SVC` | `SVC-0002` |
+| Network | `NET` | `NET-0001` |
+| Storage | `STOR` | `STOR-0001` |
+| Backup policy | `BKP` | `BKP-0001` |
 | Relationship | `REL` | `REL-0006` |
+
+Relationship ids are allocated in blocks so independent edge lists never
+collide: `REL-0001`–`REL-0999` for the AI platform set, `REL-1001` onward for
+the infrastructure set.
 
 Full prefix assignments live in `ontology/entity-types.yaml`.
 
@@ -138,6 +148,30 @@ PY
 
 If PyYAML is unavailable the Bash contract still validates structure, but structural YAML checks are skipped and the script reports it.
 
+## Recording What You Do Not Know
+
+Much of this model describes systems that have never been contacted. That is expected, and it must not be disguised.
+
+When a fact is not established by committed documentation, set `review_required: true` and add a `review_note` saying what is unconfirmed and what depends on confirming it:
+
+```yaml
+review_required: true
+review_note: >-
+  This host does not appear in any committed document. Its role and criticality
+  tier are provisional and must be confirmed before automation, monitoring, or
+  backup policy targets it.
+```
+
+The flag is not a placeholder to be cleaned up later by guessing. It is the honest answer, and it is enforced: validation requires Tier 0 and Tier 1 hosts to carry either backup coverage or `review_required`, so an unprotected critical host cannot pass silently.
+
+Do not invent a backup schedule, retention window, or restore cadence. A fabricated schedule in a machine-readable model is worse than an explicit unknown, because automation and operators will both believe it.
+
+## Ontology Conformance
+
+Every edge is validated against the `allowed_sources` and `allowed_targets` its relationship type declares. Without that check the controlled vocabulary would be decorative — any entity kind could be joined to any other and the graph would still "pass".
+
+If a legitimate edge is rejected, the fix is an explicit, commented ontology change, not a looser test. Widening a relationship's allowed types is a semantic decision and should be reviewed as one.
+
 ## Security Rules
 
 The model must never contain:
@@ -162,6 +196,11 @@ Current entities:
 | `HOST-0001` | host | schai |
 | `SVC-0002` | service | LiteLLM |
 | `SVC-0003` | service | Ollama |
+| `ROLE-0002`–`ROLE-0009` | platform-role | Management, Compute, Backup, Storage, Web, Media, Monitoring, Development |
+| `HOST-0002`–`HOST-0011` | host | schmgmt, schoxmox1, schoxmox2, schpbs, schdownload, schweb1, schweb2, schplex, schraspi, schotectli |
+| `NET-0001`–`NET-0004` | network | Homelab LAN, Management Address Pool, DHCP Client Pool, AI Backend |
+| `STOR-0001`–`STOR-0004` | storage | Ollama model volume, PBS local datastore, off-site datastore, NAS media |
+| `BKP-0001`–`BKP-0005` | backup-policy | Tier 0, Tier 1, AI configuration, Proxmox guests, off-site replication |
 
 LiteLLM is the only application-facing AI endpoint, reachable at `http://schai:4000/v1`. Ollama is an internal backend with no host-published port and must never be documented as an application endpoint.
 

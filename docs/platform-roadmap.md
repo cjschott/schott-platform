@@ -95,6 +95,53 @@ Objectives:
 - Stable automation pipeline
 - Production-quality operational standards
 
+## Reserved Release Gates
+
+Two sprints are reserved outside the normal feature sequence. They are numbered
+98 and 99 so they always sort last regardless of how many feature sprints are
+added. Both are **required before v1.0.0** and neither may be skipped by
+declaring the feature work complete.
+
+They exist because documentation and engineering quality are the two things a
+platform silently accrues debt in while every feature still appears to work.
+
+### Sprint 98 — Documentation Lockdown
+
+Freeze the feature surface and make the platform fully explicable to someone who
+did not build it.
+
+- User documentation
+- Administrator guide
+- Developer guide
+- Command reference
+- Troubleshooting
+- Operations manual
+- Architecture diagrams
+- Capability and limitation documentation
+
+The capability and limitation documentation is explicitly required: the platform
+must state what it does *not* do, so operators do not infer guarantees that were
+never implemented.
+
+### Sprint 99 — Performance & Engineering Excellence
+
+Review the accumulated implementation before declaring it production quality.
+
+- Architecture review
+- Dead-code and dependency review
+- CPU/RAM/GPU/disk/network profiling
+- API and inference latency benchmarking
+- Token/context/prompt efficiency review
+- Container and image review
+- Database/query review
+- Observability review
+- Security review
+- Final code-quality review
+
+Findings from Sprint 99 either get fixed before v1.0.0 or are recorded as
+accepted limitations with an owner. Neither sprint is a formality; a release
+that skips them is not v1.0.0.
+
 ## Engineering Workflow
 
 Every significant change follows:

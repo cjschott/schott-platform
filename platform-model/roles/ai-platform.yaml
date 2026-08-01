@@ -14,7 +14,7 @@ id: ROLE-0001
 type: platform-role
 name: AI Platform
 slug: ai-platform
-lifecycle: production
+lifecycle: active
 owner: platform-engineering
 
 provenance:
@@ -43,7 +43,7 @@ prohibited_workloads:
 
 default_tier: tier-1
 
-required_monitoring:
+observability_requirements:
   host_metrics:
     - cpu
     - memory
@@ -67,7 +67,7 @@ required_monitoring:
     Prometheus, Loki, Tempo, and Grafana are planned but not yet deployed. No
     dashboard or alert entities exist for this role in this increment.
 
-required_backup:
+backup_expectations:
   configuration:
     scope: Repository-managed configuration and local environment files.
     method: scripts/backup-config.sh
