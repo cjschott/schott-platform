@@ -1,0 +1,46 @@
+---
+# Proxmox Backup Server Local Datastore.
+#
+# Logical storage record. No live usage, free space, volume identifier,
+# credential, bucket name, or encryption key is recorded.
+#
+# Governed by: docs/standards/platform-filesystem-observability-standard.md
+
+api_version: schott-platform/v1
+kind: Storage
+
+id: STOR-0002
+type: storage
+name: Proxmox Backup Server Local Datastore
+slug: pbs-local-datastore
+lifecycle: active
+owner: platform-engineering
+host: HOST-0005
+
+review_required: true
+review_note: >-
+  Ownership, capacity planning, retention, and exact location for this storage
+  entity are not established by committed documentation. Confirm before backup
+  or recovery automation targets it.
+
+provenance:
+  class: declared
+  source: docs/standards/platform-filesystem-observability-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+purpose: >-
+  Primary on-site backup datastore holding Proxmox guest and platform backups.
+
+data_classification: authoritative
+classification_rationale: >-
+  Holds the primary recovery copy for Proxmox guests and platform configuration.
+
+notes: >-
+  Capacity, current usage, free space, and datastore identifiers are runtime facts and are not recorded.
+
+references:
+  - docs/standards/platform-role-host-classification-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-storage.yaml

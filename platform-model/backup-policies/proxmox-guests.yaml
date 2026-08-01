@@ -1,0 +1,58 @@
+---
+# Proxmox Guest Backup Policy.
+#
+# Declared protection intent. Schedules, retention windows, and verification
+# results that are not established by committed documentation are flagged for
+# review rather than invented.
+#
+# Governed by: docs/standards/platform-role-host-classification-standard.md
+
+api_version: schott-platform/v1
+kind: BackupPolicy
+
+id: BKP-0004
+type: backup-policy
+name: Proxmox Guest Backup Policy
+slug: proxmox-guests
+lifecycle: active
+owner: platform-engineering
+
+provenance:
+  class: declared
+  source: docs/standards/platform-role-host-classification-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+scope: >-
+  Virtual machines and containers hosted on the compute platform, captured by Proxmox Backup Server.
+
+rationale: >-
+  Guest-level recovery for the virtualization estate.
+
+method: review_required
+
+retention:
+  frequency: review_required
+  retention_period: review_required
+  verification: review_required
+  last_restore_test: unknown
+
+review_required: true
+review_note: >-
+  Backup frequency, retention period, restore verification cadence, and last
+  successful restore test are not established by committed documentation. They
+  must be confirmed and recorded before this policy is treated as operative.
+  No schedule has been invented for this record.
+
+excludes:
+  - Secrets and credentials
+  - Model blobs and reconstructable binary artifacts
+  - Container logs
+
+references:
+  - docs/standards/platform-role-host-classification-standard.md
+  - docs/operations/recovery.md
+  - docs/standards/definition-of-done-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-backups.yaml

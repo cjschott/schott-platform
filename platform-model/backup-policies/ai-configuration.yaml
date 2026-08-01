@@ -1,0 +1,58 @@
+---
+# AI Platform Configuration Backup Policy.
+#
+# Declared protection intent. Schedules, retention windows, and verification
+# results that are not established by committed documentation are flagged for
+# review rather than invented.
+#
+# Governed by: docs/standards/platform-role-host-classification-standard.md
+
+api_version: schott-platform/v1
+kind: BackupPolicy
+
+id: BKP-0003
+type: backup-policy
+name: AI Platform Configuration Backup Policy
+slug: ai-configuration
+lifecycle: active
+owner: platform-engineering
+
+provenance:
+  class: declared
+  source: docs/standards/platform-role-host-classification-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+scope: >-
+  Repository-managed configuration and local environment files for the AI platform. Explicitly excludes model blobs, secrets, and container logs.
+
+rationale: >-
+  Configuration is small, authoritative, and cheap to protect; model weights are reconstructable and deliberately excluded.
+
+method: scripts/backup-config.sh
+
+retention:
+  frequency: review_required
+  retention_period: review_required
+  verification: review_required
+  last_restore_test: unknown
+
+review_required: true
+review_note: >-
+  Backup frequency, retention period, restore verification cadence, and last
+  successful restore test are not established by committed documentation. They
+  must be confirmed and recorded before this policy is treated as operative.
+  No schedule has been invented for this record.
+
+excludes:
+  - Secrets and credentials
+  - Model blobs and reconstructable binary artifacts
+  - Container logs
+
+references:
+  - docs/standards/platform-role-host-classification-standard.md
+  - docs/operations/recovery.md
+  - docs/standards/definition-of-done-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-backups.yaml
