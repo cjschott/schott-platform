@@ -1,0 +1,116 @@
+---
+# Canonical declared relationships for the AI Platform role.
+#
+# This is the single authoritative edge list for these entities. Entity files
+# reference these relationship ids; they do not restate source, relationship,
+# and target. Inverse edges are derived from relationship-types.yaml rather
+# than stored, so the graph cannot hold contradictory duplicates.
+#
+# Every edge here is declared. Inferred edges are never written to this file;
+# they are produced at query time by the rules in ontology/inference-rules.yaml
+# and must carry provenance class inferred with derived_from.
+#
+# Governed by: docs/standards/platform-ontology-standard.md
+
+api_version: schott-platform/v1
+kind: RelationshipSet
+
+scope: ROLE-001
+
+provenance:
+  class: declared
+  source: docs/superpowers/plans/2026-08-01-platform-model-foundation.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+relationships:
+  - id: REL-001
+    source: HOST-001
+    relationship: BELONGS_TO
+    target: ROLE-001
+    description: schai is classified as an AI Platform host.
+    provenance:
+      class: declared
+      source: docs/decisions/ADR-0001-schai-reference-host.md
+      recorded_at: 2026-08-01
+    references:
+      - docs/standards/platform-role-host-classification-standard.md
+      - docs/decisions/ADR-0001-schai-reference-host.md
+
+  - id: REL-002
+    source: SVC-002
+    relationship: BELONGS_TO
+    target: ROLE-001
+    description: LiteLLM is an AI Platform service.
+    provenance:
+      class: declared
+      source: docs/architecture/ai-platform.md
+      recorded_at: 2026-08-01
+    references:
+      - docs/standards/service-catalog-standard.md
+
+  - id: REL-003
+    source: SVC-003
+    relationship: BELONGS_TO
+    target: ROLE-001
+    description: Ollama is an AI Platform service.
+    provenance:
+      class: declared
+      source: docs/architecture/ai-platform.md
+      recorded_at: 2026-08-01
+    references:
+      - docs/standards/service-catalog-standard.md
+
+  - id: REL-004
+    source: SVC-002
+    relationship: RUNS_ON
+    target: HOST-001
+    description: LiteLLM is deployed on schai through the ai Compose project.
+    dependency_class: hard
+    impact: service-unavailable
+    provenance:
+      class: declared
+      source: ai/compose.yaml
+      recorded_at: 2026-08-01
+    references:
+      - docs/standards/docker-platform-standard.md
+      - docs/standards/linux-server-security-standard.md
+      - docs/operations/acceptance-results.md
+
+  - id: REL-005
+    source: SVC-003
+    relationship: RUNS_ON
+    target: HOST-001
+    description: Ollama is deployed on schai through the ai Compose project.
+    dependency_class: hard
+    impact: service-unavailable
+    provenance:
+      class: declared
+      source: ai/compose.yaml
+      recorded_at: 2026-08-01
+    references:
+      - docs/standards/docker-platform-standard.md
+      - docs/standards/linux-server-security-standard.md
+      - docs/operations/acceptance-results.md
+
+  - id: REL-006
+    source: SVC-002
+    relationship: DEPENDS_ON
+    target: SVC-003
+    description: >-
+      LiteLLM routes local model requests to the Ollama backend over private
+      container networking and starts only after it reports healthy.
+    dependency_class: hard
+    impact: degraded-performance
+    impact_note: >-
+      Requests requiring local inference may fail while Ollama is unavailable.
+      Impact on the gateway process itself is partial, not total.
+    provenance:
+      class: declared
+      source: ai/compose.yaml
+      recorded_at: 2026-08-01
+    references:
+      - docs/security/network-policy.md
+      - docs/standards/service-exposure-standard.md
+      - docs/standards/dependency-mapping-standard.md
+      - docs/operations/acceptance-results.md

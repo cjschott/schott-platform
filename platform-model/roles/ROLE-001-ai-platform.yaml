@@ -1,0 +1,105 @@
+---
+# AI Platform role.
+#
+# Governs hosts and services dedicated to model serving and AI gateway
+# workloads. Automation, monitoring, backup, and firewall policy should target
+# this role rather than individual hostnames.
+#
+# Governed by: docs/standards/platform-role-host-classification-standard.md
+
+api_version: schott-platform/v1
+kind: PlatformRole
+
+id: ROLE-001
+type: platform-role
+name: AI Platform
+slug: ai-platform
+lifecycle: production
+owner: platform-engineering
+
+provenance:
+  class: declared
+  source: docs/standards/platform-role-host-classification-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+purpose: >-
+  Host artificial intelligence and model-serving workloads, and present a
+  single authenticated, application-facing AI endpoint to the platform.
+
+responsibilities:
+  - Serve local models through a GPU-backed inference backend.
+  - Present one authenticated OpenAI-compatible gateway for applications.
+  - Keep inference backends private to internal container networking.
+  - Maintain stable model aliases so applications never address a backend directly.
+  - Provide retrievable logs and health checks for every hosted service.
+
+prohibited_workloads:
+  - Unrelated public websites
+  - Media services
+  - Download automation
+  - General-purpose databases unrelated to AI workloads
+  - Automatic commercial-provider fallback for inference
+
+default_tier: tier-1
+
+required_monitoring:
+  host_metrics:
+    - cpu
+    - memory
+    - disk
+    - gpu-utilization
+    - gpu-temperature
+  service_metrics:
+    - container-health
+    - gateway-request-outcome
+    - gateway-latency
+  required_logs:
+    - docker-container-logs
+    - host-authentication-logs
+  labels:
+    - host
+    - role
+    - criticality
+    - environment
+    - lifecycle_state
+  notes: >-
+    Prometheus, Loki, Tempo, and Grafana are planned but not yet deployed. No
+    dashboard or alert entities exist for this role in this increment.
+
+required_backup:
+  configuration:
+    scope: Repository-managed configuration and local environment files.
+    method: scripts/backup-config.sh
+    excludes:
+      - Model blobs
+      - Secrets
+      - Container logs
+  model_data:
+    scope: Downloaded model weights held in the persistent model volume.
+    classification: reconstructable
+    rationale: >-
+      Models can be re-pulled from upstream registries, so they are excluded
+      from routine backup to avoid copying large binary artifacts.
+  expectation: >-
+    Tier 1 services must have a documented backup and restore path, or a
+    recorded exception explaining why data is reconstructable.
+
+standards:
+  - docs/standards/platform-role-host-classification-standard.md
+  - docs/standards/service-catalog-standard.md
+  - docs/standards/service-exposure-standard.md
+  - docs/standards/docker-platform-standard.md
+  - docs/standards/linux-server-security-standard.md
+  - docs/standards/platform-filesystem-observability-standard.md
+  - docs/standards/operational-metadata-standard.md
+  - docs/standards/platform-ontology-standard.md
+
+architecture_decisions:
+  - docs/decisions/ADR-0001-schai-reference-host.md
+
+relationships:
+  canonical_source: platform-model/relationships/ai-platform.yaml
+  notes: >-
+    Edges involving this role are declared once in the canonical relationship
+    list. They are not duplicated here.
