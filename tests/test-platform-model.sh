@@ -67,6 +67,9 @@ assert_dir "${MODEL}/roles"
 assert_dir "${MODEL}/hosts"
 assert_dir "${MODEL}/services"
 assert_dir "${MODEL}/relationships"
+assert_dir "${MODEL}/networks"
+assert_dir "${MODEL}/storage"
+assert_dir "${MODEL}/backup-policies"
 
 # Required ontology files.
 assert_file "${MODEL}/ontology/entity-types.yaml"
@@ -127,6 +130,20 @@ REQUIRED_HOST_FIELDS = [
     "id", "type", "hostname", "lifecycle", "platform_role",
     "environment", "criticality", "observability", "security",
 ]
+REQUIRED_ROLE_FIELDS = [
+    "id", "type", "name", "purpose", "lifecycle", "owner", "default_tier",
+    "responsibilities", "prohibited_workloads", "observability_requirements",
+    "backup_expectations", "standards", "provenance",
+]
+REQUIRED_NETWORK_FIELDS = ["id", "type", "name", "lifecycle", "scope", "provenance"]
+REQUIRED_STORAGE_FIELDS = ["id", "type", "name", "lifecycle", "owner", "purpose", "provenance"]
+REQUIRED_BACKUP_FIELDS = [
+    "id", "type", "name", "lifecycle", "owner", "scope", "retention", "provenance",
+]
+
+# Criticality tiers whose hosts must carry backup coverage or an explicit
+# review flag. A Tier 0 or Tier 1 host with neither is an unrecorded risk.
+CRITICAL_TIERS = {"tier-0", "tier-1"}
 
 failures = 0
 
@@ -272,7 +289,7 @@ else:
 
 # Entity records.
 entities = {}
-for directory in ("roles", "hosts", "services"):
+for directory in ("roles", "hosts", "services", "networks", "storage", "backup-policies"):
     for path in sorted((model / directory).glob("*.yaml")) if (model / directory).is_dir() else []:
         record = documents.get(path)
         if not isinstance(record, dict):
@@ -333,6 +350,30 @@ for entity_id, (path, record) in entities.items():
             bad(f"host {entity_id} missing required fields: {', '.join(missing)}")
         else:
             ok(f"host {entity_id} carries all required fields")
+    elif record.get("type") == "platform-role":
+        missing = [f for f in REQUIRED_ROLE_FIELDS if f not in record]
+        if missing:
+            bad(f"role {entity_id} missing required fields: {', '.join(missing)}")
+        else:
+            ok(f"role {entity_id} carries all required fields")
+    elif record.get("type") == "network":
+        missing = [f for f in REQUIRED_NETWORK_FIELDS if f not in record]
+        if missing:
+            bad(f"network {entity_id} missing required fields: {', '.join(missing)}")
+        else:
+            ok(f"network {entity_id} carries all required fields")
+    elif record.get("type") == "storage":
+        missing = [f for f in REQUIRED_STORAGE_FIELDS if f not in record]
+        if missing:
+            bad(f"storage {entity_id} missing required fields: {', '.join(missing)}")
+        else:
+            ok(f"storage {entity_id} carries all required fields")
+    elif record.get("type") == "backup-policy":
+        missing = [f for f in REQUIRED_BACKUP_FIELDS if f not in record]
+        if missing:
+            bad(f"backup policy {entity_id} missing required fields: {', '.join(missing)}")
+        else:
+            ok(f"backup policy {entity_id} carries all required fields")
 
 # Relationships stay canonical. An entity record may reference edge ids and name
 # the canonical source, but must never restate source, relationship, or target.
@@ -470,6 +511,65 @@ for entity_id, (path, record) in entities.items():
         else:
             bad(f"{entity_id} references an unknown relationship id: {referenced}")
 
+# Every host belongs to exactly one primary role, and that role must exist.
+for entity_id, (path, record) in entities.items():
+    if record.get("type") != "host":
+        continue
+    role = record.get("platform_role")
+    if isinstance(role, list):
+        bad(f"host {entity_id} declares multiple primary roles: {role}")
+    elif not role:
+        bad(f"host {entity_id} declares no primary platform role")
+    elif role not in entities:
+        bad(f"host {entity_id} references an unknown platform role: {role}")
+    elif entities[role][1].get("type") != "platform-role":
+        bad(f"host {entity_id} platform_role {role} is not a platform-role entity")
+    else:
+        ok(f"host {entity_id} belongs to exactly one existing role: {role}")
+
+# Tier 0 and Tier 1 hosts need backup coverage or an explicit review flag.
+backed_up = {
+    edge.get("source") for _, edge in relationship_records
+    if edge.get("relationship") == "BACKED_UP_BY"
+}
+for entity_id, (path, record) in entities.items():
+    if record.get("type") != "host":
+        continue
+    if record.get("criticality") not in CRITICAL_TIERS:
+        continue
+    if entity_id in backed_up:
+        ok(f"critical host {entity_id} declares backup coverage")
+    elif record.get("review_required") is True:
+        ok(f"critical host {entity_id} has no backup policy but is flagged review_required")
+    else:
+        bad(f"critical host {entity_id} has neither backup coverage nor review_required")
+
+# Network entities must declare a syntactically valid CIDR or address range.
+CIDR = re.compile(r"^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$")
+RANGE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}-(\d{1,3}\.){3}\d{1,3}$")
+
+
+def octets_valid(text):
+    return all(0 <= int(part) <= 255 for part in re.findall(r"\d{1,3}", text.split("/")[0]))
+
+
+for entity_id, (path, record) in entities.items():
+    if record.get("type") != "network":
+        continue
+    value = record.get("subnet") or record.get("range")
+    if not value:
+        # A private container network has no routable range of its own.
+        if record.get("scope") == "private":
+            ok(f"network {entity_id} is private and declares no routable range")
+        else:
+            bad(f"network {entity_id} declares neither subnet nor range")
+        continue
+    value = str(value)
+    if (CIDR.match(value) or RANGE.match(value)) and octets_valid(value):
+        ok(f"network {entity_id} declares a valid range: {value}")
+    else:
+        bad(f"network {entity_id} declares an invalid range: {value}")
+
 # Entity-specific operational facts.
 litellm = (entities.get("SVC-0002") or (None, {}))[1]
 ollama = (entities.get("SVC-0003") or (None, {}))[1]
@@ -529,7 +629,7 @@ if schai:
 if role:
     for field in (
         "purpose", "responsibilities", "prohibited_workloads", "default_tier",
-        "required_monitoring", "required_backup", "standards",
+        "observability_requirements", "backup_expectations", "standards",
     ):
         check(field in role, f"ROLE-0001 defines {field}")
 
