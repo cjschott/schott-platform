@@ -1,0 +1,35 @@
+---
+# AI Backend Docker Network.
+#
+# Declared network policy, not discovered runtime state. No address assignment,
+# lease, or reachability result is recorded here.
+#
+# Governed by: docs/architecture/network-architecture.md
+
+api_version: schott-platform/v1
+kind: Network
+
+id: NET-0004
+type: network
+name: AI Backend Docker Network
+slug: ai-backend
+lifecycle: active
+scope: private
+host: HOST-0001
+driver: bridge
+
+provenance:
+  class: declared
+  source: docs/architecture/network-architecture.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+purpose: >-
+  Private Docker bridge network carrying traffic between the LiteLLM gateway and the Ollama backend. It has no routable range of its own and must never be published to the host.
+
+references:
+  - docs/security/network-policy.md
+  - docs/standards/docker-platform-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-networks.yaml
