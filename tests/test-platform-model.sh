@@ -74,6 +74,7 @@ assert_dir "${MODEL}/evidence"
 assert_dir "${MODEL}/verifications"
 assert_dir "${MODEL}/drift-rules"
 assert_dir "${MODEL}/schemas"
+assert_dir "${MODEL}/capabilities"
 
 # Required ontology files.
 assert_file "${MODEL}/ontology/entity-types.yaml"
@@ -101,6 +102,8 @@ assert_file "${MODEL}/evidence/README.md"
 assert_file "${MODEL}/verifications/README.md"
 assert_file "${MODEL}/drift-rules/README.md"
 assert_file "${MODEL}/drift-rules/core-platform.yaml"
+assert_file "${MODEL}/schemas/capability.schema.yaml"
+assert_file "${MODEL}/capabilities/README.md"
 
 # Remediation must never be automatic anywhere in the model.
 assert_absent 'remediation_mode:[[:space:]]*automatic' \
@@ -306,7 +309,7 @@ else:
 
 # Entity records.
 entities = {}
-for directory in ("roles", "hosts", "services", "networks", "storage", "backup-policies"):
+for directory in ("roles", "hosts", "services", "networks", "storage", "backup-policies", "capabilities"):
     for path in sorted((model / directory).glob("*.yaml")) if (model / directory).is_dir() else []:
         record = documents.get(path)
         if not isinstance(record, dict):

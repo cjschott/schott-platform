@@ -234,3 +234,40 @@ validation_rules:
     applies_to: [drift-rules]
     remediation: Set review_required, or record a committed maximum age.
 
+  # --- Capability model ----------------------------------------------------
+
+  - id: VAL-031
+    name: Capability maturity is justified
+    description: A capability claiming operational or optimized maturity must name what implements and validates it.
+    severity: error
+    applies_to: [capabilities]
+    remediation: Populate implemented_by and validated_by, or lower the maturity to match reality.
+
+  - id: VAL-032
+    name: Capability dependencies resolve
+    description: Every capability listed as a dependency must exist.
+    severity: error
+    applies_to: [capabilities]
+    remediation: Correct the reference or create the missing capability.
+
+  - id: VAL-033
+    name: Unverified capability claims are flagged
+    description: A capability whose maturity is not justified by committed evidence must set review_required.
+    severity: warning
+    applies_to: [capabilities]
+    remediation: Set review_required, or record evidence supporting the claim.
+
+  - id: VAL-034
+    name: Collector permissions stay within the trust boundary
+    description: A collector manifest must request only approved permissions and none of the forbidden set.
+    severity: error
+    applies_to: [collectors]
+    remediation: Remove the permission; granting it requires an architecture decision revisiting ADR-0002.
+
+  - id: VAL-035
+    name: Collectors declare no runtime access
+    description: Collector manifests must declare network, subprocess, and filesystem access as false in this increment.
+    severity: error
+    applies_to: [collectors]
+    remediation: Set the flags to false; live access arrives with a later, reviewed increment.
+

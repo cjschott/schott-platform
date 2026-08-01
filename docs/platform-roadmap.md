@@ -120,6 +120,54 @@ Explicitly not delivered, and not implied:
 Evidence collection is future work. Building the contract first means a collector
 cannot invent its own vocabulary later.
 
+### v0.5.0 — Collector Framework and Architecture Decisions
+
+**Schema, contract, and validation only.** Defines what may produce evidence and
+under what constraints, without implementing a single live collector.
+
+Delivered:
+
+- ADR-0002 Evidence-First Architecture — the fixed pipeline from collection to
+  optional automation, and the twelve principles governing it
+- ADR-0003 Provider-Agnostic AI Architecture — stable gateway interface,
+  providers as adapters, no silent cloud fallback
+- Capability model standard and `CAP-0001`–`CAP-0008`
+- Collector plugin standard: five-stage lifecycle, permissions, secret rules
+- Collector framework: data models, base interface, registry, normalizer
+- A synthetic example plugin that observes nothing
+- A collector plugin validator wired into CI
+
+Explicitly not delivered:
+
+- No live collector. The only plugin refuses to run outside a test context.
+- No evidence persistence. Collectors return data; the orchestrator decides
+  what becomes a record.
+- No automatic remediation, at any layer.
+
+### v0.6.0 — Git Repository, Configuration Render, and Manual Attestation Collectors
+
+Reserved. The first real collectors, chosen because none of them needs host
+access: repository state, rendered Compose configuration, and operator
+attestation can all be gathered from the working tree.
+
+### v0.7.0 — Read-Only SSH Collector
+
+Reserved. First collector requiring host access. Read-only, key-based, scoped
+to explicitly approved commands.
+
+### v0.8.0 — Docker and Compose Runtime Collector
+
+Reserved. Container and Compose runtime state on the AI platform host.
+
+### v0.9.0 — Proxmox Collector
+
+Reserved. Virtualization inventory and guest state from the compute platform.
+
+Each collector release must extend the evidence pipeline without weakening the
+ADR-0002 guarantees. Collection order is deliberate: the lowest-risk sources
+come first, so the framework is exercised against real input before it is given
+host access.
+
 ## Reserved Release Gates
 
 Two sprints are reserved outside the normal feature sequence. They are numbered

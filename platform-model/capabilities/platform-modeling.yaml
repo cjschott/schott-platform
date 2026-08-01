@@ -1,0 +1,58 @@
+---
+# Platform Modeling capability.
+#
+# Maturity is a claim about implementation, not intent. See the rationale
+# below for why this value was chosen.
+#
+# Governed by: docs/standards/capability-model-standard.md
+
+api_version: schott-platform/v1
+kind: Capability
+
+id: CAP-0001
+type: capability
+name: Platform Modeling
+slug: platform-modeling
+lifecycle: active
+owner: platform-engineering
+maturity: operational
+risk: medium
+approval_required: false
+review_required: false
+
+provenance:
+  class: declared
+  source: docs/standards/capability-model-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+description: >-
+  Represent hosts, services, roles, networks, storage, and their relationships as a validated machine-readable model.
+
+maturity_rationale: >-
+  Operational: 35 entities and 40 relationships are modeled and validated by 750 assertions on every push. The model is relied upon by the evidence and capability layers.
+
+inputs:
+  - Committed documentation
+  - Operator declarations
+
+outputs:
+  - Entity records
+  - Canonical relationships
+
+dependencies:
+  []
+
+implemented_by:
+  - platform-model/
+  - tools/platform_model/validate_evidence.py
+
+validated_by:
+  - tests/test-platform-model.sh
+
+documented_by:
+  - docs/standards/platform-ontology-standard.md
+  - docs/standards/operational-metadata-standard.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-capabilities.yaml
