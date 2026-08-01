@@ -546,7 +546,7 @@ for document in overview evidence-store timeline confidence-and-freshness knowle
 done
 
 ADR4="docs/decisions/ADR-0004-immutable-knowledge-timeline.md"
-assert_contains "${ADR4}" '^\*\*Status:\*\* Accepted' "ADR-0004 is accepted"
+assert_contains "${ADR4}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0004 is accepted"
 for stage in Observation Evidence Verification "Knowledge Event" "Knowledge State"; do
   assert_contains "${ADR4}" "${stage}" "ADR-0004 documents the ${stage} stage"
 done
