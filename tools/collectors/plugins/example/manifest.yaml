@@ -1,0 +1,48 @@
+---
+# Synthetic example collector — TEST-ONLY, NON-PRODUCTION.
+#
+# This plugin observes nothing. It returns fixed example observations so the
+# framework contract can be exercised without a live source. It refuses to run
+# unless the caller explicitly marks the context synthetic.
+#
+# Governed by: docs/standards/collector-plugin-standard.md
+
+api_version: schott-platform/v1
+kind: CollectorManifest
+
+id: example-synthetic
+name: Example Synthetic Collector
+version: 0.1.0
+source_type: manual-attestation
+description: >-
+  Non-production fixture plugin. Returns deterministic example observations
+  from caller-supplied synthetic context. Performs no collection of any kind.
+
+classification: test-only
+
+capabilities:
+  - CAP-0002
+
+supported_targets:
+  - host
+
+permissions:
+  - synthetic-fixture-only
+
+network_access: false
+subprocess_access: false
+filesystem_access: false
+
+secret_requirements: []
+
+output_contract:
+  - attested_hostname
+  - attestation_note
+
+lifecycle: draft
+
+provenance:
+  class: declared
+  source: docs/standards/collector-plugin-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
