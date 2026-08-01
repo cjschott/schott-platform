@@ -436,14 +436,23 @@ with tempfile.TemporaryDirectory() as tmp:
     check(empty.state in {"unknown", "pending"} and empty.result == "missing_observation",
           "missing evidence produces unknown, not drift")
 
-    failed = orch.process_collector_result(
-        result({"branch": "main"}, status="failed",
-               errors=[CollectorError(category="unreachable", summary="source unavailable")]),
-        declared=declared, rules=rules, evaluated_at=STAMP)
-    check(failed.verification.result == "collection_failure",
-          "failed collection produces collection_failure")
-    check(failed.verification.state != "drift",
-          "collection failure is not reported as service failure")
+    # A failed collection is verified in a store of its own. Verification
+    # considers every known record for a target, so mixing a failure into a
+    # store that already holds successes would exercise the success path.
+    with tempfile.TemporaryDirectory() as fail_tmp:
+        fail_store = store_in(fail_tmp)
+        failed = Orchestrator(fail_store).process_collector_result(
+            result({"branch": "main"}, status="failed",
+                   errors=[CollectorError(category="unreachable", summary="source unavailable")]),
+            declared=declared, rules=rules, evaluated_at=STAMP)
+        check(failed.verification.result == "collection_failure",
+              "failed collection produces collection_failure")
+        check(failed.verification.state != "drift",
+              "collection failure is not reported as service failure")
+        check(failed.evidence is not None,
+              "a failed collection still produces evidence that it could not look")
+        check(any(e.event_type == "collection-failed" for e in failed.events),
+              "a failed collection records a collection-failed event")
 
     stale_rules = [dict(rules[0], max_age_seconds=1)]
     stale_v = verify(declared=declared,
@@ -521,8 +530,10 @@ with tempfile.TemporaryDirectory() as tmp:
     timeline = Timeline(store)
     events = timeline.query(target="REPO-0001")
     check(len(events) >= 3, "timeline preserves all historical events")
-    check([e.id for e in events] == sorted(e.id for e in events),
-          "timeline ordering is deterministic")
+    check(events == sorted(events, key=lambda e: (e.occurred_at, e.id)),
+          "timeline is ordered by occurred_at then identifier")
+    check([e.id for e in Timeline(store).query(target="REPO-0001")] == [e.id for e in events],
+          "repeated timeline queries return the same order")
     check(all(e.target == "REPO-0001" for e in events), "timeline queries filter by target")
     check(any(e.event_type == "evidence-created" for e in events),
           "timeline records evidence creation")
@@ -566,7 +577,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "knowledge state rebuilds deterministically")
     check(rebuilt.provenance_classes == {"declared": True, "observed": True, "inferred": True},
           "knowledge state keeps declared, observed, and inferred distinct")
-    check(not (Path(tmp) / "store" / "state").glob("*authoritative*"),
+    check(not list((Path(tmp) / "store" / "state").glob("*.yaml")),
           "knowledge state is not persisted as authoritative truth")
 
     conflict = orch.process_collector_result(
@@ -699,10 +710,21 @@ with tempfile.TemporaryDirectory() as tmp:
         check(forbidden not in help_proc.stdout.lower().split("positional")[-1].split("options")[0],
               f"cli exposes no {forbidden} command")
 
-    # platform-model must be untouched by any CLI run.
-    proc = subprocess.run(["git", "status", "--porcelain=v1", "platform-model"],
-                          capture_output=True, text=True, cwd=str(root))
-    check(proc.stdout.strip() == "", "cli runs leave platform-model unmodified")
+    # platform-model must be untouched by any CLI run. Compared before and
+    # after rather than against a clean tree, so an unrelated in-flight edit
+    # cannot masquerade as a CLI side effect — or hide one.
+    def model_snapshot():
+        return sorted(
+            (str(p.relative_to(root)), p.stat().st_size)
+            for p in (root / "platform-model").rglob("*") if p.is_file()
+        )
+
+    before_model = model_snapshot()
+    cli("timeline", "--target", "REPO-0001", "--store-root", str(store_root), expect=0)
+    cli("knowledge", "--target", "REPO-0001", "--store-root", str(store_root), expect=0)
+    cli("ingest", "--collector-result", "result.json", "--input-dir", str(inbox),
+        "--store-root", str(store_root), expect=0)
+    check(model_snapshot() == before_model, "cli runs leave platform-model unmodified")
 
 print(f"__FAILURES__={failures}")
 PY
