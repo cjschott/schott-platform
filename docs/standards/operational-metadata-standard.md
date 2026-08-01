@@ -31,26 +31,23 @@ It does not govern application telemetry, log payloads, or metric storage. Those
 
 Every recorded fact carries a provenance class.
 
-A fact without a provenance class is treated as `unknown`, not as truth. Consumers must not promote an unclassified value to an operational decision.
+A fact without a provenance class is untrusted, not true. Consumers must not promote an unclassified value to an operational decision.
 
 The platform model is a knowledge twin, not a live mirror of the environment. Git records what the platform is supposed to be. Runtime observation records what it was at a moment in time. These are different kinds of knowledge and must never be silently merged.
 
-## Relationship to the Platform Ontology Standard
+## The Provenance Vocabulary
 
-The Platform Ontology Standard defines four knowledge classes for consumers: `asserted`, `inferred`, `observed`, and `unknown`.
+The vocabulary is exactly three classes:
 
-This standard uses `declared` where the ontology says `asserted`. The two terms describe the same class: a fact explicitly written into the platform model by a human or an approved change process.
-
-| Ontology knowledge class | Platform model provenance value |
+| Class | Meaning |
 |---|---|
-| `asserted` | `declared` |
-| `observed` | `observed` |
-| `inferred` | `inferred` |
-| `unknown` | `unknown` |
+| `declared` | Explicitly written into the platform model |
+| `observed` | Collected from a live system at a moment in time |
+| `inferred` | Derived by an ontology inference rule |
 
-`declared` is the canonical value in `platform-model/` records because model files record declarations of intent, not claims about live state. Consumers that expose the ontology vocabulary directly may map `declared` to `asserted` without loss of meaning.
+There are exactly three values and no aliases. One concept has one name, in this standard, in the [Platform Ontology Standard](platform-ontology-standard.md), and in every record under `platform-model/`.
 
-Only one term may appear in any single record. Do not mix `declared` and `asserted` within the model.
+A fact that is not represented or not verifiable does not get a fourth class. Record the *value* as `unknown` and leave the provenance class to describe where the record came from. An explicit `unknown` value is safer than a plausible guess, and far safer than an empty field a consumer may read as a negative.
 
 ## Provenance Classes
 
@@ -95,11 +92,9 @@ Examples:
 - LiteLLM may be impacted if Ollama is unavailable.
 - LiteLLM indirectly depends on `schai`.
 
-### `unknown`
+### Unrepresented facts
 
-A fact that is not represented, not verifiable, or deliberately unfilled.
-
-`unknown` is a legitimate and preferred value. An explicit `unknown` is safer than a plausible guess, and far safer than an empty field that a consumer may interpret as a negative.
+A fact that is not represented, not verifiable, or deliberately unfilled carries no provenance class of its own. Record its value as `unknown` within a record whose provenance class is `declared`, because the *absence* is itself a deliberate declaration.
 
 Placeholder text must never be treated as an approved operational fact.
 
@@ -111,7 +106,7 @@ Required fields:
 
 | Field | Requirement | Meaning |
 |---|---|---|
-| `class` | Always | One of `declared`, `observed`, `inferred`, `unknown` |
+| `class` | Always | Exactly one of `declared`, `observed`, `inferred` |
 | `source` | Always | Where the fact came from: a document path, a command, or a rule ID |
 | `recorded_at` | Always | Date the fact entered the model |
 | `observed_at` | When `class` is `observed` | Timestamp the fact was true in the environment |

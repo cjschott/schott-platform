@@ -246,7 +246,7 @@ A hard dependency contributes to startup, shutdown, recovery, and impact-analysi
 
 ## Inference Rules
 
-Inference may derive new facts from approved relationships, but inferred facts must remain distinguishable from explicitly asserted facts.
+Inference may derive new facts from approved relationships, but inferred facts must remain distinguishable from explicitly declared facts.
 
 Initial safe inference examples:
 
@@ -260,14 +260,19 @@ Inference must not silently create write actions, change firewall policy, expose
 
 ## Explicit Facts vs. Inferred Facts
 
-Tools consuming the ontology must label knowledge as one of:
+Tools consuming the ontology must label knowledge with exactly one provenance class:
 
-- `asserted`: explicitly stored in the platform model
-- `inferred`: derived from ontology rules
+- `declared`: explicitly stored in the platform model
 - `observed`: collected from live systems
-- `unknown`: not represented or not verifiable
+- `inferred`: derived from ontology rules
+
+The vocabulary is exactly these three values. There is no alias for any of them; one concept has one name.
+
+A fact that is not represented or not verifiable has no provenance class. Record the value itself as `unknown` rather than inventing a fourth class, and never promote an unclassified value to an operational decision.
 
 When sources conflict, consumers must report the conflict rather than choosing a convenient value silently.
+
+The full contract for these classes is defined in the [Operational Metadata Standard](operational-metadata-standard.md).
 
 ## Example AI Platform Graph
 

@@ -42,9 +42,10 @@ Every fact in this model carries a provenance class. This is the most important 
 | `declared` | Written into the model deliberately; describes intended state | Carries `source` and `recorded_at` |
 | `observed` | Collected from a live system at a moment in time | Must carry `observed_at` |
 | `inferred` | Derived by an inference rule | Must carry `derived_from`; must use qualified language |
-| `unknown` | Not represented or not verifiable | Preferred over a guess |
 
-`declared` corresponds to the `asserted` knowledge class in the [Platform Ontology Standard](../docs/standards/platform-ontology-standard.md). The full contract is defined in the [Operational Metadata Standard](../docs/standards/operational-metadata-standard.md).
+The vocabulary is exactly these three values and there are no aliases. The full contract is defined in the [Operational Metadata Standard](../docs/standards/operational-metadata-standard.md), and the [Platform Ontology Standard](../docs/standards/platform-ontology-standard.md) uses the same three names.
+
+A fact that is not represented or not verifiable does not get a fourth class. Record its *value* as `unknown` inside a `declared` record — the absence is itself a deliberate declaration.
 
 Everything currently in this model is `declared`. No runtime observation is recorded yet.
 
@@ -96,7 +97,7 @@ Filenames are the bare slug: `litellm.yaml`. The slug is the join key between th
 6. Record retrieval commands instead of volatile values.
 7. Run the validator.
 
-Incomplete records are acceptable during discovery, but gaps must be explicit. Use `unknown` rather than a plausible placeholder. Placeholder text must never be treated as an approved operational fact.
+Incomplete records are acceptable during discovery, but gaps must be explicit. Use an `unknown` value rather than a plausible placeholder. Placeholder text must never be treated as an approved operational fact.
 
 ## How to Add a Relationship
 
