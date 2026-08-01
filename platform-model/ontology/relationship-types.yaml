@@ -234,3 +234,58 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Loss of the target prevents the source from operating.
+
+  # --- Evidence and verification layer ------------------------------------
+  # These describe how a claim was checked. None of them imply or authorize a
+  # corrective action: detection stays separate from remediation.
+
+  SUPPORTED_BY:
+    name: Supported By
+    description: The source verification rests on the target evidence record.
+    # Evidence is a leaf: it supports conclusions, it is not supported by them.
+    # EVID-0001 SUPPORTED_BY ... is therefore invalid and rejected.
+    allowed_sources: [verification]
+    allowed_targets: [evidence]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies what a finding actually rests on; absence makes the finding unfalsifiable.
+
+  VERIFIED_BY:
+    name: Verified By
+    description: The source entity has been evaluated by the target verification record.
+    allowed_sources: [host, virtual-machine, service, application, container, network, storage, backup-policy, platform-role]
+    allowed_targets: [verification]
+    transitive: false
+    inverse: EVALUATES
+    operational_impact: Absence means the entity is declared but unchecked.
+
+  EVALUATES:
+    name: Evaluates
+    description: The source verification assesses the target entity.
+    allowed_sources: [verification]
+    allowed_targets: [host, virtual-machine, service, application, container, network, storage, backup-policy, platform-role]
+    transitive: false
+    inverse: VERIFIED_BY
+    operational_impact: Establishes which entity a finding is about.
+
+  DETECTS_DRIFT_IN:
+    name: Detects Drift In
+    description: >-
+      The source drift rule applies to the target entity. Rule applicability to
+      an entity *type* is expressed through the rule's target_entity_types
+      metadata, not as an edge to a type definition.
+    allowed_sources: [drift-rule]
+    allowed_targets: [host, virtual-machine, service, application, container, network, storage, backup-policy, platform-role]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies coverage; an entity no rule targets is unchecked.
+
+  SUPERSEDES:
+    name: Supersedes
+    description: The source record replaces the target while the target is retained for history.
+    allowed_sources: [evidence, verification]
+    allowed_targets: [evidence, verification]
+    transitive: true
+    inverse: null
+    operational_impact: Preserves correction history without destroying the original observation.
+

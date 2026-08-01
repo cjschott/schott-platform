@@ -1,0 +1,129 @@
+---
+# Declarative schema for verification records.
+#
+# Repository-owned and enforced by tools/platform_model/validate_evidence.py.
+#
+# Governed by: docs/standards/verification-drift-standard.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: verification
+
+provenance:
+  class: declared
+  source: docs/standards/verification-drift-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+id_pattern: '^VER-[0-9]{4}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - rule
+  - evaluated_at
+  - evidence
+  - state
+  - result
+  - severity
+  - declared_value
+  - observed_value
+  - explanation
+  - recommended_action
+  - provenance
+  - approval_required
+
+constant_fields:
+  type: verification
+
+entity_reference_fields:
+  - target
+
+evidence_reference_fields:
+  - evidence
+
+enums:
+  state:
+    - unknown
+    - pending
+    - verified
+    - warning
+    - drift
+    - failed
+    - unsupported
+  result:
+    - match
+    - mismatch
+    - missing_observation
+    - stale_evidence
+    - unsupported
+    - collection_failure
+  severity:
+    - information
+    - low
+    - medium
+    - high
+    - critical
+  provenance_class:
+    - inferred
+
+timestamp_fields:
+  - evaluated_at
+
+provenance_requirements:
+  required_class: inferred
+  required_reference: derived_from
+
+conditional_requirements:
+  # A verified state with no evidence is an assertion with nothing behind it.
+  - when_field: state
+    when_value_in: [verified]
+    require_non_empty: [evidence]
+    rationale: >-
+      Verification means evidence supported the declaration. With no evidence
+      there is nothing to have supported it.
+  # Critical findings must not be closed without a human looking.
+  - when_field: severity
+    when_value_in: [critical]
+    require_true: [approval_required]
+    rationale: Critical findings require human review.
+
+# Stale evidence cannot produce a verified state; the honest result is
+# stale_evidence resting on an expired observation.
+state_result_restrictions:
+  verified:
+    forbidden_results: [stale_evidence, missing_observation, collection_failure]
+    rationale: >-
+      A verified state must not rest on absent, expired, or failed collection.
+
+# recommended_action is advisory prose. Anything that looks executable is
+# rejected, so this layer cannot grow a remediation path by accident.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - auto_remediate
+  - execute
+  - command_to_run
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+read_only: true
+modifies_entities: false
+performs_remediation: false

@@ -104,3 +104,45 @@ inference_rules:
     prohibited: >-
       Must not state that the dependent service is down, degraded, or failing.
       The assessment is a possibility, not a measurement.
+
+  - id: INF-004
+    name: Unverified declared entity
+    description: >-
+      An entity with no verification record referencing it has not been checked
+      against reality, regardless of how mature its lifecycle value is.
+    inputs:
+      - relationship: VERIFIED_BY
+        from: entity-a
+        to: verification-b
+        condition: absent
+    output:
+      assessment: entity-a may be unverified; no verification record references it
+      qualifier: may
+      provenance_class: inferred
+    evidence_requirement: >-
+      Derived from the absence of a verification edge. Absence of a record is
+      not evidence that the entity is wrong, only that nothing has checked it.
+    prohibited: >-
+      Must not be reported as drift, as a defect, or as a statement about the
+      entity's runtime health.
+
+  - id: INF-005
+    name: Verification freshness bounded by oldest evidence
+    description: >-
+      A verification result is only as fresh as the oldest evidence record it
+      rests on.
+    inputs:
+      - relationship: SUPPORTED_BY
+        from: verification-a
+        to: evidence-b
+    output:
+      assessment: verification-a may be stale when its oldest supporting evidence exceeds the rule's maximum age
+      qualifier: may
+      provenance_class: inferred
+    evidence_requirement: >-
+      Requires collected_at on every referenced evidence record. Without those
+      timestamps the freshness of the verification is unknown, not current.
+    prohibited: >-
+      Must not present an aged verification as a statement of current state,
+      and must not claim the platform is healthy now.
+

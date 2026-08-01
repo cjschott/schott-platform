@@ -70,6 +70,10 @@ assert_dir "${MODEL}/relationships"
 assert_dir "${MODEL}/networks"
 assert_dir "${MODEL}/storage"
 assert_dir "${MODEL}/backup-policies"
+assert_dir "${MODEL}/evidence"
+assert_dir "${MODEL}/verifications"
+assert_dir "${MODEL}/drift-rules"
+assert_dir "${MODEL}/schemas"
 
 # Required ontology files.
 assert_file "${MODEL}/ontology/entity-types.yaml"
@@ -88,6 +92,19 @@ assert_file "${MODEL}/relationships/ai-platform.yaml"
 
 # Required documentation.
 assert_file "${MODEL}/README.md"
+
+# Evidence and verification layer: schemas, rules, and contributor guidance.
+assert_file "${MODEL}/schemas/evidence.schema.yaml"
+assert_file "${MODEL}/schemas/verification.schema.yaml"
+assert_file "${MODEL}/schemas/drift-rule.schema.yaml"
+assert_file "${MODEL}/evidence/README.md"
+assert_file "${MODEL}/verifications/README.md"
+assert_file "${MODEL}/drift-rules/README.md"
+assert_file "${MODEL}/drift-rules/core-platform.yaml"
+
+# Remediation must never be automatic anywhere in the model.
+assert_absent 'remediation_mode:[[:space:]]*automatic' \
+  "no drift rule permits automatic remediation"
 
 # Secret handling. The model may name a secret source but never a secret value.
 assert_absent '(password|passwd|api_key|apikey|secret_key|master_key|private_key|access_token|bearer_token)[[:space:]]*:[[:space:]]*[^[:space:]#]' \

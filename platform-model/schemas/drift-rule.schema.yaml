@@ -1,0 +1,99 @@
+---
+# Declarative schema for drift rule definitions.
+#
+# Repository-owned and enforced by tools/platform_model/validate_evidence.py.
+#
+# Governed by: docs/standards/verification-drift-standard.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: drift-rule
+
+provenance:
+  class: declared
+  source: docs/standards/verification-drift-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+id_pattern: '^DRIFT-[0-9]{4}$'
+
+required_fields:
+  - id
+  - name
+  - description
+  - target_entity_types
+  - declared_path
+  - observed_fact
+  - comparator
+  - evidence_max_age
+  - severity
+  - missing_evidence_result
+  - mismatch_result
+  - enabled
+  - remediation_mode
+
+enums:
+  comparator:
+    - equals
+    - not_equals
+    - contains
+    - not_contains
+    - exists
+    - absent
+    - subset
+    - superset
+    - numeric_range
+  severity:
+    - information
+    - low
+    - medium
+    - high
+    - critical
+  missing_evidence_result:
+    - missing_observation
+    - unsupported
+    - collection_failure
+  mismatch_result:
+    - mismatch
+    - unsupported
+  # "automatic" is deliberately absent and is rejected by the validator.
+  # Detection and correction stay permanently separate: a system that does
+  # both will eventually enforce a stale declaration onto a correct
+  # environment.
+  remediation_mode:
+    - advisory
+    - manual-approval-required
+
+boolean_fields:
+  - enabled
+
+# null means "no committed cadence exists"; review_required keeps that gap
+# visible instead of letting an invented number look authoritative.
+nullable_fields:
+  - evidence_max_age
+
+conditional_requirements:
+  - when_field: evidence_max_age
+    when_value_is_null: true
+    require_true: [review_required]
+    rationale: >-
+      An unset maximum age is an unresolved question, not a default. Flag it
+      rather than inventing an operational frequency.
+
+# Duration form for evidence_max_age when a cadence is committed.
+duration_pattern: '^[0-9]+(m|h|d)$'
+
+forbidden_values:
+  remediation_mode:
+    - automatic
+    - auto
+    - immediate
+
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - auto_remediate
+  - execute
+  - command_to_run

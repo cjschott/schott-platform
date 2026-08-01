@@ -132,6 +132,9 @@ BRANCH_STANDARDS=(
   "docs/standards/operational-metadata-standard.md"
   "docs/standards/platform-ontology-standard.md"
   "docs/standards/definition-of-done-standard.md"
+  "docs/standards/entity-lifecycle-standard.md"
+  "docs/standards/evidence-standard.md"
+  "docs/standards/verification-drift-standard.md"
 )
 
 for document in "${REQUIRED_DOCS[@]}"; do
@@ -309,6 +312,84 @@ for gate in \
 done
 assert_contains "${DOD_STANDARD}" '[Ww]hen applicable' \
   "definition of done scopes gates to applicability"
+
+# Entity lifecycle standard. Lifecycle is entity maturity and must stay
+# distinct from provenance and from runtime health.
+LIFECYCLE_STANDARD="docs/standards/entity-lifecycle-standard.md"
+for state in draft declared verification-pending verified managed deprecated archived; do
+  assert_contains "${LIFECYCLE_STANDARD}" "\`${state}\`" \
+    "lifecycle standard defines the ${state} state"
+done
+# "observed" is provenance, never a lifecycle state. Asserting its absence from
+# the state list is the whole point of separating the two vocabularies.
+assert_not_contains "${LIFECYCLE_STANDARD}" "^\|[[:space:]]*\`observed\`[[:space:]]*\|" \
+  "lifecycle standard does not list observed as a lifecycle state"
+assert_contains "${LIFECYCLE_STANDARD}" 'verified -> verification-pending' \
+  "lifecycle standard permits regression when evidence goes stale"
+assert_contains "${LIFECYCLE_STANDARD}" 'operational_health' \
+  "lifecycle standard distinguishes operational health"
+assert_contains "${LIFECYCLE_STANDARD}" 'verification_state' \
+  "lifecycle standard distinguishes verification state"
+assert_contains "${LIFECYCLE_STANDARD}" 'never be reused|never reused' \
+  "lifecycle standard forbids reusing archived identifiers"
+assert_contains "${LIFECYCLE_STANDARD}" 'does not imply|not imply runtime' \
+  "lifecycle standard states lifecycle does not imply runtime health"
+
+# Evidence standard.
+EVIDENCE_STANDARD="docs/standards/evidence-standard.md"
+for source in manual-attestation command-output ssh-command api-response \
+  file-inspection configuration-render health-check backup-report \
+  monitoring-query git-repository; do
+  assert_contains "${EVIDENCE_STANDARD}" "\`${source}\`" \
+    "evidence standard defines the ${source} source type"
+done
+for status in success partial failed unavailable; do
+  assert_contains "${EVIDENCE_STANDARD}" "\`${status}\`" \
+    "evidence standard defines the ${status} status"
+done
+for level in public internal restricted secret-metadata; do
+  assert_contains "${EVIDENCE_STANDARD}" "\`${level}\`" \
+    "evidence standard defines the ${level} sensitivity"
+done
+assert_contains "${EVIDENCE_STANDARD}" 'collected_at' \
+  "evidence standard requires collected_at"
+assert_contains "${EVIDENCE_STANDARD}" 'content_fingerprint' \
+  "evidence standard requires a content fingerprint"
+assert_contains "${EVIDENCE_STANDARD}" 'secret_present' \
+  "evidence standard permits secret metadata without secret values"
+assert_contains "${EVIDENCE_STANDARD}" '[Ii]mmutab' \
+  "evidence standard defines immutability"
+assert_contains "${EVIDENCE_STANDARD}" 'supersede' \
+  "evidence standard defines supersession rather than overwrite"
+assert_contains "${EVIDENCE_STANDARD}" 'redaction' \
+  "evidence standard requires declaring redaction"
+
+# Verification and drift standard.
+VERIFY_STANDARD="docs/standards/verification-drift-standard.md"
+for state in unknown pending verified warning drift failed unsupported; do
+  assert_contains "${VERIFY_STANDARD}" "\`${state}\`" \
+    "verification standard defines the ${state} state"
+done
+for severity in information low medium high critical; do
+  assert_contains "${VERIFY_STANDARD}" "\`${severity}\`" \
+    "verification standard defines the ${severity} severity"
+done
+for result in match mismatch missing_observation stale_evidence unsupported collection_failure; do
+  assert_contains "${VERIFY_STANDARD}" "\`${result}\`" \
+    "verification standard defines the ${result} result type"
+done
+assert_contains "${VERIFY_STANDARD}" 'read-only' \
+  "verification standard states verification is read-only"
+assert_contains "${VERIFY_STANDARD}" 'no remediation|No remediation' \
+  "verification standard performs no remediation"
+assert_contains "${VERIFY_STANDARD}" 'Missing evidence is not' \
+  "verification standard separates missing evidence from drift"
+assert_contains "${VERIFY_STANDARD}" 'Collection failure is not' \
+  "verification standard separates collection failure from service failure"
+assert_contains "${VERIFY_STANDARD}" 'Stale evidence cannot' \
+  "verification standard forbids verified state from stale evidence"
+assert_contains "${VERIFY_STANDARD}" 'advisory' \
+  "verification standard marks recommended actions advisory"
 
 # Operational metadata standard requirements.
 #

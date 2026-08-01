@@ -31,6 +31,10 @@ platform-model/
 ├── storage/                      # Logical storage entities
 ├── backup-policies/              # Protection scope and retention
 ├── relationships/                # Canonical declared edge lists
+├── schemas/                      # Declarative record schemas
+├── evidence/                     # Immutable observed-fact records
+├── verifications/                # Read-only comparison results
+├── drift-rules/                  # Declarative drift definitions
 └── README.md
 ```
 
@@ -83,6 +87,9 @@ Identifiers are immutable and are never reused after retirement.
 | Network | `NET` | `NET-0001` |
 | Storage | `STOR` | `STOR-0001` |
 | Backup policy | `BKP` | `BKP-0001` |
+| Evidence | `EVID` | `EVID-0001` |
+| Verification | `VER` | `VER-0001` |
+| Drift rule | `DRIFT` | `DRIFT-0001` |
 | Relationship | `REL` | `REL-0006` |
 
 Relationship ids are allocated in blocks so independent edge lists never
@@ -165,6 +172,33 @@ review_note: >-
 The flag is not a placeholder to be cleaned up later by guessing. It is the honest answer, and it is enforced: validation requires Tier 0 and Tier 1 hosts to carry either backup coverage or `review_required`, so an unprotected critical host cannot pass silently.
 
 Do not invent a backup schedule, retention window, or restore cadence. A fabricated schedule in a machine-readable model is worse than an explicit unknown, because automation and operators will both believe it.
+
+## Lifecycle, Provenance, Verification, and Health
+
+Four questions are routinely collapsed into one word. Keeping them apart is what stops the model from quietly lying:
+
+| Concept | Question | Example values |
+|---|---|---|
+| `lifecycle` | How mature is this record? | `declared`, `verified`, `managed` |
+| `provenance` | Where did this fact come from? | `declared`, `observed`, `inferred` |
+| `verification_state` | Did evidence support the declaration? | `pending`, `verified`, `drift` |
+| `operational_health` | Is it working right now? | **Not modeled** |
+
+A `verified` lifecycle does not mean a service is up. It means evidence supported the declared facts *at a point in time*. Operational health is deliberately absent: answering it needs live telemetry the platform does not have, and an authoritative-looking field that is never refreshed is worse than no field.
+
+`observed` is provenance and never a lifecycle state. See the [Entity Lifecycle Standard](../docs/standards/entity-lifecycle-standard.md).
+
+## Evidence and Verification
+
+`evidence/`, `verifications/`, and `drift-rules/` hold the evidence layer. Their schemas live in `schemas/` and are enforced by:
+
+```bash
+python3 tools/platform_model/validate_evidence.py --root platform-model
+```
+
+**No runtime collection exists.** The `evidence/` and `verifications/` directories ship with guidance and no records, because inventing an evidence record would defeat the purpose of an evidence layer.
+
+**No automatic remediation exists.** `remediation_mode` accepts only `advisory` or `manual-approval-required`; `automatic` is rejected by the validator. Detection and correction stay permanently separate.
 
 ## Ontology Conformance
 
