@@ -125,6 +125,26 @@ assert_file ".editorconfig"
 assert_file "ai/README.md"
 assert_file "tests/test-static.sh"
 
+# Generated Python bytecode must never be tracked. Compiled artifacts are build
+# output: tracking them produces a spurious diff every time a validator runs,
+# which makes `git status` useless as a cleanliness signal — and that is exactly
+# how three .pyc files reached main unnoticed.
+#
+# .gitignore alone is not sufficient. It does not untrack files already in the
+# index, so the ignore rules and the absence of tracked artifacts are asserted
+# separately.
+tracked_bytecode="$(git -C "${ROOT}" ls-files '*.pyc' '*.pyo' '*.pyd' '*__pycache__*')"
+if [[ -z "${tracked_bytecode}" ]]; then
+  pass "no compiled Python bytecode is tracked"
+else
+  fail "compiled Python bytecode is tracked: $(printf '%s' "${tracked_bytecode}" | tr '\n' ' ')"
+fi
+
+assert_contains ".gitignore" '^__pycache__/$' \
+  "gitignore excludes __pycache__ directories"
+assert_contains ".gitignore" '^\*\.py\[cod\]$' \
+  "gitignore excludes compiled Python artifacts"
+
 # Required foundation directories.
 assert_dir "ai"
 assert_dir "docs"
