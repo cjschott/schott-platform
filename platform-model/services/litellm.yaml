@@ -154,6 +154,6 @@ standards:
 relationships:
   canonical_source: platform-model/relationships/ai-platform.yaml
   declared:
-    - REL-002
-    - REL-004
-    - REL-006
+    - REL-0002
+    - REL-0004
+    - REL-0006

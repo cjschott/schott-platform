@@ -77,7 +77,7 @@ Identifiers are immutable and are never reused after retirement.
 | Platform role | `ROLE` | `ROLE-0001` |
 | Host | `HOST` | `HOST-0001` |
 | Service | `SVC` | `SVC-0002` |
-| Relationship | `REL` | `REL-006` |
+| Relationship | `REL` | `REL-0006` |
 
 Full prefix assignments live in `ontology/entity-types.yaml`.
 

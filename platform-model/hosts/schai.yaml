@@ -138,4 +138,4 @@ architecture_decisions:
 relationships:
   canonical_source: platform-model/relationships/ai-platform.yaml
   declared:
-    - REL-001
+    - REL-0001
