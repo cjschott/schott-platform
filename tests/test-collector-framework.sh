@@ -89,10 +89,11 @@ assert_contains "${ADR2}" '[Rr]ejected' "ADR-0002 records rejected alternatives"
 # ADR-0003 provider-agnostic guarantees.
 assert_contains "${ADR3}" 'LiteLLM' "ADR-0003 names the current gateway"
 assert_contains "${ADR3}" 'adapter' "ADR-0003 models providers as adapters"
-assert_contains "${ADR3}" 'provider-specific model name' "ADR-0003 forbids provider model names as contracts"
+assert_contains "${ADR3}" '[Pp]rovider-specific model names must not become application contracts' \
+  "ADR-0003 forbids provider model names as contracts"
 assert_contains "${ADR3}" 'local' "ADR-0003 prefers local processing for sensitive workloads"
 assert_contains "${ADR3}" 'policy' "ADR-0003 requires policy authorization for external processing"
-assert_contains "${ADR3}" 'No (commercial|cloud) fallback is silently enabled|no silent' \
+assert_contains "${ADR3}" 'No commercial or cloud fallback is silently enabled' \
   "ADR-0003 forbids silent cloud fallback"
 assert_contains "${ADR3}" 'OmniRoute' "ADR-0003 addresses OmniRoute-inspired concepts"
 assert_contains "${ADR3}" 'explainable|observable' "ADR-0003 requires routing decisions be explainable"
