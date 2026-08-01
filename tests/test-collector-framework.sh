@@ -421,6 +421,19 @@ else
   printf 'SKIP: PyYAML is not installed; behavioural validation was skipped.\n'
 fi
 
+# --- v0.7.0 boundary: collectors still never persist or number -------------
+# The orchestrator exists now, so the temptation to let a collector write its
+# own evidence is real. These assertions keep the boundary where ADR-0004 put
+# it: collectors observe, the orchestrator remembers.
+assert_absent_in "tools/collectors" 'EVID-[0-9]' \
+  "collectors still assign no evidence identifier"
+assert_absent_in "tools/collectors" \
+  '(from[[:space:]]+tools\.observation|import[[:space:]]+tools\.observation|from[[:space:]]+\.\.observation)' \
+  "collectors do not import the observation package"
+assert_absent_in "tools/collectors" \
+  '(EvidenceStore|write_evidence|persist_evidence|allocate_id)' \
+  "collectors cannot reach the evidence store" "validate_plugins.py"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nCollector framework validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

@@ -117,6 +117,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0001-schai-reference-host.md"
   "docs/decisions/ADR-0002-evidence-first-architecture.md"
   "docs/decisions/ADR-0003-provider-agnostic-ai-architecture.md"
+  "docs/decisions/ADR-0004-immutable-knowledge-timeline.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -139,6 +140,8 @@ BRANCH_STANDARDS=(
   "docs/standards/verification-drift-standard.md"
   "docs/standards/capability-model-standard.md"
   "docs/standards/collector-plugin-standard.md"
+  "docs/standards/knowledge-event-standard.md"
+  "docs/standards/confidence-freshness-standard.md"
 )
 
 # Per-collector documentation introduced in v0.6.0.
@@ -535,6 +538,57 @@ assert_contains "${ROADMAP}" 'required before v1\.0\.0' \
 for document in "${REQUIRED_DOCS[@]}"; do
   assert_markdown_links "${document}"
 done
+
+# --- v0.7.0 observation documentation --------------------------------------
+for document in overview evidence-store timeline confidence-and-freshness knowledge-state; do
+  assert_file "docs/observation/${document}.md"
+  assert_markdown_links "docs/observation/${document}.md"
+done
+
+ADR4="docs/decisions/ADR-0004-immutable-knowledge-timeline.md"
+assert_contains "${ADR4}" '^\*\*Status:\*\* Accepted' "ADR-0004 is accepted"
+for stage in Observation Evidence Verification "Knowledge Event" "Knowledge State"; do
+  assert_contains "${ADR4}" "${stage}" "ADR-0004 documents the ${stage} stage"
+done
+assert_contains "${ADR4}" 'Missing evidence is not drift' \
+  "ADR-0004 states that missing evidence is not drift"
+assert_contains "${ADR4}" 'Collection failure is not service failure' \
+  "ADR-0004 states that collection failure is not service failure"
+assert_contains "${ADR4}" 'Rejected [Aa]lternatives' "ADR-0004 records rejected alternatives"
+assert_contains "${ADR4}" 'Mutable current-state files' \
+  "ADR-0004 rejects mutable current-state files"
+
+EVENT_STD="docs/standards/knowledge-event-standard.md"
+for event in observation-received evidence-created evidence-refreshed \
+             verification-created drift-detected drift-cleared evidence-stale \
+             collection-failed review-required knowledge-state-generated; do
+  assert_contains "${EVENT_STD}" "${event}" "knowledge event standard defines ${event}"
+done
+assert_contains "${EVENT_STD}" 'append-only' "knowledge event standard states events are append-only"
+
+CONF_STD="docs/standards/confidence-freshness-standard.md"
+for factor in source_reliability freshness verification source_agreement completeness; do
+  assert_contains "${CONF_STD}" "${factor}" "confidence standard documents the ${factor} factor"
+done
+assert_contains "${CONF_STD}" '0\.25' "confidence standard documents factor weights"
+assert_contains "${CONF_STD}" '[Nn]ot a probability' \
+  "confidence standard states confidence is not a probability"
+assert_contains "${CONF_STD}" 'heuristic' "confidence standard calls confidence a heuristic"
+for state in current aging stale unknown; do
+  assert_contains "${CONF_STD}" "^- \`${state}\`" "confidence standard defines the ${state} freshness state"
+done
+
+# The roadmap must record this release and reserve the next three.
+assert_contains "docs/platform-roadmap.md" 'v0\.7\.0 — Knowledge Orchestrator and Immutable Timeline' \
+  "roadmap records v0.7.0"
+assert_contains "docs/platform-roadmap.md" 'v0\.7\.5 — Developer Experience Hardening' \
+  "roadmap reserves v0.7.5"
+assert_contains "docs/platform-roadmap.md" 'v0\.8\.0 — Remote Read-Only Collectors' \
+  "roadmap reserves v0.8.0"
+assert_contains "docs/platform-roadmap.md" 'v0\.9\.0 — Knowledge Graph and Cross-Source Reasoning' \
+  "roadmap reserves v0.9.0"
+assert_contains "docs/platform-roadmap.md" 'Sprint 98' "roadmap keeps Sprint 98 intact"
+assert_contains "docs/platform-roadmap.md" 'Sprint 99' "roadmap keeps Sprint 99 intact"
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

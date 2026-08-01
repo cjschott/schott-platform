@@ -718,6 +718,81 @@ else
   printf 'SKIP: PyYAML is not installed; structural YAML validation was skipped.\n'
 fi
 
+# --- v0.7.0 observation schemas and ontology -------------------------------
+for schema in observation knowledge-event knowledge-state; do
+  assert_file "platform-model/schemas/${schema}.schema.yaml"
+done
+assert_file "platform-model/observations/README.md"
+assert_file "platform-model/knowledge-events/README.md"
+
+if python3 -c 'import yaml' >/dev/null 2>&1; then
+  ONTOLOGY_OUTPUT="$(python3 - "${ROOT}" <<'PY' 2>&1 || true
+import sys
+from pathlib import Path
+
+import yaml
+
+root = Path(sys.argv[1])
+failures = 0
+
+
+def check(condition, message):
+    global failures
+    if condition:
+        print(f"PASS: {message}")
+    else:
+        failures += 1
+        print(f"FAIL: {message}")
+
+
+entities = yaml.safe_load((root / "platform-model/ontology/entity-types.yaml").read_text())
+types = entities.get("entity_types") or {}
+check("observation" in types, "ontology defines the observation entity type")
+check("knowledge-event" in types, "ontology defines the knowledge-event entity type")
+check((types.get("observation") or {}).get("id_prefix") == "OBS",
+      "observation entities use the OBS prefix")
+check((types.get("knowledge-event") or {}).get("id_prefix") == "MEM",
+      "knowledge events use the MEM prefix")
+check((types.get("evidence") or {}).get("id_prefix") == "EVID",
+      "evidence keeps the EVID prefix")
+
+rels = yaml.safe_load((root / "platform-model/ontology/relationship-types.yaml").read_text())
+catalog = rels.get("relationship_types") or {}
+for name in ("DERIVED_FROM", "REFRESHES", "SUPERSEDES", "SUPPORTS_KNOWLEDGE", "RECORDED_IN"):
+    check(name in catalog, f"ontology defines the {name} relationship")
+
+# No relationship may imply that observed data can rewrite declared intent.
+forbidden = [n for n in catalog if any(
+    token in n.upper() for token in ("REMEDIAT", "APPLIES_FIX", "ENFORCES", "MUTATES"))]
+check(not forbidden, "no relationship implies remediation authority")
+
+for schema_name, prefix in (("observation", "OBS"), ("knowledge-event", "MEM")):
+    schema = yaml.safe_load(
+        (root / f"platform-model/schemas/{schema_name}.schema.yaml").read_text())
+    check(schema.get("id_pattern") == f"^{prefix}-[0-9]{{6}}$",
+          f"{schema_name} schema requires six-digit {prefix} identifiers")
+    check("remediation_command" in (schema.get("forbidden_fields") or []),
+          f"{schema_name} schema forbids remediation fields")
+
+state_schema = yaml.safe_load(
+    (root / "platform-model/schemas/knowledge-state.schema.yaml").read_text())
+for field in ("target", "generated_at", "knowledge_age_seconds", "freshness",
+              "confidence", "supporting_evidence", "review_required"):
+    check(field in (state_schema.get("required_fields") or []),
+          f"knowledge-state schema requires {field}")
+
+print(f"__FAILURES__={failures}")
+PY
+)"
+  printf '%s\n' "${ONTOLOGY_OUTPUT}" | grep -v '^__FAILURES__=' || true
+  ONTOLOGY_FAILURES="$(printf '%s\n' "${ONTOLOGY_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+  if [[ -z "${ONTOLOGY_FAILURES}" ]]; then
+    fail "observation ontology validation did not report a result"
+  else
+    FAILURES=$((FAILURES + ONTOLOGY_FAILURES))
+  fi
+fi
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nPlatform model validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

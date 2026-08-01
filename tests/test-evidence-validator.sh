@@ -108,7 +108,7 @@ run_case() {
 # --- Valid baseline -------------------------------------------------------
 VALID="$(new_fixture c18)"
 cat >"${VALID}/evidence/evid-0001.yaml" <<'YAML'
-id: EVID-0001
+id: EVID-000001
 type: evidence
 target: HOST-9001
 source_type: manual-attestation
@@ -128,13 +128,13 @@ facts:
 references: []
 YAML
 cat >"${VALID}/verifications/ver-0001.yaml" <<'YAML'
-id: VER-0001
+id: VER-000001
 type: verification
 target: HOST-9001
 rule: DRIFT-9001
 evaluated_at: 2026-08-01T09:05:00-05:00
 evidence:
-  - EVID-0001
+  - EVID-000001
 state: verified
 result: match
 severity: information
@@ -145,7 +145,7 @@ recommended_action: none
 provenance:
   class: inferred
   derived_from:
-    - EVID-0001
+    - EVID-000001
 approval_required: false
 YAML
 cat >"${VALID}/drift-rules/core.yaml" <<'YAML'
@@ -170,13 +170,13 @@ run_case "valid fixture passes" "${VALID}" expect-zero
 # --- Invalid cases --------------------------------------------------------
 D="$(new_fixture c01)"
 for n in a b; do
-  sed "s/EVID-0001/EVID-0002/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/evid-${n}.yaml"
+  sed "s/EVID-000001/EVID-000002/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/evid-${n}.yaml"
 done
 run_case "duplicate evidence ids are rejected" "${D}" expect-nonzero "duplicate"
 
 D="$(new_fixture c02)"
-sed "s/EVID-0001/EVID-001/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
-run_case "three-digit evidence id is rejected" "${D}" expect-nonzero "four-digit"
+sed "s/EVID-000001/EVID-00001/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
+run_case "five-digit evidence id is rejected" "${D}" expect-nonzero "pattern"
 
 D="$(new_fixture c03)"
 sed "s/target: HOST-9001/target: HOST-9999/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
@@ -215,7 +215,7 @@ cp "${VALID}/drift-rules/core.yaml" "${D}/drift-rules/"
 run_case "unapproved verification state is rejected" "${D}" expect-nonzero "state"
 
 D="$(new_fixture c11)"
-sed "s/  - EVID-0001/  - EVID-9999/" "${VALID}/verifications/ver-0001.yaml" >"${D}/verifications/v.yaml"
+sed "s/  - EVID-000001/  - EVID-999999/" "${VALID}/verifications/ver-0001.yaml" >"${D}/verifications/v.yaml"
 cp "${VALID}/evidence/evid-0001.yaml" "${D}/evidence/"
 cp "${VALID}/drift-rules/core.yaml" "${D}/drift-rules/"
 run_case "verification referencing unknown evidence is rejected" "${D}" expect-nonzero "evidence"
@@ -224,7 +224,7 @@ D="$(new_fixture c12)"
 python3 - "${VALID}/verifications/ver-0001.yaml" "${D}/verifications/v.yaml" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
-text = open(src).read().replace("evidence:\n  - EVID-0001\n", "evidence: []\n")
+text = open(src).read().replace("evidence:\n  - EVID-000001\n", "evidence: []\n")
 open(dst, "w").write(text)
 PY
 cp "${VALID}/evidence/evid-0001.yaml" "${D}/evidence/"
@@ -261,6 +261,33 @@ if grep -q 'PLACEHOLDER-NOT-A-REAL-VALUE' <<<"${secret_output}"; then
 else
   pass "validator reports a secret-bearing key without echoing its value"
 fi
+
+# --- v0.7.0 identifier widths ----------------------------------------------
+# Evidence and verification widened to six digits; capability and drift-rule
+# identifiers are human-authored and must stay at four.
+if grep -q "EVID-\[0-9\]{6}" "${ROOT}/platform-model/schemas/evidence.schema.yaml"; then
+  pass "evidence schema requires six-digit identifiers"
+else
+  fail "evidence schema must require six-digit identifiers"
+fi
+if grep -q "VER-\[0-9\]{6}" "${ROOT}/platform-model/schemas/verification.schema.yaml"; then
+  pass "verification schema requires six-digit identifiers"
+else
+  fail "verification schema must require six-digit identifiers"
+fi
+if grep -q "DRIFT-\[0-9\]{4}" "${ROOT}/platform-model/schemas/drift-rule.schema.yaml"; then
+  pass "drift-rule identifiers remain four digits"
+else
+  fail "drift-rule identifiers must remain four digits"
+fi
+
+# A six-digit identifier must be accepted by the validator, not merely allowed
+# by the pattern.
+D="$(new_fixture c19)"
+cp "${VALID}/evidence/evid-0001.yaml" "${D}/evidence/"
+cp "${VALID}/verifications/ver-0001.yaml" "${D}/verifications/"
+cp "${VALID}/drift-rules/core.yaml" "${D}/drift-rules/"
+run_case "six-digit evidence and verification ids are accepted" "${D}" expect-zero ""
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nEvidence validator tests failed with %d error(s).\n' "${FAILURES}" >&2
