@@ -21,3 +21,8 @@ data/
 # Generated validation / config output
 validation-output/
 *.rendered.yaml
+
+# Python bytecode. This repository now ships Python tooling; compiled
+# artifacts are build output and must never be committed.
+__pycache__/
+*.py[cod]
