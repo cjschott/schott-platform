@@ -48,6 +48,7 @@ new_fixture() {
   local name="$1"
   local dir="${WORK}/${name}"
   mkdir -p "${dir}"/{hosts,evidence,verifications,drift-rules,schemas}
+  cp "${ROOT}"/platform-model/schemas/*.schema.yaml "${dir}/schemas/"
 
   cat >"${dir}/hosts/fixture-host.yaml" <<'YAML'
 id: HOST-9001
@@ -95,15 +96,17 @@ run_case() {
     fail "${desc} (expected non-zero exit, got 0)"
     return
   fi
-  if [[ -n "${needle}" ]] && ! grep -qi -- "${needle}" <<<"${output}"; then
-    fail "${desc} (exit ${status} but message lacked '${needle}': ${output})"
+  local scrubbed
+  scrubbed="${output//${dir}/<FIXTURE>}"
+  if [[ -n "${needle}" ]] && ! grep -qi -- "${needle}" <<<"${scrubbed}"; then
+    fail "${desc} (exit ${status} but message lacked '${needle}': ${scrubbed})"
     return
   fi
   pass "${desc}"
 }
 
 # --- Valid baseline -------------------------------------------------------
-VALID="$(new_fixture valid)"
+VALID="$(new_fixture c18)"
 cat >"${VALID}/evidence/evid-0001.yaml" <<'YAML'
 id: EVID-0001
 type: evidence
@@ -165,58 +168,59 @@ YAML
 run_case "valid fixture passes" "${VALID}" expect-zero
 
 # --- Invalid cases --------------------------------------------------------
-D="$(new_fixture dup-id)"
+D="$(new_fixture c01)"
 for n in a b; do
   sed "s/EVID-0001/EVID-0002/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/evid-${n}.yaml"
 done
 run_case "duplicate evidence ids are rejected" "${D}" expect-nonzero "duplicate"
 
-D="$(new_fixture bad-id)"
+D="$(new_fixture c02)"
 sed "s/EVID-0001/EVID-001/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "three-digit evidence id is rejected" "${D}" expect-nonzero "four-digit"
 
-D="$(new_fixture unresolved-target)"
+D="$(new_fixture c03)"
 sed "s/target: HOST-9001/target: HOST-9999/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "unresolvable evidence target is rejected" "${D}" expect-nonzero "resolve"
 
-D="$(new_fixture bad-source-type)"
+D="$(new_fixture c04)"
 sed "s/source_type: manual-attestation/source_type: telepathy/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "unapproved evidence source type is rejected" "${D}" expect-nonzero "source_type"
 
-D="$(new_fixture missing-collected-at)"
+D="$(new_fixture c05)"
 grep -v '^collected_at:' "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "evidence without collected_at is rejected" "${D}" expect-nonzero "collected_at"
 
-D="$(new_fixture naive-timestamp)"
+D="$(new_fixture c06)"
 sed "s/collected_at: .*/collected_at: 2026-08-01T09:00:00/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "timestamp without timezone is rejected" "${D}" expect-nonzero "timezone"
 
-D="$(new_fixture observed-without-observed-at)"
+D="$(new_fixture c07)"
 grep -v '^  observed_at:' "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "observed provenance without observed_at is rejected" "${D}" expect-nonzero "observed_at"
 
-D="$(new_fixture failed-without-error)"
+D="$(new_fixture c08)"
 sed "s/status: success/status: failed/" "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "failed evidence without an error summary is rejected" "${D}" expect-nonzero "error"
 
 # Placeholder only. Deliberately not a realistic credential.
-D="$(new_fixture secret-bearing)"
-{ cat "${VALID}/evidence/evid-0001.yaml"; printf '  api_key: PLACEHOLDER-NOT-A-REAL-VALUE\n'; } >"${D}/evidence/e.yaml"
+D="$(new_fixture c09)"
+sed 's/^  hostname: fixture-host$/  hostname: fixture-host\n  api_key: PLACEHOLDER-NOT-A-REAL-VALUE/' \
+  "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 run_case "secret-bearing evidence key is rejected" "${D}" expect-nonzero "secret"
 
-D="$(new_fixture bad-state)"
+D="$(new_fixture c10)"
 sed "s/^state: verified/state: probably-fine/" "${VALID}/verifications/ver-0001.yaml" >"${D}/verifications/v.yaml"
 cp "${VALID}/evidence/evid-0001.yaml" "${D}/evidence/"
 cp "${VALID}/drift-rules/core.yaml" "${D}/drift-rules/"
 run_case "unapproved verification state is rejected" "${D}" expect-nonzero "state"
 
-D="$(new_fixture missing-evidence-ref)"
+D="$(new_fixture c11)"
 sed "s/  - EVID-0001/  - EVID-9999/" "${VALID}/verifications/ver-0001.yaml" >"${D}/verifications/v.yaml"
 cp "${VALID}/evidence/evid-0001.yaml" "${D}/evidence/"
 cp "${VALID}/drift-rules/core.yaml" "${D}/drift-rules/"
 run_case "verification referencing unknown evidence is rejected" "${D}" expect-nonzero "evidence"
 
-D="$(new_fixture verified-without-evidence)"
+D="$(new_fixture c12)"
 python3 - "${VALID}/verifications/ver-0001.yaml" "${D}/verifications/v.yaml" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -227,27 +231,28 @@ cp "${VALID}/evidence/evid-0001.yaml" "${D}/evidence/"
 cp "${VALID}/drift-rules/core.yaml" "${D}/drift-rules/"
 run_case "verified state with no evidence is rejected" "${D}" expect-nonzero "evidence"
 
-D="$(new_fixture automatic-remediation)"
+D="$(new_fixture c13)"
 sed "s/remediation_mode: advisory/remediation_mode: automatic/" "${VALID}/drift-rules/core.yaml" >"${D}/drift-rules/core.yaml"
 run_case "automatic remediation is rejected" "${D}" expect-nonzero "remediation"
 
-D="$(new_fixture bad-comparator)"
+D="$(new_fixture c14)"
 sed "s/comparator: equals/comparator: vibes/" "${VALID}/drift-rules/core.yaml" >"${D}/drift-rules/core.yaml"
 run_case "unapproved comparator is rejected" "${D}" expect-nonzero "comparator"
 
-D="$(new_fixture bad-severity)"
+D="$(new_fixture c15)"
 sed "s/severity: medium/severity: catastrophic/" "${VALID}/drift-rules/core.yaml" >"${D}/drift-rules/core.yaml"
 run_case "unapproved drift severity is rejected" "${D}" expect-nonzero "severity"
 
-D="$(new_fixture remediation-field)"
+D="$(new_fixture c16)"
 { cat "${VALID}/verifications/ver-0001.yaml"; printf 'remediation_command: restart-everything\n'; } >"${D}/verifications/v.yaml"
 cp "${VALID}/evidence/evid-0001.yaml" "${D}/evidence/"
 cp "${VALID}/drift-rules/core.yaml" "${D}/drift-rules/"
 run_case "high-impact action field is rejected" "${D}" expect-nonzero "action"
 
 # The validator must never echo a value it flagged as secret-bearing.
-D="$(new_fixture no-secret-echo)"
-{ cat "${VALID}/evidence/evid-0001.yaml"; printf '  password: PLACEHOLDER-NOT-A-REAL-VALUE\n'; } >"${D}/evidence/e.yaml"
+D="$(new_fixture c17)"
+sed 's/^  hostname: fixture-host$/  hostname: fixture-host\n  password: PLACEHOLDER-NOT-A-REAL-VALUE/' \
+  "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
 set +e
 secret_output="$(python3 "${VALIDATOR}" --root "${D}" 2>&1)"
 set -e
