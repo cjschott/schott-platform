@@ -300,11 +300,11 @@ assert_contains "${METADATA_STANDARD}" '^## Purpose' \
   "operational metadata standard states a purpose"
 assert_contains "${METADATA_STANDARD}" '^## Scope' \
   "operational metadata standard states a scope"
-assert_contains "${METADATA_STANDARD}" '`declared`' \
+assert_contains "${METADATA_STANDARD}" "\`declared\`" \
   "operational metadata standard defines the declared provenance class"
-assert_contains "${METADATA_STANDARD}" '`observed`' \
+assert_contains "${METADATA_STANDARD}" "\`observed\`" \
   "operational metadata standard defines the observed provenance class"
-assert_contains "${METADATA_STANDARD}" '`inferred`' \
+assert_contains "${METADATA_STANDARD}" "\`inferred\`" \
   "operational metadata standard defines the inferred provenance class"
 assert_contains "${METADATA_STANDARD}" 'observed_at' \
   "operational metadata standard requires observed_at on observed facts"

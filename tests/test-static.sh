@@ -1233,7 +1233,7 @@ assert_contains "${NETPOL_DOC}" 'explicitly approved management' \
   "network policy requires an explicitly approved management host"
 assert_contains "${NETPOL_DOC}" 'membership in the broader' \
   "network policy denies SSH authorization by /24 membership alone"
-assert_contains "${NETPOL_DOC}" 'broader `/24` rule merely for convenience' \
+assert_contains "${NETPOL_DOC}" "broader \`/24\` rule merely for convenience" \
   "network policy forbids widening SSH to the /24 for convenience"
 assert_contains "${NETPOL_DOC}" 'replace literal address ranges with VLAN' \
   "network policy requires replacing literal ranges with VLAN policy"
