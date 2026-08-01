@@ -331,3 +331,57 @@ relationship_types:
     inverse: null
     operational_impact: Absence on a high-impact capability means nothing gated it.
 
+
+  DERIVED_FROM:
+    name: Derived From
+    description: >-
+      The source was computed from the target. Records provenance for anything
+      inferred, so a conclusion can always be traced back to its inputs.
+    allowed_sources: [verification, knowledge-event, observation]
+    allowed_targets: [evidence, observation, verification]
+    transitive: true
+    inverse: null
+    operational_impact: A derived fact is only as trustworthy as what it was derived from.
+
+  REFRESHES:
+    name: Refreshes
+    description: >-
+      The source re-confirmed the target without changing it. Records that a
+      fact was observed again, which updates freshness and creates no new
+      evidence.
+    allowed_sources: [observation, knowledge-event]
+    allowed_targets: [evidence]
+    transitive: false
+    inverse: null
+    operational_impact: Absence over time means a fact is aging even though nothing contradicts it.
+
+  SUPERSEDES:
+    name: Supersedes
+    description: >-
+      The source replaces the target as the current record of a fact. The
+      superseded record remains readable; correction never edits in place.
+    allowed_sources: [evidence, verification]
+    allowed_targets: [evidence, verification]
+    transitive: true
+    inverse: null
+    operational_impact: The superseded record stays citable, so past conclusions remain legible.
+
+  SUPPORTS_KNOWLEDGE:
+    name: Supports Knowledge
+    description: >-
+      The source evidence contributes to a derived conclusion about the target.
+      Confers no authority to change the target.
+    allowed_sources: [evidence, verification]
+    allowed_targets: [host, service, application, container, network, storage, backup-policy, repository, capability]
+    transitive: false
+    inverse: null
+    operational_impact: A conclusion with no supporting evidence is an opinion, not a finding.
+
+  RECORDED_IN:
+    name: Recorded In
+    description: The source fact is durably recorded in the target append-only event.
+    allowed_sources: [evidence, verification]
+    allowed_targets: [knowledge-event]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies where the audit trail for a conclusion lives.

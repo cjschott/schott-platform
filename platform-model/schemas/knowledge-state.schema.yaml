@@ -1,0 +1,110 @@
+---
+# Declarative schema for derived knowledge state.
+#
+# Knowledge state is computed on demand from immutable evidence, verifications,
+# and events. It is never authoritative and is never committed: this schema
+# describes the shape of a derived artefact so consumers can rely on it, not a
+# record the repository stores.
+#
+# Governed by: docs/decisions/ADR-0004-immutable-knowledge-timeline.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: knowledge-state
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0004-immutable-knowledge-timeline.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+# Derived state is keyed by the target it describes, not by an identifier of
+# its own. Giving it an id would imply it is a record worth citing; it is a
+# view, and a view that can be regenerated should not be referenced as though
+# it were evidence.
+identified_by: target
+
+required_fields:
+  - target
+  - generated_at
+  - newest_evidence_at
+  - knowledge_age_seconds
+  - freshness
+  - confidence
+  - supporting_evidence
+  - verification_state
+  - review_required
+  - provenance_classes
+
+entity_reference_fields:
+  - target
+
+evidence_reference_fields:
+  - supporting_evidence
+
+enums:
+  freshness:
+    - current
+    - aging
+    - stale
+    - unknown
+  verification_state:
+    - unknown
+    - pending
+    - verified
+    - warning
+    - drift
+    - failed
+    - unsupported
+
+timestamp_fields:
+  - generated_at
+
+# Declared, observed, and inferred stay distinguishable in the output. Merging
+# them would let observation masquerade as reviewed intent.
+required_provenance_classes:
+  - declared
+  - observed
+  - inferred
+
+confidence_requirements:
+  required_factors:
+    - source_reliability
+    - freshness
+    - verification
+    - source_agreement
+    - completeness
+  bounds: [0.0, 1.0]
+  weights_total: 1.0
+  interpretation: >-
+    Confidence is an engineering heuristic with visible inputs. It is not a
+    probability and must never be presented as one.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - raw_output

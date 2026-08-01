@@ -169,23 +169,52 @@ Explicitly not delivered:
 Platform awareness is not complete. Evidence Collection advances from
 `foundation` to `partial`, not `operational`.
 
-### v0.7.0 — Read-Only SSH Collector
+### v0.7.0 — Knowledge Orchestrator and Immutable Timeline
 
-Reserved. First collector requiring host access. Read-only, key-based, scoped
-to explicitly approved commands.
+**Delivered.** The layer that turns observations into memory. v0.6.0 collectors
+observed and returned; nothing persisted, nothing was numbered, nothing
+accumulated. This release adds identity, immutable storage, and derived
+knowledge.
 
-### v0.8.0 — Docker and Compose Runtime Collector
+- `evidence_store.py` — atomic, overwrite-refusing, append-only storage at an explicit root
+- `orchestrator.py` — the thirteen-step lifecycle; consumes results, never runs a collector
+- `verifier.py` and `drift_engine.py` — deterministic, read-only comparison against declared intent
+- `confidence.py` — five explainable factors, weights totalling 1.0
+- `timeline.py` and `knowledge.py` — append-only events and derived state
+- ADR-0004, plus the knowledge event and confidence standards
+- `EVID` and `VER` widen to six digits; `MEM` joins them. `CAP` and `DRIFT` stay at four.
 
-Reserved. Container and Compose runtime state on the AI platform host.
+Explicitly not delivered:
 
-### v0.9.0 — Proxmox Collector
+- **No remote observation.** Still local only; nothing has contacted a host.
+- **No database.** Files on disk, inspectable with `cat`. The storage decision stays open.
+- **No remediation.** Recommendations are prose for a human to read.
+- **No promotion of observation to intent.** Declared entities are never rewritten.
 
-Reserved. Virtualization inventory and guest state from the compute platform.
+Evidence Collection remains `partial`: real evidence now persists, but nothing
+observes a remote host.
 
-Each collector release must extend the evidence pipeline without weakening the
-ADR-0002 guarantees. Collection order is deliberate: the lowest-risk sources
-come first, so the framework is exercised against real input before it is given
-host access.
+### v0.7.5 — Developer Experience Hardening
+
+Reserved. Ergonomics of the tooling built so far — diagnostics, error messages,
+and the friction of running the pipeline by hand — before more surface is added
+on top of it.
+
+### v0.8.0 — Remote Read-Only Collectors
+
+Reserved. First collectors requiring host access. Read-only, key-based, scoped
+to explicitly approved commands. This is the release where the model stops
+describing hosts nothing has contacted.
+
+### v0.9.0 — Knowledge Graph and Cross-Source Reasoning
+
+Reserved. Relationships across evidence from multiple sources, and the storage
+decision ADR-0004 deliberately deferred.
+
+Each release must extend the evidence pipeline without weakening the ADR-0002
+and ADR-0004 guarantees. The order is deliberate: the lowest-risk sources come
+first, and memory is built before remote access, so the pipeline is exercised
+against real input before it is given reach.
 
 ## Reserved Release Gates
 

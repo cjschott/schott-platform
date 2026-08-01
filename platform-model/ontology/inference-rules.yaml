@@ -166,3 +166,46 @@ inference_rules:
       Must not automatically rewrite a capability's declared maturity, and must
       not be reported as a defect in either capability.
 
+
+  - id: INF-008
+    name: Stale evidence weakens a conclusion
+    description: >-
+      A conclusion supported only by evidence older than its policy maximum is
+      weakened, not reversed. Old evidence is weak evidence, not contrary
+      evidence.
+    inputs:
+      - relationship: SUPPORTS_KNOWLEDGE
+        from: evidence
+        to: entity
+    output:
+      assessment: the conclusion about entity may no longer hold and requires fresh observation
+      qualifier: may
+      provenance_class: inferred
+    evidence_requirement: >-
+      Derived from evidence timestamps against a declared freshness policy. If
+      no policy is declared, freshness is unknown and no staleness may be
+      inferred.
+    prohibited: >-
+      Must not be reported as drift or mismatch, and must not lower a declared
+      entity's recorded state.
+
+  - id: INF-009
+    name: Independent agreement strengthens a conclusion
+    description: >-
+      Two collectors of different source types reporting the same fact
+      corroborate each other more than repeated observation by one collector.
+    inputs:
+      - relationship: SUPPORTS_KNOWLEDGE
+        from: evidence
+        to: entity
+    output:
+      assessment: the fact about entity is better supported than a single-source observation
+      qualifier: may
+      provenance_class: inferred
+    evidence_requirement: >-
+      Requires evidence from at least two distinct collectors. Repeated
+      observation by one collector is not corroboration; a single source cannot
+      confirm itself.
+    prohibited: >-
+      Must not promote an observed fact to declared intent, and must not
+      produce certainty from agreement alone.

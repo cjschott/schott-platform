@@ -1,0 +1,106 @@
+---
+# Declarative schema for observation records.
+#
+# An observation is the validated, redacted, normalized form of a collector
+# result, before it is given a persistent identity. It is the boundary type
+# between collection and evidence.
+#
+# Repository-owned. Deliberately not JSON Schema: that would add an external
+# dependency for a contract this small, and the checks that matter here
+# (secret detection, timezone-aware timestamps) are ones a generic validator
+# cannot express.
+#
+# Governed by: docs/decisions/ADR-0004-immutable-knowledge-timeline.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: observation
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0004-immutable-knowledge-timeline.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+# Six digits: observations accumulate once per collection.
+id_pattern: '^OBS-[0-9]{6}$'
+
+required_fields:
+  - collector_id
+  - target
+  - collected_at
+  - status
+  - facts
+  - source_fingerprint
+  - provenance
+
+constant_fields:
+  type: observation
+
+entity_reference_fields:
+  - target
+
+enums:
+  status:
+    - success
+    - partial
+    - failed
+    - unavailable
+  provenance_class:
+    - observed
+
+timestamp_fields:
+  - collected_at
+
+# Observation provenance is always observed. An observation that could claim
+# to be declared would let collected data masquerade as reviewed intent.
+provenance_requirements:
+  required_class: observed
+  required_timestamp: observed_at
+
+conditional_requirements:
+  - when_field: status
+    when_value_in: [failed, unavailable]
+    require_fields: [errors]
+    rationale: >-
+      A failure with no explanation is indistinguishable from a broken
+      collector, and both need to be visible. The errors describe the
+      collection attempt, never the target's health.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+permitted_fact_value_types:
+  - string
+  - integer
+  - float
+  - boolean
+  - null
+  - list
+  - mapping
+
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - raw_output

@@ -1679,6 +1679,28 @@ assert_contains "ai/ollama/README.md" 'OLLAMA_VOLUME_NAME' \
   "ollama README documents the configurable model volume name"
 
 # ---------------------------------------------------------------------------
+# v0.7.0 — knowledge orchestrator
+# ---------------------------------------------------------------------------
+
+# The orchestration layer must exist as its own package. Keeping it separate
+# from tools/collectors is what stops a collector from acquiring the ability to
+# number and persist its own evidence.
+for module in models orchestrator evidence_store evidence_builder deduplicator \
+              verifier drift_engine confidence timeline knowledge cli; do
+  assert_file "tools/observation/${module}.py"
+done
+
+assert_file "tests/test-knowledge-orchestrator.sh"
+
+# The suite must stay wired into CI. Asserting the invocation here means the
+# test cannot be silently dropped from the workflow.
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-knowledge-orchestrator\.sh' \
+  "ci runs the knowledge orchestrator suite"
+
+# Derived state is a cache, not a record. It must never be tracked.
+assert_ignored "observations-local/"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

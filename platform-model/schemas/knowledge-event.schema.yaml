@@ -1,0 +1,106 @@
+---
+# Declarative schema for knowledge event records.
+#
+# An event records that something happened to the platform's understanding of
+# an entity. Evidence records what was observed; events record what the
+# platform did with that observation and when.
+#
+# Governed by: docs/standards/knowledge-event-standard.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: knowledge-event
+
+provenance:
+  class: declared
+  source: docs/standards/knowledge-event-standard.md
+  recorded_at: 2026-08-01
+  last_reviewed: 2026-08-01
+
+# Six digits: events are the highest-volume record the platform generates.
+id_pattern: '^MEM-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - event_type
+  - occurred_at
+  - explanation
+  - provenance
+
+constant_fields:
+  type: knowledge-event
+
+entity_reference_fields:
+  - target
+
+evidence_reference_fields:
+  - evidence
+
+enums:
+  # Closed vocabulary. An open-ended event type list forces every consumer to
+  # handle types it has never seen.
+  event_type:
+    - observation-received
+    - evidence-created
+    - evidence-refreshed
+    - verification-created
+    - drift-detected
+    - drift-cleared
+    - evidence-stale
+    - collection-failed
+    - review-required
+    - knowledge-state-generated
+  provenance_class:
+    - observed
+    - inferred
+
+timestamp_fields:
+  - occurred_at
+
+conditional_requirements:
+  - when_field: event_type
+    when_value_in: [evidence-created, evidence-refreshed, evidence-stale]
+    require_fields: [evidence]
+    rationale: >-
+      An event that concludes something about evidence without naming the
+      evidence cannot be audited, and an unauditable conclusion is
+      indistinguishable from a guess.
+  - when_field: event_type
+    when_value_in: [verification-created, drift-detected, drift-cleared]
+    require_fields: [verification]
+    rationale: >-
+      A verification outcome must name the verification record that produced
+      it so the reasoning can be re-read later.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+# Events are read by tooling. A record that can cause an action when parsed is
+# a remote-execution surface with extra steps.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - raw_output

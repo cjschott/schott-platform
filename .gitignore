@@ -26,3 +26,11 @@ validation-output/
 # artifacts are build output and must never be committed.
 __pycache__/
 *.py[cod]
+
+# Observation stores. Generated evidence, verifications, and knowledge events
+# live outside version control: they would swamp the declared model, and
+# committing an append-only record creates an editable second copy of
+# something whose whole value is that it cannot be edited.
+observations-local/
+observations-test/
+*.observation-store/

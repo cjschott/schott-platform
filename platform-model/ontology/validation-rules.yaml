@@ -271,3 +271,45 @@ validation_rules:
     applies_to: [collectors]
     remediation: Set the flags to false; live access arrives with a later, reviewed increment.
 
+
+  - id: VAL-036
+    name: Evidence is never rewritten
+    description: An evidence, verification, or knowledge-event record must never be modified or deleted after creation.
+    severity: error
+    applies_to: [evidence, verifications, knowledge-events]
+    remediation: Append a superseding record; correction never edits in place.
+
+  - id: VAL-037
+    name: Identifiers are assigned by the orchestrator
+    description: Only the orchestration layer allocates EVID, VER, and MEM identifiers; collectors must not.
+    severity: error
+    applies_to: [collectors, evidence, verifications, knowledge-events]
+    remediation: Remove identifier assignment from the collector; identity is assigned outside plugin code.
+
+  - id: VAL-038
+    name: Generated records stay out of the declared model
+    description: Runtime evidence, observations, verifications, and events must not be committed under platform-model.
+    severity: error
+    applies_to: [evidence, observations, knowledge-events, verifications]
+    remediation: Move the records to an explicit observation store root outside the repository.
+
+  - id: VAL-039
+    name: Missing evidence is not drift
+    description: A verification or drift result must not report mismatch when no evidence observed the fact.
+    severity: error
+    applies_to: [verifications, drift-rules]
+    remediation: Report missing_observation; absence of observation is not a detected difference.
+
+  - id: VAL-040
+    name: Collection failure is not target failure
+    description: A failed or unavailable collection must be reported as collection_failure, never as service failure or drift.
+    severity: error
+    applies_to: [verifications, evidence]
+    remediation: Report collection_failure; a collector that could not look has learned nothing about the target.
+
+  - id: VAL-041
+    name: Confidence is explainable
+    description: A reported confidence must carry every factor and weight that produced it, and must not be presented as a probability.
+    severity: error
+    applies_to: [verifications, knowledge-events]
+    remediation: Emit the factor breakdown alongside the score; an unexplained score cannot be reviewed.
