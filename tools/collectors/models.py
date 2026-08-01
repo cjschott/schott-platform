@@ -115,7 +115,7 @@ class CollectorManifest:
     supported_targets: tuple[str, ...] = ()
     network_access: bool = False
     subprocess_access: bool = False
-    filesystem_access: bool = False
+    filesystem_access: bool | str = False
     secret_requirements: tuple[str, ...] = ()
     output_contract: tuple[str, ...] = ()
     lifecycle: str = "draft"
@@ -136,13 +136,26 @@ class CollectorManifest:
             elif permission not in APPROVED_PERMISSIONS:
                 problems.append(f"permission '{permission}' is not approved")
 
-        for flag_name, flag in (
-            ("network_access", self.network_access),
-            ("subprocess_access", self.subprocess_access),
-            ("filesystem_access", self.filesystem_access),
-        ):
-            if flag:
-                problems.append(f"{flag_name} must be false in this increment")
+        # Network access is refused unconditionally. A collector that can reach
+        # the network is no longer a local read-only observer, whatever else its
+        # manifest claims.
+        if self.network_access:
+            problems.append("network_access must be false; collectors are local and read-only")
+
+        # Subprocess and filesystem access are declarable from v0.6.0, but only
+        # in the narrowed forms the framework can enforce: subprocess runs
+        # exclusively through command_runner.py, and filesystem access is
+        # read-only. Write access remains outside the trust boundary.
+        if self.subprocess_access not in (True, False):
+            problems.append("subprocess_access must be a boolean")
+        if self.filesystem_access not in (True, False, "read-only"):
+            problems.append(
+                "filesystem_access must be false or 'read-only'; write access is not permitted"
+            )
+        if self.filesystem_access is True:
+            problems.append(
+                "filesystem_access must be declared 'read-only' rather than true"
+            )
 
         for requirement in self.secret_requirements:
             lowered = str(requirement).lower()
@@ -169,6 +182,9 @@ class CollectionContext:
     requested_facts: tuple[str, ...] | list[str]
     collected_at: str
     synthetic: bool = False
+    # Collector-specific inputs (paths, attestation payloads). Supplied by the
+    # orchestrator; never read from the environment by a plugin.
+    options: dict[str, Any] | None = None
 
     def validation_errors(self) -> list[str]:
         problems: list[str] = []
