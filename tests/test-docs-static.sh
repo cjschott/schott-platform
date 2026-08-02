@@ -122,6 +122,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0008-experience-engine.md"
   "docs/decisions/ADR-0009-occurrence-timeline.md"
   "docs/decisions/ADR-0010-remote-read-only-collection.md"
+  "docs/decisions/ADR-0011-trust-plane.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -895,6 +896,40 @@ assert_contains "docs/platform-roadmap.md" 'v0\.9\.5 — Distributed Capability 
   "roadmap preserves v0.9.5"
 assert_contains "docs/platform-roadmap.md" 'v1\.0\.0 — Kyri Core Foundation' \
   "roadmap preserves v1.0.0"
+
+# --- v0.9.2 trust plane ------------------------------------------------------
+ADR11="docs/decisions/ADR-0011-trust-plane.md"
+assert_contains "${ADR11}" '^# ADR-0011:' "ADR-0011 has the expected title"
+assert_contains "${ADR11}" '\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0011 is Accepted"
+assert_markdown_links "${ADR11}"
+
+for trust_doc in docs/trust/trust-plane.md docs/trust/trust-domains.md \
+                 docs/trust/trust-states.md; do
+  assert_file "${trust_doc}"
+  assert_contains "${trust_doc}" '^# ' "$(basename "${trust_doc}" .md) has a title"
+  assert_markdown_links "${trust_doc}"
+done
+
+# The Trust Plane is a governed layer beside the others, not beneath reasoning.
+assert_contains "${ADR11}" 'Observation' "ADR-0011 places trust beside observation"
+assert_contains "${ADR11}" 'Knowledge' "ADR-0011 places trust beside knowledge"
+assert_contains "${ADR11}" 'Integrity' "ADR-0011 places trust beside integrity"
+assert_contains "${ADR11}" 'Experience' "ADR-0011 places trust beside experience"
+assert_contains "${ADR11}" 'Occurrence' "ADR-0011 places trust beside occurrence"
+
+# Architecture only. The documents must say so, so a reader does not mistake a
+# specification for a shipped control.
+assert_contains "${ADR11}" '[Nn]o runtime implementation|architecture only|not implemented in this release' \
+  "ADR-0011 states that no runtime implementation exists yet"
+assert_contains "${TRUST_PLANE_DOC:-docs/trust/trust-plane.md}" '[Nn]ot yet implemented|architecture only|no runtime' \
+  "the trust plane document states it is not yet implemented"
+
+# Supervised v0.9.0 validation is the origin of this decision and must be cited.
+assert_contains "${ADR11}" 'v0\.9\.0' "ADR-0011 cites the v0.9.0 validation that motivated it"
+
+# Documentation must use synthetic identifiers only.
+assert_not_contains "docs/trust/trust-plane.md" '[a-z0-9-]+\.(com|net|org|io)\b' \
+  "trust plane doc uses synthetic hostnames only"
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

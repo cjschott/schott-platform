@@ -1,0 +1,157 @@
+---
+# Declarative schema for trust authorities.
+#
+# A trust authority is the entity permitted to make trust decisions within one
+# or more domains. It declares which domains it covers, which states it may
+# assign, what approval it requires, and how often its own grants must be
+# reviewed.
+#
+# An authority may not approve its own trust record. Something else must
+# establish it, or the chain terminates in a claim about itself.
+#
+# Human-authored, so identifiers are four digits.
+#
+# ARCHITECTURE ONLY. No runtime evaluates these declarations in this release.
+#
+# Governed by: docs/decisions/ADR-0011-trust-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: trust-authority
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0011-trust-plane.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^TAUTH-[0-9]{4}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+# The chain has to terminate somewhere outside itself.
+self_approval: not-permitted
+
+# Every trust chain terminates at an Operator Root Authority external to Kyri.
+# A chain terminating inside the platform is circular: the system asserts its
+# own trustworthiness, and that assertion is worth what the system is worth if
+# it has been compromised.
+root_authority:
+  origin: external-to-kyri
+  control: human
+  established_by: out-of-band-process
+  created_by_kyri: false
+  approved_by_kyri: false
+  modified_by_kyri: false
+  terminates_chain: true
+  permitted_actions:
+    - approve
+    - restrict
+    - quarantine
+    - revoke
+    - reject
+    - supersede
+  produces_immutable_history: true
+  self_delegation: not-permitted
+  delegation: requires-recorded-trust-decision
+  # Binding a specific person, account, key, or address here would create an
+  # identity that outlives whoever currently holds it, and would turn a role
+  # into a name needing edits in records that cannot be edited. The role is
+  # defined here; the concrete external identity is bound by the v0.9.2
+  # implementation, where it can be superseded like any other record.
+  concrete_identity: deferred-to-v0.9.2-implementation
+
+required_fields:
+  - authority_id
+  - authority_type
+  - name
+  - description
+  - domains
+  - permitted_states
+  - approval_requirements
+  - review_interval_days
+  - established_by
+  - provenance
+
+optional_fields:
+  - superseded_by
+  - supersedes
+  - contact_reference
+  - notes
+
+forbidden_fields:
+  - private_key
+  - private_key_content
+  - password
+  - passwd
+  - passphrase
+  - token
+  - secret
+  - credential
+  - auto_enroll
+  - auto_approve
+  - auto_renew
+  - trust_on_first_use
+  - trust_score
+  - command
+
+enums:
+  authority_type:
+    # operator-root is the external terminating authority. delegated
+    # authorities exist only because a recorded decision created them.
+    - operator-root
+    - delegated
+  permitted_states:
+    - pending
+    - trusted
+    - restricted
+    - quarantined
+    - revoked
+    - rejected
+  domains:
+    - host
+    - ssh-host-key
+    - certificate
+    - user
+    - collector-plugin
+    - capability-package
+    - model
+    - model-adapter
+    - prompt-bundle
+    - embedding-model
+    - index
+    - policy
+    - configuration-snapshot
+    - remote-transport
+    - fabric-node
+
+field_rules:
+  domains:
+    # An authority covers named domains. An authority over everything is an
+    # authority nobody scoped.
+    wildcard: not-permitted
+    unbounded: not-permitted
+  permitted_states:
+    # No authority may assign expired: only the passage of time does that,
+    # against a recorded expiration. Nor unknown, which is the absence of a
+    # record rather than an assignable outcome.
+    excluded:
+      - expired
+      - unknown
+  approval_requirements:
+    minimum_approvers: 1
+    self_approval: not-permitted
+  review_interval_days:
+    minimum: 1
+    required: true
+
+relationships:
+  - APPROVED_BY
+  - PROTECTED_BY
+  - SUPERSEDES
+
+review_required: true

@@ -1,0 +1,124 @@
+---
+# Declarative schema for trust policies.
+#
+# A trust policy declares, for one domain, what the default state is, which
+# transitions are permitted, whether expiration is mandatory, which verification
+# methods are acceptable, and how often grants must be reviewed.
+#
+# A policy that can rewrite itself is not a policy, so policies are immutable
+# and superseded rather than edited, and automatic transitions are refused at
+# the schema level rather than left to an implementation to enforce.
+#
+# Human-authored, so identifiers are four digits.
+#
+# ARCHITECTURE ONLY. No runtime evaluates these policies in this release.
+#
+# Governed by: docs/decisions/ADR-0011-trust-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: trust-policy
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0011-trust-plane.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^TPOL-[0-9]{4}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+# Every transition requires a decision. Only expiry may be reached by the
+# passage of time, and expiry is not a renewal trigger.
+automatic_transitions: not-permitted
+automatic_recovery: not-permitted
+trust_on_first_use: not-permitted
+
+required_fields:
+  - policy_id
+  - name
+  - description
+  - domain
+  - default_state
+  - permitted_transitions
+  - expiration_required
+  - verification_methods
+  - review_interval_days
+  - authority_id
+  - provenance
+
+optional_fields:
+  - superseded_by
+  - supersedes
+  - maximum_grant_days
+  - notes
+
+forbidden_fields:
+  - private_key
+  - private_key_content
+  - password
+  - passwd
+  - passphrase
+  - token
+  - secret
+  - credential
+  - auto_enroll
+  - auto_approve
+  - auto_renew
+  - trust_on_first_use
+  - trust_score
+  - command
+
+constant_fields:
+  default_state: unknown
+
+enums:
+  domain:
+    - host
+    - ssh-host-key
+    - certificate
+    - user
+    - collector-plugin
+    - capability-package
+    - model
+    - model-adapter
+    - prompt-bundle
+    - embedding-model
+    - index
+    - policy
+    - configuration-snapshot
+    - remote-transport
+    - fabric-node
+  default_state:
+    - unknown
+
+field_rules:
+  permitted_transitions:
+    # Declared as explicit from/to pairs. Nothing returns to trusted without a
+    # new decision: a transition into trusted always requires one, and no
+    # transition may be marked automatic.
+    form: explicit-from-to-pairs
+    automatic: not-permitted
+    into_trusted_requires_decision: true
+  expiration_required:
+    # Every grant is time-bounded. An unbounded grant is one nobody will look at
+    # again.
+    default: true
+  verification_methods:
+    unbounded: not-permitted
+    values_from: platform-model/schemas/trust-decision.schema.yaml
+  review_interval_days:
+    minimum: 1
+    required: true
+
+relationships:
+  - PROTECTED_BY
+  - APPROVED_BY
+  - SUPERSEDES
+
+review_required: true

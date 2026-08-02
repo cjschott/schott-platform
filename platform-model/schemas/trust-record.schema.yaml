@@ -1,0 +1,182 @@
+---
+# Declarative schema for trust records.
+#
+# A trust record is the current standing of one subject in one domain. It is
+# never edited: a change is a new record superseding the old one, and both stay
+# readable. An editable trust record is an audit trail that can be rewritten
+# after the fact, which is the one property an audit trail must not have.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0011-trust-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: trust-record
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0011-trust-plane.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^TRUST-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+# The absence of a record is Unknown, and Unknown fails closed. A default of
+# anything else is trust on first use wearing a different name.
+default_state: unknown
+
+required_fields:
+  - record_id
+  - domain
+  - subject_identifier
+  - subject_fingerprint
+  - state
+  - scope
+  - trust_authority_id
+  - decision_id
+  - created_at
+  - provenance
+
+optional_fields:
+  - superseded_by
+  - supersedes
+  - expires_at
+  - review_due_at
+  - notes
+  - version
+  # Lineage. After revocation, later approval creates a new record that
+  # references the revoked one and never mutates it.
+  - lineage_id
+  - revokes_record_id
+
+# Credential material never enters a trust record: the record says a subject
+# was verified, never how to authenticate as it. The automation switches are
+# forbidden as fields so that no configuration can reintroduce them.
+forbidden_fields:
+  - private_key
+  - private_key_content
+  - password
+  - passwd
+  - passphrase
+  - token
+  - secret
+  - credential
+  - auto_enroll
+  - auto_approve
+  - auto_renew
+  - trust_on_first_use
+  - trust_score
+  - command
+
+enums:
+  state:
+    - unknown
+    - pending
+    - trusted
+    - restricted
+    - quarantined
+    - revoked
+    - expired
+    - rejected
+  domain:
+    - host
+    - ssh-host-key
+    - certificate
+    - user
+    - collector-plugin
+    - capability-package
+    - model
+    - model-adapter
+    - prompt-bundle
+    - embedding-model
+    - index
+    - policy
+    - configuration-snapshot
+    - remote-transport
+    - fabric-node
+
+# Per-state invariants. Declared here rather than left to prose so an
+# implementation cannot quietly collapse two states that mean different things.
+state_rules:
+  restricted:
+    # Identity is trusted; authority is deliberately limited. A restriction
+    # that bounds nothing is a trusted record with a misleading label.
+    requires_scope: true
+    scope_may_be_empty: false
+    usable_within_scope: true
+    # Restriction is a governance decision, not evidence of compromise.
+    implies_suspicion: false
+    scope_expansion: requires-new-decision
+    automatic_return_to_trusted: not-permitted
+    equivalent_to_quarantined: false
+
+  quarantined:
+    # Identity, integrity, provenance, or behaviour is suspect.
+    implies_suspicion: true
+    normal_capability_use: forbidden
+    permitted_activity: explicitly-approved-verification-only
+    # A withheld state pending an answer, not a withdrawal.
+    equivalent_to_revoked: false
+    equivalent_to_restricted: false
+    exit: requires-new-decision
+    automatic_return_to_usable: not-permitted
+
+  rejected:
+    # Approval was considered and denied. There is no grant to withdraw.
+    trust_ever_granted: false
+    equivalent_to_revoked: false
+
+  revoked:
+    # A grant existed, was relied upon, and was taken away.
+    trust_previously_granted: true
+    reactivation: not-permitted
+    later_approval: new-lineage-only
+    mutates_prior_record: false
+    equivalent_to_rejected: false
+
+  expired:
+    # The only state reachable by the passage of time.
+    reachable_by_time: true
+    automatic_renewal: not-permitted
+
+  pending:
+    # Operationally equivalent to unknown. A state meaning "not yet trusted but
+    # usable" is trust on first use with a waiting period.
+    usable: false
+
+  unknown:
+    usable: false
+    fail_closed: true
+
+field_rules:
+  subject_fingerprint:
+    # A stable identity for the thing trusted, by reference. Never the material
+    # itself: a fingerprint identifies, a key authenticates.
+    carries_material: false
+  scope:
+    # Trust is never global. A host trusted for observation is not trusted for
+    # placement.
+    unbounded: not-permitted
+  state:
+    automatic_transitions: not-permitted
+    default: unknown
+
+relationships:
+  - TRUSTS
+  - VERIFIED_BY
+  - APPROVED_BY
+  - REVOKES
+  - SUPERSEDES
+  - DERIVED_FROM
+  - PROTECTED_BY
+
+review_required: true

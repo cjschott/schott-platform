@@ -547,3 +547,88 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Distinguishes what was seen on another machine from what was seen here.
+
+  TRUSTS:
+    name: Trusts
+    description: >-
+      The source trust record establishes standing for the target subject.
+      Never inferred: a trust record exists only because a decision created it.
+      A reasoning record may never be the source, or inference would be able to
+      manufacture its own authority.
+    allowed_sources: [trust-record]
+    allowed_targets: [host, service, capability, collector, remote-target, remote-operation]
+    transitive: false
+    inverse: null
+    operational_impact: Records what the platform is permitted to rely on, and why.
+
+  VERIFIED_BY:
+    name: Verified By
+    description: >-
+      The source trust decision rested on the target evidence, checked by a
+      named verification method. Evidence is referenced, never inlined.
+    allowed_sources: [trust-decision, trust-record]
+    allowed_targets: [evidence, verification]
+    transitive: false
+    inverse: null
+    operational_impact: Distinguishes a checked assertion from an assumed one.
+
+  APPROVED_BY:
+    name: Approved By
+    description: >-
+      The source decision, record, authority, or policy was authorised by the
+      target trust authority. Self-approval is not permitted: the chain must
+      terminate outside the thing being established.
+    allowed_sources: [trust-decision, trust-record, trust-authority, trust-policy]
+    allowed_targets: [trust-authority]
+    transitive: false
+    inverse: null
+    operational_impact: Answers who authorised a grant, separately from who performed it.
+
+  REVOKES:
+    name: Revokes
+    description: >-
+      The source decision withdraws the target trust record. Terminal for that
+      record: the subject may be trusted again only by a new decision producing
+      a new record. Revocation never deletes anything.
+    allowed_sources: [trust-decision]
+    allowed_targets: [trust-record]
+    transitive: false
+    inverse: null
+    operational_impact: Makes withdrawal a recorded act rather than an edit.
+
+  SUPERSEDES:
+    name: Supersedes
+    description: >-
+      The source record replaces the target record, which remains readable.
+      This is how trust changes: correction is supersession, because an
+      editable audit trail can be rewritten after the fact.
+    allowed_sources: [trust-record, trust-decision, trust-authority, trust-policy]
+    allowed_targets: [trust-record, trust-decision, trust-authority, trust-policy]
+    transitive: true
+    inverse: null
+    operational_impact: Preserves what was trusted at any past moment.
+
+  DERIVED_FROM:
+    name: Derived From
+    description: >-
+      The source trust record was established from the target source material -
+      a signed release, an offline authority, a documented out-of-band
+      verification. Names the origin of an assertion, distinct from the actor
+      who acted on it.
+    allowed_sources: [trust-record, trust-decision]
+    allowed_targets: [evidence, configuration-snapshot, capability]
+    transitive: false
+    inverse: null
+    operational_impact: Separates where an assertion came from and who recorded it.
+
+  PROTECTED_BY:
+    name: Protected By
+    description: >-
+      The source subject is governed by the target trust policy or authority.
+      Present so that an ungoverned subject is visible as ungoverned rather
+      than merely unlisted.
+    allowed_sources: [host, service, capability, collector, remote-target, model, trust-record]
+    allowed_targets: [trust-policy, trust-authority]
+    transitive: false
+    inverse: null
+    operational_impact: Shows which governance applies before a subject is used.

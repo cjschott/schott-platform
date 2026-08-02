@@ -242,7 +242,7 @@ useful.
 
 ### Architectural rule
 
-**No model is Kyri. No machine is Kyri. Kyri is the governed core, its
+**No model is Kyri. No machine is Kyri. No node's self-report is trust. Kyri is the governed core, its
 evidence, and the contracts connecting replaceable capabilities.**
 
 This is load-bearing, not a slogan. Kyri is the reasoning layer, its memory,
@@ -397,10 +397,81 @@ produce a wrong record. Accepted limits are recorded rather than resolved —
 the OpenSSH client is external code, and fake-transport coverage is not
 real-world coverage, so first real use needs supervised validation.
 
+### v0.9.2 — Trust Plane
+
+Reserved. Architecture defined in
+[ADR-0011](decisions/ADR-0011-trust-plane.md); no runtime exists yet.
+
+**Kyri shall never silently trust anything.**
+
+During supervised validation of v0.9.0 the platform refused to contact a real
+host because its SSH identity had never been explicitly trusted. Nothing was
+broken — that was the design working. It also showed that the platform's trust
+decisions were scattered across the layers that happened to need them, with no
+shared way to answer four questions: who decided this is trusted, on what
+evidence, for how long and for what, and how is it withdrawn.
+
+Trust becomes a governed layer beside Observation, Knowledge, Integrity,
+Experience, and Occurrence.
+
+- **Reasoning may consume trust. Trust never consumes reasoning.** No inference,
+  pattern, baseline, or model output may produce, raise, or restore a trust
+  state. A trust plane that consumes reasoning can be argued into trusting
+  something, and a compromised subject's most likely behaviour is to look
+  normal.
+- **Four immutable entities** — trust record (`TRUST`), trust decision (`TDEC`),
+  trust authority (`TAUTH`), trust policy (`TPOL`). No update method, no delete
+  method, superseded by new record only. A correction is a supersession.
+- **Eight states** — `Unknown`, `Pending`, `Trusted`, `Restricted`,
+  `Quarantined`, `Revoked`, `Expired`, `Rejected`. `Unknown` is the default and
+  fails closed. Only `Expired` may be reached by the passage of time; every
+  other transition requires a decision.
+- **Fifteen domains**, none inheriting from another — hosts, SSH host keys,
+  certificates, users, collector plugins, capability packages, models, model
+  adapters, prompt bundles, embedding models, indexes, policies, configuration
+  snapshots, remote transports, and fabric nodes.
+- **Eleven mandatory elements per decision** — identifier, actor, timestamp,
+  reason, evidence, verification method, approval source, scope, expiration,
+  resulting state, and history. A decision missing any of them cannot be
+  written.
+- **Nothing automatic** — no automatic trust, no trust on first use, no
+  automatic `ssh-keyscan`, no automatic `known_hosts` updates, no automatic
+  certificate acceptance, no automatic model or capability approval, no
+  automatic policy changes, no automatic recovery. No trust scores.
+
+Every future capability depends on this layer. A model, plugin, host, adapter,
+index, transport, or node is something that must be trusted before it is used,
+and each will arrive with a good reason why its particular case should be easy.
+
+The cost is accepted and stated: everything becomes slower to add, there is no
+fast path, and human approval is a bottleneck. That will be felt first during an
+incident — which is when the pressure to add a fast path is strongest and the
+reason to refuse is strongest.
+
+Existing mechanisms — `known_hosts` references, the plugin registry, the
+operation catalog, target allowlists — keep working unchanged. Migrating them
+under the Trust Plane is later work.
+
+**Implementation note.** Before any Fabric node can be trusted, v0.9.2 must
+instantiate an external **Operator Root Authority**. Every trust chain terminates
+there, and a chain terminating inside the platform is circular — the system
+would be asserting its own trustworthiness, which is worth what the system is
+worth if it has been compromised. ADR-0011 defines the role and its invariants;
+the concrete external identity is bound during v0.9.2 implementation, not in
+the architecture, because a specific person, account, or key named in an
+architecture document outlives whoever currently holds it.
+
 ### v0.9.5 — Distributed Capability Fabric
 
 Reserved. Lets the platform use capacity that is not on this host, without any
 node becoming the platform.
+
+> **Blocked until the Trust Plane exists.** The Distributed Capability Fabric
+> cannot begin until v0.9.2 ships. Every question the fabric asks is a trust
+> question — may this node run this workload, may this result be believed, may
+> this endpoint see this data — and answering them inside the scheduler is how a
+> scheduler becomes the security boundary. The trust and privacy classifications
+> reserved below are governed by the Trust Plane rather than defined here.
 
 Registries — what exists:
 

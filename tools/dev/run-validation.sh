@@ -89,10 +89,10 @@ skipped_note() {
 # four of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=18
+  TOTAL_STEPS=19
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=26
+  TOTAL_STEPS=27
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -155,6 +155,11 @@ else
   skipped_note "Occurrence timeline"
   skipped_note "Remote collectors"
 fi
+
+# Static and documentation only: the trust plane is architecture in this
+# release, so there is no engine to exercise. Builds no store, spawns no
+# subprocess, contacts nothing — it runs in quick mode as well.
+run "Trust plane" bash tests/test-trust-plane.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 
