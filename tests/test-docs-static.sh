@@ -120,6 +120,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0004-immutable-knowledge-timeline.md"
   "docs/decisions/ADR-0007-operational-integrity-engine.md"
   "docs/decisions/ADR-0008-experience-engine.md"
+  "docs/decisions/ADR-0009-occurrence-timeline.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -709,6 +710,81 @@ for preserved in "User documentation" "Administrator guide" "Command reference" 
   assert_contains "${ROADMAP}" "${preserved}" \
     "roadmap preserves the existing requirement: ${preserved}"
 done
+
+# --- v0.8.6 occurrence timeline ---------------------------------------------
+ADR9="docs/decisions/ADR-0009-occurrence-timeline.md"
+assert_contains "${ADR9}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0009 is accepted"
+assert_contains "${ADR9}" '^## Context' "ADR-0009 contains Context"
+assert_contains "${ADR9}" '^## Decision' "ADR-0009 contains Decision"
+assert_contains "${ADR9}" '^## Consequences' "ADR-0009 contains Consequences"
+for concept in Occurrence "Occurrence Series" Pattern Timeline; do
+  assert_contains "${ADR9}" "${concept}" "ADR-0009 defines ${concept}"
+done
+assert_contains "${ADR9}" '[Nn]ever predicts|no prediction' \
+  "ADR-0009 states the engine never predicts"
+assert_contains "${ADR9}" 'Rejected [Aa]lternatives' "ADR-0009 records rejected alternatives"
+assert_contains "${ADR9}" '[Ff]orecast' "ADR-0009 addresses forecasting"
+
+assert_file "docs/occurrence/overview.md"
+assert_markdown_links "docs/occurrence/overview.md"
+for concept in "first seen" "last seen" interval frequency recurrence ordering; do
+  assert_contains "docs/occurrence/overview.md" "${concept}" \
+    "occurrence overview documents ${concept}"
+done
+for state in regular irregular single unknown; do
+  assert_contains "docs/occurrence/overview.md" "${state}" \
+    "occurrence overview documents the ${state} recurrence state"
+done
+
+assert_contains "docs/platform-roadmap.md" 'v0\.8\.6 — Occurrence Timeline' \
+  "roadmap records v0.8.6"
+assert_contains "docs/platform-roadmap.md" 'Sprint 97' "roadmap keeps Sprint 97"
+
+# --- v0.9.5 reservation and the extended architectural rule ------------------
+assert_contains "${ROADMAP}" 'v0\.9\.5 — Distributed Capability Fabric' \
+  "roadmap reserves v0.9.5 Distributed Capability Fabric"
+
+# The reservation must describe what it covers, or it reserves a name rather
+# than a scope.
+for requirement in "[Nn]ode registry" "[Cc]apability registry" "[Mm]odel endpoint registry" \
+                   "[Rr]esource metadata" "[Hh]ealth and availability" \
+                   "[Tt]rust and privacy classifications" \
+                   "[Dd]eterministic[, ].*placement" "[Ww]orkload leases" \
+                   "[Mm]aintenance and drain" "[Ll]ocal-only enforcement" \
+                   "[Pp]referred and fallback placement" "[Rr]esult validation" \
+                   "[Pp]lacement audit events"; do
+  assert_contains "${ROADMAP}" "${requirement}" \
+    "v0.9.5 reservation covers ${requirement}"
+done
+
+# Ordering: v0.9.5 must sit between v0.9.0 and v1.0.0.
+roadmap_order="$(grep -nE '^### (v0\.9\.0|v0\.9\.5|v1\.0\.0) — ' "${ROOT}/${ROADMAP}" \
+  | cut -d: -f1 | tr '\n' ' ')"
+read -r line_090 line_095 line_100 <<<"${roadmap_order}"
+if [[ -n "${line_090}" && -n "${line_095}" && -n "${line_100}" ]] \
+   && (( line_090 < line_095 && line_095 < line_100 )); then
+  pass "roadmap orders v0.9.0 before v0.9.5 before v1.0.0"
+else
+  fail "roadmap must order v0.9.0, v0.9.5, v1.0.0 (found lines: ${roadmap_order})"
+fi
+
+# Kyri is neither a model nor a machine. The second half matters once work is
+# placed on other nodes: a fabric that lets one machine become the platform has
+# recreated the coupling the first half exists to prevent.
+assert_contains "${ROADMAP}" 'No model is Kyri' "roadmap states no model is Kyri"
+assert_contains "${ROADMAP}" 'No machine is Kyri' "roadmap states no machine is Kyri"
+assert_contains "${ROADMAP}" 'governed core' \
+  "roadmap defines Kyri as the governed core and its contracts"
+
+# v0.9.5 is a reservation only in this release.
+refute_contains_docs() {
+  if [[ -d "${ROOT}/tools/fabric" ]] || [[ -d "${ROOT}/tools/capability" ]]; then
+    fail "v0.9.5 is a roadmap reservation; no fabric implementation belongs here"
+  else
+    pass "v0.9.5 remains a reservation with no implementation"
+  fi
+}
+refute_contains_docs
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

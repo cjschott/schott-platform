@@ -225,3 +225,27 @@ entity_types:
     description: What has been typical for a metric. Never a statement of what is correct.
     id_prefix: BASE
     lifecycle_supported: [declared, archived]
+
+  occurrence:
+    name: Occurrence
+    description: One thing that happened, at one time, cited to the record it was derived from.
+    id_prefix: OCC
+    lifecycle_supported: [declared, archived]
+
+  occurrence-series:
+    name: Occurrence Series
+    description: Every observed occurrence of one kind for one target, with derived temporal measures.
+    id_prefix: SERIES
+    lifecycle_supported: [declared, archived]
+
+  pattern:
+    name: Pattern
+    description: A recognised temporal shape in a series. Describes observed history, never the future.
+    id_prefix: PAT
+    lifecycle_supported: [declared, archived]
+
+  timeline:
+    name: Timeline
+    description: An ordered view of occurrences for a target, across kinds.
+    id_prefix: TL
+    lifecycle_supported: [declared, archived]

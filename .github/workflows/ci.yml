@@ -110,7 +110,11 @@ jobs:
                           'platform-model/**/RECOV-*' \
                           'platform-model/**/EXP-*' \
                           'platform-model/**/WINDOW-*' \
-                          'platform-model/**/BASE-*' | grep -q .; then
+                          'platform-model/**/BASE-*' \
+                          'platform-model/**/OCC-*' \
+                          'platform-model/**/SERIES-*' \
+                          'platform-model/**/PAT-*' \
+                          'platform-model/**/TL-*' | grep -q .; then
             echo "Generated runtime records must not be committed under platform-model." >&2
             exit 1
           fi
@@ -131,6 +135,12 @@ jobs:
       # model. Asserts the engine cannot predict, learn, or act.
       - name: Experience engine tests
         run: bash tests/test-experience-engine.sh
+
+      # Fixture-driven. Builds temporary evidence and occurrence stores in a
+      # temp directory; contacts no host, runs no subprocess, and makes no
+      # forward-looking claim. Asserts the engine cannot predict.
+      - name: Occurrence timeline tests
+        run: bash tests/test-occurrence-timeline.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).

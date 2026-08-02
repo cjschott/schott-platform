@@ -1,0 +1,100 @@
+---
+# Declarative schema for temporal patterns.
+#
+# A recognised shape in a series. Every pattern is a statement about observed
+# history and never about what happens next.
+#
+# Governed by: docs/decisions/ADR-0009-occurrence-timeline.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: pattern
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0009-occurrence-timeline.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^PAT-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - kind
+  - detected_at
+  - series
+  - explanation
+  - provenance
+
+constant_fields:
+  type: pattern
+
+entity_reference_fields:
+  - target
+
+enums:
+  # Closed vocabulary. Each names a shape observed in recorded history.
+  kind:
+    - recurring
+    - burst
+    - isolated
+    - accelerating
+    - decelerating
+  provenance_class:
+    - inferred
+
+timestamp_fields:
+  - detected_at
+
+# A pattern must cite the series it was detected in and explain itself in
+# prose. A shape asserted without either cannot be checked by a human.
+citation_requirements:
+  must_reference:
+    - series
+  requires_explanation: true
+
+forward_claims:
+  permitted: false
+  rationale: >-
+    "Recurring" means it has recurred, not that it will. Presenting the first
+    as the second is how a descriptive system starts making promises it cannot
+    keep.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+# A record read by tooling must never cause an action when parsed, and must
+# never carry a claim about the future.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - prediction
+  - forecast
+  - next_occurrence_at
+  - expected_next
+  - probability
+  - raw_output

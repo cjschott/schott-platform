@@ -242,14 +242,21 @@ useful.
 
 ### Architectural rule
 
-**No model is Kyri. Models are replaceable reasoning providers used by Kyri
-Core.**
+**No model is Kyri. No machine is Kyri. Kyri is the governed core, its
+evidence, and the contracts connecting replaceable capabilities.**
 
 This is load-bearing, not a slogan. Kyri is the reasoning layer, its memory,
-and its policies; a language model is an adapter behind a stable interface, in
-exactly the way ADR-0003 treats providers. A platform that lets a specific model
+and its policies. Models are replaceable reasoning providers used by Kyri Core:
+a language model is an adapter behind a stable interface, in exactly the way
+ADR-0003 treats providers. A platform that lets a specific model
 become its identity cannot replace that model without replacing itself — and
 model choice is the fastest-moving decision in the stack.
+
+The second sentence becomes load-bearing at v0.9.5, when work can be placed on
+other nodes. A fabric that lets one machine become the platform has recreated
+exactly the coupling the first sentence exists to prevent, one layer down: the
+host would then be as unreplaceable as a hardcoded model. Nodes are capacity
+behind a contract, and Kyri is what governs them.
 
 ### v0.8.0 — Operational Integrity and Digital Twin Foundation
 
@@ -314,11 +321,40 @@ evidence values*, not collection frequency, because the observation layer
 collapses identical repeated readings into one record plus a refresh event.
 Frequency-aware weighting is reserved for v0.8.6.
 
-### v0.8.6 — Occurrence Timeline
+### v0.8.6 — Occurrence Timeline and Temporal Knowledge
 
-Reserved. A unified chronology of what happened across evidence, integrity, and
-experience, so an operator can read a sequence of events rather than reconcile
-several stores by hand.
+**Delivered.** A unified chronology of what happened across evidence,
+integrity, and experience, so an operator can read a sequence of events rather
+than reconcile several stores by hand.
+
+- `recorder.py` — immutable `OCC` records carrying both `occurred_at` and
+  `recorded_at`, each citing the evidence it came from
+- `series.py` — `SERIES` records with first seen, last seen, intervals,
+  frequency, and recurrence
+- `patterns.py` — `PAT` records: recurring, burst, isolated, accelerating,
+  decelerating
+- `timeline.py` — `TL` records ordered by time then identifier
+- `confidence.py` — four factors totalling 1.0, each with a written reason
+- `integration.py` — temporal context alongside integrity and behaviour
+- ADR-0009, four schemas, four entity types, five relationships
+- `tools/common/immutable_store.py` — the shared write path, so this is not a
+  fourth hand-copied store
+
+Answers the question an operator asks first during an incident: **has this
+happened before?** `DRIFT + UNEXPECTED` occurring for the first time is a
+different situation from the same pair recurring every Tuesday for a month, and
+only temporal history distinguishes them.
+
+**No prediction, by decision rather than omission.** Once a system records
+eleven events at two-hour intervals, predicting the twelfth is one function
+away — and a predictive system that is wrong is confidently wrong at exactly
+the moment an operator has stopped checking. `recurring` means it has recurred,
+not that it will, and the models carry no field in which a forward claim could
+be recorded.
+
+Frequency weighting for the Experience Engine is exposed and explicitly
+**not applied**: applying it would change how every existing baseline reads.
+Experience continues to use distinct evidence in this release.
 
 ### v0.9.0 — Remote Read-Only Collectors
 
@@ -328,6 +364,46 @@ describing hosts nothing has contacted.
 
 Deliberately after the reasoning layers: the pipeline is exercised against
 local input, and memory is built, before anything is given reach.
+
+### v0.9.5 — Distributed Capability Fabric
+
+Reserved. Lets the platform use capacity that is not on this host, without any
+node becoming the platform.
+
+Registries — what exists:
+
+- **Node registry** — the machines the platform may use
+- **Capability registry** — what each node can actually do
+- **Model endpoint registry** — where inference is reachable, behind the
+  ADR-0003 gateway contract rather than as a direct provider dependency
+- **Resource metadata** — CPU, memory, GPU, and storage each node reports
+- **Health and availability states** — whether a node is usable right now
+- **Trust and privacy classifications** — what a node is permitted to see
+
+Placement — what runs where:
+
+- **Deterministic, policy-aware placement** — the same inputs choose the same
+  node, and the choice is explainable. A scheduler nobody can predict is a
+  scheduler nobody can debug during an incident.
+- **Preferred and fallback placement** — an explicit second choice, never a
+  silent redirection
+- **Local-only enforcement** — a workload marked local must never leave this
+  host, and the fabric must be able to refuse rather than degrade
+- **Workload leases and expiry** — placement is time-bounded, so a node that
+  disappears does not hold work indefinitely
+- **Maintenance and drain modes** — a node can be removed from service
+  deliberately rather than by failing
+
+Verification — what came back:
+
+- **Result validation** — output from another node is checked before it is
+  trusted, because remote capacity does not confer remote authority
+- **Placement audit events** — every decision is recorded on the timeline, so
+  "why did this run there?" has an answer
+
+Explicitly deferred to that release, and not implemented before it: no fabric,
+no registry, no placement, and no remote execution of any kind exists in v0.8.6
+or earlier.
 
 ### v1.0.0 — Kyri Core Foundation
 
