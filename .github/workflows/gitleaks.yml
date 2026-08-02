@@ -22,14 +22,14 @@ jobs:
     steps:
       - name: Check out repository (full history)
         # actions/checkout v4.4.0
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           # Full history so commit-level scanning covers the whole repository.
           fetch-depth: 0
 
       - name: Run Gitleaks
         # gitleaks/gitleaks-action v2.3.9
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Repository-wide scan; a verified leak fails the job (default behavior).
