@@ -1,0 +1,61 @@
+---
+# Linux service state collector — remote and read-only.
+#
+# Observes only units the target explicitly lists in allowed_units. There is
+# no enumeration operation, and adding one would be a decision rather than a
+# configuration change: a survey of every installed unit is a different thing
+# from a targeted question.
+#
+# Governed by: docs/decisions/ADR-0010-remote-read-only-collection.md
+
+api_version: schott-platform/v1
+kind: CollectorManifest
+
+id: linux-services
+name: Linux Services Collector
+version: 0.1.0
+source_type: ssh-command
+description: >-
+  Observes the load, active, and enablement state of explicitly allow-listed
+  units on an approved remote Linux host. Enumerates nothing and reads no
+  logs.
+
+capabilities: []
+
+supported_targets:
+  - host
+  - service
+
+permissions:
+  - read-remote-host
+
+network_access: true
+subprocess_access: true
+filesystem_access: false
+read_only: true
+
+approved_operations:
+  - linux.service_state
+
+# Logs are the richest source of accidental secrets on any machine. A
+# collector that reads them ships tokens, credentials, and personal data into
+# evidence records as a side effect of checking whether a service is running.
+forbidden_facts:
+  - journal
+  - logs
+  - process_list
+  - unit_enumeration
+  - service_configuration
+
+secret_requirements: []
+
+output_contract:
+  - service.<unit>
+
+lifecycle: production
+
+provenance:
+  class: declared
+  source: docs/collectors/linux-services.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
