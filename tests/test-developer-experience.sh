@@ -482,6 +482,22 @@ assert_contains "${VALIDATION}" 'STEP" -ne "\$\{TOTAL_STEPS|STEP != TOTAL_STEPS|
 assert_contains "${VALIDATION}" 'declared|miscount|step count' \
   "validation explains a step-count mismatch when it finds one"
 
+# --- v0.9.0 remote suite wiring ---------------------------------------------
+# Three previous sprints wired a new suite into CI but not into local
+# validation. Assert both, and assert they agree.
+assert_contains "${VALIDATION}" 'tests/test-remote-collectors\.sh' \
+  "local validation runs the remote collector suite"
+assert_contains ".github/workflows/ci.yml" 'tests/test-remote-collectors\.sh' \
+  "ci runs the remote collector suite"
+
+# Validation itself must not become a way to reach a host. Matched at command
+# position only: bootstrap.sh's own comment says it never touches SSH, and a
+# pattern that flags prose would punish the documentation for being explicit.
+assert_absent_in "${DEV}" '(^|[;&|(]|\$\()[[:space:]]*(ssh|scp|sftp|ssh-keyscan|ssh-copy-id)[[:space:]]' \
+  "developer tooling invokes no ssh client"
+assert_absent_in "${DEV}" '(nmap|masscan|StrictHostKeyChecking)' \
+  "developer tooling performs no scanning or host-key configuration"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nDeveloper experience validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

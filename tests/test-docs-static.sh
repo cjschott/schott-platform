@@ -121,6 +121,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0007-operational-integrity-engine.md"
   "docs/decisions/ADR-0008-experience-engine.md"
   "docs/decisions/ADR-0009-occurrence-timeline.md"
+  "docs/decisions/ADR-0010-remote-read-only-collection.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -785,6 +786,55 @@ refute_contains_docs() {
   fi
 }
 refute_contains_docs
+
+# --- v0.9.0 remote read-only collection --------------------------------------
+ADR10="docs/decisions/ADR-0010-remote-read-only-collection.md"
+assert_contains "${ADR10}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0010 is accepted"
+assert_contains "${ADR10}" '^## Context' "ADR-0010 contains Context"
+assert_contains "${ADR10}" '^## Decision' "ADR-0010 contains Decision"
+assert_contains "${ADR10}" '^## Consequences' "ADR-0010 contains Consequences"
+assert_contains "${ADR10}" 'observe.*never administer|never administer' \
+  "ADR-0010 states collectors observe but never administer"
+assert_contains "${ADR10}" '[Hh]ost-key verification is mandatory|Host-key verification is mandatory' \
+  "ADR-0010 requires host-key verification"
+assert_contains "${ADR10}" 'fail closed' "ADR-0010 states unknown keys fail closed"
+assert_contains "${ADR10}" 'connection failure is not' \
+  "ADR-0010 states connection failure is not host failure"
+assert_contains "${ADR10}" 'Rejected [Aa]lternatives' "ADR-0010 records rejected alternatives"
+for rejected in "arbitrary SSH command" "Shell text supplied in YAML" \
+                "Disabling host-key checking" "Remote sudo" \
+                "Package installation" "Ansible"; do
+  assert_contains "${ADR10}" "${rejected}" "ADR-0010 rejects ${rejected}"
+done
+
+for doc in remote-collection linux-host linux-resources linux-services; do
+  assert_file "docs/collectors/${doc}.md"
+  assert_markdown_links "docs/collectors/${doc}.md"
+done
+
+REMOTE_DOC="docs/collectors/remote-collection.md"
+for topic in "[Tt]hreat model" "host key" "authentication reference" \
+             "operation catalog" "timeout" "[Ff]ailure semantics" "[Rr]edaction" \
+             "sudo" "Distributed Capability Fabric"; do
+  assert_contains "${REMOTE_DOC}" "${topic}" "remote collection doc covers ${topic}"
+done
+for category in authentication_failure host_key_failure timeout output_limit \
+                transport_failure unsupported_target collection_failure; do
+  assert_contains "${REMOTE_DOC}" "${category}" \
+    "remote collection doc documents the ${category} category"
+done
+
+# Documentation must use synthetic hostnames only; a real one invites a copy
+# and paste straight at production.
+assert_not_contains "${REMOTE_DOC}" '[a-z0-9-]+\.(com|net|org|io)\b' \
+  "remote collection doc uses synthetic hostnames only"
+
+assert_contains "docs/platform-roadmap.md" 'v0\.9\.0 — Remote Read-Only Collectors' \
+  "roadmap records v0.9.0"
+assert_contains "docs/platform-roadmap.md" 'v0\.9\.5 — Distributed Capability Fabric' \
+  "roadmap preserves v0.9.5"
+assert_contains "docs/platform-roadmap.md" 'v1\.0\.0 — Kyri Core Foundation' \
+  "roadmap preserves v1.0.0"
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

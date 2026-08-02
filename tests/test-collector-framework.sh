@@ -438,6 +438,49 @@ assert_absent_in "tools/collectors" \
   '(EvidenceStore|write_evidence|persist_evidence|allocate_id)' \
   "collectors cannot reach the evidence store" "validate_plugins.py"
 
+# --- v0.9.0: the network permission is narrowed, not relaxed -----------------
+# v0.5.0 refused network_access unconditionally. Three collectors now genuinely
+# need it, so the rule is narrowed the same way v0.6.0 narrowed subprocess:
+# permitted only alongside an explicit permission, never by default.
+assert_contains "tools/collectors/models.py" 'read-remote-host' \
+  "the framework defines a read-remote-host permission"
+assert_contains "tools/collectors/models.py" 'network_access' \
+  "the framework still governs network access explicitly"
+assert_contains "tools/collectors/models.py" \
+  'network_access.*read-remote-host|read-remote-host.*network_access' \
+  "network access is tied to the read-remote-host permission"
+
+# Local collectors must not quietly acquire network access.
+for plugin in git_repository configuration_render manual_attestation example; do
+  if [[ -f "${ROOT}/tools/collectors/plugins/${plugin}/manifest.yaml" ]]; then
+    assert_contains "tools/collectors/plugins/${plugin}/manifest.yaml" \
+      'network_access:[[:space:]]*false' \
+      "local collector ${plugin} declares no network access"
+  fi
+done
+
+# Remote collectors must declare both the flag and the permission, so a
+# manifest cannot reach the network while presenting itself as local.
+for plugin in linux_host linux_resources linux_services; do
+  assert_contains "tools/collectors/plugins/${plugin}/manifest.yaml" \
+    'network_access:[[:space:]]*true' \
+    "remote collector ${plugin} declares network access"
+  assert_contains "tools/collectors/plugins/${plugin}/manifest.yaml" \
+    'read-remote-host' \
+    "remote collector ${plugin} declares the read-remote-host permission"
+  assert_contains "tools/collectors/plugins/${plugin}/manifest.yaml" \
+    'read_only:[[:space:]]*true' \
+    "remote collector ${plugin} declares itself read-only"
+done
+
+# The framework-wide guarantees still hold for the remote package: a collector
+# returns results, and never numbers or stores them.
+assert_absent_in "tools/collectors/remote" 'EVID-[0-9]' \
+  "the remote package assigns no evidence identifiers"
+assert_absent_in "tools/collectors/remote" \
+  '(evidence_store|EvidenceStore|persist_evidence)' \
+  "the remote package persists no evidence"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nCollector framework validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1
