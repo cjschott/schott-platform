@@ -1716,6 +1716,19 @@ assert_contains ".github/workflows/ci.yml" 'bash tests/test-operational-integrit
 assert_ignored "integrity-local/"
 
 # ---------------------------------------------------------------------------
+# v0.8.5 — experience engine
+# ---------------------------------------------------------------------------
+
+for module in models statistics windows profile_builder baseline confidence \
+              experience_store integration cli; do
+  assert_file "tools/experience/${module}.py"
+done
+assert_file "tests/test-experience-engine.sh"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-experience-engine\.sh' \
+  "ci runs the experience engine suite"
+assert_ignored "experience-local/"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
