@@ -58,11 +58,10 @@ for schema in trust-record trust-decision trust-authority trust-policy; do
   assert_file "platform-model/schemas/${schema}.schema.yaml"
 done
 
-# --- No implementation exists ------------------------------------------------
-# This is the sprint's defining constraint. Trust is specified here and built
-# later; a half-built trust engine is worse than none, because it looks like a
-# control while behaving like a suggestion.
-for forbidden_dir in tools/trust tools/fabric tools/capability tools/enrollment; do
+# --- The architecture stays separable from later releases --------------------
+# v0.9.2 specified the Trust Plane and built nothing; v0.9.3 implements it.
+# These assertions now guard the next boundary rather than the last one.
+for forbidden_dir in tools/fabric tools/capability tools/enrollment; do
   if [[ -e "${ROOT}/${forbidden_dir}" ]]; then
     fail "no implementation belongs in this sprint: ${forbidden_dir} exists"
   else
@@ -224,7 +223,7 @@ done
 for banned in "enrollment workflow" "approval engine" "revocation executor"; do
   pass "architecture sprint asserts absence of: ${banned}"
 done
-for impl in tools/trust tools/fabric tools/capability tools/enrollment \
+for impl in tools/fabric tools/capability tools/enrollment \
             tools/approval tools/revocation; do
   if [[ -e "${ROOT}/${impl}" ]]; then
     fail "no runtime implementation belongs in this sprint: ${impl}"
@@ -300,11 +299,12 @@ else
   fail "roadmap must order v0.9.0, v0.9.2, v0.9.5, v1.0.0 (found lines: ${roadmap_order})"
 fi
 
-# v0.9.2 is a reservation in this release: architecture only.
-if [[ -d "${ROOT}/tools/trust" ]]; then
-  fail "v0.9.2 is an architecture reservation; no trust implementation belongs here"
+# The architecture and its implementation are separate releases, and both now
+# exist. What must remain absent is the Fabric: v0.9.5 is still gated.
+if [[ -d "${ROOT}/tools/fabric" ]]; then
+  fail "v0.9.5 remains gated; no fabric implementation belongs here"
 else
-  pass "v0.9.2 remains an architecture reservation with no implementation"
+  pass "v0.9.5 remains gated with no fabric implementation"
 fi
 
 # --- CI and local validation wiring -----------------------------------------

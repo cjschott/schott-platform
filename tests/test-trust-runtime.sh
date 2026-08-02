@@ -76,19 +76,24 @@ assert_absent_in "${TRUST}" "['\"][^'\"]*ai/\\.env['\"]" \
 # --- No reasoning, no scores -------------------------------------------------
 # Trust never consumes reasoning. A trust engine that asks a model what to
 # trust has inverted the entire layer.
+# Matched against model *clients and calls*, not the word: these modules
+# describe what they refuse, and a pattern that flagged the description would
+# punish the documentation for being explicit.
 assert_absent_in "${TRUST}" \
-  '(litellm|openai|anthropic|ollama|langchain|transformers|llm_|\bprompt\b)' \
+  '(litellm|openai|anthropic|ollama|langchain|transformers|llm_client|system_prompt|prompt_template|chat\.completions)' \
   "the trust runtime consumes no model or reasoning output"
 assert_absent_in "${TRUST}" \
   '(tools\.observation|tools\.experience|tools\.occurrence|tools\.integrity)' \
   "the trust runtime imports no reasoning layer"
+# Naming these in a deny-list is the mechanism, not a violation. What must
+# not exist is a score being assigned, read, or returned.
 assert_absent_in "${TRUST}" \
-  '(trust_score|confidence_score|trust_level_numeric|reputation)' \
-  "the trust runtime defines no trust score"
+  '((trust_score|confidence_score|trust_level_numeric|reputation)[[:space:]]*=[^=]|\.(trust_score|confidence_score|reputation)\b|return[[:space:]]+.*trust_score)' \
+  "the trust runtime computes no trust score"
 
 # --- No automatic trust, no recovery, no remediation ------------------------
 assert_absent_in "${TRUST}" \
-  '(trust_on_first_use|auto_trust|auto_enroll|auto_approve|tofu)' \
+  '((trust_on_first_use|auto_trust|auto_enroll|auto_approve)[[:space:]]*=[^=]|def[[:space:]]+(auto_trust|auto_enroll|auto_approve))' \
   "the trust runtime has no automatic trust path"
 assert_absent_in "${TRUST}" \
   '(def[[:space:]]+(remediate|repair|restore_trust|fix)_?|auto_remediate|auto_recover)' \

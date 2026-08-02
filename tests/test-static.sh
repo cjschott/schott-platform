@@ -1858,10 +1858,11 @@ for trust_artefact in \
   assert_file "${trust_artefact}"
 done
 
-# No trust runtime, no enrollment, no certificate handling, no approval
-# workflow. Those are later releases: a partial trust engine is worse than none
-# because it reads as a control while behaving as a suggestion.
-for trust_impl in tools/trust tools/fabric tools/capability tools/enrollment; do
+# v0.9.2 forbade tools/trust outright because that sprint was architecture only.
+# v0.9.3 is the release that implements it, so the runtime is now expected --
+# and the Fabric, enrollment, and capability packages remain forbidden. The
+# boundary moved by one release; it did not dissolve.
+for trust_impl in tools/fabric tools/capability tools/enrollment; do
   if [[ -e "${ROOT}/${trust_impl}" ]]; then
     fail "no trust implementation belongs in the architecture sprint: ${trust_impl}"
   else

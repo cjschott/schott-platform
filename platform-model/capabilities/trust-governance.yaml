@@ -1,0 +1,75 @@
+---
+# Trust Governance capability.
+#
+# Maturity is a claim about implementation, not intent. See the rationale
+# below for why this value was chosen.
+#
+# Governed by: docs/standards/capability-model-standard.md
+
+api_version: schott-platform/v1
+kind: Capability
+
+id: CAP-0009
+type: capability
+name: Trust Governance
+slug: trust-governance
+lifecycle: active
+owner: platform-engineering
+maturity: partial
+risk: high
+approval_required: true
+review_required: true
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0011-trust-plane.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+description: >-
+  Decide explicitly what the platform is permitted to rely on, record every decision immutably, and refuse anything not explicitly trusted.
+
+maturity_rationale: >-
+  Partial: an immutable root authority declaration, trust decisions, lineage enforcement, state transitions, scope and quarantine evaluation, expiry, and read-only queries exist and are enforced at runtime. The platform's existing trust mechanisms are not yet migrated, so two trust systems coexist and only one is enforced here. Enrollment and certificate handling remain unimplemented, and Fabric integration remains blocked. Not operational.
+
+review_note: >-
+  Partial: runtime enforcement exists; migration of known_hosts, the plugin registry, the operation catalog, and target allowlists is outstanding, and no enrollment or certificate path exists.
+
+inputs:
+  - Operator root authority declarations
+  - Trust decision inputs
+  - Evidence references
+
+outputs:
+  - Trust records
+  - Trust decisions
+  - Trust lineages
+  - Trust audit events
+  - Read-only trust evaluations
+
+dependencies:
+  - CAP-0002
+
+implemented_by:
+  - tools/trust/models.py
+  - tools/trust/store.py
+  - tools/trust/transitions.py
+  - tools/trust/scope.py
+  - tools/trust/evaluator.py
+  - tools/trust/query.py
+  - platform-model/schemas/trust-record.schema.yaml
+  - platform-model/schemas/trust-decision.schema.yaml
+  - platform-model/schemas/trust-authority.schema.yaml
+  - platform-model/schemas/trust-policy.schema.yaml
+
+validated_by:
+  - tests/test-trust-plane.sh
+  - tests/test-trust-runtime.sh
+
+documented_by:
+  - docs/decisions/ADR-0011-trust-plane.md
+  - docs/trust/trust-plane.md
+  - docs/trust/runtime-overview.md
+
+relationships:
+  canonical_source: platform-model/relationships/platform-capabilities.yaml

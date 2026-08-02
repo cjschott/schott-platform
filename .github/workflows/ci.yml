@@ -155,6 +155,12 @@ jobs:
       - name: Trust plane tests
         run: bash tests/test-trust-plane.sh
 
+      # Builds synthetic trust stores in temporary directories and destroys
+      # them. No network, no SSH, no subprocess from library code, no Docker,
+      # no secrets file of any kind, and no store inside the repository.
+      - name: Trust runtime tests
+        run: bash tests/test-trust-runtime.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

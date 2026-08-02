@@ -942,7 +942,7 @@ for runtime_doc in docs/trust/runtime-overview.md \
 done
 
 RUNTIME_DOC="docs/trust/runtime-overview.md"
-for topic in "store layout" "[Ss]tored versus effective|stored and effective" \
+for topic in "[Ss]tore layout" "[Ss]tored versus effective|stored and effective" \
              "[Ff]ailure semantics" "[Nn]on-goal" "single-host"; do
   assert_contains "${RUNTIME_DOC}" "${topic}" "runtime overview covers ${topic}"
 done

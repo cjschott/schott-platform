@@ -461,13 +461,57 @@ the concrete external identity is bound during v0.9.2 implementation, not in
 the architecture, because a specific person, account, or key named in an
 architecture document outlives whoever currently holds it.
 
+### v0.9.3 — Trust Plane Runtime Foundation
+
+**Delivered.** Turns ADR-0011 from a specification into runtime enforcement.
+
+v0.9.2 defined the Trust Plane and deliberately built nothing, which left the
+platform with guarantees that were intentions. This release makes them
+refusals.
+
+- **Immutable runtime records** — root authority (`TAUTH`), trust record
+  (`TREC`), decision (`TDEC`), scope (`TSCOPE`), evidence reference (`TEVID`),
+  audit event (`TAUDIT`), and versioned lineage (`TLIN`). No update method, no
+  delete method, anywhere in the package.
+- **External Operator Root Authority** — Kyri persists a declaration that an
+  external root exists and never establishes the identity. A second active root
+  fails closed; superseding it is not implemented.
+- **Lineage enforcement** — decisions cannot cross lineages, a subject cannot
+  change type mid-chain, and supersession cannot loop or dangle. A lineage
+  advances by writing a new version, never by editing one.
+- **Code-owned transition table** — only `Expired` occurs automatically, and no
+  automatic transition can produce a usable state. `Revoked` and `Rejected` are
+  terminal; `Expired` continues the lineage, resolving an ambiguity ADR-0011
+  left open.
+- **Deny-by-default scope** — an unstated dimension is denied, and every
+  non-usable state overrides a matching scope.
+- **Quarantine enforcement** — normal use forbidden; only explicitly named
+  verification operations, with no generic wildcard.
+- **Deterministic expiry** — stored state versus effective state, with no wall
+  clock inside core functions.
+- **Read-only queries** — nothing written, no identifier consumed, every denial
+  explained, and three distinct fail-closed paths.
+
+Trust never consumes reasoning: no module in the runtime imports a reasoning
+layer or a model client.
+
+**Known limits.** Sequence allocation is single-host. The platform's existing
+trust mechanisms — `known_hosts`, the plugin registry, the operation catalog,
+target allowlists — keep working unchanged and are **not migrated**, so the
+platform has two trust systems and only one is enforced by this runtime.
+
 ### v0.9.5 — Distributed Capability Fabric
 
 Reserved. Lets the platform use capacity that is not on this host, without any
 node becoming the platform.
 
-> **Blocked until the Trust Plane exists.** The Distributed Capability Fabric
-> cannot begin until v0.9.2 ships. Every question the fabric asks is a trust
+> **Blocked until the Trust Plane is implemented, not merely specified.** The
+> Distributed Capability Fabric cannot begin until v0.9.2 and v0.9.3 both ship.
+> v0.9.3 supplies the instantiated root authority, enforced state transitions,
+> scope enforcement, quarantine, revocation lineage, and the trust query
+> service the gate requires. Migration of the existing trust mechanisms is
+> still outstanding, and a fabric node would be trusted through mechanisms that
+> have not yet moved. Every question the fabric asks is a trust
 > question — may this node run this workload, may this result be believed, may
 > this endpoint see this data — and answering them inside the scheduler is how a
 > scheduler becomes the security boundary. The trust and privacy classifications
