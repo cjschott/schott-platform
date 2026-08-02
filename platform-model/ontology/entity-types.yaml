@@ -249,3 +249,15 @@ entity_types:
     description: An ordered view of occurrences for a target, across kinds.
     id_prefix: TL
     lifecycle_supported: [declared, archived]
+
+  remote-target:
+    name: Remote Target
+    description: A host explicitly approved for read-only observation. Declared by a human; never discovered.
+    id_prefix: RTGT
+    lifecycle_supported: [declared, archived]
+
+  remote-operation:
+    name: Remote Operation
+    description: One read-only operation the code-owned catalog defines. Describes an operation; never defines its argv.
+    id_prefix: ROP
+    lifecycle_supported: [declared, archived]
