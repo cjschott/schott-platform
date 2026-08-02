@@ -196,9 +196,30 @@ observes a remote host.
 
 ### v0.7.5 — Developer Experience Hardening
 
-Reserved. Ergonomics of the tooling built so far — diagnostics, error messages,
-and the friction of running the pipeline by hand — before more surface is added
-on top of it.
+**Delivered.** No feature work. This release changed how the repository is
+validated, not what it does, after three local/CI divergences were found by
+inspection.
+
+- `tools/dev/versions.env` — every tool version pinned in one file, each with
+  its kind (exact, minimum, CI-aligned, host-observed) and its evidence
+- `tools/dev/run-shellcheck.sh` — ShellCheck `0.9.0` via a pinned container,
+  no host package required; CI now lints `tools/dev/` too
+- `tools/dev/check-toolchain.sh` and `bootstrap.sh` — dry-run by default;
+  nothing installs without `--apply`
+- `tools/dev/run-validation.sh` — one command, twenty ordered steps, plus a
+  `--quick` mode that documents exactly what it omits
+- `tools/dev/run-local-ci.sh` — strict-mode wrapper that names the four
+  security workflows it cannot reproduce
+- Optional `.pre-commit-config.yaml` using repository-local hooks only
+
+The change that mattered most: **five suites printed `SKIP` and exited `0`
+when PyYAML was missing.** A green run that verified almost nothing is worse
+than no run, because it tells you your change is safe. All five now fail
+closed and name the pinned install command.
+
+Two defects were caught by the new tooling during its own construction — six
+ShellCheck findings that would have failed CI, and a bug in the validation
+runner that printed `FAILED` and then exited `0`.
 
 ### v0.8.0 — Remote Read-Only Collectors
 
