@@ -103,7 +103,11 @@ jobs:
           if git ls-files 'platform-model/evidence/EVID-*' \
                           'platform-model/verifications/VER-*' \
                           'platform-model/knowledge-events/MEM-*' \
-                          'platform-model/observations/OBS-*' | grep -q .; then
+                          'platform-model/observations/OBS-*' \
+                          'platform-model/**/SNAP-*' \
+                          'platform-model/**/TWIN-*' \
+                          'platform-model/**/INTEG-*' \
+                          'platform-model/**/RECOV-*' | grep -q .; then
             echo "Generated runtime records must not be committed under platform-model." >&2
             exit 1
           fi
@@ -112,6 +116,12 @@ jobs:
             git status --porcelain platform-model >&2
             exit 1
           fi
+
+      # Fixture-driven. Builds temporary evidence and integrity stores in a temp
+      # directory; contacts no host, starts no container, and executes no
+      # recovery. Asserts the engine cannot execute one at all.
+      - name: Operational integrity tests
+        run: bash tests/test-operational-integrity.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).

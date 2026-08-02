@@ -1718,6 +1718,34 @@ assert_contains "tools/dev/versions.env" '^PYYAML_VERSION=' \
   "toolchain manifest pins the PyYAML version"
 
 # ---------------------------------------------------------------------------
+# v0.8.0 — operational integrity
+# ---------------------------------------------------------------------------
+
+for module in models snapshot_manager twin_builder integrity_analyzer \
+              confidence recovery_planner cli; do
+  assert_file "tools/integrity/${module}.py"
+done
+assert_file "tests/test-operational-integrity.sh"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-operational-integrity\.sh' \
+  "ci runs the operational integrity suite"
+
+# Derived integrity artefacts are disposable and must never be tracked.
+assert_ignored "integrity-local/"
+
+# ---------------------------------------------------------------------------
+# Combined-state parity: both suites must run locally and in CI. A merge that
+# kept one side's wiring and dropped the other's would leave a suite that
+# exists but is never executed.
+# ---------------------------------------------------------------------------
+
+assert_contains "tools/dev/run-validation.sh" 'tests/test-developer-experience\.sh' \
+  "local validation runs the developer experience suite"
+assert_contains "tools/dev/run-validation.sh" 'tests/test-operational-integrity\.sh' \
+  "local validation runs the operational integrity suite"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-developer-experience\.sh' \
+  "ci runs the developer experience suite"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

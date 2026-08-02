@@ -118,6 +118,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0002-evidence-first-architecture.md"
   "docs/decisions/ADR-0003-provider-agnostic-ai-architecture.md"
   "docs/decisions/ADR-0004-immutable-knowledge-timeline.md"
+  "docs/decisions/ADR-0007-operational-integrity-engine.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -587,6 +588,28 @@ assert_contains "docs/platform-roadmap.md" 'v0\.7\.5 — Developer Experience Ha
 # roadmap block further down; the earlier reservation names were superseded.
 assert_contains "docs/platform-roadmap.md" 'Sprint 98' "roadmap keeps Sprint 98 intact"
 assert_contains "docs/platform-roadmap.md" 'Sprint 99' "roadmap keeps Sprint 99 intact"
+
+# --- v0.8.0 operational integrity ------------------------------------------
+ADR7="docs/decisions/ADR-0007-operational-integrity-engine.md"
+assert_contains "${ADR7}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0007 is accepted"
+assert_contains "${ADR7}" '^## Context' "ADR-0007 contains Context"
+assert_contains "${ADR7}" '^## Decision' "ADR-0007 contains Decision"
+assert_contains "${ADR7}" '^## Consequences' "ADR-0007 contains Consequences"
+for concept in Snapshot "Digital Twin" "Integrity Report" "Recovery Plan"; do
+  assert_contains "${ADR7}" "${concept}" "ADR-0007 defines ${concept}"
+done
+assert_contains "${ADR7}" '[Aa]dvisory' "ADR-0007 states recovery is advisory"
+assert_contains "${ADR7}" 'never (executes|recovers)|no execution' \
+  "ADR-0007 states the engine never executes recovery"
+assert_contains "${ADR7}" 'disposable' "ADR-0007 states twins are disposable"
+assert_contains "${ADR7}" 'Rejected [Aa]lternatives' "ADR-0007 records rejected alternatives"
+
+assert_file "docs/integrity/overview.md"
+assert_markdown_links "docs/integrity/overview.md"
+for state in MATCH PARTIAL DRIFT UNKNOWN INSUFFICIENT_EVIDENCE; do
+  assert_contains "docs/integrity/overview.md" "${state}" \
+    "integrity overview documents the ${state} status"
+done
 
 # --- v0.7.5 developer documentation ----------------------------------------
 for document in getting-started toolchain local-validation; do

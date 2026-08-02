@@ -182,3 +182,28 @@ entity_types:
     description: An append-only record that something happened to the platform's understanding of an entity.
     id_prefix: MEM
     lifecycle_supported: [declared, archived]
+
+  snapshot:
+    name: Snapshot
+    description: Immutable representation of a known-good operational state, never revised.
+    id_prefix: SNAP
+    lifecycle_supported: [declared, deprecated, archived]
+
+  digital-twin:
+    name: Digital Twin
+    description: Disposable working reconstruction of current state, rebuilt entirely from knowledge.
+    id_prefix: TWIN
+    # No deprecation lifecycle: a twin is rebuilt or discarded, never aged.
+    lifecycle_supported: [declared]
+
+  integrity-report:
+    name: Integrity Report
+    description: Read-only comparison between a digital twin and an immutable snapshot.
+    id_prefix: INTEG
+    lifecycle_supported: [declared, archived]
+
+  recovery-plan:
+    name: Recovery Plan
+    description: Advisory, human-readable reconstruction strategy. Never executed.
+    id_prefix: RECOV
+    lifecycle_supported: [declared, archived]

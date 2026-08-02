@@ -385,3 +385,47 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Identifies where the audit trail for a conclusion lives.
+
+  SNAPSHOT_OF:
+    name: Snapshot Of
+    description: >-
+      The source snapshot records a known-good observed state of the target
+      entity. Records observation, never intent, and confers no authority over
+      the target's declared configuration.
+    allowed_sources: [snapshot]
+    allowed_targets: [host, service, application, container, network, storage, backup-policy, repository]
+    transitive: false
+    inverse: null
+    operational_impact: Provides the reference point an integrity comparison is measured against.
+
+  RECONSTRUCTED_FROM:
+    name: Reconstructed From
+    description: >-
+      The source digital twin was rebuilt entirely from the target knowledge or
+      evidence. A twin has no content of its own.
+    allowed_sources: [digital-twin]
+    allowed_targets: [evidence, verification, knowledge-event]
+    transitive: false
+    inverse: null
+    operational_impact: A twin is only as trustworthy as the knowledge it was rebuilt from.
+
+  COMPARED_AGAINST:
+    name: Compared Against
+    description: The source integrity report compared a digital twin against the target snapshot.
+    allowed_sources: [integrity-report]
+    allowed_targets: [snapshot]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies which reference point a finding was measured against.
+
+  RECOMMENDS_RECONSTRUCTION:
+    name: Recommends Reconstruction
+    description: >-
+      The source recovery plan advises reconstruction toward the target
+      snapshot. Advisory only: this relationship confers no authority to act,
+      and detected drift may be intended change.
+    allowed_sources: [recovery-plan]
+    allowed_targets: [snapshot]
+    transitive: false
+    inverse: null
+    operational_impact: Records advice a human may accept or reject; nothing acts on it.

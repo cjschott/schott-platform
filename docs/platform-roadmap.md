@@ -253,9 +253,34 @@ model choice is the fastest-moving decision in the stack.
 
 ### v0.8.0 — Operational Integrity and Digital Twin Foundation
 
-Immutable snapshots of known-good state, disposable digital twins reconstructed
-from knowledge, integrity comparison, and advisory recovery planning. Answers
-"is this still the system we think it is?" without ever acting on the answer.
+**Delivered.** Immutable snapshots of known-good state, disposable digital twins
+reconstructed from knowledge, integrity comparison, and advisory recovery
+planning. Answers "is this still the system we think it is?" without ever
+acting on the answer.
+
+- `snapshot_manager.py` — immutable, versioned, fingerprinted, deterministic
+  snapshots; temp-file plus `os.link`, so committing a write and refusing an
+  overwrite are one atomic step
+- `twin_builder.py` — disposable twins rebuilt entirely from knowledge, frozen
+  with write-protected facts so a hand-edit fails rather than silently succeeds
+- `integrity_analyzer.py` — five states: `MATCH`, `PARTIAL`, `DRIFT`,
+  `UNKNOWN`, `INSUFFICIENT_EVIDENCE`
+- `confidence.py` — five factors with weights totalling 1.0, each carrying a
+  written reason
+- `recovery_planner.py` — prose only; no command field, no script, no execute
+  method
+- ADR-0007, four schemas (`SNAP`, `TWIN`, `INTEG`, `RECOV`), four entity types,
+  four relationships
+
+`UNKNOWN` and `INSUFFICIENT_EVIDENCE` are deliberately separate from `DRIFT`:
+reporting "we could not tell" as a change produces a false alarm on every gap
+in coverage, and an operator paged three times for a coverage gap stops reading
+drift reports at all.
+
+Explicitly not delivered: no remediation, no automatic recovery, no runtime
+Docker inspection, no remote access. Detected drift is frequently *intended*
+change, and an engine that reverts a deployment it did not recognise has caused
+the incident it was meant to prevent.
 
 ### v0.8.5 — Experience Engine and Operational Memory
 

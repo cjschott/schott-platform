@@ -34,3 +34,8 @@ __pycache__/
 observations-local/
 observations-test/
 *.observation-store/
+
+# Disposable integrity artefacts (snapshots, twins, reports, plans) live in an
+# explicit data root outside the repository and are never tracked.
+integrity-local/
+integrity-test/
