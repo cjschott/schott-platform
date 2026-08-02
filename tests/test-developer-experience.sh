@@ -24,6 +24,14 @@ assert_file() {
   if [[ -f "${ROOT}/$1" ]]; then pass "file exists: $1"; else fail "required file missing: $1"; fi
 }
 
+# check <exit-status> <pass-message> <fail-message>
+# An explicit if rather than `condition && pass || fail`: in that idiom the
+# fail branch also runs when pass itself fails, which is how a green suite
+# starts reporting phantom failures.
+check() {
+  if [[ "$1" -eq 0 ]]; then pass "$2"; else fail "$3"; fi
+}
+
 assert_executable() {
   if [[ -x "${ROOT}/$1" ]]; then pass "executable: $1"; else fail "script is not executable: $1"; fi
 }
@@ -118,9 +126,18 @@ assert_absent_in "${DEV}" \
 assert_absent_in "${DEV}" \
   '(ufw|iptables|nft|systemctl (start|stop|restart|enable|disable))' \
   "no dev script alters firewall or system services"
+# Platform runtime is off limits. The pinned ShellCheck image is the single
+# approved container: it is ephemeral, network-isolated, mounts the repository
+# read-only, and touches no platform service. Anything else is a finding.
 assert_absent_in "${DEV}" \
-  '(docker (run|start|stop|rm|exec|compose up|compose down)|docker volume)' \
-  "no dev script starts, stops, or removes a container or volume"
+  '(docker (start|stop|rm|exec|kill|volume|network)|docker compose (up|down|start|stop|restart))' \
+  "no dev script touches a platform container, volume, or network"
+unapproved_run="$(grep -rInE 'docker run' "${ROOT}/${DEV}" | grep -v 'SHELLCHECK_IMAGE' || true)"
+if [[ -z "${unapproved_run}" ]]; then
+  pass "the only container a dev script runs is the pinned ShellCheck image"
+else
+  fail "dev script runs an unapproved container: $(printf '%s' "${unapproved_run}" | head -1)"
+fi
 assert_absent_in "${DEV}" "['\"][^'\"]*ai/\\.env['\"]" \
   "no dev script references ai/.env"
 assert_absent_in "${DEV}" '(gh (api|pr|run|release)|api\.github\.com)' \
@@ -212,23 +229,23 @@ if [[ -x "${ROOT}/${DEV}/bootstrap.sh" ]]; then
   set -e
   after="$(find "${ROOT}" -path "${ROOT}/.git" -prune -o -type f -print | sort | md5sum)"
 
-  [[ "${dry_status}" -eq 0 ]] && pass "bootstrap dry-run succeeds" \
-    || fail "bootstrap dry-run must succeed (exit ${dry_status})"
-  [[ "${before}" == "${after}" ]] && pass "bootstrap dry-run creates no files" \
-    || fail "bootstrap dry-run modified the repository"
-  grep -qiE 'dry.run' <<<"${dry_output}" && pass "bootstrap announces dry-run mode" \
-    || fail "bootstrap must state that it is running in dry-run mode"
-  grep -qE 'apt-get install' <<<"${dry_output}" && pass "bootstrap prints exact install commands" \
-    || fail "bootstrap must print the exact Ubuntu install command"
-  grep -qE '\-\-apply' <<<"${dry_output}" && pass "bootstrap documents the explicit apply flag" \
-    || fail "bootstrap must name --apply as the way to install"
+  check "$([[ "${dry_status}" -eq 0 ]] && echo 0 || echo 1)" \
+    "bootstrap dry-run succeeds" "bootstrap dry-run must succeed (exit ${dry_status})"
+  check "$([[ "${before}" == "${after}" ]] && echo 0 || echo 1)" \
+    "bootstrap dry-run creates no files" "bootstrap dry-run modified the repository"
+  check "$(grep -qiE 'dry.run' <<<"${dry_output}" && echo 0 || echo 1)" \
+    "bootstrap announces dry-run mode" "bootstrap must state that it is running in dry-run mode"
+  check "$(grep -qE 'apt-get install' <<<"${dry_output}" && echo 0 || echo 1)" \
+    "bootstrap prints exact install commands" "bootstrap must print the exact Ubuntu install command"
+  check "$(grep -qE '\-\-apply' <<<"${dry_output}" && echo 0 || echo 1)" \
+    "bootstrap documents the explicit apply flag" "bootstrap must name --apply as the way to install"
 
   # Idempotent: a second dry-run produces identical output.
   set +e
   second="$(bash "${ROOT}/${DEV}/bootstrap.sh" 2>&1)"
   set -e
-  [[ "${dry_output}" == "${second}" ]] && pass "bootstrap dry-run is idempotent" \
-    || fail "repeated bootstrap dry-runs must produce identical output"
+  check "$([[ "${dry_output}" == "${second}" ]] && echo 0 || echo 1)" \
+    "bootstrap dry-run is idempotent" "repeated bootstrap dry-runs must produce identical output"
 
   assert_contains "${DEV}/bootstrap.sh" 'DRY_RUN|dry_run' "bootstrap defaults to dry-run"
 else
@@ -241,29 +258,23 @@ if [[ -x "${ROOT}/${DEV}/check-toolchain.sh" ]]; then
   tc_output="$(bash "${ROOT}/${DEV}/check-toolchain.sh" 2>&1)"
   tc_status=$?
   set -e
-  [[ "${tc_status}" -eq 0 ]] && pass "toolchain check passes on this host" \
-    || fail "toolchain check failed on this host: $(head -3 <<<"${tc_output}" | tr '\n' ' ')"
-  grep -qE 'python3' <<<"${tc_output}" && pass "toolchain check reports python3" \
-    || fail "toolchain check must report python3"
-  grep -qiE 'pyyaml' <<<"${tc_output}" && pass "toolchain check reports PyYAML" \
-    || fail "toolchain check must report PyYAML"
-  grep -qiE 'shellcheck' <<<"${tc_output}" && pass "toolchain check reports ShellCheck" \
-    || fail "toolchain check must report a ShellCheck execution path"
-  grep -qiE 'compose' <<<"${tc_output}" && pass "toolchain check reports Docker Compose" \
-    || fail "toolchain check must report Docker Compose"
-  grep -qiE '(^|[^a-z])git' <<<"${tc_output}" && pass "toolchain check reports git" \
-    || fail "toolchain check must report git"
+  check "${tc_status}" "toolchain check passes on this host" \
+    "toolchain check failed on this host: $(head -3 <<<"${tc_output}" | tr '\n' ' ')"
+  for tool in python3 pyyaml shellcheck compose git; do
+    check "$(grep -qiE "${tool}" <<<"${tc_output}" && echo 0 || echo 1)" \
+      "toolchain check reports ${tool}" "toolchain check must report ${tool}"
+  done
 
   # A missing tool must produce an actionable error, not a bare non-zero exit.
   set +e
   missing_output="$(PATH="${SHIM}" bash "${ROOT}/${DEV}/check-toolchain.sh" 2>&1)"
   missing_status=$?
   set -e
-  [[ "${missing_status}" -ne 0 ]] && pass "toolchain check fails when tools are absent" \
-    || fail "toolchain check must fail when required tools are absent"
-  grep -qiE '(install|apt-get|bootstrap)' <<<"${missing_output}" \
-    && pass "missing-tool error is actionable" \
-    || fail "missing-tool error must name a remediation"
+  check "$([[ "${missing_status}" -ne 0 ]] && echo 0 || echo 1)" \
+    "toolchain check fails when tools are absent" \
+    "toolchain check must fail when required tools are absent"
+  check "$(grep -qiE '(install|apt-get|bootstrap)' <<<"${missing_output}" && echo 0 || echo 1)" \
+    "missing-tool error is actionable" "missing-tool error must name a remediation"
 else
   fail "cannot exercise the toolchain check; the script is absent or not executable"
 fi
