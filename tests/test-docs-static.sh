@@ -120,6 +120,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0004-immutable-knowledge-timeline.md"
   "docs/decisions/ADR-0007-operational-integrity-engine.md"
   "docs/decisions/ADR-0008-experience-engine.md"
+  "docs/decisions/ADR-0009-occurrence-timeline.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -709,6 +710,35 @@ for preserved in "User documentation" "Administrator guide" "Command reference" 
   assert_contains "${ROADMAP}" "${preserved}" \
     "roadmap preserves the existing requirement: ${preserved}"
 done
+
+# --- v0.8.6 occurrence timeline ---------------------------------------------
+ADR9="docs/decisions/ADR-0009-occurrence-timeline.md"
+assert_contains "${ADR9}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0009 is accepted"
+assert_contains "${ADR9}" '^## Context' "ADR-0009 contains Context"
+assert_contains "${ADR9}" '^## Decision' "ADR-0009 contains Decision"
+assert_contains "${ADR9}" '^## Consequences' "ADR-0009 contains Consequences"
+for concept in Occurrence "Occurrence Series" Pattern Timeline; do
+  assert_contains "${ADR9}" "${concept}" "ADR-0009 defines ${concept}"
+done
+assert_contains "${ADR9}" '[Nn]ever predicts|no prediction' \
+  "ADR-0009 states the engine never predicts"
+assert_contains "${ADR9}" 'Rejected [Aa]lternatives' "ADR-0009 records rejected alternatives"
+assert_contains "${ADR9}" '[Ff]orecast' "ADR-0009 addresses forecasting"
+
+assert_file "docs/occurrence/overview.md"
+assert_markdown_links "docs/occurrence/overview.md"
+for concept in "first seen" "last seen" interval frequency recurrence ordering; do
+  assert_contains "docs/occurrence/overview.md" "${concept}" \
+    "occurrence overview documents ${concept}"
+done
+for state in regular irregular single unknown; do
+  assert_contains "docs/occurrence/overview.md" "${state}" \
+    "occurrence overview documents the ${state} recurrence state"
+done
+
+assert_contains "docs/platform-roadmap.md" 'v0\.8\.6 — Occurrence Timeline' \
+  "roadmap records v0.8.6"
+assert_contains "docs/platform-roadmap.md" 'Sprint 97' "roadmap keeps Sprint 97"
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

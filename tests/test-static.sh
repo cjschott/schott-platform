@@ -1769,6 +1769,32 @@ for kind in EVID VER MEM OBS SNAP TWIN INTEG RECOV EXP WINDOW BASE; do
 done
 
 # ---------------------------------------------------------------------------
+# v0.8.6 — occurrence timeline
+# ---------------------------------------------------------------------------
+
+for module in models recorder series patterns timeline confidence \
+              occurrence_store integration cli; do
+  assert_file "tools/occurrence/${module}.py"
+done
+assert_file "tools/common/immutable_store.py"
+assert_file "tests/test-occurrence-timeline.sh"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-occurrence-timeline\.sh' \
+  "ci runs the occurrence timeline suite"
+assert_contains "tools/dev/run-validation.sh" 'tests/test-occurrence-timeline\.sh' \
+  "local validation runs the occurrence timeline suite"
+assert_ignored "occurrence-local/"
+
+# Temporal history describes what happened; it never claims what will. This
+# suite has no recursive-grep helper, so the check is scoped per module using
+# refute_contains, which is the negative assertion it does provide.
+for module in models recorder series patterns timeline confidence \
+              occurrence_store integration cli; do
+  refute_contains "tools/occurrence/${module}.py" \
+    '(def[[:space:]]+(predict|forecast|extrapolate)|next_occurrence_at|will_occur)' \
+    "no prediction in occurrence/${module}.py"
+done
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
