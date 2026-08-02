@@ -83,6 +83,9 @@ fi
 # green run.
 if python3 -c 'import yaml' >/dev/null 2>&1; then
   pyyaml_version="$(python3 -c 'import yaml; print(yaml.__version__)' 2>/dev/null || echo "unknown")"
+  # PYYAML_VERSION comes from the sourced manifest, which shellcheck cannot
+  # follow without -x; the similar local name is what triggers the warning.
+  # shellcheck disable=SC2153
   if [[ "${pyyaml_version}" == "${PYYAML_VERSION}" ]]; then
     ok "PyYAML ${pyyaml_version} (matches the pinned CI version)"
   else
