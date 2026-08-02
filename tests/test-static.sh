@@ -1795,6 +1795,26 @@ for module in models recorder series patterns timeline confidence \
 done
 
 # ---------------------------------------------------------------------------
+# Combined-state guards: every layer runs locally and in CI
+# ---------------------------------------------------------------------------
+
+for suite in operational-integrity experience-engine occurrence-timeline \
+             developer-experience; do
+  assert_contains "tools/dev/run-validation.sh" "tests/test-${suite}\.sh" \
+    "local validation runs the ${suite} suite"
+  assert_contains ".github/workflows/ci.yml" "bash tests/test-${suite}\.sh" \
+    "ci runs the ${suite} suite"
+done
+
+# Every record kind the platform can generate must be in the backstop. A kind
+# added to a store but missing here can be committed with nothing objecting.
+for kind in EVID VER MEM OBS SNAP TWIN INTEG RECOV EXP WINDOW BASE \
+            OCC SERIES PAT TL; do
+  assert_contains ".github/workflows/ci.yml" "${kind}-\*" \
+    "ci backstop covers ${kind} records"
+done
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

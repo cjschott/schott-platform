@@ -242,14 +242,21 @@ useful.
 
 ### Architectural rule
 
-**No model is Kyri. Models are replaceable reasoning providers used by Kyri
-Core.**
+**No model is Kyri. No machine is Kyri. Kyri is the governed core, its
+evidence, and the contracts connecting replaceable capabilities.**
 
 This is load-bearing, not a slogan. Kyri is the reasoning layer, its memory,
-and its policies; a language model is an adapter behind a stable interface, in
-exactly the way ADR-0003 treats providers. A platform that lets a specific model
+and its policies. Models are replaceable reasoning providers used by Kyri Core:
+a language model is an adapter behind a stable interface, in exactly the way
+ADR-0003 treats providers. A platform that lets a specific model
 become its identity cannot replace that model without replacing itself — and
 model choice is the fastest-moving decision in the stack.
+
+The second sentence becomes load-bearing at v0.9.5, when work can be placed on
+other nodes. A fabric that lets one machine become the platform has recreated
+exactly the coupling the first sentence exists to prevent, one layer down: the
+host would then be as unreplaceable as a hardcoded model. Nodes are capacity
+behind a contract, and Kyri is what governs them.
 
 ### v0.8.0 — Operational Integrity and Digital Twin Foundation
 
@@ -357,6 +364,46 @@ describing hosts nothing has contacted.
 
 Deliberately after the reasoning layers: the pipeline is exercised against
 local input, and memory is built, before anything is given reach.
+
+### v0.9.5 — Distributed Capability Fabric
+
+Reserved. Lets the platform use capacity that is not on this host, without any
+node becoming the platform.
+
+Registries — what exists:
+
+- **Node registry** — the machines the platform may use
+- **Capability registry** — what each node can actually do
+- **Model endpoint registry** — where inference is reachable, behind the
+  ADR-0003 gateway contract rather than as a direct provider dependency
+- **Resource metadata** — CPU, memory, GPU, and storage each node reports
+- **Health and availability states** — whether a node is usable right now
+- **Trust and privacy classifications** — what a node is permitted to see
+
+Placement — what runs where:
+
+- **Deterministic, policy-aware placement** — the same inputs choose the same
+  node, and the choice is explainable. A scheduler nobody can predict is a
+  scheduler nobody can debug during an incident.
+- **Preferred and fallback placement** — an explicit second choice, never a
+  silent redirection
+- **Local-only enforcement** — a workload marked local must never leave this
+  host, and the fabric must be able to refuse rather than degrade
+- **Workload leases and expiry** — placement is time-bounded, so a node that
+  disappears does not hold work indefinitely
+- **Maintenance and drain modes** — a node can be removed from service
+  deliberately rather than by failing
+
+Verification — what came back:
+
+- **Result validation** — output from another node is checked before it is
+  trusted, because remote capacity does not confer remote authority
+- **Placement audit events** — every decision is recorded on the timeline, so
+  "why did this run there?" has an answer
+
+Explicitly deferred to that release, and not implemented before it: no fabric,
+no registry, no placement, and no remote execution of any kind exists in v0.8.6
+or earlier.
 
 ### v1.0.0 — Kyri Core Foundation
 
