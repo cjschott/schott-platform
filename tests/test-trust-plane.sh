@@ -242,6 +242,15 @@ for domain in "Host Trust" "SSH Host Keys" "Certificates" "Users" \
   assert_contains "${DOMAIN_DOC}" "${domain}" "the domain document covers ${domain}"
 done
 
+# The domain document must connect domains to the clarified states, so a
+# reader does not have to infer which distinction applies where.
+assert_contains "${DOMAIN_DOC}" '[Rr]estricted' "the domain document references Restricted"
+assert_contains "${DOMAIN_DOC}" '[Qq]uarantined' "the domain document references Quarantined"
+assert_contains "${DOMAIN_DOC}" '[Rr]estriction is not suspicion' \
+  "the domain document states restriction is not suspicion"
+assert_contains "${DOMAIN_DOC}" 'Operator Root Authority' \
+  "the domain document names the Operator Root Authority"
+
 # --- The eleven recorded elements of every decision -------------------------
 for element in Identifier Actor Timestamp Reason Evidence "Verification Method" \
                "Approval Source" Scope Expiration "Current State" History; do

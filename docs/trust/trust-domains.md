@@ -139,6 +139,48 @@ capabilities, resources, and health; the Trust Plane decides whether that
 description is believed and what the node may see.
 **Note:** this domain is why the Fabric is gated on the Trust Plane.
 
+## Domains and states
+
+Every domain uses the same eight states, and two distinctions matter in every
+one of them:
+
+- **Restricted** — identity is trusted, authority is deliberately bounded. The
+  subject is **usable within its scope**. *Restriction is not suspicion.* This
+  is the normal steady state for most subjects: a host trusted for observation
+  but not placement, a model trusted for summarisation but not decisions.
+- **Quarantined** — identity or integrity is **suspect**. The subject is not
+  usable for normal work while the question is open.
+
+Worked through two domains:
+
+| Domain | Restricted looks like | Quarantined looks like |
+|---|---|---|
+| **Host Trust** | `MainPC` may execute local-only coding workloads but may not receive data above its approved trust classification | `MainPC`'s host identity changed unexpectedly, so normal placement is forbidden while identity verification is performed |
+| **Model Adapters** | An adapter approved for one provider and one gateway contract, and no other | An adapter whose released artifact no longer matches its signed manifest |
+
+And the two historical states, which are about whether trust ever existed:
+
+- **Rejected** — a proposed third-party model adapter was reviewed and denied
+  before receiving any authority. Nothing to withdraw.
+- **Revoked** — a previously approved collector plugin was later found
+  compromised and its granted trust was withdrawn. The original grant stays
+  readable.
+
+See [trust states](trust-states.md) for the full definitions and transitions.
+
+## Every domain terminates at the same root
+
+Whatever the domain, the chain of approvals ends at the
+**Operator Root Authority**: external to Kyri, human-controlled, established
+out of band, and never created or approved by the platform itself.
+
+This matters most for **Fabric Nodes**, where the subject actively describes
+itself. A node's self-report is not trust — and if the chain terminated inside
+the platform, a compromised platform could authorise the nodes it places work
+on.
+
+The concrete external identity is bound during v0.9.2 implementation, not here.
+
 ## Existing mechanisms this will eventually absorb
 
 The platform already makes trust decisions in four places. **All keep working
