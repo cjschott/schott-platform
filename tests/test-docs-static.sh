@@ -590,6 +590,25 @@ assert_contains "docs/platform-roadmap.md" 'v0\.9\.0 — Knowledge Graph and Cro
 assert_contains "docs/platform-roadmap.md" 'Sprint 98' "roadmap keeps Sprint 98 intact"
 assert_contains "docs/platform-roadmap.md" 'Sprint 99' "roadmap keeps Sprint 99 intact"
 
+# --- v0.7.5 developer documentation ----------------------------------------
+for document in getting-started toolchain local-validation; do
+  assert_file "docs/development/${document}.md"
+  assert_markdown_links "docs/development/${document}.md"
+done
+
+assert_contains "docs/development/getting-started.md" '^# ' "getting-started has a title"
+assert_contains "docs/development/toolchain.md" '^# ' "toolchain doc has a title"
+assert_contains "docs/development/local-validation.md" '^# ' "local-validation has a title"
+assert_contains "docs/development/getting-started.md" '(never installs|no packages are installed|without .*approval)' \
+  "getting started states that nothing is installed without approval"
+assert_contains "docs/development/local-validation.md" 'fail(s|ed)? closed|fail-closed' \
+  "local validation documents fail-closed PyYAML behaviour"
+
+assert_contains "docs/platform-roadmap.md" 'v0\.7\.5 — Developer Experience Hardening' \
+  "roadmap records v0.7.5"
+assert_contains "docs/platform-roadmap.md" 'Sprint 98' "roadmap keeps Sprint 98 intact"
+assert_contains "docs/platform-roadmap.md" 'Sprint 99' "roadmap keeps Sprint 99 intact"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

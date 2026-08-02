@@ -1701,6 +1701,23 @@ assert_contains ".github/workflows/ci.yml" 'bash tests/test-knowledge-orchestrat
 assert_ignored "observations-local/"
 
 # ---------------------------------------------------------------------------
+# v0.7.5 — developer experience
+# ---------------------------------------------------------------------------
+
+for script in bootstrap check-toolchain run-validation run-shellcheck run-local-ci; do
+  assert_file "tools/dev/${script}.sh"
+done
+assert_file "tools/dev/versions.env"
+assert_file "tests/test-developer-experience.sh"
+
+# The manifest is the single source of pinned versions. A second copy of a
+# version string is a second place to forget to update.
+assert_contains "tools/dev/versions.env" '^SHELLCHECK_VERSION=' \
+  "toolchain manifest pins the ShellCheck version"
+assert_contains "tools/dev/versions.env" '^PYYAML_VERSION=' \
+  "toolchain manifest pins the PyYAML version"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
