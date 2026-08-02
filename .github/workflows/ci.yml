@@ -149,6 +149,12 @@ jobs:
       - name: Remote collector tests
         run: bash tests/test-remote-collectors.sh
 
+      # Architecture only: ADR-0011, four immutable schemas, ontology, and
+      # documentation. Asserts the specification is complete and that no trust
+      # engine, enrollment, certificate handling, or approval workflow exists.
+      - name: Trust plane tests
+        run: bash tests/test-trust-plane.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
