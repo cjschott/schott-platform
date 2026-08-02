@@ -53,6 +53,10 @@ optional_fields:
   - review_due_at
   - notes
   - version
+  # Lineage. After revocation, later approval creates a new record that
+  # references the revoked one and never mutates it.
+  - lineage_id
+  - revokes_record_id
 
 # Credential material never enters a trust record: the record says a subject
 # was verified, never how to authenticate as it. The automation switches are
@@ -99,6 +103,59 @@ enums:
     - configuration-snapshot
     - remote-transport
     - fabric-node
+
+# Per-state invariants. Declared here rather than left to prose so an
+# implementation cannot quietly collapse two states that mean different things.
+state_rules:
+  restricted:
+    # Identity is trusted; authority is deliberately limited. A restriction
+    # that bounds nothing is a trusted record with a misleading label.
+    requires_scope: true
+    scope_may_be_empty: false
+    usable_within_scope: true
+    # Restriction is a governance decision, not evidence of compromise.
+    implies_suspicion: false
+    scope_expansion: requires-new-decision
+    automatic_return_to_trusted: not-permitted
+    equivalent_to_quarantined: false
+
+  quarantined:
+    # Identity, integrity, provenance, or behaviour is suspect.
+    implies_suspicion: true
+    normal_capability_use: forbidden
+    permitted_activity: explicitly-approved-verification-only
+    # A withheld state pending an answer, not a withdrawal.
+    equivalent_to_revoked: false
+    equivalent_to_restricted: false
+    exit: requires-new-decision
+    automatic_return_to_usable: not-permitted
+
+  rejected:
+    # Approval was considered and denied. There is no grant to withdraw.
+    trust_ever_granted: false
+    equivalent_to_revoked: false
+
+  revoked:
+    # A grant existed, was relied upon, and was taken away.
+    trust_previously_granted: true
+    reactivation: not-permitted
+    later_approval: new-lineage-only
+    mutates_prior_record: false
+    equivalent_to_rejected: false
+
+  expired:
+    # The only state reachable by the passage of time.
+    reachable_by_time: true
+    automatic_renewal: not-permitted
+
+  pending:
+    # Operationally equivalent to unknown. A state meaning "not yet trusted but
+    # usable" is trust on first use with a waiting period.
+    usable: false
+
+  unknown:
+    usable: false
+    fail_closed: true
 
 field_rules:
   subject_fingerprint:

@@ -47,6 +47,9 @@ required_fields:
   - resulting_state
   - previous_state
   - history_reference
+  # A method name alone says a check happened without saying what was checked,
+  # which is unreviewable a year later.
+  - verification_details
 
 optional_fields:
   - notes
@@ -87,7 +90,7 @@ enums:
     - offline-signature-verification
     - checksum-against-signed-manifest
     - hardware-token-attestation
-    - documented-physical-verification
+    - out-of-band-physical-verification
     - reviewed-source-inspection
   approval_source:
     - named-operator
@@ -105,6 +108,28 @@ field_rules:
     # Referenced, never inlined. Evidence identifies what was checked; it is not
     # a place to store the thing itself.
     carries_material: false
+    minimum_references: 1
+    immutable_reference: true
+
+  verification_details:
+    # Every verification records its details, and out-of-band physical
+    # verification records all five: it is the strongest claim and the most
+    # easily written up after the fact, because it rests entirely on what a
+    # human says they did.
+    required_by_method:
+      out-of-band-physical-verification:
+        - subject_property
+        - observed_value_reference
+        - comparison_source
+        - performed_by
+        - performed_at
+    # A time without a zone is not a point in time, and placing the check is
+    # the whole value of the record.
+    timezone_required_fields:
+      - performed_at
+    # The record proves a comparison was made; it is not a copy of the material
+    # compared.
+    raw_values: referenced-not-embedded
   expiration:
     required: true
     # Expiry exists to force a look. An expiry that renews itself measures

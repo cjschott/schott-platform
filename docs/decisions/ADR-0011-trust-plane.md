@@ -79,6 +79,16 @@ Concretely: `TRUSTS`, `VERIFIED_BY`, and `APPROVED_BY` may not take a
 Reasoning records may reference trust records; trust records may not be derived
 from them.
 
+### The external root rule
+
+**Every trust chain must terminate at an external Operator Root Authority that
+is not established, approved, or modified by Kyri itself.**
+
+A chain that terminates inside the platform is circular: the system asserts its
+own trustworthiness, and the assertion is worth exactly what the system is worth
+if it has been compromised. The root is outside so that compromising Kyri does
+not compromise the ability to say what Kyri may trust.
+
 ### Design principles
 
 1. **Trust is explicit.** It is granted by a decision that names a subject, not
@@ -111,6 +121,28 @@ assign, what approval it requires, and how often its own grants must be
 reviewed. An authority may not approve its own trust record; something else must
 establish it. Schema: `TAUTH-0000`.
 
+**Operator Root Authority.** The authority every trust chain terminates at.
+
+- **External to Kyri.** It is not a component of this platform.
+- **Human-controlled.**
+- **Established through an out-of-band process**, outside any system it governs.
+- **Not created, approved, or modified by Kyri itself.** A platform that can
+  establish its own root authority has no root authority — it has a variable.
+- **Terminates every trust chain.** Follow any `APPROVED_BY` edge far enough and
+  it ends here.
+- **May approve, restrict, quarantine, revoke, reject, and supersede** trust.
+- **Every action produces immutable history**, exactly like any other decision.
+- **Cannot silently self-delegate.** Delegation requires a recorded trust
+  decision, so an authority's reach is always readable.
+
+**The concrete external identity is deliberately not named here.** Binding a
+specific person, account, key, or address into an architecture document creates
+an identity that outlives whoever currently holds it, and turns a role into a
+name that must be edited — in an immutable record — when the person changes.
+ADR-0011 defines the *role* and its invariants; the **v0.9.2 implementation
+binds the concrete external identity**, where it can be superseded like any
+other record.
+
 **Trust Decision.** One act of judgement, at one moment, by one actor, producing
 one state for one subject. Immutable. It is the only thing that can change a
 trust state, and it records everything needed to re-examine it later. Schema:
@@ -132,6 +164,29 @@ named method rather than a free-text claim. A fingerprint compared over a
 separate channel is a different quality of verification from a fingerprint read
 from the connection being verified, and the record must be able to tell them
 apart.
+
+Every verification records a `verification_method` **and**
+`verification_details`, plus **at least one immutable trust-evidence
+reference**. A method name alone says a check happened without saying what was
+checked, which is unreviewable a year later.
+
+For **out-of-band-physical-verification** — the strongest and most easily
+faked-up claim, because it rests entirely on what a human says they did — the
+details must record all five of:
+
+| Field | Records |
+|---|---|
+| `subject_property` | **What property was verified** (for example, a host key fingerprint) |
+| `observed_value_reference` | **Where it was observed**, by reference |
+| `comparison_source` | **Which independent channel** it was compared against, and what approved value or evidence |
+| `performed_by` | **Who performed the comparison** |
+| `performed_at` | **When it occurred**, as a timezone-aware ISO 8601 timestamp |
+
+`performed_at` requires an offset because a time without a zone is not a point
+in time, and the whole value of this record is being able to place the check.
+
+Sensitive raw values are **referenced, never embedded**. The record proves a
+comparison was made; it is not a copy of the material compared.
 
 **Trust Revocation.** A decision moving a subject to `Revoked`. Revocation is
 terminal for that record: the subject may be trusted again only by a new
@@ -176,24 +231,84 @@ none of the other structures need to be editable.
 
 Eight states. **Unknown is the default state, and it fails closed.**
 
-| State | Meaning | Reached by |
+| State | Meaning | Usable? |
 |---|---|---|
-| `Unknown` | No record exists. The platform knows nothing about this subject. | Default for everything |
-| `Pending` | A decision has been requested but not made. Fails closed exactly like `Unknown`. | Submission for review |
-| `Trusted` | Explicitly approved, in scope, unexpired. | An approving decision |
-| `Restricted` | Trusted for a narrower scope than requested. | A decision granting less than asked |
-| `Quarantined` | Previously trusted, temporarily withheld pending investigation. | A decision, never automatically |
-| `Revoked` | Trust withdrawn, terminal for this record. | A revoking decision |
-| `Expired` | The grant's expiration has passed. | Time, against a recorded expiration |
-| `Rejected` | A request for trust was considered and refused. | A refusing decision |
+| `Unknown` | No approved trust decision exists. Fail closed. | No |
+| `Pending` | A decision is awaiting review. Operationally equivalent to `Unknown`. | No |
+| `Trusted` | Approved for the recorded scope. | Yes, within scope |
+| `Restricted` | Identity is trusted, but authority or use is deliberately limited to an explicit non-empty scope. | Yes, within that scope |
+| `Quarantined` | Identity, integrity, provenance, or behaviour is suspect. Normal use is forbidden. | No |
+| `Revoked` | Previously granted trust was explicitly withdrawn. | No |
+| `Expired` | Trust ceased solely because its approved time boundary elapsed. | No |
+| `Rejected` | A proposed trust decision was considered and denied; trust was never granted under that decision. | No |
 
 `Pending` deliberately behaves as `Unknown` rather than as provisional trust.
 A state that is "not yet trusted but usable" is trust on first use with a
 waiting period.
 
-Only `Expired` may be entered by the passage of time. Every other transition
-requires a decision. **No state transition may be automatic**, and in particular
-nothing returns to `Trusted` without a new decision — see principle 8.
+#### Restricted: limited authority, not suspicion
+
+**Restricted is a governance decision, not evidence of compromise.** The
+subject's identity is trusted; what it is permitted to do has been
+deliberately limited.
+
+- A `Restricted` record **requires a non-empty scope**. A restriction that
+  bounds nothing is a `Trusted` record with a misleading label.
+- The subject may be used, but **only inside that explicit scope**.
+- **Broadening the scope requires a new approval and a new trust decision.**
+  Scope expansion is the moment a restriction stops being one, so it gets the
+  same scrutiny as the original grant.
+- `Restricted` **never automatically returns to** `Trusted`.
+
+**Restricted is not equivalent to Quarantined.** One says "we deliberately gave
+it less authority"; the other says "we are worried about it". Reporting either
+as the other destroys the distinction an operator needs during an incident.
+
+#### Quarantined: suspect, pending investigation
+
+**Quarantined means identity, integrity, provenance, or behaviour is suspect
+and requires investigation.**
+
+- **Normal capability use is forbidden.** A quarantined subject is not usable
+  for ordinary work of any kind.
+- Only **explicitly approved verification or investigation activity** may occur
+  — the actions needed to resolve the question, and nothing else.
+- **Quarantine does not itself mean `Revoked`.** It is a withheld state pending
+  an answer, not a withdrawal. **Quarantine is not permanent revocation.**
+- A quarantined subject **cannot automatically return to a usable state**.
+  Moving to `Trusted` or `Restricted` requires a new trust decision.
+
+**Quarantined is not equivalent to Restricted.**
+
+#### Rejected versus Revoked
+
+These are permanently distinct historical meanings, and the difference is about
+whether trust ever existed.
+
+- **`Rejected`** — approval was considered and denied. The subject **never
+  became trusted** under that decision. There is no grant to withdraw, because
+  none was made.
+- **`Revoked`** — **previously granted** trust was explicitly withdrawn. A grant
+  existed, was relied upon, and was taken away.
+
+A revoked subject **does not return to** `Trusted`. Later approval after
+revocation creates a **new trust lineage**: a new record, with its own evidence
+and approval, which references the revoked record but **does not mutate** it.
+The revoked record remains exactly as written, because it is usually the most
+interesting entry in the subject's history.
+
+#### Transition rules
+
+- **Only `Expired` may occur automatically**, through the passage of time
+  against a recorded boundary.
+- **Every other transition requires a new decision.**
+- **No transition mutates prior records.** Change is supersession.
+- **No usable state is restored automatically** — see principle 8.
+- **Restricted scope expansion requires approval.**
+- **Quarantine exit requires a new decision.**
+- **Revoked trust cannot be reactivated**; future approval creates a new
+  lineage.
+- **`Rejected` and `Revoked` remain permanently distinct** in the history.
 
 ### Trust domains
 

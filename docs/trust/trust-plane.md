@@ -102,7 +102,15 @@ there" become a valid justification.
 **Evidence is referenced, never inlined.** Evidence identifies what was checked;
 it is not a place to store the thing itself. No trust record carries a private
 key, password, passphrase, or token — the record says a subject was verified,
-never how to authenticate as it.
+never how to authenticate as it. Every verification requires at least one
+**immutable trust-evidence reference**.
+
+**Verification records a method and its details.** A method name alone says a
+check happened without saying what was checked. For
+`out-of-band-physical-verification`, the details must record what property was
+verified, where it was observed, which independent channel it was compared
+against, who performed the comparison, and when — the last as a timezone-aware
+timestamp, because a time without a zone is not a point in time.
 
 ## Scope: trust is never global
 
@@ -113,6 +121,50 @@ for decisions. Unbounded scope is refused at the schema level.
 Domains do not inherit from one another. Trusting a host does not trust the SSH
 host key that identifies it, and trusting a model does not trust the prompt
 bundle used with it. See [trust domains](trust-domains.md).
+
+## The four distinctions that matter most
+
+**Restricted is usable within scope.** Identity is trusted; authority is
+deliberately limited. *Restriction is not suspicion* — it is a normal governance
+outcome. Broadening the scope requires a new approval and a new decision.
+
+**Quarantined is not usable for normal work.** Identity or integrity is suspect
+and under investigation; only explicitly approved verification activity may
+occur. *Quarantine is not permanent revocation* — but leaving it requires a new
+decision, never a cleared alert.
+
+**Rejection refers to trust never granted.** A proposal was considered and
+denied. There is nothing to withdraw.
+
+**Revocation refers to previously granted trust.** A grant existed and was taken
+away. Later approval creates a new lineage referencing the revoked record
+without mutating it.
+
+| Example | State |
+|---|---|
+| `MainPC` may run local-only coding workloads but may not receive data above its approved classification | **Restricted** |
+| `MainPC`'s host identity changed unexpectedly; placement forbidden pending verification | **Quarantined** |
+| A proposed third-party model adapter was reviewed and denied before receiving authority | **Rejected** |
+| A previously approved collector plugin was found compromised and its trust withdrawn | **Revoked** |
+
+## The Operator Root Authority
+
+Every trust chain terminates at an **Operator Root Authority** that is
+**external to Kyri**, human-controlled, and established out of band. It is not
+created, approved, or modified by the platform.
+
+A chain terminating inside the platform is circular: the system asserts its own
+trustworthiness, and that assertion is worth what the system is worth if it has
+been compromised.
+
+The root may approve, restrict, quarantine, revoke, reject, and supersede, and
+every action produces immutable history. It **cannot silently self-delegate** —
+delegation requires a recorded trust decision.
+
+**The concrete identity is deliberately not named in the architecture.** Binding
+a specific person, account, or key here creates an identity that outlives
+whoever holds it. ADR-0011 defines the role; the **v0.9.2 implementation** binds
+the external identity, where it can be superseded like any other record.
 
 ## Expiration and review
 

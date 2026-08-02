@@ -452,6 +452,15 @@ Existing mechanisms — `known_hosts` references, the plugin registry, the
 operation catalog, target allowlists — keep working unchanged. Migrating them
 under the Trust Plane is later work.
 
+**Implementation note.** Before any Fabric node can be trusted, v0.9.2 must
+instantiate an external **Operator Root Authority**. Every trust chain terminates
+there, and a chain terminating inside the platform is circular — the system
+would be asserting its own trustworthiness, which is worth what the system is
+worth if it has been compromised. ADR-0011 defines the role and its invariants;
+the concrete external identity is bound during v0.9.2 implementation, not in
+the architecture, because a specific person, account, or key named in an
+architecture document outlives whoever currently holds it.
+
 ### v0.9.5 — Distributed Capability Fabric
 
 Reserved. Lets the platform use capacity that is not on this host, without any
