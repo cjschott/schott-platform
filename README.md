@@ -73,19 +73,33 @@ The approved design and task-by-task implementation plan are authoritative:
 
 ## Validation
 
-Run the static repository assertions (no VM, Docker daemon, or secrets required):
+One command runs everything CI runs (no VM, running deployment, or secrets
+required):
 
 ```bash
-bash tests/test-static.sh
+tools/dev/run-validation.sh
 ```
+
+Add `--quick` for a faster edit-loop subset; it prints exactly what it omitted
+and is never sufficient before pushing.
 
 ## Development
 
-Continuous integration in `.github/workflows/` automates the same validation
-you can run locally — nothing CI-only. For the full list of local checks
-(shell syntax, static assertions, Compose rendering, ShellCheck, Gitleaks,
-Trivy, Semgrep) and how they map to CI, see:
+New machine? Check the toolchain and see what is missing — nothing is installed
+without your explicit approval:
 
+```bash
+tools/dev/check-toolchain.sh
+tools/dev/bootstrap.sh            # dry run; changes nothing
+```
+
+Continuous integration in `.github/workflows/` automates the same validation
+you can run locally — nothing CI-only. Tool versions are pinned in
+`tools/dev/versions.env`, and `tools/dev/run-local-ci.sh` names the four
+security workflows that can only run on GitHub.
+
+- [docs/development/getting-started.md](docs/development/getting-started.md)
+- [docs/development/toolchain.md](docs/development/toolchain.md)
 - [docs/development/local-validation.md](docs/development/local-validation.md)
 
 Passing local validation should produce the same result as CI.
