@@ -37,3 +37,29 @@ class CollectorExecutionError(CollectorError):
     a CollectorResult rather than raised; this type is for framework-level
     faults the plugin could not convert.
     """
+
+
+class CollectorFailure(CollectorError):
+    """A collection failed in a way the plugin has already categorised.
+
+    The generic handler in `execute` reports `<ExceptionType> during
+    collection`, which is right for an unexpected fault and useless for an
+    expected one: it cannot distinguish a timeout from a rejected credential.
+    Plugins that can tell those apart raise this instead, and the lifecycle
+    uses the errors as given rather than inventing a category.
+
+    Added in v0.9.0 for remote collection, where "why did this not work" is
+    the operational question and the answer must not be flattened to
+    "internal". Nothing about the lifecycle is bypassed: the result is still
+    built by `execute`, still carries no evidence identifier, and still
+    contains no observations.
+
+    Errors must already be redacted. This type is a way to report a category,
+    not a way to smuggle a value past the redaction boundary.
+    """
+
+    def __init__(self, errors, status: str = "failed") -> None:
+        self.errors = tuple(errors)
+        self.status = status
+        summaries = "; ".join(getattr(error, "summary", "") for error in self.errors)
+        super().__init__(summaries or "collection failed")

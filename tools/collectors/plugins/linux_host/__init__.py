@@ -1,0 +1,1 @@
+"""Linux host identity collector."""

@@ -24,6 +24,7 @@ set -Eeuo pipefail
 #   - tests/test-operational-integrity.sh  (builds temporary integrity stores)
 #   - tests/test-experience-engine.sh      (builds temporary experience stores)
 #   - tests/test-occurrence-timeline.sh    (builds temporary occurrence stores)
+#   - tests/test-remote-collectors.sh      (drives a fake transport; spawns the CLI)
 #   - the three Docker Compose renders  (each spawns the compose binary)
 #
 # Quick mode still runs syntax checking, ShellCheck, both static suites, both
@@ -91,7 +92,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=18
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=25
+  TOTAL_STEPS=26
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -141,12 +142,18 @@ if (( QUICK == 0 )); then
   # After experience: the occurrence layer reads both integrity and experience
   # vocabulary, so it is validated downstream of both.
   run "Occurrence timeline" bash tests/test-occurrence-timeline.sh
+  # After the reasoning layers: remote collection is the only suite that
+  # exercises code able to reach another machine. It drives a fake transport
+  # exclusively and contacts no host, but it spawns the CLI, so it sits with
+  # the other subprocess-driving suites rather than in the quick path.
+  run "Remote collectors" bash tests/test-remote-collectors.sh
 else
   skipped_note "Initial read-only collectors"
   skipped_note "Knowledge orchestrator"
   skipped_note "Operational integrity"
   skipped_note "Experience engine"
   skipped_note "Occurrence timeline"
+  skipped_note "Remote collectors"
 fi
 
 run "Developer experience" bash tests/test-developer-experience.sh
@@ -241,6 +248,7 @@ if (( QUICK == 1 )); then
     - tests/test-operational-integrity.sh
     - tests/test-experience-engine.sh
     - tests/test-occurrence-timeline.sh
+    - tests/test-remote-collectors.sh
     - the three Docker Compose renders
 
   Run without --quick before pushing.

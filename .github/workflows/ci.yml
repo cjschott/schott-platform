@@ -142,6 +142,13 @@ jobs:
       - name: Occurrence timeline tests
         run: bash tests/test-occurrence-timeline.sh
 
+      # Drives a fake transport exclusively. The one component that could reach
+      # a host — SSHRemoteTransport — is tested by inspecting the argv it would
+      # build, and is never executed. No DNS lookup, no SSH, no network, no
+      # credential read, no host-key enrollment, no model mutation.
+      - name: Remote collector tests
+        run: bash tests/test-remote-collectors.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

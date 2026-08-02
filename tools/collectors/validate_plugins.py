@@ -43,11 +43,15 @@ from tools.collectors.models import (  # noqa: E402
     FORBIDDEN_PERMISSIONS,
     SECRET_BEARING_KEYS,
     PERMITTED_SECRET_METADATA_KEYS,
+    REMOTE_PERMISSION,
     CollectionContext,
 )
 from tools.collectors.plugins.configuration_render.collector import ConfigurationRenderCollector  # noqa: E402
 from tools.collectors.plugins.example.collector import ExampleSyntheticCollector  # noqa: E402
 from tools.collectors.plugins.git_repository.collector import GitRepositoryCollector  # noqa: E402
+from tools.collectors.plugins.linux_host.collector import LinuxHostCollector  # noqa: E402
+from tools.collectors.plugins.linux_resources.collector import LinuxResourcesCollector  # noqa: E402
+from tools.collectors.plugins.linux_services.collector import LinuxServicesCollector  # noqa: E402
 from tools.collectors.plugins.manual_attestation.collector import ManualAttestationCollector  # noqa: E402
 from tools.collectors.registry import CollectorRegistry  # noqa: E402
 
@@ -67,6 +71,11 @@ KNOWN_PLUGINS = {
     "git-repository": GitRepositoryCollector,
     "configuration-render": ConfigurationRenderCollector,
     "manual-attestation": ManualAttestationCollector,
+    # Remote, read-only. These are the first plugins permitted network access,
+    # and only because each declares the read-remote-host permission.
+    "linux-host": LinuxHostCollector,
+    "linux-resources": LinuxResourcesCollector,
+    "linux-services": LinuxServicesCollector,
 }
 
 
@@ -115,11 +124,27 @@ def check_manifest(path: Path, manifest: dict, capability_ids: set[str], finding
         elif permission not in APPROVED_PERMISSIONS:
             findings.error(location, f"permission '{permission}' is not approved")
 
-    # Network access is refused unconditionally. Subprocess and read-only
-    # filesystem access are declarable from v0.6.0, but only in the narrowed
-    # forms the framework enforces.
-    if manifest.get("network_access") is not False:
-        findings.error(location, "'network_access' must be false; collectors are local and read-only")
+    # Network access was refused unconditionally through v0.8.6. From v0.9.0 it
+    # is narrowed rather than relaxed: permitted only alongside the
+    # read-remote-host permission, and checked in both directions. Network
+    # access without the permission is an undeclared capability; the permission
+    # without network access is a manifest claiming a boundary it does not sit
+    # behind. Subprocess and read-only filesystem access are declarable from
+    # v0.6.0, but only in the narrowed forms the framework enforces.
+    wants_network = manifest.get("network_access")
+    has_remote_permission = REMOTE_PERMISSION in (manifest.get("permissions") or [])
+    if wants_network not in (True, False):
+        findings.error(location, "'network_access' must be a boolean")
+    elif wants_network and not has_remote_permission:
+        findings.error(
+            location,
+            f"'network_access' requires the '{REMOTE_PERMISSION}' permission",
+        )
+    elif has_remote_permission and not wants_network:
+        findings.error(
+            location,
+            f"the '{REMOTE_PERMISSION}' permission requires 'network_access' to be true",
+        )
     if manifest.get("subprocess_access") not in (True, False):
         findings.error(location, "'subprocess_access' must be a boolean")
     if manifest.get("filesystem_access") not in (False, "read-only"):

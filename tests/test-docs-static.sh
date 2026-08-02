@@ -121,6 +121,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0007-operational-integrity-engine.md"
   "docs/decisions/ADR-0008-experience-engine.md"
   "docs/decisions/ADR-0009-occurrence-timeline.md"
+  "docs/decisions/ADR-0010-remote-read-only-collection.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -152,6 +153,11 @@ COLLECTOR_DOCS=(
   "docs/collectors/git-repository.md"
   "docs/collectors/configuration-render.md"
   "docs/collectors/manual-attestation.md"
+  # Remote collectors, added in v0.9.0. Held to the same contract as the local
+  # ones: reaching another machine is a reason for more scrutiny, not less.
+  "docs/collectors/linux-host.md"
+  "docs/collectors/linux-resources.md"
+  "docs/collectors/linux-services.md"
 )
 
 for document in "${REQUIRED_DOCS[@]}"; do
@@ -785,6 +791,110 @@ refute_contains_docs() {
   fi
 }
 refute_contains_docs
+
+# --- v0.9.0 remote read-only collection --------------------------------------
+ADR10="docs/decisions/ADR-0010-remote-read-only-collection.md"
+assert_contains "${ADR10}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0010 is accepted"
+assert_contains "${ADR10}" '^## Context' "ADR-0010 contains Context"
+assert_contains "${ADR10}" '^## Decision' "ADR-0010 contains Decision"
+assert_contains "${ADR10}" '^## Consequences' "ADR-0010 contains Consequences"
+assert_contains "${ADR10}" 'observe.*never administer|never administer' \
+  "ADR-0010 states collectors observe but never administer"
+assert_contains "${ADR10}" '[Hh]ost-key verification is mandatory|Host-key verification is mandatory' \
+  "ADR-0010 requires host-key verification"
+assert_contains "${ADR10}" 'fail closed' "ADR-0010 states unknown keys fail closed"
+assert_contains "${ADR10}" 'connection failure is not' \
+  "ADR-0010 states connection failure is not host failure"
+assert_contains "${ADR10}" 'Rejected [Aa]lternatives' "ADR-0010 records rejected alternatives"
+for rejected in "arbitrary SSH command" "Shell text supplied in YAML" \
+                "Disabling host-key checking" "Remote sudo" \
+                "Package installation" "Ansible"; do
+  assert_contains "${ADR10}" "${rejected}" "ADR-0010 rejects ${rejected}"
+done
+
+for doc in remote-collection linux-host linux-resources linux-services; do
+  assert_file "docs/collectors/${doc}.md"
+  assert_markdown_links "docs/collectors/${doc}.md"
+done
+
+REMOTE_DOC="docs/collectors/remote-collection.md"
+for topic in "[Tt]hreat model" "host key" "[Aa]uthentication reference" \
+             "operation catalog" "timeout" "[Ff]ailure semantics" "[Rr]edaction" \
+             "sudo" "Distributed Capability Fabric"; do
+  assert_contains "${REMOTE_DOC}" "${topic}" "remote collection doc covers ${topic}"
+done
+for category in authentication_failure host_key_failure timeout output_limit \
+                transport_failure unsupported_target collection_failure; do
+  assert_contains "${REMOTE_DOC}" "${category}" \
+    "remote collection doc documents the ${category} category"
+done
+
+# A target is one machine, as a name or an explicit address literal. The
+# documentation must say both what is permitted and what stays refused, so a
+# reader cannot infer that explicit addressing implies discovery.
+for form in "DNS name" "IPv4 literal" "IPv6 literal"; do
+  assert_contains "${REMOTE_DOC}" "${form}" \
+    "remote collection doc documents the permitted ${form} target form"
+done
+for refused in "CIDR" "[Aa]ddress range" "[Ww]ildcard" "URL" \
+               "[Ee]mbedded username" "[Mm]alformed literal"; do
+  assert_contains "${REMOTE_DOC}" "${refused}" \
+    "remote collection doc documents that ${refused} stays refused"
+done
+assert_contains "${REMOTE_DOC}" 'not host discovery|not discovery' \
+  "remote collection doc states explicit addressing is not discovery"
+assert_contains "${REMOTE_DOC}" 'bootstrap' \
+  "remote collection doc explains why address literals exist"
+assert_contains "${REMOTE_DOC}" 'unbracketed' \
+  "remote collection doc states IPv6 is stored unbracketed"
+assert_contains "${REMOTE_DOC}" 'RemoteTarget\.port|port field' \
+  "remote collection doc states the port stays a separate field"
+assert_contains "${REMOTE_DOC}" 'known_hosts' \
+  "remote collection doc explains known_hosts identity for address literals"
+assert_contains "${REMOTE_DOC}" 'ipaddress' \
+  "remote collection doc states literals are parsed, not pattern-matched"
+assert_contains "${REMOTE_DOC}" 'refused rather than trimmed|rejected-not-trimmed' \
+  "remote collection doc states whitespace is refused rather than trimmed"
+
+# Enrollment must never be documented as automatic.
+assert_not_contains "${REMOTE_DOC}" '(automatic|automated)[[:space:]]+host.key[[:space:]]+enrollment' \
+  "remote collection doc documents no automatic host-key enrollment"
+
+# Atomic collection, in the approved wording.
+assert_contains "${REMOTE_DOC}" '[Aa]tomic at the collector level' \
+  "remote collection doc states collection is atomic at the collector level"
+assert_contains "${REMOTE_DOC}" '[Ss]uccessful intermediate operations are discarded' \
+  "remote collection doc states intermediate successes are discarded"
+assert_contains "${REMOTE_DOC}" '[Pp]artial collection is deferred' \
+  "remote collection doc records that partial collection is deferred"
+
+# subprocess_access: true must be explained, not left to be read literally.
+assert_contains "${REMOTE_DOC}" 'subprocess_access' \
+  "remote collection doc explains the subprocess_access declaration"
+assert_contains "${REMOTE_DOC}" 'not general subprocess authority|rather than general subprocess authority' \
+  "remote collection doc bounds what subprocess_access means"
+assert_contains "${REMOTE_DOC}" 'SSHRemoteTransport' \
+  "remote collection doc names the transport that owns execution"
+
+for collector_doc in docs/collectors/linux-host.md docs/collectors/linux-resources.md \
+                     docs/collectors/linux-services.md; do
+  assert_contains "${collector_doc}" '[Aa]tomic at the collector level' \
+    "$(basename "${collector_doc}" .md) doc states collection is atomic"
+  assert_contains "${collector_doc}" 'subprocess_access' \
+    "$(basename "${collector_doc}" .md) doc explains subprocess_access"
+done
+
+# Documentation must use synthetic hostnames only; a real one invites a copy
+# and paste straight at production.
+assert_not_contains "${REMOTE_DOC}" '[a-z0-9-]+\.(com|net|org|io)\b' \
+  "remote collection doc uses synthetic hostnames only"
+
+assert_contains "docs/platform-roadmap.md" 'v0\.9\.0 — Remote Read-Only Collectors' \
+  "roadmap records v0.9.0"
+assert_contains "docs/platform-roadmap.md" 'v0\.9\.5 — Distributed Capability Fabric' \
+  "roadmap preserves v0.9.5"
+assert_contains "docs/platform-roadmap.md" 'v1\.0\.0 — Kyri Core Foundation' \
+  "roadmap preserves v1.0.0"
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

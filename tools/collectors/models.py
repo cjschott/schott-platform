@@ -39,7 +39,13 @@ APPROVED_SOURCE_TYPES = frozenset({
 
 APPROVED_PERMISSIONS = frozenset({
     "read-declared-model", "read-repository-files", "synthetic-fixture-only",
+    "read-remote-host",
 })
+
+# The one permission that unlocks network access, and the only way to get it.
+# A collector holding it may observe an explicitly approved remote target
+# through the audited transport; it may not administer one.
+REMOTE_PERMISSION = "read-remote-host"
 
 FORBIDDEN_PERMISSIONS = frozenset({
     "write-platform-model", "write-evidence-store", "modify-runtime",
@@ -136,11 +142,25 @@ class CollectorManifest:
             elif permission not in APPROVED_PERMISSIONS:
                 problems.append(f"permission '{permission}' is not approved")
 
-        # Network access is refused unconditionally. A collector that can reach
-        # the network is no longer a local read-only observer, whatever else its
-        # manifest claims.
-        if self.network_access:
-            problems.append("network_access must be false; collectors are local and read-only")
+        # Network access was refused unconditionally through v0.8.6. From
+        # v0.9.0 it is narrowed rather than relaxed, exactly as v0.6.0 narrowed
+        # the subprocess prohibition: the capability exists in one reviewable
+        # form, gated by one permission, and is refused in every other case.
+        #
+        # The pairing is enforced in both directions on purpose. Network access
+        # without the permission is an undeclared capability; the permission
+        # without network access is a manifest claiming a boundary it does not
+        # actually sit behind. Either mismatch means the manifest no longer
+        # describes the collector.
+        if self.network_access and REMOTE_PERMISSION not in self.permissions:
+            problems.append(
+                f"network_access requires the '{REMOTE_PERMISSION}' permission; "
+                "collectors are read-only and reach nothing they have not declared"
+            )
+        if REMOTE_PERMISSION in self.permissions and not self.network_access:
+            problems.append(
+                f"the '{REMOTE_PERMISSION}' permission requires network_access to be true"
+            )
 
         # Subprocess and filesystem access are declarable from v0.6.0, but only
         # in the narrowed forms the framework can enforce: subprocess runs

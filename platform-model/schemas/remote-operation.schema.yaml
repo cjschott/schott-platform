@@ -1,0 +1,91 @@
+---
+# Declarative schema for remote operation records.
+#
+# A remote operation record *describes* an operation the code-owned catalog
+# defines. It does not define one. There is no field anywhere in this schema
+# that carries command text, and that absence is the schema's main purpose:
+# once argv can be expressed as data, anyone who can edit data can run
+# anything the credential permits.
+#
+# The argv lives in tools/collectors/remote/command_catalog.py, in reviewed
+# code. Adding a fact is a code change, on purpose.
+#
+# Human-authored, so identifiers are four digits: ROP-[0-9]{4}.
+#
+# Repository-owned. Enforced by tests/test-platform-model.sh and
+# tests/test-remote-collectors.sh.
+#
+# Governed by: docs/decisions/ADR-0010-remote-read-only-collection.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: remote-operation
+
+provenance:
+  class: declared
+  source: docs/collectors/remote-collection.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^ROP-[0-9]{4}$'
+
+# Where the executable form of an operation comes from. Not configuration.
+command_source: code-owned-catalog
+command_source_path: tools/collectors/remote/command_catalog.py
+
+required_fields:
+  - operation_id
+  - description
+  - platform
+  - sensitivity
+  - read_only
+
+optional_fields:
+  - timeout_ceiling_seconds
+  - output_ceiling_bytes
+  - required_privilege
+  - parameterised
+
+# Absent by construction. A record that could carry any of these would make
+# the catalog advisory rather than authoritative.
+forbidden_fields:
+  - command
+  - command_text
+  - argv
+  - shell
+  - script
+  - args
+  - sudo
+  - run_as
+
+constant_fields:
+  read_only: true
+  required_privilege: unprivileged
+
+enums:
+  platform:
+    - linux
+  sensitivity:
+    - public
+    - internal
+  required_privilege:
+    # No escalation. Every fact collected here is readable unprivileged, so
+    # sudo would buy nothing and would leave the platform holding privileged
+    # remote execution against the day someone wants a fact that needs it.
+    - unprivileged
+
+field_rules:
+  operation_id:
+    pattern: '^[a-z][a-z0-9]*\.[a-z][a-z0-9_]*$'
+  timeout_ceiling_seconds:
+    minimum: 1
+  output_ceiling_bytes:
+    minimum: 1
+    # Output past the ceiling is discarded, never truncated and parsed. A
+    # parser handed half a file produces a confident wrong answer.
+    on_exceeded: discard
+
+relationships:
+  - PERMITS_OPERATION
+
+review_required: true

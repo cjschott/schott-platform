@@ -511,3 +511,39 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Establishes the sequence an operator reads during review.
+
+  TARGETS:
+    name: Targets
+    description: >-
+      The source collector or collection attempt observes the target remote
+      host. Observation only: this relationship never implies the platform
+      administers, depends on, or places work on the host.
+    allowed_sources: [collector, evidence]
+    allowed_targets: [remote-target]
+    transitive: false
+    inverse: null
+    operational_impact: Records which machines the platform has been approved to look at.
+
+  PERMITS_OPERATION:
+    name: Permits Operation
+    description: >-
+      The source remote target authorizes the target remote operation. This is
+      the authorization boundary: an operation absent here cannot be run
+      against that host, whatever a collector asks for.
+    allowed_sources: [remote-target]
+    allowed_targets: [remote-operation]
+    transitive: false
+    inverse: null
+    operational_impact: Bounds what can happen on a remote machine to a reviewed list.
+
+  COLLECTS_FROM:
+    name: Collects From
+    description: >-
+      The source evidence record was derived from observation of the target
+      remote host. Present so a remote-derived fact is never mistaken for a
+      locally observed one.
+    allowed_sources: [evidence, observation]
+    allowed_targets: [remote-target]
+    transitive: false
+    inverse: null
+    operational_impact: Distinguishes what was seen on another machine from what was seen here.

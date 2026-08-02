@@ -797,6 +797,100 @@ PY
   fi
 fi
 
+# --- v0.9.0 remote schemas and ontology --------------------------------------
+assert_file "platform-model/schemas/remote-target.schema.yaml"
+assert_file "platform-model/schemas/remote-operation.schema.yaml"
+
+if python3 -c 'import yaml' >/dev/null 2>&1; then
+  REMOTE_OUTPUT="$(python3 - "${ROOT}" <<'REMOTEPY' 2>&1 || true
+import sys
+from pathlib import Path
+
+import yaml
+
+root = Path(sys.argv[1])
+failures = 0
+
+
+def check(condition, message):
+    global failures
+    if condition:
+        print(f"PASS: {message}")
+    else:
+        failures += 1
+        print(f"FAIL: {message}")
+
+
+entities = yaml.safe_load((root / "platform-model/ontology/entity-types.yaml").read_text())
+types = entities.get("entity_types") or {}
+check("remote-target" in types, "ontology defines the remote-target entity type")
+check("remote-operation" in types, "ontology defines the remote-operation entity type")
+check((types.get("remote-target") or {}).get("id_prefix") == "RTGT",
+      "remote targets use the RTGT prefix")
+check((types.get("remote-operation") or {}).get("id_prefix") == "ROP",
+      "remote operations use the ROP prefix")
+
+rels = yaml.safe_load(
+    (root / "platform-model/ontology/relationship-types.yaml").read_text())
+catalog = rels.get("relationship_types") or {}
+for name in ("TARGETS", "PERMITS_OPERATION", "COLLECTS_FROM"):
+    check(name in catalog, f"ontology defines the {name} relationship")
+
+# The Distributed Capability Fabric belongs to v0.9.5. Observation must not
+# quietly acquire the vocabulary of placement.
+for premature in ("PLACES_WORKLOAD", "LEASES", "SCHEDULES_ON", "PROVIDES_ENDPOINT"):
+    check(premature not in catalog,
+          f"no capability-fabric relationship is added early ({premature})")
+for premature in ("worker-node", "workload-lease", "model-endpoint", "placement"):
+    check(premature not in types,
+          f"no capability-fabric entity is added early ({premature})")
+
+target_schema = yaml.safe_load(
+    (root / "platform-model/schemas/remote-target.schema.yaml").read_text())
+required = target_schema.get("required_fields") or []
+for field in ("target_id", "hostname", "port", "username", "host_key_policy",
+              "known_hosts_reference", "authentication_reference", "platform",
+              "trust_classification", "allowed_operation_ids"):
+    check(field in required, f"remote-target schema requires {field}")
+
+forbidden = target_schema.get("forbidden_fields") or []
+for name in ("password", "passphrase", "private_key", "private_key_content",
+             "command", "sudo"):
+    check(name in forbidden, f"remote-target schema forbids {name}")
+
+check(target_schema.get("discovery") == "not-supported",
+      "remote-target schema records that discovery is unsupported")
+
+operation_schema = yaml.safe_load(
+    (root / "platform-model/schemas/remote-operation.schema.yaml").read_text())
+op_required = operation_schema.get("required_fields") or []
+for field in ("operation_id", "description", "platform", "sensitivity",
+              "read_only"):
+    check(field in op_required, f"remote-operation schema requires {field}")
+
+# Command text must never be a schema field: the argv lives in reviewed code.
+for name in ("command", "command_text", "shell", "script", "args"):
+    check(name not in op_required,
+          f"remote-operation schema carries no {name} field")
+check(operation_schema.get("command_source") == "code-owned-catalog",
+      "remote-operation schema records that argv is code-owned")
+
+print(f"__FAILURES__={failures}")
+REMOTEPY
+)"
+  printf '%s\n' "${REMOTE_OUTPUT}" | grep -v '^__FAILURES__=' || true
+  REMOTE_FAILURES="$(printf '%s\n' "${REMOTE_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+  if [[ -z "${REMOTE_FAILURES}" ]]; then
+    fail "remote schema validation did not report a result"
+  else
+    FAILURES=$((FAILURES + REMOTE_FAILURES))
+  fi
+fi
+
+# No remote target may be declared with a routable address in the repository.
+assert_absent 'RTGT-[0-9]{4}.*([0-9]{1,3}\.){3}[0-9]{1,3}' \
+  "no remote target is declared with a literal IP address"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nPlatform model validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

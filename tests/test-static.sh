@@ -1815,6 +1815,34 @@ for kind in EVID VER MEM OBS SNAP TWIN INTEG RECOV EXP WINDOW BASE \
 done
 
 # ---------------------------------------------------------------------------
+# v0.9.0 — remote read-only collectors
+# ---------------------------------------------------------------------------
+
+for module in models target transport ssh_transport command_catalog result redaction; do
+  assert_file "tools/collectors/remote/${module}.py"
+done
+assert_file "tools/collectors/remote_cli.py"
+for plugin in linux_host linux_resources linux_services; do
+  assert_file "tools/collectors/plugins/${plugin}/collector.py"
+  assert_file "tools/collectors/plugins/${plugin}/manifest.yaml"
+done
+assert_file "tests/test-remote-collectors.sh"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-remote-collectors\.sh' \
+  "ci runs the remote collector suite"
+assert_contains "tools/dev/run-validation.sh" 'tests/test-remote-collectors\.sh' \
+  "local validation runs the remote collector suite"
+
+# Host-key verification is the one defence against a machine-in-the-middle.
+for module in ssh_transport command_catalog models target transport; do
+  refute_contains "tools/collectors/remote/${module}.py" \
+    'StrictHostKeyChecking[[:space:]]*=?[[:space:]]*(no|accept-new)' \
+    "host-key checking is never weakened in remote/${module}.py"
+  refute_contains "tools/collectors/remote/${module}.py" \
+    '(shell[[:space:]]*=[[:space:]]*True|os\.system\(|os\.popen\(|\beval\(|\bexec\()' \
+    "no arbitrary execution in remote/${module}.py"
+done
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

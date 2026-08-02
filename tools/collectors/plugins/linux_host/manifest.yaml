@@ -1,0 +1,79 @@
+---
+# Linux host identity collector — remote and read-only.
+#
+# Network access is declared, and is permitted only because this manifest also
+# declares the read-remote-host permission. That pairing is the whole of the
+# v0.9.0 narrowing: network access is not a default any collector can take.
+#
+# Every approved operation is an unprivileged read drawn from the code-owned
+# catalog in tools/collectors/remote/command_catalog.py. This manifest cannot
+# add one; it names identifiers the catalog already defines.
+#
+# Governed by: docs/decisions/ADR-0010-remote-read-only-collection.md
+
+api_version: schott-platform/v1
+kind: CollectorManifest
+
+id: linux-host
+name: Linux Host Collector
+version: 0.1.0
+source_type: ssh-command
+description: >-
+  Observes the identity of an approved remote Linux host: name, operating
+  system, kernel, architecture, and uptime. Collects no users, processes,
+  packages, or network state.
+
+capabilities: []
+
+supported_targets:
+  - host
+
+permissions:
+  - read-remote-host
+
+network_access: true
+# subprocess_access: true denotes constrained, indirect transport capability --
+# this collector causes a process to run, through one audited chokepoint, with
+# a fixed executable and a code-owned argv. It is not general subprocess
+# authority. The collector imports no subprocess, constructs no argv, and
+# supplies no executable text; it selects operation identifiers only.
+# SSHRemoteTransport owns the single remote subprocess call.
+subprocess_access: true
+filesystem_access: false
+read_only: true
+
+approved_operations:
+  - linux.hostname
+  - linux.os_release
+  - linux.kernel
+  - linux.architecture
+  - linux.uptime
+
+# Facts this collector must never gather. Recorded so the boundary is
+# reviewable rather than implied by what the code happens to do today.
+forbidden_facts:
+  - users
+  - environment
+  - processes
+  - command_history
+  - network_connections
+  - installed_packages
+
+secret_requirements: []
+
+output_contract:
+  - hostname
+  - os_id
+  - os_pretty_name
+  - os_version_id
+  - kernel_release
+  - architecture
+  - uptime_seconds
+
+lifecycle: production
+
+provenance:
+  class: declared
+  source: docs/collectors/linux-host.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02

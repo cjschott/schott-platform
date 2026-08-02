@@ -1,0 +1,137 @@
+---
+# Declarative schema for remote target records.
+#
+# A remote target is a host this platform has been explicitly approved to
+# observe. It is declared by a human and reviewed as code; nothing generates
+# one, and there is no discovery path that could.
+#
+# Human-authored, so identifiers are four digits: RTGT-[0-9]{4}. Six-digit
+# widths are reserved for machine-generated records, and a target that a
+# machine could generate would defeat the point of declaring them.
+#
+# Repository-owned. Enforced by tests/test-platform-model.sh and
+# tests/test-remote-collectors.sh.
+#
+# Governed by: docs/decisions/ADR-0010-remote-read-only-collection.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: remote-target
+
+provenance:
+  class: declared
+  source: docs/collectors/remote-collection.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^RTGT-[0-9]{4}$'
+
+# Targets are declared, never found. No scan, no address range, no default.
+discovery: not-supported
+
+required_fields:
+  - target_id
+  - hostname
+  - port
+  - username
+  - host_key_policy
+  - known_hosts_reference
+  - authentication_reference
+  - platform
+  - trust_classification
+  - allowed_operation_ids
+
+optional_fields:
+  - connect_timeout_seconds
+  - command_timeout_seconds
+  - max_stdout_bytes
+  - max_stderr_bytes
+  - allowed_units
+  - description
+  - owner
+
+# Refused outright wherever they appear, at any depth, rather than ignored.
+# Ignoring credential material would leave a working secret in a reviewed file
+# that everyone assumes holds none — and "command" and "sudo" are here because
+# a target that can say what to run is no longer a target.
+forbidden_fields:
+  - password
+  - passwd
+  - passphrase
+  - private_key
+  - private_key_content
+  - key_content
+  - secret
+  - token
+  - credential
+  - command
+  - command_text
+  - shell
+  - script
+  - sudo
+
+enums:
+  platform:
+    - linux
+  # Only one value, and deliberately so. A policy field that can express
+  # "ignore" will eventually be set to it, usually at 2am during an incident.
+  host_key_policy:
+    - strict
+  trust_classification:
+    - internal
+    - restricted
+    - untrusted
+  authentication_reference.kind:
+    - ssh-key-path
+    - ssh-agent
+    - secret-source
+
+field_rules:
+  hostname:
+    # Exactly one machine, in one of three forms. Explicit address literals
+    # exist for bootstrap and DNS-failure situations: requiring a name would
+    # mean the platform cannot observe a host precisely when name resolution
+    # is what broke. Naming one machine by address is not discovery.
+    permitted_forms:
+      - dns-name
+      - ipv4-literal
+      - ipv6-literal
+    # Applied to DNS names only. Address literals are parsed by Python's
+    # ipaddress module rather than matched by a pattern, because a permissive
+    # expression accepts malformed literals such as 999.168.86.11.
+    dns_pattern: '^(?=.*[A-Za-z])[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+    address_validation: python-ipaddress
+    # An IPv6 literal is stored canonical, compressed, and unbracketed.
+    # Brackets are URL syntax and never appear in a target value.
+    ipv6_form: canonical-unbracketed
+    wildcards: not-permitted
+    address_ranges: not-permitted
+    cidr_ranges: not-permitted
+    host_lists: not-permitted
+    urls: not-permitted
+    embedded_username: not-permitted
+    embedded_port: not-permitted
+    surrounding_whitespace: rejected-not-trimmed
+    name_resolution: never-performed
+  port:
+    minimum: 1
+    maximum: 65535
+  authentication_reference:
+    # A path or a secret-source identifier. The platform never reads it; it is
+    # handed to the ssh client, which resolves it.
+    carries_material: false
+  allowed_operation_ids:
+    # The authorization boundary. An operation absent from this list cannot be
+    # run against this target, whatever a collector asks for.
+    values_from: platform-model/schemas/remote-operation.schema.yaml
+  allowed_units:
+    # Named units only. There is no enumeration operation, so a unit absent
+    # from this list is not observed.
+    pattern: '^[A-Za-z0-9][A-Za-z0-9@._-]{0,127}\.service$'
+
+relationships:
+  - TARGETS
+  - PERMITS_OPERATION
+  - COLLECTS_FROM
+
+review_required: true
