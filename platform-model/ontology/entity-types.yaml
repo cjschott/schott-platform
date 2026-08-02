@@ -261,3 +261,27 @@ entity_types:
     description: One read-only operation the code-owned catalog defines. Describes an operation; never defines its argv.
     id_prefix: ROP
     lifecycle_supported: [declared, archived]
+
+  trust-record:
+    name: Trust Record
+    description: Current standing of one subject in one domain. Superseded, never edited.
+    id_prefix: TRUST
+    lifecycle_supported: [declared, archived]
+
+  trust-decision:
+    name: Trust Decision
+    description: One act of judgement producing one trust state. The only thing that can change standing.
+    id_prefix: TDEC
+    lifecycle_supported: [declared, archived]
+
+  trust-authority:
+    name: Trust Authority
+    description: Entity permitted to make trust decisions in named domains. May not approve itself.
+    id_prefix: TAUTH
+    lifecycle_supported: [declared, archived]
+
+  trust-policy:
+    name: Trust Policy
+    description: Declared defaults, permitted transitions, and review cadence for one trust domain.
+    id_prefix: TPOL
+    lifecycle_supported: [declared, archived]

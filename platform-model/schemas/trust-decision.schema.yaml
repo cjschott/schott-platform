@@ -1,0 +1,136 @@
+---
+# Declarative schema for trust decisions.
+#
+# One act of judgement, at one moment, by one actor, producing one state for one
+# subject. A decision is the only thing that can change a trust state, and it
+# records everything needed to re-examine it later.
+#
+# Every one of the eleven required elements is mandatory. A decision missing any
+# of them cannot be written, so an incomplete decision cannot be recorded now
+# and explained away afterwards.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0011-trust-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: trust-decision
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0011-trust-plane.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^TDEC-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+required_fields:
+  - decision_id
+  - record_id
+  - actor
+  - decided_at
+  - reason
+  - evidence
+  - verification_method
+  - approval_source
+  - scope
+  - expiration
+  - resulting_state
+  - previous_state
+  - history_reference
+
+optional_fields:
+  - notes
+  - review_reference
+  - superseded_decision_id
+
+forbidden_fields:
+  - private_key
+  - private_key_content
+  - password
+  - passwd
+  - passphrase
+  - token
+  - secret
+  - credential
+  - auto_enroll
+  - auto_approve
+  - auto_renew
+  - trust_on_first_use
+  - trust_score
+  - command
+
+enums:
+  resulting_state:
+    - unknown
+    - pending
+    - trusted
+    - restricted
+    - quarantined
+    - revoked
+    - expired
+    - rejected
+  verification_method:
+    # Named methods rather than free text. A fingerprint compared over a
+    # separate channel is a different quality of verification from one read off
+    # the connection being verified, and the record must tell them apart.
+    - out-of-band-fingerprint-comparison
+    - offline-signature-verification
+    - checksum-against-signed-manifest
+    - hardware-token-attestation
+    - documented-physical-verification
+    - reviewed-source-inspection
+  approval_source:
+    - named-operator
+    - change-review-record
+    - offline-certificate-authority
+    - signed-release-artifact
+
+field_rules:
+  reason:
+    # A written justification, not a code. "It was already there" is not a
+    # reason, and a schema that accepts an enum here would make it one.
+    free_text_required: true
+    minimum_words: 5
+  evidence:
+    # Referenced, never inlined. Evidence identifies what was checked; it is not
+    # a place to store the thing itself.
+    carries_material: false
+  expiration:
+    required: true
+    # Expiry exists to force a look. An expiry that renews itself measures
+    # nothing.
+    automatic_renewal: not-permitted
+  previous_state:
+    required: true
+  decided_at:
+    timezone_required: true
+
+# A decision is never derived from inference. Reasoning may consume trust;
+# trust never consumes reasoning, or a model could argue the platform into
+# trusting something.
+derivable_from_reasoning: false
+forbidden_sources:
+  - knowledge-event
+  - knowledge-state
+  - experience-profile
+  - operational-baseline
+  - pattern
+  - occurrence-series
+
+relationships:
+  - VERIFIED_BY
+  - APPROVED_BY
+  - REVOKES
+  - SUPERSEDES
+
+review_required: true
