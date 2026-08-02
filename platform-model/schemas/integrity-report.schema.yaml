@@ -1,0 +1,106 @@
+---
+# Declarative schema for integrity reports.
+#
+# The comparison between a digital twin and an immutable snapshot.
+#
+# Governed by: docs/decisions/ADR-0007-operational-integrity-engine.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: integrity-report
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0007-operational-integrity-engine.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^INTEG-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - evaluated_at
+  - snapshot
+  - twin
+  - status
+  - confidence
+  - explanation
+  - review_required
+  - provenance
+
+constant_fields:
+  type: integrity-report
+
+entity_reference_fields:
+  - target
+
+enums:
+  # UNKNOWN and INSUFFICIENT_EVIDENCE are separate from DRIFT on purpose.
+  # Reporting "we could not tell" as a change produces a false alarm on every
+  # coverage gap, which trains operators to ignore the reports.
+  status:
+    - MATCH
+    - PARTIAL
+    - DRIFT
+    - UNKNOWN
+    - INSUFFICIENT_EVIDENCE
+  provenance_class:
+    - inferred
+
+timestamp_fields:
+  - evaluated_at
+
+confidence_requirements:
+  required_factors:
+    - coverage
+    - knowledge_freshness
+    - knowledge_confidence
+    - snapshot_integrity
+    - determinacy
+  bounds: [0.0, 1.0]
+  weights_total: 1.0
+  requires_written_reason_per_factor: true
+  interpretation: >-
+    Confidence is an engineering heuristic with visible inputs. It is not a
+    probability and must never be presented as one.
+
+# Every conclusion names the records it came from. A finding that cites nothing
+# cannot be audited, and an unauditable finding is indistinguishable from a guess.
+citation_requirements:
+  must_reference:
+    - snapshot
+    - twin
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+# A record read by tooling must never be able to cause an action when parsed.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - script
+  - raw_output

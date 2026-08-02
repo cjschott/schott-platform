@@ -1,0 +1,97 @@
+---
+# Declarative schema for advisory recovery plans.
+#
+# A plan is a human-readable reconstruction strategy. It is never executed, and
+# this schema forbids any field an executor could consume.
+#
+# Governed by: docs/decisions/ADR-0007-operational-integrity-engine.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: recovery-plan
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0007-operational-integrity-engine.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^RECOV-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - created_at
+  - integrity_report
+  - target_snapshot
+  - status
+  - summary
+  - advisory_only
+  - approval_required
+  - provenance
+
+constant_fields:
+  type: recovery-plan
+  advisory_only: true
+  approval_required: true
+
+entity_reference_fields:
+  - target
+
+enums:
+  status:
+    - no-action-required
+    - review-recommended
+    - reconstruction-recommended
+    - insufficient-evidence
+  provenance_class:
+    - inferred
+
+timestamp_fields:
+  - created_at
+
+# Steps are prose for a human to read. A structured, machine-readable action is
+# one scheduler away from being executed, and the moment this engine can act on
+# its own conclusions a wrong conclusion becomes an outage.
+step_requirements:
+  permitted_fields:
+    - order
+    - description
+  prose_only: true
+  executable: false
+  rationale: >-
+    Detected drift is frequently intended change. Deciding whether a difference
+    should be reversed requires a human who can tell the difference.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+# A record read by tooling must never be able to cause an action when parsed.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - script
+  - raw_output

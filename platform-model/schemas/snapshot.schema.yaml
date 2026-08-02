@@ -1,0 +1,90 @@
+---
+# Declarative schema for immutable operational snapshots.
+#
+# A snapshot records a known-good operational state. It is written once and
+# never revised: a reference point that can change after something cited it is
+# not a reference point.
+#
+# Governed by: docs/decisions/ADR-0007-operational-integrity-engine.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: snapshot
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0007-operational-integrity-engine.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+# Six digits, matching the v0.7.0 decision for machine-generated records.
+id_pattern: '^SNAP-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - created_at
+  - label
+  - facts
+  - content_fingerprint
+  - schema_version
+  - provenance
+
+constant_fields:
+  type: snapshot
+
+entity_reference_fields:
+  - target
+
+evidence_reference_fields:
+  - supporting_evidence
+
+enums:
+  provenance_class:
+    - derived
+
+timestamp_fields:
+  - created_at
+
+# A snapshot records what was observed at a moment a human labelled good. It is
+# not a statement of what the platform should be; that distinction is what keeps
+# it evidence rather than intent.
+immutability:
+  revisable: false
+  supersede_only: true
+  rationale: >-
+    A newer snapshot is a new record. The earlier one stays readable so that
+    conclusions which cited it remain legible.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+# A record read by tooling must never be able to cause an action when parsed.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - script
+  - raw_output
