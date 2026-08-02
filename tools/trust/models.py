@@ -61,6 +61,13 @@ FORBIDDEN_KEYS = frozenset({
     "trust_on_first_use",
 })
 
+# Who authorised a decision, from the released trust-decision schema. Named
+# rather than free text so "who said yes" is answerable from the record.
+APPROVAL_SOURCES = frozenset({
+    "named-operator", "change-review-record", "offline-certificate-authority",
+    "signed-release-artifact",
+})
+
 # Preserved explicitly rather than dropped: a value known to be unknown and a
 # value nobody recorded are different facts.
 UNKNOWN = "unknown"
@@ -413,9 +420,16 @@ class TrustRecord:
     expiration: datetime | None = None
     provenance: Mapping[str, Any] = field(default_factory=dict)
     fingerprint: str = ""
+    subject_fingerprint: str = ""
 
     def __post_init__(self) -> None:
         _match(RECORD_ID, self.record_id, "record_id")
+        if not self.subject_fingerprint:
+            # Derived from the subject's identity and domain, not supplied: a
+            # caller-chosen fingerprint could make two subjects look like one.
+            digest = hashlib.sha256(
+                f"{self.subject_type}\u0000{self.subject_id}".encode("utf-8")).hexdigest()
+            object.__setattr__(self, "subject_fingerprint", f"sha256:{digest}")
         _match(LINEAGE_ID, self.lineage_id, "lineage_id")
         _match(DECISION_ID, self.decision_id, "decision_id")
         _match(AUTHORITY_ID, self.authority_id, "authority_id")
@@ -432,6 +446,14 @@ class TrustRecord:
     def _body(self) -> dict[str, Any]:
         return {
             "record_id": self.record_id,
+            # Schema field names from the released v0.9.2 contract.
+            "domain": self.subject_type,
+            "subject_identifier": self.subject_id,
+            "subject_fingerprint": self.subject_fingerprint,
+            "trust_authority_id": self.authority_id,
+            "expires_at": self.expiration.isoformat() if self.expiration else None,
+            # Runtime attribute names, retained so a reader of either
+            # vocabulary finds what they expect.
             "subject_id": self.subject_id,
             "subject_type": self.subject_type,
             "state": self.state,
@@ -474,6 +496,8 @@ class TrustDecision:
     evidence_references: tuple[TrustEvidenceReference, ...]
     verification_method: str
     verification_details: TrustVerificationDetails
+    approval_source: str = ""
+    history_reference: str = ""
     trust_scope: TrustScope | None = None
     expiration: datetime | None = None
     supersedes: str | None = None
@@ -496,6 +520,14 @@ class TrustDecision:
             )
         if not self.evidence_references:
             raise TrustError("a decision requires at least one evidence reference")
+        if self.approval_source not in APPROVAL_SOURCES:
+            raise TrustError(
+                f"approval source '{self.approval_source}' is not recognised; "
+                "who authorised a decision is one of its mandatory elements")
+        if not str(self.history_reference or "").strip():
+            raise TrustError(
+                "history_reference is required; a decision that cannot be placed in "
+                "its chain is not reviewable")
         if self.verification_method not in {m.value for m in VerificationMethod}:
             raise TrustError(f"verification method '{self.verification_method}' is not recognised")
         if self.expiration is not None:
@@ -516,17 +548,26 @@ class TrustDecision:
     def _body(self) -> dict[str, Any]:
         return {
             "decision_id": self.decision_id,
+            "record_id": self.history_reference,
             "lineage_id": self.lineage_id,
             "subject_id": self.subject_id,
             "previous_state": self.previous_state,
             "requested_state": self.requested_state,
+            # Schema field names from the released v0.9.2 contract. The
+            # dataclass attribute names differ where the schema chose another
+            # word; forking a second runtime vocabulary would leave two
+            # descriptions of one record.
+            "actor": self.actor_authority_id,
             "actor_authority_id": self.actor_authority_id,
             "decided_at": self.decided_at.isoformat(),
             "reason": self.reason,
-            "evidence_references": [e.to_dict() for e in self.evidence_references],
+            "evidence": [e.to_dict() for e in self.evidence_references],
+            "approval_source": self.approval_source,
+            "history_reference": self.history_reference,
             "verification_method": self.verification_method,
             "verification_details": self.verification_details.to_dict(),
-            "trust_scope": self.trust_scope.to_dict() if self.trust_scope else None,
+            "scope": self.trust_scope.to_dict() if self.trust_scope else None,
+            "resulting_state": self.requested_state,
             "expiration": self.expiration.isoformat() if self.expiration else None,
             "supersedes": self.supersedes,
             "revokes_record_id": self.revokes_record_id,

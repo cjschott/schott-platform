@@ -84,6 +84,7 @@ def create_decision(
     revokes_record_id: str | None = None,
     lineage_id: str | None = None,
     supersedes_lineage_id: str | None = None,
+    approval_source: str = "named-operator",
     provenance: dict[str, Any] | None = None,
 ) -> DecisionOutcome:
     """Record one act of judgement, or refuse and write nothing."""
@@ -167,6 +168,9 @@ def create_decision(
 
     resolved_lineage_id = (head.get("lineage_id") if head
                            else store.allocate_id("lineage"))
+    # Allocated before the decision so the decision can cite the record it
+    # produces: a decision that cannot be placed in its chain is not reviewable.
+    record_id = store.allocate_id("record")
 
     decision = TrustDecision(
         decision_id=decision_id,
@@ -180,6 +184,8 @@ def create_decision(
         evidence_references=tuple(stored_evidence),
         verification_method=verification_method,
         verification_details=verification_details,
+        approval_source=approval_source,
+        history_reference=record_id,
         trust_scope=scope,
         expiration=expiration,
         supersedes=supersedes,
@@ -188,7 +194,7 @@ def create_decision(
     )
 
     record = TrustRecord(
-        record_id=store.allocate_id("record"),
+        record_id=record_id,
         subject_id=subject_id,
         subject_type=subject_type,
         state=requested_state,

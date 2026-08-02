@@ -150,6 +150,7 @@ def command_create_decision(args) -> int:
         revokes_record_id=payload.get("revokes_record_id"),
         lineage_id=payload.get("lineage_id"),
         supersedes_lineage_id=payload.get("supersedes_lineage_id"),
+        approval_source=str(payload.get("approval_source", "named-operator")),
         provenance=payload.get("provenance") or {},
     )
     _emit(outcome.to_dict())
