@@ -117,6 +117,14 @@ fi
 if (( ${#APT_PACKAGES[@]} == 0 && ${#MANUAL_STEPS[@]} == 0 )); then
   printf 'Nothing to do. The toolchain is complete.\n'
   printf 'Verify with: tools/dev/check-toolchain.sh\n'
+  # The --apply flag is named even when there is nothing to install, so the
+  # output describes the tool consistently regardless of host state. Omitting
+  # it here made this branch the only one that never mentioned how installing
+  # works, which is exactly the branch a well-provisioned machine sees.
+  if (( DRY_RUN == 1 )); then
+    printf 'This was a dry run; nothing was installed. Had anything been missing,\n'
+    printf 'tools/dev/bootstrap.sh --apply would install it.\n'
+  fi
   exit 0
 fi
 
