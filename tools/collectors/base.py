@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .exceptions import CollectorConfigurationError
+from .exceptions import CollectorConfigurationError, CollectorFailure
 from .models import (
     CollectionContext,
     CollectorError,
@@ -110,6 +110,20 @@ class CollectorPlugin(ABC):
             observations = self.normalize(raw, context)
         except NormalizationError as error:
             return failure(ErrorCategory.MALFORMED_SOURCE, str(error), ResultStatus.FAILED)
+        except CollectorFailure as categorised:
+            # The plugin already knows why this failed and said so in its own
+            # vocabulary. Reporting it as "internal" would discard exactly the
+            # information an operator needs.
+            return CollectorResult(
+                collector_id=manifest.id,
+                target=context.target,
+                status=categorised.status,
+                started_at=started_at,
+                completed_at=context.collected_at,
+                observations=[],
+                errors=list(categorised.errors),
+                content_fingerprint="",
+            )
         except Exception as error:  # noqa: BLE001 - converted to a redacted result
             return failure(
                 ErrorCategory.INTERNAL,

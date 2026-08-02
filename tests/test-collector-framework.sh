@@ -38,14 +38,24 @@ assert_contains() {
 
 # Assert a pattern is absent from a path (file or directory tree).
 # assert_absent_in <target> <pattern> <description> [exclude-glob]
+# assert_absent_in <target> <pattern> <description> [exclude-glob...]
+#
+# Trailing arguments are exclusion globs. More than one is needed from v0.9.0:
+# subprocess now has two audited homes, not one.
 assert_absent_in() {
-  local target="$1" pattern="$2" description="$3" exclude="${4:-}" matches
+  local target="$1" pattern="$2" description="$3" matches
+  shift 3
+  local -a exclusions=()
+  local glob
+  for glob in "$@"; do
+    [[ -n "${glob}" ]] && exclusions+=("--exclude=${glob}")
+  done
   if [[ ! -e "${ROOT}/${target}" ]]; then
     fail "${description} (missing ${target})"
     return
   fi
-  if [[ -n "${exclude}" ]]; then
-    matches="$(grep -rIniE --exclude="${exclude}" -e "${pattern}" "${ROOT}/${target}" || true)"
+  if (( ${#exclusions[@]} > 0 )); then
+    matches="$(grep -rIniE "${exclusions[@]}" -e "${pattern}" "${ROOT}/${target}" || true)"
   else
     matches="$(grep -rIniE -e "${pattern}" "${ROOT}/${target}" || true)"
   fi
@@ -165,9 +175,18 @@ assert_absent_in "${COLLECTORS}" \
 # permitted only inside command_runner.py, a single audited chokepoint enforcing
 # shell=False, an executable allowlist, a mandatory timeout, bounded output, and
 # a sanitized environment. Plugin code still never calls it directly.
+#
+# v0.9.0 adds a second chokepoint, ssh_transport.py, and no more. It cannot
+# reuse command_runner.py, whose allowlist refuses `ssh` outright — correctly,
+# for a module whose job is local execution. Rather than punch a hole in that
+# allowlist, remote execution gets its own audited home with its own rules:
+# argv-only, mandatory host-key verification, pinned client options, bounded
+# time and bytes, and a minimal environment. Two reviewable places, not one,
+# and still nowhere else.
 assert_absent_in "${COLLECTORS}" \
   '(import[[:space:]]+subprocess|from[[:space:]]+subprocess[[:space:]]+import|subprocess\.[a-zA-Z_]|os\.system\(|os\.popen\(|os\.exec)' \
-  "collector framework invokes no subprocess outside command_runner.py" "command_runner.py"
+  "collector framework invokes no subprocess outside its two audited chokepoints" \
+  "command_runner.py" "ssh_transport.py"
 # Writes are the capability that turns a wrong observation into a wrong record.
 assert_absent_in "${COLLECTORS}" \
   "(open\\([^)]*['\"](w|a|x)|\\.write_text\\(|\\.write_bytes\\(|shutil\\.(copy|move|rmtree)|os\\.(remove|unlink|rename|mkdir|makedirs))" \
@@ -298,13 +317,26 @@ for manifest_path in sorted(plugin_root.rglob("manifest.yaml")) if plugin_root.i
     else:
         bad(f"{identifier} source type is not approved: {manifest.get('source_type')}")
 
-    # Network access is refused unconditionally: a collector that can reach the
-    # network is no longer a local read-only observer. Subprocess and read-only
-    # filesystem access are declarable from v0.6.0; write access never is.
-    if manifest.get("network_access") is False:
-        ok(f"{identifier} declares network_access: false")
+    # Network access was refused unconditionally through v0.8.6. From v0.9.0 it
+    # is narrowed rather than relaxed: permitted only alongside the
+    # read-remote-host permission, and refused in both directions. Network
+    # access without the permission is an undeclared capability; the permission
+    # without network access is a manifest claiming a boundary it does not sit
+    # behind. Subprocess and read-only filesystem access are declarable from
+    # v0.6.0; write access never is.
+    declared_permissions = manifest.get("permissions") or []
+    wants_network = manifest.get("network_access") is True
+    has_remote_permission = "read-remote-host" in declared_permissions
+
+    if wants_network == has_remote_permission:
+        if wants_network:
+            ok(f"{identifier} pairs network_access with read-remote-host")
+        else:
+            ok(f"{identifier} declares network_access: false")
+    elif wants_network:
+        bad(f"{identifier} declares network_access without read-remote-host")
     else:
-        bad(f"{identifier} must declare network_access: false")
+        bad(f"{identifier} declares read-remote-host without network_access")
     if manifest.get("subprocess_access") in (True, False):
         ok(f"{identifier} declares a boolean subprocess_access")
     else:
@@ -447,8 +479,11 @@ assert_contains "tools/collectors/models.py" 'read-remote-host' \
 assert_contains "tools/collectors/models.py" 'network_access' \
   "the framework still governs network access explicitly"
 assert_contains "tools/collectors/models.py" \
-  'network_access.*read-remote-host|read-remote-host.*network_access' \
-  "network access is tied to the read-remote-host permission"
+  'self\.network_access and REMOTE_PERMISSION not in self\.permissions' \
+  "network access without the permission is refused"
+assert_contains "tools/collectors/models.py" \
+  'REMOTE_PERMISSION in self\.permissions and not self\.network_access' \
+  "the permission without network access is refused"
 
 # Local collectors must not quietly acquire network access.
 for plugin in git_repository configuration_render manual_attestation example; do

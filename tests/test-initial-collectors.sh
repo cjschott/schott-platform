@@ -32,14 +32,24 @@ assert_contains() {
 }
 
 # assert_absent_in <target> <pattern> <description> [exclude-glob]
+# assert_absent_in <target> <pattern> <description> [exclude-glob...]
+#
+# Trailing arguments are exclusion globs. More than one is needed from v0.9.0:
+# subprocess now has two audited homes, not one.
 assert_absent_in() {
-  local target="$1" pattern="$2" description="$3" exclude="${4:-}" matches
+  local target="$1" pattern="$2" description="$3" matches
+  shift 3
+  local -a exclusions=()
+  local glob
+  for glob in "$@"; do
+    [[ -n "${glob}" ]] && exclusions+=("--exclude=${glob}")
+  done
   if [[ ! -e "${ROOT}/${target}" ]]; then
     fail "${description} (missing ${target})"
     return
   fi
-  if [[ -n "${exclude}" ]]; then
-    matches="$(grep -rIniE --exclude="${exclude}" -e "${pattern}" "${ROOT}/${target}" || true)"
+  if (( ${#exclusions[@]} > 0 )); then
+    matches="$(grep -rIniE "${exclusions[@]}" -e "${pattern}" "${ROOT}/${target}" || true)"
   else
     matches="$(grep -rIniE -e "${pattern}" "${ROOT}/${target}" || true)"
   fi
@@ -69,9 +79,15 @@ done
 # Subprocess is permitted only inside command_runner.py. That single audited
 # chokepoint is what makes the v0.6.0 permission change a narrowing rather
 # than a relaxation.
+#
+# v0.9.0 adds exactly one more: ssh_transport.py. It cannot route through
+# command_runner.py, whose executable allowlist refuses `ssh` outright, so
+# remote execution gets its own audited home rather than a hole in that
+# allowlist. Two reviewable places, and still nowhere else.
 assert_absent_in "${COLLECTORS}" \
   '(import[[:space:]]+subprocess|from[[:space:]]+subprocess[[:space:]]+import|subprocess\.[a-zA-Z_]|os\.system\(|os\.popen\()' \
-  "subprocess appears only in command_runner.py" "command_runner.py"
+  "subprocess appears only in the two audited chokepoints" \
+  "command_runner.py" "ssh_transport.py"
 
 assert_absent_in "${COLLECTORS}" 'shell[[:space:]]*=[[:space:]]*True' \
   "no collector code uses shell=True"
