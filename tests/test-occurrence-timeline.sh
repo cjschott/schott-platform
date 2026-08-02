@@ -345,11 +345,18 @@ check(any(p.kind == PatternKind.ISOLATED.value for p in isolated),
 check(detect_patterns(empty, pattern_id_prefix="PAT", generated_at=NOW) == [],
       "an empty series yields no patterns rather than an invented one")
 
-# Nothing may claim a future occurrence.
-pattern_blob = json.dumps([p.to_dict() for p in patterns + burst_patterns], default=str).lower()
-for forbidden in ("next expected", "will occur", "predicted", "forecast", "probability"):
-    check(forbidden not in pattern_blob,
+# Nothing may claim a future occurrence. Scoped to the fields that make claims
+# — kind and explanation — because the confidence block legitimately carries
+# the sentence "engineering heuristic, not a probability".
+claim_text = " ".join(
+    f"{p.kind} {p.explanation}" for p in patterns + burst_patterns).lower()
+for forbidden in ("next expected", "will occur", "predicted", "forecast",
+                  "probability", "likely to", "expect "):
+    check(forbidden not in claim_text,
           f"patterns make no forward-looking claim ({forbidden})")
+check("not a probability" in json.dumps(
+    [p.to_dict() for p in patterns], default=str).lower(),
+    "pattern confidence still states it is not a probability")
 
 # --- Timeline is ordered and deterministic --------------------------------
 mixed = [occ(5, kind="deploy"), occ(9, kind="service-restart"), occ(1, kind="deploy")]
