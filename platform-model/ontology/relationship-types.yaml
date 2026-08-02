@@ -429,3 +429,34 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Records advice a human may accept or reject; nothing acts on it.
+
+  SUMMARIZES:
+    name: Summarizes
+    description: >-
+      The source experience profile statistically summarizes observations of
+      the target entity. Records what was seen, never what is correct.
+    allowed_sources: [experience-profile]
+    allowed_targets: [host, service, application, container, network, storage, backup-policy, repository]
+    transitive: false
+    inverse: null
+    operational_impact: Provides the operational history a behavioural comparison is measured against.
+
+  DERIVED_FROM_WINDOW:
+    name: Derived From Window
+    description: The source profile or baseline was computed over the target time window.
+    allowed_sources: [experience-profile, operational-baseline]
+    allowed_targets: [experience-window]
+    transitive: false
+    inverse: null
+    operational_impact: A summary is only as representative as the window it covers.
+
+  ESTABLISHES_BASELINE:
+    name: Establishes Baseline
+    description: >-
+      The source profile contributes to the target baseline. Contributing to
+      what is typical confers no authority over what is correct.
+    allowed_sources: [experience-profile]
+    allowed_targets: [operational-baseline]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies which observations a notion of normal rests on.

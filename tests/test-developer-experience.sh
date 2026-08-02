@@ -468,6 +468,20 @@ fi
 # Quick mode must document what it omits rather than silently dropping steps.
 assert_contains "${VALIDATION}" 'omit' "validation documents what quick mode omits"
 
+# --- Step counter must be self-verifying -----------------------------------
+# The declared total drifted from the executed count twice during integration,
+# because a suite added to full mode was skipped in quick mode. A hardcoded
+# total cannot notice that. The script must check its own arithmetic at the end
+# of a run, so a miscount becomes a validation failure rather than a cosmetic
+# label nobody trusts.
+#
+# Asserted statically rather than by invoking run-validation.sh, which runs
+# this suite and would recurse.
+assert_contains "${VALIDATION}" 'STEP" -ne "\$\{TOTAL_STEPS|STEP != TOTAL_STEPS|STEP" != "\$\{TOTAL_STEPS' \
+  "validation verifies its executed step count against its declared total"
+assert_contains "${VALIDATION}" 'declared|miscount|step count' \
+  "validation explains a step-count mismatch when it finds one"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nDeveloper experience validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

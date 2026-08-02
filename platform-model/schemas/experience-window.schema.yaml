@@ -1,0 +1,78 @@
+---
+# Declarative schema for experience windows.
+#
+# A window is the bounded span of time a profile summarizes.
+#
+# Governed by: docs/decisions/ADR-0008-experience-engine.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: experience-window
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0008-experience-engine.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^WINDOW-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - label
+  - window_start
+  - window_end
+  - duration_seconds
+
+constant_fields:
+  type: experience-window
+
+enums:
+  label:
+    - 24h
+    - 7d
+    - 30d
+    - custom
+
+timestamp_fields:
+  - window_start
+  - window_end
+
+# A custom window carries no default duration. An invented span presented as a
+# chosen one would make every profile built on it quietly wrong.
+custom_window_requirements:
+  requires_explicit_duration: true
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - prediction
+  - forecast
+  - model_weights
+  - raw_output

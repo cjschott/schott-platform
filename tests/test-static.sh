@@ -1733,7 +1733,20 @@ assert_contains ".github/workflows/ci.yml" 'bash tests/test-operational-integrit
 assert_ignored "integrity-local/"
 
 # ---------------------------------------------------------------------------
-# Combined-state parity: both suites must run locally and in CI. A merge that
+# v0.8.5 — experience engine
+# ---------------------------------------------------------------------------
+
+for module in models statistics windows profile_builder baseline confidence \
+              experience_store integration cli; do
+  assert_file "tools/experience/${module}.py"
+done
+assert_file "tests/test-experience-engine.sh"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-experience-engine\.sh' \
+  "ci runs the experience engine suite"
+assert_ignored "experience-local/"
+
+# ---------------------------------------------------------------------------
+# Combined-state parity: every suite must run locally and in CI. A merge that
 # kept one side's wiring and dropped the other's would leave a suite that
 # exists but is never executed.
 # ---------------------------------------------------------------------------
@@ -1742,8 +1755,18 @@ assert_contains "tools/dev/run-validation.sh" 'tests/test-developer-experience\.
   "local validation runs the developer experience suite"
 assert_contains "tools/dev/run-validation.sh" 'tests/test-operational-integrity\.sh' \
   "local validation runs the operational integrity suite"
+assert_contains "tools/dev/run-validation.sh" 'tests/test-experience-engine\.sh' \
+  "local validation runs the experience engine suite"
 assert_contains ".github/workflows/ci.yml" 'bash tests/test-developer-experience\.sh' \
   "ci runs the developer experience suite"
+
+# The generated-record backstop must cover every record kind the platform can
+# produce. A kind added to a store but missing here is a kind that can be
+# committed without anything objecting.
+for kind in EVID VER MEM OBS SNAP TWIN INTEG RECOV EXP WINDOW BASE; do
+  assert_contains ".github/workflows/ci.yml" "${kind}-\*" \
+    "ci backstop covers ${kind} records"
+done
 
 # ---------------------------------------------------------------------------
 # Result

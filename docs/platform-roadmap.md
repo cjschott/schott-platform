@@ -284,9 +284,35 @@ the incident it was meant to prevent.
 
 ### v0.8.5 — Experience Engine and Operational Memory
 
-Statistical summaries of observed history: experience profiles, rolling
-windows, and operational baselines. Answers "what is normal?", which is a
-different question from "what is true?". No prediction and no machine learning.
+**Delivered.** Statistical summaries of observed history: experience profiles,
+rolling windows, and operational baselines. Answers "what is normal?", which is
+a different question from "what is true?".
+
+- `statistics.py` — deterministic descriptive statistics, standard library only
+- `windows.py` — rolling `24h`, `7d`, `30d`, and `custom` windows resolved from
+  an explicit `now` rather than the clock
+- `profile_builder.py` and `baseline.py` — `EXP`, `WINDOW`, and `BASE` records,
+  all immutable
+- `confidence.py` — four factors totalling 1.0, each with a written reason
+- `integration.py` — the `EXPECTED`/`UNEXPECTED` axis, independent of
+  `MATCH`/`DRIFT`
+- ADR-0008, three schemas, three entity types, three relationships
+
+**No machine learning, by decision rather than omission.** No forecasting, no
+online learning, no anomaly model, no randomness. Every number is recomputable
+by hand from evidence: a wrong statistic is visibly wrong, while a wrong model
+is confidently wrong, and confident wrongness is what an operational platform
+can least afford.
+
+Three rules keep it honest: missing observations are `UNKNOWN` and a thin
+history is `INSUFFICIENT_EVIDENCE` — never `UNEXPECTED`; and `EXPECTED` is not
+equivalent to `MATCH`, because one compares against operational history and the
+other against a snapshot.
+
+Known limitation carried forward: `sample_count` reflects *distinct retained
+evidence values*, not collection frequency, because the observation layer
+collapses identical repeated readings into one record plus a refresh event.
+Frequency-aware weighting is reserved for v0.8.6.
 
 ### v0.8.6 — Occurrence Timeline
 

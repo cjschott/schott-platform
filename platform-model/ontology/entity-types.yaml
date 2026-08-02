@@ -207,3 +207,21 @@ entity_types:
     description: Advisory, human-readable reconstruction strategy. Never executed.
     id_prefix: RECOV
     lifecycle_supported: [declared, archived]
+
+  experience-profile:
+    name: Experience Profile
+    description: Statistical summary of one metric over one window. Observed history, not a truth claim.
+    id_prefix: EXP
+    lifecycle_supported: [declared, archived]
+
+  experience-window:
+    name: Experience Window
+    description: Bounded span of time an experience profile summarizes.
+    id_prefix: WINDOW
+    lifecycle_supported: [declared, archived]
+
+  operational-baseline:
+    name: Operational Baseline
+    description: What has been typical for a metric. Never a statement of what is correct.
+    id_prefix: BASE
+    lifecycle_supported: [declared, archived]

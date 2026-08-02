@@ -39,3 +39,8 @@ observations-test/
 # explicit data root outside the repository and are never tracked.
 integrity-local/
 integrity-test/
+
+# Experience records (profiles, windows, baselines) live in an explicit data
+# root outside the repository and are never tracked.
+experience-local/
+experience-test/

@@ -119,6 +119,7 @@ REQUIRED_DOCS=(
   "docs/decisions/ADR-0003-provider-agnostic-ai-architecture.md"
   "docs/decisions/ADR-0004-immutable-knowledge-timeline.md"
   "docs/decisions/ADR-0007-operational-integrity-engine.md"
+  "docs/decisions/ADR-0008-experience-engine.md"
   "docs/security/network-policy.md"
   "docs/platform-roadmap.md"
 )
@@ -609,6 +610,35 @@ assert_markdown_links "docs/integrity/overview.md"
 for state in MATCH PARTIAL DRIFT UNKNOWN INSUFFICIENT_EVIDENCE; do
   assert_contains "docs/integrity/overview.md" "${state}" \
     "integrity overview documents the ${state} status"
+done
+
+# --- v0.8.5 experience engine ----------------------------------------------
+ADR8="docs/decisions/ADR-0008-experience-engine.md"
+assert_contains "${ADR8}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0008 is accepted"
+assert_contains "${ADR8}" '^## Context' "ADR-0008 contains Context"
+assert_contains "${ADR8}" '^## Decision' "ADR-0008 contains Decision"
+assert_contains "${ADR8}" '^## Consequences' "ADR-0008 contains Consequences"
+assert_contains "${ADR8}" 'Experience Profile' "ADR-0008 defines the Experience Profile"
+assert_contains "${ADR8}" 'Experience Window' "ADR-0008 defines the Experience Window"
+assert_contains "${ADR8}" 'Operational Baseline' "ADR-0008 defines the Operational Baseline"
+assert_contains "${ADR8}" '[Ss]tatistics are not knowledge' \
+  "ADR-0008 states that statistics are not knowledge"
+assert_contains "${ADR8}" 'machine learning|Machine [Ll]earning' \
+  "ADR-0008 explains the machine-learning exclusion"
+assert_contains "${ADR8}" 'Rejected [Aa]lternatives' "ADR-0008 records rejected alternatives"
+for rejected in "Predictive" "Online learning" "Automatic baseline" "LLM-generated" "anomaly correction"; do
+  assert_contains "${ADR8}" "${rejected}" "ADR-0008 rejects ${rejected}"
+done
+
+assert_file "docs/experience/overview.md"
+assert_markdown_links "docs/experience/overview.md"
+for state in EXPECTED UNEXPECTED UNKNOWN INSUFFICIENT_EVIDENCE; do
+  assert_contains "docs/experience/overview.md" "${state}" \
+    "experience overview documents the ${state} status"
+done
+for trend in stable increasing decreasing volatile unknown; do
+  assert_contains "docs/experience/overview.md" "${trend}" \
+    "experience overview documents the ${trend} trend"
 done
 
 # --- v0.7.5 developer documentation ----------------------------------------

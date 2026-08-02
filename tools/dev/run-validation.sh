@@ -22,6 +22,7 @@ set -Eeuo pipefail
 #   - tests/test-initial-collectors.sh  (builds temporary git repositories)
 #   - tests/test-knowledge-orchestrator.sh (builds temporary evidence stores)
 #   - tests/test-operational-integrity.sh  (builds temporary integrity stores)
+#   - tests/test-experience-engine.sh      (builds temporary experience stores)
 #   - the three Docker Compose renders  (each spawns the compose binary)
 #
 # Quick mode still runs syntax checking, ShellCheck, both static suites, both
@@ -86,10 +87,10 @@ skipped_note() {
 # four of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=19
+  TOTAL_STEPS=18
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=23
+  TOTAL_STEPS=24
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -133,10 +134,14 @@ if (( QUICK == 0 )); then
   # Builds temporary evidence and integrity stores, so it belongs with the
   # other store-building suites rather than in the quick path.
   run "Operational integrity" bash tests/test-operational-integrity.sh
+  # After integrity: the experience engine consumes integrity's vocabulary for
+  # the combined EXPECTED/MATCH assessment, so it is validated downstream of it.
+  run "Experience engine" bash tests/test-experience-engine.sh
 else
   skipped_note "Initial read-only collectors"
   skipped_note "Knowledge orchestrator"
   skipped_note "Operational integrity"
+  skipped_note "Experience engine"
 fi
 
 run "Developer experience" bash tests/test-developer-experience.sh
@@ -229,6 +234,7 @@ if (( QUICK == 1 )); then
     - tests/test-initial-collectors.sh
     - tests/test-knowledge-orchestrator.sh
     - tests/test-operational-integrity.sh
+    - tests/test-experience-engine.sh
     - the three Docker Compose renders
 
   Run without --quick before pushing.
@@ -237,5 +243,17 @@ else
   printf '  all checks ran\n'
 fi
 
-printf '\nValidation passed (%s mode), started %s.\n' \
-  "$( ((QUICK == 1)) && printf 'quick' || printf 'full')" "${STARTED_AT}"
+# The declared total drifted from the executed count twice during integration,
+# each time because a suite added to full mode is skipped in quick mode. A
+# hardcoded number cannot notice that, so the script checks its own step count
+# and fails rather than printing a total it did not meet.
+if (( STEP != TOTAL_STEPS )); then
+  printf '\nFAILED: step count mismatch — declared %d, executed %d.\n' \
+    "${TOTAL_STEPS}" "${STEP}" >&2
+  printf 'Every check ran, but the declared total is wrong. Fix TOTAL_STEPS.\n' >&2
+  exit 1
+fi
+
+printf '\nValidation passed (%s mode), started %s, %d/%d steps.\n' \
+  "$( ((QUICK == 1)) && printf 'quick' || printf 'full')" "${STARTED_AT}" \
+  "${STEP}" "${TOTAL_STEPS}"
