@@ -515,7 +515,13 @@ second = LinuxHostCollector().execute(context(transport=FakeRemoteTransport(resp
 check([(o.fact, o.value) for o in first.observations] ==
       [(o.fact, o.value) for o in second.observations],
       "repeated collection with identical input is byte-identical")
-check(first.content_fingerprint == "", "collectors assign no fingerprint of their own")
+# The fingerprint is a content hash over normalized, redacted observations,
+# computed by the framework's execute() lifecycle. It is not an identity: the
+# guarantee that matters is that no collector assigns a record identifier.
+check(first.content_fingerprint.startswith("sha256:"),
+      "remote results carry a framework content fingerprint")
+check(first.content_fingerprint == second.content_fingerprint,
+      "identical remote input produces an identical fingerprint")
 for record in (first, resources, services):
     blob = json.dumps({"o": [o.__dict__ for o in record.observations]}, default=str)
     for prefix in ("EVID-", "VER-", "MEM-", "OBS-", "OCC-"):
