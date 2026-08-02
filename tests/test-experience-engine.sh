@@ -217,8 +217,9 @@ check(abs(summary["mean"] - 22.0) < 1e-9, "summary computes the mean exactly")
 check(summary["median"] == 3.0, "summary computes the median for an odd count")
 check(summarize_samples([1.0, 3.0])["median"] == 2.0,
       "summary averages the middle pair for an even count")
-# Population standard deviation of [1,2,3,4,100] is 38.72983...
-check(abs(summary["standard_deviation"] - 38.729834) < 1e-5,
+# Population standard deviation of [1,2,3,4,100]: mean 22, variance 1522,
+# sqrt(1522) = 39.012818. Verified independently rather than assumed.
+check(abs(summary["standard_deviation"] - 39.012818) < 1e-5,
       "summary computes the standard deviation exactly")
 check(summarize_samples([5.0])["standard_deviation"] == 0.0,
       "a single sample has zero deviation rather than an error")
@@ -285,7 +286,10 @@ check(resolve_window("24h", now=NOW) == resolve_window("24h", now=NOW),
 # --- Profiles summarize real observed history -----------------------------
 with tempfile.TemporaryDirectory() as tmp:
     # Twelve hourly observations inside the window, one far outside it.
-    history = [(hour, float(25 + (hour % 5))) for hour in range(1, 13)]
+    # Values are distinct on purpose: the evidence layer deduplicates identical
+    # content, so repeated readings would collapse and this assertion would be
+    # measuring deduplication rather than window filtering.
+    history = [(hour, float(20 + hour)) for hour in range(1, 13)]
     history.append((400, 999.0))
     store = seed_history(tmp, history)
 
@@ -389,7 +393,9 @@ except ValueError:
 # --- Baselines -------------------------------------------------------------
 with tempfile.TemporaryDirectory() as tmp:
     # A steady history around 27%.
-    history = [(hour, float(27 + ((hour % 3) - 1))) for hour in range(1, 25)]
+    # Distinct values around 27 so each hourly reading is retained as its own
+    # evidence record rather than deduplicated away.
+    history = [(hour, 27.0 + (hour * 0.01)) for hour in range(1, 25)]
     evidence = seed_history(tmp, history)
     profile = build_profile(evidence, target=TARGET, metric=METRIC,
                             window=resolve_window("24h", now=NOW),
@@ -580,7 +586,7 @@ for forbidden in ("predict", "forecast", "train", "delete", "remediate"):
 cli("build", "--target", TARGET, "--metric", METRIC, expect=2)
 
 with tempfile.TemporaryDirectory() as tmp:
-    evidence = seed_history(tmp, [(hour, float(25 + (hour % 4))) for hour in range(1, 13)])
+    evidence = seed_history(tmp, [(hour, float(20 + hour)) for hour in range(1, 13)])
     store_root = str(Path(tmp) / "experience-store")
     evidence_root = str(Path(tmp) / "evidence-store")
 

@@ -101,7 +101,10 @@ jobs:
                           'platform-model/**/SNAP-*' \
                           'platform-model/**/TWIN-*' \
                           'platform-model/**/INTEG-*' \
-                          'platform-model/**/RECOV-*' | grep -q .; then
+                          'platform-model/**/RECOV-*' \
+                          'platform-model/**/EXP-*' \
+                          'platform-model/**/WINDOW-*' \
+                          'platform-model/**/BASE-*' | grep -q .; then
             echo "Generated runtime records must not be committed under platform-model." >&2
             exit 1
           fi
@@ -116,6 +119,12 @@ jobs:
       # recovery. Asserts the engine cannot execute one at all.
       - name: Operational integrity tests
         run: bash tests/test-operational-integrity.sh
+
+      # Fixture-driven. Builds temporary evidence and experience stores in a
+      # temp directory; contacts no host, runs no subprocess, and holds no
+      # model. Asserts the engine cannot predict, learn, or act.
+      - name: Experience engine tests
+        run: bash tests/test-experience-engine.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
