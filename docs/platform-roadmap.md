@@ -15,6 +15,19 @@ Guiding principles:
 
 ## Release Roadmap
 
+The roadmap runs in two phases. **Phase I** built the platform's ability to
+observe itself and remember what it observed. **Phase II** builds the reasoning
+layer on top of that foundation.
+
+The order is deliberate: nothing in Phase II is worth building on a platform
+that cannot describe its own state honestly.
+
+## Phase I — Platform Foundation
+
+Versions v0.1.0 through v0.7.5. Architecture, governance, the evidence
+pipeline, immutable knowledge, and the developer workflow that validates all of
+it.
+
 ### v0.2.x — Foundation
 
 Objective: Establish architecture, governance, and engineering standards.
@@ -196,35 +209,129 @@ observes a remote host.
 
 ### v0.7.5 — Developer Experience Hardening
 
-Reserved. Ergonomics of the tooling built so far — diagnostics, error messages,
-and the friction of running the pipeline by hand — before more surface is added
-on top of it.
+**Delivered.** No feature work. This release changed how the repository is
+validated, not what it does, after three local/CI divergences were found by
+inspection.
 
-### v0.8.0 — Remote Read-Only Collectors
+- `tools/dev/versions.env` — every tool version pinned in one file, each with
+  its kind (exact, minimum, CI-aligned, host-observed) and its evidence
+- `tools/dev/run-shellcheck.sh` — ShellCheck `0.9.0` via a pinned container,
+  no host package required; CI now lints `tools/dev/` too
+- `tools/dev/check-toolchain.sh` and `bootstrap.sh` — dry-run by default;
+  nothing installs without `--apply`
+- `tools/dev/run-validation.sh` — one command, twenty ordered steps, plus a
+  `--quick` mode that documents exactly what it omits
+- `tools/dev/run-local-ci.sh` — strict-mode wrapper that names the four
+  security workflows it cannot reproduce
+- Optional `.pre-commit-config.yaml` using repository-local hooks only
+
+The change that mattered most: **five suites printed `SKIP` and exited `0`
+when PyYAML was missing.** A green run that verified almost nothing is worse
+than no run, because it tells you your change is safe. All five now fail
+closed and name the pinned install command.
+
+Two defects were caught by the new tooling during its own construction — six
+ShellCheck findings that would have failed CI, and a bug in the validation
+runner that printed `FAILED` and then exited `0`.
+
+## Phase II — Cognitive Infrastructure
+
+Phase II turns a platform that records what it sees into one that can reason
+about what it sees. Each release adds one faculty, and each is separately
+useful.
+
+### Architectural rule
+
+**No model is Kyri. Models are replaceable reasoning providers used by Kyri
+Core.**
+
+This is load-bearing, not a slogan. Kyri is the reasoning layer, its memory,
+and its policies; a language model is an adapter behind a stable interface, in
+exactly the way ADR-0003 treats providers. A platform that lets a specific model
+become its identity cannot replace that model without replacing itself — and
+model choice is the fastest-moving decision in the stack.
+
+### v0.8.0 — Operational Integrity and Digital Twin Foundation
+
+Immutable snapshots of known-good state, disposable digital twins reconstructed
+from knowledge, integrity comparison, and advisory recovery planning. Answers
+"is this still the system we think it is?" without ever acting on the answer.
+
+### v0.8.5 — Experience Engine and Operational Memory
+
+Statistical summaries of observed history: experience profiles, rolling
+windows, and operational baselines. Answers "what is normal?", which is a
+different question from "what is true?". No prediction and no machine learning.
+
+### v0.8.6 — Occurrence Timeline
+
+Reserved. A unified chronology of what happened across evidence, integrity, and
+experience, so an operator can read a sequence of events rather than reconcile
+several stores by hand.
+
+### v0.9.0 — Remote Read-Only Collectors
 
 Reserved. First collectors requiring host access. Read-only, key-based, scoped
 to explicitly approved commands. This is the release where the model stops
 describing hosts nothing has contacted.
 
-### v0.9.0 — Knowledge Graph and Cross-Source Reasoning
+Deliberately after the reasoning layers: the pipeline is exercised against
+local input, and memory is built, before anything is given reach.
 
-Reserved. Relationships across evidence from multiple sources, and the storage
-decision ADR-0004 deliberately deferred.
+### v1.0.0 — Kyri Core Foundation
 
-Each release must extend the evidence pipeline without weakening the ADR-0002
-and ADR-0004 guarantees. The order is deliberate: the lowest-risk sources come
-first, and memory is built before remote access, so the pipeline is exercised
-against real input before it is given reach.
+Reserved. The reasoning layer itself — routing, policy, and memory — built on
+the evidence, integrity, and experience foundations beneath it, and bound by
+the architectural rule above.
+
+Each release must extend the evidence pipeline without weakening the ADR-0002,
+ADR-0004, or ADR-0007 guarantees.
 
 ## Reserved Release Gates
 
-Two sprints are reserved outside the normal feature sequence. They are numbered
-98 and 99 so they always sort last regardless of how many feature sprints are
-added. Both are **required before v1.0.0** and neither may be skipped by
-declaring the feature work complete.
+Three sprints are reserved outside the normal feature sequence. They are
+numbered 97, 98, and 99 so they always sort last regardless of how many feature
+sprints are added. All three are **required before v1.0.0** and none may be
+skipped by declaring the feature work complete.
 
-They exist because documentation and engineering quality are the two things a
-platform silently accrues debt in while every feature still appears to work.
+They exist because cognitive integrity, documentation, and engineering quality
+are the three things a platform silently accrues debt in while every feature
+still appears to work.
+
+### Sprint 97 — Cognitive Integrity and Recovery
+
+Make the reasoning layer as recoverable as the infrastructure beneath it.
+
+A platform can restore a container from a snapshot and still be broken, because
+what actually changed was a prompt, an embedding model, or a routing rule.
+Cognitive state drifts in ways filesystem state does not, and it fails quietly:
+answers get subtly worse while every health check stays green.
+
+Versioning and provenance:
+
+- Model and adapter manifests
+- Prompt and policy versioning
+- Routing configuration snapshots
+- Embedding and index compatibility
+- Memory schema versioning
+
+Detection:
+
+- Known-good cognitive baselines
+- Golden evaluation suite
+- Regression detection
+
+Recovery:
+
+- Suspect-state quarantine
+- Human-approved layer-specific recovery
+- Post-restore validation
+- Audit trail and timeline events
+
+Recovery is **layer-specific** on purpose: restoring an entire cognitive stack
+because one embedding index went stale discards good state along with bad.
+Every recovery step requires human approval, in line with ADR-0007 — an engine
+that repairs its own reasoning without review has no independent check left.
 
 ### Sprint 98 — Documentation Lockdown
 

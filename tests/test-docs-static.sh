@@ -583,12 +583,79 @@ assert_contains "docs/platform-roadmap.md" 'v0\.7\.0 — Knowledge Orchestrator 
   "roadmap records v0.7.0"
 assert_contains "docs/platform-roadmap.md" 'v0\.7\.5 — Developer Experience Hardening' \
   "roadmap reserves v0.7.5"
-assert_contains "docs/platform-roadmap.md" 'v0\.8\.0 — Remote Read-Only Collectors' \
-  "roadmap reserves v0.8.0"
-assert_contains "docs/platform-roadmap.md" 'v0\.9\.0 — Knowledge Graph and Cross-Source Reasoning' \
-  "roadmap reserves v0.9.0"
+# v0.8.0 and v0.9.0 are asserted against the approved Phase II sequence in the
+# roadmap block further down; the earlier reservation names were superseded.
 assert_contains "docs/platform-roadmap.md" 'Sprint 98' "roadmap keeps Sprint 98 intact"
 assert_contains "docs/platform-roadmap.md" 'Sprint 99' "roadmap keeps Sprint 99 intact"
+
+# --- v0.7.5 developer documentation ----------------------------------------
+for document in getting-started toolchain local-validation; do
+  assert_file "docs/development/${document}.md"
+  assert_markdown_links "docs/development/${document}.md"
+done
+
+assert_contains "docs/development/getting-started.md" '^# ' "getting-started has a title"
+assert_contains "docs/development/toolchain.md" '^# ' "toolchain doc has a title"
+assert_contains "docs/development/local-validation.md" '^# ' "local-validation has a title"
+assert_contains "docs/development/getting-started.md" '(never installs|no packages are installed|without .*approval)' \
+  "getting started states that nothing is installed without approval"
+assert_contains "docs/development/local-validation.md" 'fail(s|ed)? closed|fail-closed' \
+  "local validation documents fail-closed PyYAML behaviour"
+
+assert_contains "docs/platform-roadmap.md" 'v0\.7\.5 — Developer Experience Hardening' \
+  "roadmap records v0.7.5"
+assert_contains "docs/platform-roadmap.md" 'Sprint 98' "roadmap keeps Sprint 98 intact"
+assert_contains "docs/platform-roadmap.md" 'Sprint 99' "roadmap keeps Sprint 99 intact"
+
+# --- Roadmap: Phase I and Phase II ------------------------------------------
+ROADMAP="docs/platform-roadmap.md"
+assert_contains "${ROADMAP}" '^## Phase I — Platform Foundation' \
+  "roadmap defines Phase I — Platform Foundation"
+assert_contains "${ROADMAP}" '^## Phase II — Cognitive Infrastructure' \
+  "roadmap defines Phase II — Cognitive Infrastructure"
+
+# The approved Phase II sequence, in order.
+assert_contains "${ROADMAP}" 'v0\.8\.0 — Operational Integrity and Digital Twin Foundation' \
+  "roadmap records v0.8.0 Operational Integrity and Digital Twin Foundation"
+assert_contains "${ROADMAP}" 'v0\.8\.5 — Experience Engine and Operational Memory' \
+  "roadmap records v0.8.5 Experience Engine and Operational Memory"
+assert_contains "${ROADMAP}" 'v0\.8\.6 — Occurrence Timeline' \
+  "roadmap records v0.8.6 Occurrence Timeline"
+assert_contains "${ROADMAP}" 'v0\.9\.0 — Remote Read-Only Collectors' \
+  "roadmap records v0.9.0 Remote Read-Only Collectors"
+assert_contains "${ROADMAP}" 'v1\.0\.0 — Kyri Core Foundation' \
+  "roadmap records v1.0.0 Kyri Core Foundation"
+
+# The architectural rule that keeps Kyri separable from any model.
+assert_contains "${ROADMAP}" 'No model is Kyri' \
+  "roadmap states that no model is Kyri"
+assert_contains "${ROADMAP}" 'replaceable reasoning providers' \
+  "roadmap states models are replaceable reasoning providers"
+
+# --- Reserved release gates --------------------------------------------------
+assert_contains "${ROADMAP}" 'Sprint 97 — Cognitive Integrity and Recovery' \
+  "roadmap reserves Sprint 97"
+assert_contains "${ROADMAP}" 'Sprint 98' "roadmap keeps Sprint 98"
+assert_contains "${ROADMAP}" 'Sprint 99' "roadmap keeps Sprint 99"
+
+for requirement in "[Mm]odel and adapter manifests" "[Pp]rompt and policy versioning" \
+                   "[Rr]outing configuration snapshots" "[Ee]mbedding and index compatibility" \
+                   "[Mm]emory schema versioning" "[Kk]nown-good cognitive baselines" \
+                   "[Gg]olden evaluation suite" "[Rr]egression detection" \
+                   "[Ss]uspect-state quarantine" "layer-specific recovery" \
+                   "[Pp]ost-restore validation" "[Aa]udit trail"; do
+  assert_contains "${ROADMAP}" "${requirement}" \
+    "Sprint 97 requires ${requirement}"
+done
+
+# Sprint 98 and Sprint 99 requirements must survive the restructure.
+for preserved in "User documentation" "Administrator guide" "Command reference" \
+                 "Capability and limitation documentation" "Architecture review" \
+                 "Dead-code and dependency review" "Security review" \
+                 "Final code-quality review"; do
+  assert_contains "${ROADMAP}" "${preserved}" \
+    "roadmap preserves the existing requirement: ${preserved}"
+done
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

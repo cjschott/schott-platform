@@ -25,8 +25,11 @@ jobs:
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      # shellcheck is preinstalled on ubuntu-24.04, so this matches local use.
+      # shellcheck is preinstalled on ubuntu-24.04. The version printed here is
+      # the one tools/dev/versions.env pins (SHELLCHECK_VERSION), so a local run
+      # via tools/dev/run-shellcheck.sh reports the same findings this step does.
+      # The file list must stay identical to that script's, or the two diverge.
       - name: Run ShellCheck on all shell scripts
         run: |
           shellcheck --version
-          shellcheck scripts/*.sh tests/*.sh
+          shellcheck scripts/*.sh tests/*.sh tools/dev/*.sh
