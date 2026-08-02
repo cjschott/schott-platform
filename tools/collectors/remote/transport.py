@@ -146,11 +146,16 @@ class FakeRemoteTransport(RemoteTransport):
         failure_mode: str | None = None,
         leak: tuple[str, str] | None = None,
         raw_bytes: bytes | None = None,
+        fail_operations: dict[str, str] | None = None,
     ) -> None:
         self.responses = dict(responses or {})
         self.failure_mode = failure_mode
         self.leak = leak
         self.raw_bytes = raw_bytes
+        # Per-operation failure. Lets a test make some operations succeed and
+        # one fail, which is the only way to prove that successful
+        # intermediate output is discarded rather than never fetched.
+        self.fail_operations = dict(fail_operations or {})
         # Recorded so a test can assert which operations were attempted. Holds
         # identifiers only; no output is retained here.
         self.attempted: list[str] = []
@@ -163,11 +168,12 @@ class FakeRemoteTransport(RemoteTransport):
     def run(self, target: RemoteTarget, operation: RemoteOperation) -> RemoteExecutionResult:
         self.attempted.append(operation.operation_id)
 
-        if self.failure_mode is not None:
+        mode = self.fail_operations.get(operation.operation_id, self.failure_mode)
+        if mode is not None:
             category = FAKE_FAILURE_MODES.get(
-                self.failure_mode, RemoteFailureCategory.TRANSPORT_FAILURE.value)
+                mode, RemoteFailureCategory.TRANSPORT_FAILURE.value)
             summary = FAKE_FAILURE_SUMMARIES.get(
-                self.failure_mode, "the collection attempt did not complete")
+                mode, "the collection attempt did not complete")
             return RemoteExecutionResult(
                 operation_id=operation.operation_id,
                 exit_status=None,
@@ -175,7 +181,7 @@ class FakeRemoteTransport(RemoteTransport):
                 stderr="",
                 failure_category=category,
                 summary=summary,
-                truncated=self.failure_mode == "output_limit",
+                truncated=mode == "output_limit",
             )
 
         stdout: bytes | str

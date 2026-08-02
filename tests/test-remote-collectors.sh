@@ -167,6 +167,25 @@ assert_absent_in "${REMOTE}" \
 assert_absent_in "${REMOTE}" "['\"][^'\"]*ai/\\.env['\"]" \
   "remote code never references ai/.env"
 
+# --- Command text is never configuration ------------------------------------
+# A target or manifest that can carry executable text moves the trust boundary
+# from reviewed code onto reviewed data, which is a weaker review.
+for plugin in linux_host linux_resources linux_services; do
+  assert_contains "tools/collectors/plugins/${plugin}/manifest.yaml" \
+    'read-remote-host' "${plugin} manifest requires read-remote-host"
+  assert_absent_in "tools/collectors/plugins/${plugin}/manifest.yaml" \
+    '^[[:space:]]*(command|command_text|argv|shell|script|run|exec)[[:space:]]*:' \
+    "${plugin} manifest declares no command text field"
+done
+
+assert_contains "platform-model/schemas/remote-target.schema.yaml" \
+  'forbidden_fields' "the target schema forbids fields explicitly"
+for forbidden_field in command command_text shell script sudo; do
+  assert_contains "platform-model/schemas/remote-target.schema.yaml" \
+    "^[[:space:]]*-[[:space:]]*${forbidden_field}$" \
+    "the target schema forbids a ${forbidden_field} field"
+done
+
 # --- CI and local validation wiring ----------------------------------------
 assert_contains ".github/workflows/ci.yml" 'bash tests/test-remote-collectors\.sh' \
   "ci runs the remote collector tests"
@@ -325,6 +344,57 @@ for broken, label in ((target(known_hosts_reference=""), "known-hosts reference"
 check(issubclass(SSHRemoteTransport, RemoteTransport),
       "the ssh transport implements the transport interface")
 
+# The builder must carry a DNS name, an IPv4 literal, and an IPv6 literal
+# through to argv identically: one element, unaltered, never a URL and never
+# with a credential or port fused into it. Inspected only — no ssh runs.
+ARGV_HOSTS = (
+    ("schmgmt.home.arpa", "a DNS name"),
+    ("192.168.86.11", "an IPv4 literal"),
+    ("2001:db8::10", "an IPv6 literal"),
+)
+for value, label in ARGV_HOSTS:
+    host_argv = build_ssh_argv(target(hostname=value, port=2222),
+                               operation_for("linux.hostname"))
+    host_joined = " ".join(host_argv)
+
+    check(host_argv.count(value) == 1,
+          f"ssh argv carries {label} as exactly one element")
+    check("[" not in host_joined and "]" not in host_joined,
+          f"ssh argv never brackets {label}")
+    check("://" not in host_joined, f"ssh argv builds no URL for {label}")
+    check("@" not in host_joined, f"ssh argv embeds no credential for {label}")
+
+    # The port travels through the client's own option, never fused into the
+    # host element, so an address literal cannot be confused with host:port.
+    check("-p" in host_argv and host_argv[host_argv.index("-p") + 1] == "2222",
+          f"ssh argv passes the port separately for {label}")
+    check(f"{value}:2222" not in host_joined,
+          f"ssh argv never fuses host and port for {label}")
+
+    # The pinned guarantees hold for every target form, not just DNS names.
+    for required in ("BatchMode=yes", "StrictHostKeyChecking=yes",
+                     "UserKnownHostsFile=/approved/known_hosts", "ConnectTimeout=5"):
+        check(required in host_joined, f"ssh argv still pins {required} for {label}")
+    for absent in ("StrictHostKeyChecking=no", "StrictHostKeyChecking=accept-new",
+                   "ProxyCommand", "ProxyJump", "-tt", "ForwardAgent=yes",
+                   "ForwardX11=yes", "/dev/null", "ControlMaster"):
+        check(absent not in host_joined, f"ssh argv still excludes {absent} for {label}")
+
+    # Nothing is assembled into a shell string, for any target form.
+    for shell_marker in (";", "&&", "||", "|", "$(", "`", ">", "<"):
+        check(not any(shell_marker in part for part in host_argv),
+              f"ssh argv contains no shell construction ({shell_marker}) for {label}")
+
+# Host-key enrollment must not appear anywhere in the transport, whatever the
+# target form: a transport that can add a key can add an attacker's.
+import tools.collectors.remote.ssh_transport as ssh_module  # noqa: E402
+
+ssh_source = Path(ssh_module.__file__).read_text(encoding="utf-8")
+for enrollment in ("ssh-keyscan", "known_hosts.write", "add_host_key",
+                   "ssh-copy-id", "AddKeysToAgent=yes"):
+    check(enrollment not in ssh_source,
+          f"the ssh transport performs no host-key enrollment ({enrollment})")
+
 # --- Target model: explicit, no credentials -------------------------------
 fields = set(RemoteTarget.__dataclass_fields__)
 for absent in ("password", "passphrase", "private_key", "key_content", "secret"):
@@ -332,12 +402,80 @@ for absent in ("password", "passphrase", "private_key", "key_content", "secret")
 check("authentication_reference" in fields, "the target references authentication")
 check("known_hosts_reference" in fields, "the target references known hosts")
 
-for bad_host in ("10.0.0.0/24", "192.168.1.1-192.168.1.50", "*.example.invalid", ""):
+# A target names exactly one machine. It may do so as a DNS name, an IPv4
+# literal, or an IPv6 literal — explicit addresses are for bootstrap and
+# DNS-failure situations, where requiring a name would mean the platform
+# cannot observe a host precisely when name resolution is what broke.
+#
+# Naming one machine by address is not discovery. Anything expressing a
+# scope rather than a host stays refused.
+ACCEPTED_HOSTNAMES = (
+    ("schmgmt.home.arpa", "a fully qualified DNS name"),
+    ("schmgmt", "a short DNS name"),
+    ("192.168.86.11", "an explicit IPv4 literal"),
+    ("2001:db8::10", "an explicit IPv6 literal"),
+)
+for value, label in ACCEPTED_HOSTNAMES:
     try:
-        validate_target(target(hostname=bad_host))
-        bad(f"a range or wildcard hostname is rejected: {bad_host!r}")
+        validate_target(target(hostname=value))
+        ok(f"an explicit single target is accepted: {label}")
+    except TargetError as error:
+        bad(f"an explicit single target is accepted: {label} ({error})")
+
+REJECTED_HOSTNAMES = (
+    # Scopes, not hosts.
+    ("192.168.86.0/24", "an IPv4 CIDR range"),
+    ("2001:db8::/64", "an IPv6 CIDR range"),
+    ("192.168.86.10-192.168.86.20", "an IPv4 address range"),
+    ("192.168.86.10-20", "an abbreviated address range"),
+    ("*.home.arpa", "a wildcard hostname"),
+    # More than one host, or more than a host.
+    ("schmgmt,schai", "a comma-separated host list"),
+    ("schmgmt schai", "a whitespace-separated host list"),
+    ("ssh://schmgmt", "a URL"),
+    ("cschott@schmgmt", "an embedded username"),
+    ("schmgmt:22", "a hostname carrying a port"),
+    ("[2001:db8::10]", "a bracketed IPv6 literal"),
+    ("[2001:db8::10]:22", "a bracketed IPv6 literal with a port"),
+    # Malformed literals must be refused, never quietly treated as names.
+    ("999.168.86.11", "a malformed IPv4 literal"),
+    ("2001:db8:::10", "a malformed IPv6 literal"),
+    # Surrounding whitespace is refused rather than trimmed: silently editing
+    # a declared target means the reviewed value and the used value differ.
+    (" schmgmt", "a leading-whitespace hostname"),
+    ("schmgmt ", "a trailing-whitespace hostname"),
+    ("", "an empty hostname"),
+)
+for value, label in REJECTED_HOSTNAMES:
+    try:
+        validate_target(target(hostname=value))
+        bad(f"a non-explicit or malformed target is rejected: {label}")
     except TargetError:
-        ok(f"a range or wildcard hostname is rejected: {bad_host!r}")
+        ok(f"a non-explicit or malformed target is rejected: {label}")
+
+# IPv6 is stored unbracketed and canonical, so the value that was reviewed is
+# the value handed to the client.
+from tools.collectors.remote.target import canonical_hostname  # noqa: E402
+
+check(canonical_hostname("2001:0DB8:0000::0010") == "2001:db8::10",
+      "an IPv6 literal is canonicalised to unbracketed lower-case form")
+check(canonical_hostname("192.168.86.11") == "192.168.86.11",
+      "an IPv4 literal is preserved exactly")
+check(canonical_hostname("schmgmt.home.arpa") == "schmgmt.home.arpa",
+      "a DNS name is preserved exactly")
+check("[" not in canonical_hostname("2001:db8::10"),
+      "a canonical IPv6 target carries no brackets")
+
+# Validation must never resolve a name. A lookup would make results depend on
+# DNS state, contact the network from a test suite, and leak target names to a
+# resolver.
+import tools.collectors.remote.target as target_module  # noqa: E402
+
+target_source = Path(target_module.__file__).read_text(encoding="utf-8")
+for lookup in ("gethostbyname", "getaddrinfo", "socket.", "resolve_name",
+               "gethostbyaddr", "ip_network"):
+    check(lookup not in target_source,
+          f"target validation performs no name resolution ({lookup})")
 
 for bad_port in (0, 65536, -1):
     try:
@@ -484,6 +622,83 @@ truncated = FakeRemoteTransport(responses=RESPONSES, failure_mode="output_limit"
 partial = LinuxHostCollector().execute(context(transport=truncated))
 check(not any(o.fact == "hostname" for o in partial.observations),
       "no partial output is accepted after a truncation failure")
+
+# --- Atomic collection: intermediate success is discarded ------------------
+# One operation fails; the other four succeed. The collector must return
+# nothing at all. A record mixing fresh facts with silently missing ones reads
+# as complete, which is worse than a clean failure.
+atomic_fake = FakeRemoteTransport(responses=RESPONSES,
+                                  fail_operations={"linux.uptime": "timeout"})
+atomic = LinuxHostCollector().execute(context(transport=atomic_fake))
+
+check(atomic.status in {"failed", "unavailable"},
+      "one failed required operation fails the whole collector")
+check(list(atomic.observations) == [],
+      "no facts are returned when any required operation fails")
+check(atomic.content_fingerprint == "",
+      "no success fingerprint is produced for a partial collection")
+
+# The successful operations really did run and really did return usable
+# output, so this proves the output was discarded rather than never fetched.
+check("linux.hostname" in atomic_fake.attempted,
+      "the successful operations were attempted before the failure")
+check(RESPONSES["linux.hostname"].strip() == "web01.invalid",
+      "the fixture's successful value is known")
+
+atomic_blob = json.dumps({
+    "obs": [o.__dict__ for o in atomic.observations],
+    "err": [e.__dict__ for e in atomic.errors],
+    "fp": atomic.content_fingerprint,
+    "status": atomic.status,
+}, default=str)
+for survivor in ("web01.invalid", "6.8.0-136-generic", "x86_64", "Ubuntu"):
+    check(survivor not in atomic_blob,
+          f"a successful intermediate value does not survive the failure: {survivor}")
+
+check(any(e.category == RemoteFailureCategory.TIMEOUT.value for e in atomic.errors),
+      "the failure category stays specific after a partial collection")
+atomic_summaries = " ".join(e.summary.lower() for e in atomic.errors)
+for claim in ("host is down", "service failed", "infrastructure drifted",
+              "declared state is wrong", "unhealthy"):
+    check(claim not in atomic_summaries,
+          f"an atomic failure does not claim '{claim}'")
+
+# Nothing is spilled to disk on the way, so there is no partial artefact for a
+# later run to pick up.
+for write_api in (".write_text(", ".write_bytes(", "tempfile.NamedTemporaryFile",
+                  "mkstemp", "os.replace(", "shutil.copy"):
+    check(write_api not in "".join(
+        Path(root / "tools/collectors/remote" / name).read_text(encoding="utf-8")
+        for name in sorted(p.name for p in (root / "tools/collectors/remote").glob("*.py"))),
+        f"remote collection writes no file ({write_api})")
+
+# --- Subprocess authority is indirect and constrained ----------------------
+# subprocess_access: true on a remote manifest denotes restricted transport
+# capability, not general subprocess authority. Assert the difference holds.
+for plugin_dir in ("linux_host", "linux_resources", "linux_services"):
+    plugin_source = (root / "tools/collectors/plugins" / plugin_dir
+                     / "collector.py").read_text(encoding="utf-8")
+    check("import subprocess" not in plugin_source,
+          f"{plugin_dir} imports no subprocess")
+    check("subprocess." not in plugin_source,
+          f"{plugin_dir} makes no subprocess call")
+    for shell_api in ("os.system", "os.popen", "shell=True", "Popen"):
+        check(shell_api not in plugin_source,
+              f"{plugin_dir} uses no {shell_api}")
+    # A collector selects identifiers; it never supplies executable text.
+    # Matched against argv *use*, not the word: these modules describe the
+    # boundary in prose, and a pattern that flagged the description would
+    # punish the documentation for being explicit.
+    for argv_use in ("argv =", "argv=", ".argv", "argv[", "argv +"):
+        check(argv_use not in plugin_source,
+              f"{plugin_dir} never constructs an argv ({argv_use})")
+
+remote_py = {path.name: path.read_text(encoding="utf-8")
+             for path in sorted((root / "tools/collectors/remote").glob("*.py"))}
+subprocess_owners = sorted(name for name, source in remote_py.items()
+                           if "subprocess" in source)
+check(subprocess_owners == ["ssh_transport.py"],
+      f"only the ssh transport owns the remote subprocess call (found {subprocess_owners})")
 
 # --- Secrets never escape ---------------------------------------------------
 for stream in ("stdout", "stderr", "exception"):

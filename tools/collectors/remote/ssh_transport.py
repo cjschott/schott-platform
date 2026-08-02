@@ -24,7 +24,7 @@ from typing import Mapping
 from .models import RemoteFailureCategory, RemoteOperation, RemoteTarget
 from .models import RemoteExecutionResult
 from .redaction import redact_remote_output
-from .target import TargetError
+from .target import TargetError, canonical_hostname
 from .transport import RemoteTransport, prepare_result
 
 # Options pinned on every invocation. Each is set to the value this platform
@@ -117,9 +117,16 @@ def build_ssh_argv(target: RemoteTarget, operation: RemoteOperation) -> tuple[st
         argv += ["-o", "IdentitiesOnly=yes"]
         argv += ["-i", authentication.reference]
 
+    # The port travels through the client's own option, never fused into the
+    # host argument. Fusing them would make an IPv6 literal ambiguous, since
+    # its colons are already part of the address.
     argv += ["-p", str(int(target.port))]
     argv += ["-l", target.username]
-    argv.append(target.hostname)
+
+    # One argv element, canonical and unbracketed, whether it is a DNS name,
+    # an IPv4 literal, or an IPv6 literal. Brackets belong to URL syntax; the
+    # client takes a bare address. No lookup is performed here or anywhere.
+    argv.append(canonical_hostname(target.hostname))
 
     # The operation's words are appended as discrete entries. They are never
     # joined, quoted, or interpolated into a single string.
