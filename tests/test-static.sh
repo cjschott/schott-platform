@@ -1870,6 +1870,29 @@ for trust_impl in tools/trust tools/fabric tools/capability tools/enrollment; do
 done
 
 # ---------------------------------------------------------------------------
+# v0.9.3 trust plane runtime
+# ---------------------------------------------------------------------------
+
+for trust_module in __init__ models errors identifiers root_authority store \
+                    lineage transitions scope expiry evaluator query audit cli; do
+  assert_file "tools/trust/${trust_module}.py"
+done
+
+for trust_runtime_doc in runtime-overview root-authority-operations \
+                         state-transition-runtime trust-query-reference; do
+  assert_file "docs/trust/${trust_runtime_doc}.md"
+done
+
+# The Fabric stays blocked. Trust runtime does not smuggle it in.
+for still_forbidden in tools/fabric tools/capability tools/enrollment; do
+  if [[ -e "${ROOT}/${still_forbidden}" ]]; then
+    fail "v0.9.3 implements trust only: ${still_forbidden} must not exist"
+  else
+    pass "no premature implementation: ${still_forbidden}"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
