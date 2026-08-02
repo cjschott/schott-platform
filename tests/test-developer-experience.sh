@@ -132,11 +132,22 @@ assert_absent_in "${DEV}" \
 assert_absent_in "${DEV}" \
   '(docker (start|stop|rm|exec|kill|volume|network)|docker compose (up|down|start|stop|restart))' \
   "no dev script touches a platform container, volume, or network"
-unapproved_run="$(grep -rInE 'docker run' "${ROOT}/${DEV}" | grep -v 'SHELLCHECK_IMAGE' || true)"
+# The invocation spans several lines, so the file is judged rather than the
+# line: any script running a container must be the ShellCheck runner, and it
+# must use the pinned image variable rather than a literal tag.
+unapproved_run=""
+while read -r runner; do
+  [[ -z "${runner}" ]] && continue
+  if [[ "$(basename "${runner}")" != "run-shellcheck.sh" ]]; then
+    unapproved_run+="${runner} "
+  elif ! grep -q 'SHELLCHECK_IMAGE' "${runner}"; then
+    unapproved_run+="${runner}(unpinned) "
+  fi
+done < <(grep -rIlE 'docker run' "${ROOT}/${DEV}" || true)
 if [[ -z "${unapproved_run}" ]]; then
   pass "the only container a dev script runs is the pinned ShellCheck image"
 else
-  fail "dev script runs an unapproved container: $(printf '%s' "${unapproved_run}" | head -1)"
+  fail "dev script runs an unapproved container: ${unapproved_run}"
 fi
 assert_absent_in "${DEV}" "['\"][^'\"]*ai/\\.env['\"]" \
   "no dev script references ai/.env"
@@ -145,13 +156,53 @@ assert_absent_in "${DEV}" '(gh (api|pr|run|release)|api\.github\.com)' \
 assert_absent_in "${DEV}" '(git (push|commit|checkout -b|branch)[[:space:]])' \
   "no dev script pushes, commits, or creates branches"
 
-# apt/dnf must appear only inside the guarded apply path of bootstrap.sh.
-apt_outside_bootstrap="$(grep -rIlnE '(apt-get|apt |dnf |yum )' "${ROOT}/${DEV}" \
-  | grep -v 'bootstrap.sh' || true)"
-if [[ -z "${apt_outside_bootstrap}" ]]; then
-  pass "package manager invocations appear only in bootstrap.sh"
+# A package manager may be *named* anywhere: remediation text has to tell the
+# reader what to run. What matters is whether it is *executed*.
+#
+# Distinguishing the two needs more than a line-position regex, because a
+# here-doc body is indented exactly like a command. This strips here-doc bodies
+# first, so text a script prints is never mistaken for a command it runs.
+strip_heredocs() {
+  awk '
+    /<<-?[A-Z'"'"'"]*[A-Za-z_]+/ && !inheredoc {
+      line = $0
+      if (match(line, /<<-?[ ]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?/)) {
+        tag = substr(line, RSTART, RLENGTH)
+        gsub(/<<-?[ ]*['"'"'"]?/, "", tag); gsub(/['"'"'"]/, "", tag)
+        inheredoc = 1; heretag = tag
+      }
+      print; next
+    }
+    inheredoc {
+      stripped = $0; gsub(/^[ \t]+/, "", stripped)
+      if (stripped == heretag) { inheredoc = 0 }
+      next
+    }
+    { print }
+  ' "$1"
+}
+
+executed_pm=""
+for dev_script in "${ROOT}/${DEV}"/*.sh; do
+  [[ -f "${dev_script}" ]] || continue
+  [[ "$(basename "${dev_script}")" == "bootstrap.sh" ]] && continue
+  if strip_heredocs "${dev_script}" \
+      | grep -qE '^[[:space:]]*(sudo[[:space:]]+)?(apt-get|apt|dnf|yum)[[:space:]]+(install|update|upgrade)'; then
+    executed_pm+="$(basename "${dev_script}") "
+  fi
+done
+if [[ -z "${executed_pm}" ]]; then
+  pass "only bootstrap.sh executes a package manager"
 else
-  fail "package manager used outside bootstrap.sh: ${apt_outside_bootstrap}"
+  fail "package manager executed outside bootstrap.sh: ${executed_pm}"
+fi
+
+# bootstrap.sh must genuinely execute one, or --apply does nothing.
+if strip_heredocs "${ROOT}/${DEV}/bootstrap.sh" \
+    | grep -qE '^[[:space:]]*sudo[[:space:]]+apt-get[[:space:]]+install'; then
+  pass "bootstrap.sh executes the install it advertises"
+else
+  fail "bootstrap.sh --apply must actually run the install command"
 fi
 
 # --- Validation wrapper wiring ---------------------------------------------
@@ -275,10 +326,19 @@ if [[ -x "${ROOT}/${DEV}/check-toolchain.sh" ]]; then
   done
 
   # A missing tool must produce an actionable error, not a bare non-zero exit.
+  # A PATH with nothing in it cannot start bash, which would test the shell
+  # rather than the script. This keeps a working shell and removes the tools.
+  MINIMAL_BIN="$(mktemp -d)/bin"
+  mkdir -p "${MINIMAL_BIN}"
+  for essential in bash dirname basename awk sed cat env; do
+    essential_path="$(command -v "${essential}" || true)"
+    [[ -n "${essential_path}" ]] && ln -sf "${essential_path}" "${MINIMAL_BIN}/${essential}"
+  done
   set +e
-  missing_output="$(PATH="${SHIM}" bash "${ROOT}/${DEV}/check-toolchain.sh" 2>&1)"
+  missing_output="$(PATH="${MINIMAL_BIN}" bash "${ROOT}/${DEV}/check-toolchain.sh" 2>&1)"
   missing_status=$?
   set -e
+  rm -rf "$(dirname "${MINIMAL_BIN}")"
   check "$([[ "${missing_status}" -ne 0 ]] && echo 0 || echo 1)" \
     "toolchain check fails when tools are absent" \
     "toolchain check must fail when required tools are absent"
@@ -299,8 +359,14 @@ if [[ -x "${ROOT}/${DEV}/run-shellcheck.sh" ]]; then
   # Never silently skip: absence must be an error with a remediation.
   assert_contains "${DEV}/run-shellcheck.sh" '(ERROR|error:|not available|could not)' \
     "shellcheck runner reports absence as an error"
-  assert_absent_in "${DEV}/run-shellcheck.sh" '(apt-get install|SKIP:)' \
-    "shellcheck runner neither installs nor skips"
+  if strip_heredocs "${ROOT}/${DEV}/run-shellcheck.sh" \
+      | grep -qE '^[[:space:]]*(sudo[[:space:]]+)?apt-get[[:space:]]+install'; then
+    fail "shellcheck runner must never execute an install"
+  else
+    pass "shellcheck runner never executes an install"
+  fi
+  assert_absent_in "${DEV}/run-shellcheck.sh" 'SKIP:' \
+    "shellcheck runner never skips"
 else
   fail "cannot exercise the shellcheck runner; the script is absent or not executable"
 fi
@@ -361,6 +427,46 @@ assert_contains "docs/development/local-validation.md" '(omit|skip|does not run)
   "local validation doc states what quick mode omits"
 assert_contains "docs/development/local-validation.md" 'requirements-ci\.txt' \
   "local validation doc documents PyYAML fail-closed behaviour"
+
+# --- CI parity: commands, not just suites ----------------------------------
+# A suite list that matches is not enough; the validators and renders CI runs
+# must run locally too, or "local validation passed" means less than it sounds.
+CI_WORKFLOW=".github/workflows/ci.yml"
+for command in 'validate_evidence\.py' 'validate_plugins\.py' \
+               'ai/compose\.yaml' 'ai/ollama/compose\.yaml' 'ai/litellm/compose\.yaml'; do
+  if grep -Eq "${command}" "${ROOT}/${CI_WORKFLOW}" 2>/dev/null; then
+    assert_contains "${VALIDATION}" "${command}" \
+      "local validation runs the CI command matching /${command}/"
+  fi
+done
+
+# ShellCheck must lint the same files in both places.
+SHELLCHECK_WORKFLOW=".github/workflows/shellcheck.yml"
+if [[ -f "${ROOT}/${SHELLCHECK_WORKFLOW}" ]]; then
+  if grep -q 'tools/dev/\*\.sh' "${ROOT}/${SHELLCHECK_WORKFLOW}"; then
+    pass "CI lints tools/dev/*.sh, matching the local runner"
+  else
+    fail "CI must lint tools/dev/*.sh or its file list diverges from the local runner"
+  fi
+else
+  fail "cannot compare ShellCheck file lists; ${SHELLCHECK_WORKFLOW} is missing"
+fi
+
+# The validation script must not be able to drop a suite silently: every suite
+# file in tests/ is either wired in or is the wrapper's own dependency.
+unwired=""
+for suite_path in "${ROOT}"/tests/test-*.sh; do
+  suite_name="$(basename "${suite_path}")"
+  grep -q "${suite_name}" "${ROOT}/${VALIDATION}" || unwired+="${suite_name} "
+done
+if [[ -z "${unwired}" ]]; then
+  pass "every test suite in tests/ is wired into local validation"
+else
+  fail "test suites exist that local validation never runs: ${unwired}"
+fi
+
+# Quick mode must document what it omits rather than silently dropping steps.
+assert_contains "${VALIDATION}" 'omit' "validation documents what quick mode omits"
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nDeveloper experience validation failed with %d error(s).\n' "${FAILURES}" >&2

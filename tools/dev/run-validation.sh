@@ -81,11 +81,14 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
+# Counted, not guessed: 21 checks plus the closing summary. Quick mode drops
+# four of them. A validation tool that miscounts its own steps invites doubt
+# about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=16
+  TOTAL_STEPS=18
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=20
+  TOTAL_STEPS=22
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
