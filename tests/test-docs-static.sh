@@ -153,6 +153,11 @@ COLLECTOR_DOCS=(
   "docs/collectors/git-repository.md"
   "docs/collectors/configuration-render.md"
   "docs/collectors/manual-attestation.md"
+  # Remote collectors, added in v0.9.0. Held to the same contract as the local
+  # ones: reaching another machine is a reason for more scrutiny, not less.
+  "docs/collectors/linux-host.md"
+  "docs/collectors/linux-resources.md"
+  "docs/collectors/linux-services.md"
 )
 
 for document in "${REQUIRED_DOCS[@]}"; do
@@ -813,7 +818,7 @@ for doc in remote-collection linux-host linux-resources linux-services; do
 done
 
 REMOTE_DOC="docs/collectors/remote-collection.md"
-for topic in "[Tt]hreat model" "host key" "authentication reference" \
+for topic in "[Tt]hreat model" "host key" "[Aa]uthentication reference" \
              "operation catalog" "timeout" "[Ff]ailure semantics" "[Rr]edaction" \
              "sudo" "Distributed Capability Fabric"; do
   assert_contains "${REMOTE_DOC}" "${topic}" "remote collection doc covers ${topic}"

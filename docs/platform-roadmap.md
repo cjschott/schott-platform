@@ -358,12 +358,44 @@ Experience continues to use distinct evidence in this release.
 
 ### v0.9.0 — Remote Read-Only Collectors
 
-Reserved. First collectors requiring host access. Read-only, key-based, scoped
-to explicitly approved commands. This is the release where the model stops
-describing hosts nothing has contacted.
+**Delivered.** First collectors requiring host access. Read-only, key-based,
+scoped to explicitly approved operations. This is the release where the model
+stops describing hosts nothing has contacted.
 
 Deliberately after the reasoning layers: the pipeline is exercised against
 local input, and memory is built, before anything is given reach.
+
+Governed by [ADR-0010](decisions/ADR-0010-remote-read-only-collection.md).
+One rule holds the release together: **remote collectors observe, they never
+administer.**
+
+- **The network contract is narrowed, not relaxed.** v0.5.0 refused
+  `network_access` unconditionally. It is now permitted only alongside a
+  `read-remote-host` permission — the same shape as the v0.6.0 subprocess
+  narrowing, and refused in both directions so a manifest cannot claim one
+  without the other.
+- **A code-owned catalog of nine operations.** Configuration may choose an
+  operation identifier and may never supply command text. Adding a fact is a
+  code change and a review, on purpose: configuration is reviewed as data,
+  and command text is code.
+- **Targets are declared, never discovered.** No scan, no address range, no
+  default. Target files are refused if they resolve outside their approved
+  directory.
+- **Host-key verification is mandatory** and cannot be disabled. Unknown and
+  changed keys fail closed. Enrollment is deliberately absent — a collector
+  that can enroll a key can enroll an attacker's.
+- **Authentication is referenced, never stored.** Credential material in a
+  target file is refused outright, and the refusal never echoes the value.
+- **Three collectors:** `linux-host`, `linux-resources`, `linux-services`.
+  No users, environments, processes, command history, network connections,
+  package inventories, journals, or logs.
+- **A collection failure is not a target failure.** Seven categories, all
+  describing the attempt. None can say the host is down.
+
+Largest blast-radius expansion so far: every earlier release could at worst
+produce a wrong record. Accepted limits are recorded rather than resolved —
+the OpenSSH client is external code, and fake-transport coverage is not
+real-world coverage, so first real use needs supervised validation.
 
 ### v0.9.5 — Distributed Capability Fabric
 
