@@ -1,0 +1,106 @@
+---
+# Declarative schema for experience profiles.
+#
+# A profile is a statistical summary of one metric over one window. It records
+# what was observed. It is not a truth claim and not a prediction.
+#
+# Governed by: docs/decisions/ADR-0008-experience-engine.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: experience-profile
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0008-experience-engine.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^EXP-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - metric
+  - generated_at
+  - window_label
+  - window_start
+  - window_end
+  - sample_count
+  - trend
+  - provenance
+
+constant_fields:
+  type: experience-profile
+
+entity_reference_fields:
+  - target
+
+enums:
+  trend:
+    - stable
+    - increasing
+    - decreasing
+    - volatile
+    - unknown
+  provenance_class:
+    - derived
+
+timestamp_fields:
+  - generated_at
+  - window_start
+  - window_end
+
+# With no samples every statistic is null. Reporting zero would let an
+# unobserved metric look like one measured at zero, which is a different and
+# false claim.
+nullable_statistics:
+  - minimum
+  - maximum
+  - mean
+  - median
+  - standard_deviation
+null_semantics: >-
+  Null means not observed. It must never be rendered, defaulted, or aggregated
+  as zero.
+
+immutability:
+  revisable: false
+  supersede_only: true
+  rationale: >-
+    New observations create newer profiles. A profile is a record of what a
+    window contained at the moment it was summarized.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - prediction
+  - forecast
+  - model_weights
+  - raw_output

@@ -1,0 +1,115 @@
+---
+# Declarative schema for operational baselines.
+#
+# A baseline says what has been typical. It never says what is correct.
+#
+# Governed by: docs/decisions/ADR-0008-experience-engine.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: operational-baseline
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0008-experience-engine.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^BASE-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - metric
+  - generated_at
+  - sample_count
+  - confidence
+  - review_required
+  - provenance
+
+constant_fields:
+  type: operational-baseline
+
+entity_reference_fields:
+  - target
+
+enums:
+  trend:
+    - stable
+    - increasing
+    - decreasing
+    - volatile
+    - unknown
+  provenance_class:
+    - derived
+
+timestamp_fields:
+  - generated_at
+
+# A baseline with no samples has no typical value. Inventing one so the field
+# is populated would fabricate the very thing the baseline exists to report.
+nullable_statistics:
+  - typical_value
+  - tolerance
+
+confidence_requirements:
+  required_factors:
+    - coverage
+    - sample_quality
+    - window_size
+    - data_age
+  bounds: [0.0, 1.0]
+  weights_total: 1.0
+  requires_written_reason_per_factor: true
+  interpretation: >-
+    Confidence is an engineering heuristic describing how much history the
+    baseline rests on. It is not a probability.
+
+# Behavioural classification. UNKNOWN and INSUFFICIENT_EVIDENCE are separate
+# from UNEXPECTED so that not having watched, and having barely watched, are
+# never reported as abnormal behaviour.
+behaviour_states:
+  - EXPECTED
+  - UNEXPECTED
+  - UNKNOWN
+  - INSUFFICIENT_EVIDENCE
+
+# A newer baseline is a new record. Which one represents normal is a human
+# decision, never an automatic one.
+replacement:
+  automatic: false
+  supersede_only: true
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - prediction
+  - forecast
+  - model_weights
+  - raw_output
