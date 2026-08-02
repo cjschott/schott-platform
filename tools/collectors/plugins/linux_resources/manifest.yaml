@@ -1,0 +1,64 @@
+---
+# Linux resource capacity collector — remote and read-only.
+#
+# Network access is declared alongside the read-remote-host permission; one
+# without the other is refused by the framework.
+#
+# Governed by: docs/decisions/ADR-0010-remote-read-only-collection.md
+
+api_version: schott-platform/v1
+kind: CollectorManifest
+
+id: linux-resources
+name: Linux Resources Collector
+version: 0.1.0
+source_type: ssh-command
+description: >-
+  Observes processor, memory, and durable filesystem capacity on an approved
+  remote Linux host. Reports capacity in bytes and excludes
+  pseudo-filesystems.
+
+capabilities: []
+
+supported_targets:
+  - host
+
+permissions:
+  - read-remote-host
+
+network_access: true
+subprocess_access: true
+filesystem_access: false
+read_only: true
+
+approved_operations:
+  - linux.cpu_summary
+  - linux.memory_summary
+  - linux.filesystem_summary
+
+# This collector measures capacity, not utilisation, and is not a monitoring
+# agent. Sampling load would invite the platform to be read as one.
+forbidden_facts:
+  - load_average
+  - process_list
+  - open_files
+  - network_throughput
+  - per_process_memory
+
+secret_requirements: []
+
+output_contract:
+  - cpu_logical_count
+  - cpu_architecture
+  - cpu_model
+  - memory_total_bytes
+  - memory_available_bytes
+  - filesystems
+
+lifecycle: production
+
+provenance:
+  class: declared
+  source: docs/collectors/linux-resources.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
