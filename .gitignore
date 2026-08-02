@@ -44,3 +44,8 @@ integrity-test/
 # root outside the repository and are never tracked.
 experience-local/
 experience-test/
+
+# Occurrence records (occurrences, series, patterns, timelines) live in an
+# explicit data root outside the repository and are never tracked.
+occurrence-local/
+occurrence-test/

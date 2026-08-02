@@ -314,11 +314,40 @@ evidence values*, not collection frequency, because the observation layer
 collapses identical repeated readings into one record plus a refresh event.
 Frequency-aware weighting is reserved for v0.8.6.
 
-### v0.8.6 — Occurrence Timeline
+### v0.8.6 — Occurrence Timeline and Temporal Knowledge
 
-Reserved. A unified chronology of what happened across evidence, integrity, and
-experience, so an operator can read a sequence of events rather than reconcile
-several stores by hand.
+**Delivered.** A unified chronology of what happened across evidence,
+integrity, and experience, so an operator can read a sequence of events rather
+than reconcile several stores by hand.
+
+- `recorder.py` — immutable `OCC` records carrying both `occurred_at` and
+  `recorded_at`, each citing the evidence it came from
+- `series.py` — `SERIES` records with first seen, last seen, intervals,
+  frequency, and recurrence
+- `patterns.py` — `PAT` records: recurring, burst, isolated, accelerating,
+  decelerating
+- `timeline.py` — `TL` records ordered by time then identifier
+- `confidence.py` — four factors totalling 1.0, each with a written reason
+- `integration.py` — temporal context alongside integrity and behaviour
+- ADR-0009, four schemas, four entity types, five relationships
+- `tools/common/immutable_store.py` — the shared write path, so this is not a
+  fourth hand-copied store
+
+Answers the question an operator asks first during an incident: **has this
+happened before?** `DRIFT + UNEXPECTED` occurring for the first time is a
+different situation from the same pair recurring every Tuesday for a month, and
+only temporal history distinguishes them.
+
+**No prediction, by decision rather than omission.** Once a system records
+eleven events at two-hour intervals, predicting the twelfth is one function
+away — and a predictive system that is wrong is confidently wrong at exactly
+the moment an operator has stopped checking. `recurring` means it has recurred,
+not that it will, and the models carry no field in which a forward claim could
+be recorded.
+
+Frequency weighting for the Experience Engine is exposed and explicitly
+**not applied**: applying it would change how every existing baseline reads.
+Experience continues to use distinct evidence in this release.
 
 ### v0.9.0 — Remote Read-Only Collectors
 

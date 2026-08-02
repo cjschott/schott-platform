@@ -23,6 +23,7 @@ set -Eeuo pipefail
 #   - tests/test-knowledge-orchestrator.sh (builds temporary evidence stores)
 #   - tests/test-operational-integrity.sh  (builds temporary integrity stores)
 #   - tests/test-experience-engine.sh      (builds temporary experience stores)
+#   - tests/test-occurrence-timeline.sh    (builds temporary occurrence stores)
 #   - the three Docker Compose renders  (each spawns the compose binary)
 #
 # Quick mode still runs syntax checking, ShellCheck, both static suites, both
@@ -90,7 +91,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=18
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=24
+  TOTAL_STEPS=25
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -137,11 +138,15 @@ if (( QUICK == 0 )); then
   # After integrity: the experience engine consumes integrity's vocabulary for
   # the combined EXPECTED/MATCH assessment, so it is validated downstream of it.
   run "Experience engine" bash tests/test-experience-engine.sh
+  # After experience: the occurrence layer reads both integrity and experience
+  # vocabulary, so it is validated downstream of both.
+  run "Occurrence timeline" bash tests/test-occurrence-timeline.sh
 else
   skipped_note "Initial read-only collectors"
   skipped_note "Knowledge orchestrator"
   skipped_note "Operational integrity"
   skipped_note "Experience engine"
+  skipped_note "Occurrence timeline"
 fi
 
 run "Developer experience" bash tests/test-developer-experience.sh
@@ -235,6 +240,7 @@ if (( QUICK == 1 )); then
     - tests/test-knowledge-orchestrator.sh
     - tests/test-operational-integrity.sh
     - tests/test-experience-engine.sh
+    - tests/test-occurrence-timeline.sh
     - the three Docker Compose renders
 
   Run without --quick before pushing.
