@@ -197,10 +197,10 @@ def seeded_knowledge(tmp, facts, *, collected=STAMP):
 
 # --- Snapshots are immutable, deterministic, fingerprinted ----------------
 with tempfile.TemporaryDirectory() as tmp:
-    knowledge, _ = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
+    knowledge, store = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
     snapshots = SnapshotStore(Path(tmp) / "integrity-store")
 
-    first = create_snapshot(knowledge, snapshot_id=snapshots.allocate_id("snapshot"),
+    first = create_snapshot(knowledge, store, snapshot_id=snapshots.allocate_id("snapshot"),
                             created_at=STAMP, label="known-good")
     check(first.id == "SNAP-000001", "first snapshot receives SNAP-000001")
     check(len(first.id) == len("SNAP-000001"), "snapshot identifiers use six digits")
@@ -228,24 +228,20 @@ with tempfile.TemporaryDirectory() as tmp:
     # Determinism: the same knowledge and the same identifier reproduce byte
     # for byte. A snapshot that cannot be reproduced cannot be trusted as a
     # reference point.
-    again = create_snapshot(knowledge, snapshot_id="SNAP-000001",
+    again = create_snapshot(knowledge, store, snapshot_id="SNAP-000001",
                             created_at=STAMP, label="known-good")
     check(json.dumps(again.to_dict(), sort_keys=True) ==
           json.dumps(first.to_dict(), sort_keys=True),
           "snapshot creation is deterministic and reproducible")
     check(again.content_fingerprint == first.content_fingerprint,
           "identical knowledge produces an identical fingerprint")
+    FIRST_FINGERPRINT = first.content_fingerprint
 
-    # Different knowledge must produce a different fingerprint.
-    other_knowledge, _ = seeded_knowledge(tmp + "/x" if False else tmp, {"branch": "main"})
-    changed = create_snapshot(other_knowledge, snapshot_id="SNAP-000002",
-                              created_at=STAMP, label="other")
-    check(changed.content_fingerprint != first.content_fingerprint,
-          "different knowledge produces a different fingerprint")
+
 
     # Versioned: a second snapshot of the same target supersedes nothing and
     # both remain readable.
-    second = create_snapshot(knowledge, snapshot_id=snapshots.allocate_id("snapshot"),
+    second = create_snapshot(knowledge, store, snapshot_id=snapshots.allocate_id("snapshot"),
                              created_at=LATER, label="later")
     snapshots.write_snapshot(second)
     listed = [s["id"] for s in snapshots.list_snapshots(TARGET)]
@@ -254,18 +250,28 @@ with tempfile.TemporaryDirectory() as tmp:
     check(snapshots.latest_snapshot(TARGET)["id"] == second.id,
           "the newest snapshot is identifiable without deleting older ones")
 
+# Different knowledge must produce a different fingerprint. Seeded into a
+# separate store: adding evidence to the same store merges facts and would
+# legitimately reproduce the original fingerprint.
+with tempfile.TemporaryDirectory() as other_tmp:
+    other_knowledge, other_store = seeded_knowledge(other_tmp, {"branch": "release"})
+    changed = create_snapshot(other_knowledge, other_store, snapshot_id="SNAP-000002",
+                              created_at=STAMP, label="other")
+    check(changed.content_fingerprint != FIRST_FINGERPRINT,
+          "different knowledge produces a different fingerprint")
+
 # --- Twins are rebuilt from knowledge, disposable, deterministic ----------
 with tempfile.TemporaryDirectory() as tmp:
-    knowledge, _ = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
+    knowledge, store = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
 
-    twin = build_twin(knowledge, twin_id="TWIN-000001", built_at=STAMP)
+    twin = build_twin(knowledge, store, twin_id="TWIN-000001", built_at=STAMP)
     check(isinstance(twin, DigitalTwin), "twin builder returns a DigitalTwin")
     check(twin.id.startswith("TWIN-") and len(twin.id) == len("TWIN-000001"),
           "twin identifiers use six digits")
     check(twin.disposable is True, "twins declare themselves disposable")
     check(twin.source_knowledge_target == TARGET, "twins record the knowledge they came from")
 
-    rebuilt = build_twin(knowledge, twin_id="TWIN-000001", built_at=STAMP)
+    rebuilt = build_twin(knowledge, store, twin_id="TWIN-000001", built_at=STAMP)
     check(json.dumps(rebuilt.to_dict(), sort_keys=True) ==
           json.dumps(twin.to_dict(), sort_keys=True),
           "twin rebuild is deterministic")
@@ -288,11 +294,11 @@ with tempfile.TemporaryDirectory() as tmp:
 
 # --- Integrity analysis classifies all five states ------------------------
 with tempfile.TemporaryDirectory() as tmp:
-    baseline_knowledge, _ = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
-    snapshot = create_snapshot(baseline_knowledge, snapshot_id="SNAP-000010",
+    baseline_knowledge, store = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
+    snapshot = create_snapshot(baseline_knowledge, store, snapshot_id="SNAP-000010",
                                created_at=STAMP, label="baseline")
 
-    identical = build_twin(baseline_knowledge, twin_id="TWIN-000010", built_at=LATER)
+    identical = build_twin(baseline_knowledge, store, twin_id="TWIN-000010", built_at=LATER)
     report = analyze_integrity(snapshot=snapshot, twin=identical, evaluated_at=LATER,
                                report_id="INTEG-000001")
     check(isinstance(report, IntegrityReport), "analyzer returns an IntegrityReport")
@@ -308,12 +314,12 @@ for observed, expected, label in (
     ({"branch": "hotfix", "tracked_files": "999"}, "DRIFT", "every fact changed"),
 ):
     with tempfile.TemporaryDirectory() as tmp:
-        base_knowledge, _ = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
-        snapshot = create_snapshot(base_knowledge, snapshot_id="SNAP-000011",
+        base_knowledge, store = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
+        snapshot = create_snapshot(base_knowledge, store, snapshot_id="SNAP-000011",
                                    created_at=STAMP, label="baseline")
     with tempfile.TemporaryDirectory() as tmp2:
-        now_knowledge, _ = seeded_knowledge(tmp2, observed, collected=LATER)
-        twin = build_twin(now_knowledge, twin_id="TWIN-000011", built_at=LATER)
+        now_knowledge, store = seeded_knowledge(tmp2, observed, collected=LATER)
+        twin = build_twin(now_knowledge, store, twin_id="TWIN-000011", built_at=LATER)
     report = analyze_integrity(snapshot=snapshot, twin=twin, evaluated_at=LATER,
                                report_id="INTEG-000002")
     check(report.status == expected, f"{label} reports {expected}")
@@ -326,10 +332,10 @@ for observed, expected, label in (
 
 # A twin with no facts cannot support any conclusion.
 with tempfile.TemporaryDirectory() as tmp:
-    base_knowledge, _ = seeded_knowledge(tmp, {"branch": "main"})
-    snapshot = create_snapshot(base_knowledge, snapshot_id="SNAP-000012",
+    base_knowledge, store = seeded_knowledge(tmp, {"branch": "main"})
+    snapshot = create_snapshot(base_knowledge, store, snapshot_id="SNAP-000012",
                                created_at=STAMP, label="baseline")
-    empty_twin = build_twin(base_knowledge, twin_id="TWIN-000012", built_at=LATER)
+    empty_twin = build_twin(base_knowledge, store, twin_id="TWIN-000012", built_at=LATER)
     empty_twin = empty_twin.without_facts()
     report = analyze_integrity(snapshot=snapshot, twin=empty_twin, evaluated_at=LATER,
                                report_id="INTEG-000003")
@@ -340,12 +346,12 @@ with tempfile.TemporaryDirectory() as tmp:
 
 # Facts the snapshot never captured are UNKNOWN, not drift.
 with tempfile.TemporaryDirectory() as tmp:
-    base_knowledge, _ = seeded_knowledge(tmp, {"branch": "main"})
-    snapshot = create_snapshot(base_knowledge, snapshot_id="SNAP-000013",
+    base_knowledge, store = seeded_knowledge(tmp, {"branch": "main"})
+    snapshot = create_snapshot(base_knowledge, store, snapshot_id="SNAP-000013",
                                created_at=STAMP, label="baseline")
 with tempfile.TemporaryDirectory() as tmp2:
-    wider_knowledge, _ = seeded_knowledge(tmp2, {"unrelated_fact": "value"}, collected=LATER)
-    wider_twin = build_twin(wider_knowledge, twin_id="TWIN-000013", built_at=LATER)
+    wider_knowledge, store = seeded_knowledge(tmp2, {"unrelated_fact": "value"}, collected=LATER)
+    wider_twin = build_twin(wider_knowledge, store, twin_id="TWIN-000013", built_at=LATER)
 report = analyze_integrity(snapshot=snapshot, twin=wider_twin, evaluated_at=LATER,
                            report_id="INTEG-000004")
 check(report.status == IntegrityStatus.UNKNOWN.value,
@@ -383,13 +389,13 @@ except ValueError:
 
 # --- Recovery plans are advisory only -------------------------------------
 with tempfile.TemporaryDirectory() as tmp:
-    base_knowledge, _ = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
-    snapshot = create_snapshot(base_knowledge, snapshot_id="SNAP-000020",
+    base_knowledge, store = seeded_knowledge(tmp, {"branch": "main", "tracked_files": "164"})
+    snapshot = create_snapshot(base_knowledge, store, snapshot_id="SNAP-000020",
                                created_at=STAMP, label="baseline")
 with tempfile.TemporaryDirectory() as tmp2:
-    drift_knowledge, _ = seeded_knowledge(tmp2, {"branch": "hotfix", "tracked_files": "1"},
+    drift_knowledge, store = seeded_knowledge(tmp2, {"branch": "hotfix", "tracked_files": "1"},
                                           collected=LATER)
-    drift_twin = build_twin(drift_knowledge, twin_id="TWIN-000020", built_at=LATER)
+    drift_twin = build_twin(drift_knowledge, store, twin_id="TWIN-000020", built_at=LATER)
 
 drift_report = analyze_integrity(snapshot=snapshot, twin=drift_twin, evaluated_at=LATER,
                                  report_id="INTEG-000020")
@@ -416,22 +422,34 @@ for forbidden in ("subprocess", "os.system", "shell=true", "docker run",
           f"recovery plan carries no executable field ({forbidden})")
 check(not hasattr(plan, "execute"), "a recovery plan has no execute method")
 
-# A matching report needs no recovery.
-match_plan = plan_recovery(report=report, snapshot=snapshot, plan_id="RECOV-000002",
-                           created_at=LATER)
-check(not match_plan.steps or match_plan.status == "no-action-required",
-      "a report with nothing to recover produces no recovery steps")
+# A matching report needs no recovery. Built explicitly rather than reusing an
+# earlier variable, which by this point holds an UNKNOWN comparison.
+with tempfile.TemporaryDirectory() as match_tmp:
+    match_knowledge, match_store = seeded_knowledge(match_tmp, {"branch": "main"})
+    match_snapshot = create_snapshot(match_knowledge, match_store,
+                                     snapshot_id="SNAP-000030", created_at=STAMP,
+                                     label="baseline")
+    match_twin = build_twin(match_knowledge, match_store, twin_id="TWIN-000030",
+                            built_at=LATER)
+    match_report = analyze_integrity(snapshot=match_snapshot, twin=match_twin,
+                                     evaluated_at=LATER, report_id="INTEG-000030")
+    check(match_report.status == IntegrityStatus.MATCH.value,
+          "the no-recovery fixture really is a MATCH")
+    match_plan = plan_recovery(report=match_report, snapshot=match_snapshot,
+                               plan_id="RECOV-000002", created_at=LATER)
+    check(not match_plan.steps and match_plan.status == "no-action-required",
+          "a report with nothing to recover produces no recovery steps")
 
 # --- Secrets never reach a snapshot, twin, report, or plan ----------------
 with tempfile.TemporaryDirectory() as tmp:
-    secret_knowledge, _ = seeded_knowledge(
+    secret_knowledge, store = seeded_knowledge(
         tmp, {"remote_url": f"https://user:{CANARY}@git.example.invalid/x.git"})
     snapshots = SnapshotStore(Path(tmp) / "integrity-store")
-    secret_snapshot = create_snapshot(secret_knowledge,
+    secret_snapshot = create_snapshot(secret_knowledge, store,
                                       snapshot_id=snapshots.allocate_id("snapshot"),
                                       created_at=STAMP, label="secret-probe")
     snapshots.write_snapshot(secret_snapshot)
-    secret_twin = build_twin(secret_knowledge, twin_id="TWIN-000099", built_at=STAMP)
+    secret_twin = build_twin(secret_knowledge, store, twin_id="TWIN-000099", built_at=STAMP)
     secret_report = analyze_integrity(snapshot=secret_snapshot, twin=secret_twin,
                                       evaluated_at=STAMP, report_id="INTEG-000099")
     secret_plan = plan_recovery(report=secret_report, snapshot=secret_snapshot,
@@ -463,12 +481,12 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     before = sorted((str(p.relative_to(root)), p.stat().st_size)
                     for p in (root / "platform-model").rglob("*") if p.is_file())
-    knowledge, _ = seeded_knowledge(tmp, {"branch": "main"})
+    knowledge, store = seeded_knowledge(tmp, {"branch": "main"})
     snapshots = SnapshotStore(Path(tmp) / "integrity-store")
-    snap = create_snapshot(knowledge, snapshot_id=snapshots.allocate_id("snapshot"),
+    snap = create_snapshot(knowledge, store, snapshot_id=snapshots.allocate_id("snapshot"),
                            created_at=STAMP, label="model-probe")
     snapshots.write_snapshot(snap)
-    twin = build_twin(knowledge, twin_id="TWIN-000100", built_at=STAMP)
+    twin = build_twin(knowledge, store, twin_id="TWIN-000100", built_at=STAMP)
     rep = analyze_integrity(snapshot=snap, twin=twin, evaluated_at=STAMP,
                             report_id="INTEG-000100")
     plan_recovery(report=rep, snapshot=snap, plan_id="RECOV-000100", created_at=STAMP)
@@ -493,9 +511,16 @@ def cli(*args, expect=None):
 help_proc = cli("--help")
 for command in ("snapshot", "twin", "analyze", "plan"):
     check(command in help_proc.stdout, f"cli exposes the {command} command")
-for forbidden in ("execute", "recover", "apply", "delete"):
-    body = help_proc.stdout.lower().split("positional")[-1].split("options")[0]
-    check(forbidden not in body, f"cli exposes no {forbidden} command")
+# Checked against the parsed command list, not the help prose: the word
+# "recovery" legitimately appears in "advisory recovery plan", and a substring
+# search would flag the description rather than a command.
+import re as _re  # noqa: E402 - local to this assertion
+
+choices = _re.search(r"\{([a-z,\-]+)\}", help_proc.stdout)
+command_names = set(choices.group(1).split(",")) if choices else set()
+check(bool(command_names), "cli help exposes a parseable command list")
+for forbidden in ("execute", "recover", "apply", "delete", "remediate"):
+    check(forbidden not in command_names, f"cli exposes no {forbidden} command")
 
 # The store root has no default: a default is a production path waiting for an
 # accidental write.
