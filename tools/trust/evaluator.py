@@ -18,6 +18,7 @@ from typing import Any
 
 from .audit import STATE_EVENT, AuditEventKind
 from .errors import TrustError
+from .expiry import effective_state
 from .lineage import current_lineage, lineage_head, validate_advance, validate_supersession
 from .models import (
     AuthorityType,
@@ -50,6 +51,14 @@ class DecisionOutcome:
             "lineage": self.lineage.to_dict(),
             "audit_event": self.audit_event.to_dict(),
         }
+
+
+def _record_for_decision(store, decision_id: str) -> dict[str, Any] | None:
+    """The trust record a decision produced, or None."""
+    for record in store.all_records("record"):
+        if record.get("decision_id") == decision_id:
+            return record
+    return None
 
 
 def _active_root(store) -> dict[str, Any]:
@@ -123,7 +132,22 @@ def create_decision(
                 "lineage, supplied explicitly via supersedes_lineage_id"
             )
 
-    previous_state = str(head.get("current_state")) if head else TrustState.UNKNOWN.value
+    # The previous state is the state at the moment of decision, not the state
+    # the record happens to store. Expiry is never written down -- it is derived
+    # -- so reading the stored value here would make `expired` unreachable as a
+    # previous state and leave renewal permanently refused as `trusted ->
+    # trusted`, even though the transition table permits `expired -> trusted`.
+    previous_state = TrustState.UNKNOWN.value
+    if head is not None:
+        stored_state = str(head.get("current_state"))
+        head_record = _record_for_decision(store, str(head.get("current_decision_id")))
+        deadline = None
+        if head_record is not None and head_record.get("expiration"):
+            try:
+                deadline = datetime.fromisoformat(str(head_record.get("expiration")))
+            except ValueError:
+                deadline = None
+        previous_state = effective_state(stored_state, deadline, decided_at)
 
     if head is not None:
         validate_advance(store, head, subject_id, subject_type)
@@ -148,7 +172,8 @@ def create_decision(
             "a revocation must name the record whose trust it withdraws")
 
     if requested_state == TrustState.REJECTED.value and previous_state in {
-            TrustState.TRUSTED.value, TrustState.RESTRICTED.value}:
+            TrustState.TRUSTED.value, TrustState.RESTRICTED.value,
+            TrustState.EXPIRED.value}:
         raise TrustError(
             "a rejection cannot follow a granted trust; withdrawing a grant is a "
             "revocation, and the two are permanently distinct in the history"

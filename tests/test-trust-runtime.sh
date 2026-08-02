@@ -370,6 +370,10 @@ U, P, TR, RS, Q_, RV, EX, RJ = (
 
 ALLOWED_BY_DECISION = [
     (U, P), (U, TR), (U, RS), (U, Q_), (U, RJ),
+    # An expired grant was granted. It must still be withdrawable and still be
+    # quarantinable: a lapsed subject that turns out to be compromised cannot
+    # be made to require renewal-into-trust before it can be revoked.
+    (EX, RV), (EX, Q_),
     (P, TR), (P, RS), (P, Q_), (P, RJ),
     (TR, RS), (TR, Q_), (TR, RV),
     (RS, TR), (RS, Q_), (RS, RV),
@@ -383,6 +387,11 @@ for previous, requested in ALLOWED_BY_DECISION:
     check(bool(outcome.governing_rule), f"{previous} -> {requested} names its governing rule")
 
 DENIED_BY_DECISION = [(RV, TR), (RV, RS), (RJ, TR), (RJ, RS), (RV, Q_), (RJ, Q_)]
+# Rejected means trust was never granted. An expired grant was granted, so
+# rejecting it would blur the one distinction the ADR is emphatic about.
+rejected_after_expiry = T.evaluate_transition(EX, RJ, by_decision=True)
+check(not rejected_after_expiry.allowed,
+      "an expired grant cannot be rejected; rejection means trust was never granted")
 for previous, requested in DENIED_BY_DECISION:
     outcome = T.evaluate_transition(previous, requested, by_decision=True)
     check(not outcome.allowed, f"decision transition denied: {previous} -> {requested}")
@@ -508,6 +517,104 @@ check(effective_state(TR, expiration=None, evaluated_at=YEAR) == TR,
 for state in (U, P, RV, RJ):
     check(effective_state(state, expiration=YEAR, evaluated_at=YEAR) == state,
           f"expiry never rewrites {state}")
+
+# --- Renewal after expiry, through create_decision --------------------------
+# Regression: the pure expiry function is not enough. A decision derives its
+# previous state from the lineage, and if it reads the *stored* state rather
+# than the effective one, `expired` can never be a previous state and renewal
+# is unreachable -- even though the transition table permits it.
+with tempfile.TemporaryDirectory() as tmp:
+    store = make_store(tmp)
+    approved = Path(tmp) / "approved"
+    approved.mkdir()
+    import yaml as _yaml
+    (approved / "root.yaml").write_text(_yaml.safe_dump(root_input()), encoding="utf-8")
+    authority = declare_root_authority(store, load_root_declaration(
+        "root.yaml", approved_directory=str(approved)))
+
+    SHORT = STAMP + timedelta(days=2)
+    AFTER = STAMP + timedelta(days=3)
+    granted = create_decision(
+        store, subject_id="HOST-EXP", subject_type="host", requested_state=TR,
+        actor_authority_id=authority.authority_id, decided_at=STAMP,
+        reason="granted with a short expiration for the renewal regression",
+        evidence_references=evidence(),
+        verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        verification_details=details(), scope=scope, expiration=SHORT)
+
+    lapsed = Q.get_current_trust(store, "HOST-EXP", evaluated_at=AFTER)
+    check(lapsed["stored_state"] == TR and lapsed["effective_state"] == EX,
+          "after the boundary the stored state is trusted and the effective state expired")
+    check(not lapsed["usable"], "an effectively expired subject is not usable")
+
+    renewed = create_decision(
+        store, subject_id="HOST-EXP", subject_type="host", requested_state=TR,
+        actor_authority_id=authority.authority_id, decided_at=AFTER,
+        reason="renewed by explicit decision after the grant elapsed",
+        evidence_references=evidence(),
+        verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        verification_details=details(), scope=scope,
+        expiration=AFTER + timedelta(days=365),
+        lineage_id=granted.lineage.lineage_id)
+    check(renewed.lineage.lineage_id == granted.lineage.lineage_id,
+          "renewal after expiry continues the same lineage")
+    check(renewed.decision.previous_state == EX,
+          "the renewal decision records the effective previous state, not the stored one")
+    check(renewed.lineage.version == granted.lineage.version + 1,
+          "the lineage advanced by a new version rather than an edit")
+    check(Q.get_trust_record(store, granted.record.record_id)["state"] == TR,
+          "the elapsed record is untouched by the renewal")
+
+# --- Revoking a grant that has already lapsed -------------------------------
+# Regression: before the previous-state fix this worked only because expiry was
+# invisible to the evaluator. It must keep working now that expiry is visible.
+with tempfile.TemporaryDirectory() as tmp:
+    store = make_store(tmp)
+    approved = Path(tmp) / "approved"
+    approved.mkdir()
+    import yaml as _yaml
+    (approved / "root.yaml").write_text(_yaml.safe_dump(root_input()), encoding="utf-8")
+    authority = declare_root_authority(store, load_root_declaration(
+        "root.yaml", approved_directory=str(approved)))
+
+    SHORT = STAMP + timedelta(days=1)
+    LATE = STAMP + timedelta(days=400)
+    lapsed_grant = create_decision(
+        store, subject_id="HOST-LAPSE", subject_type="host", requested_state=TR,
+        actor_authority_id=authority.authority_id, decided_at=STAMP,
+        reason="granted with a short expiration for the revocation regression",
+        evidence_references=evidence(),
+        verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        verification_details=details(), scope=scope, expiration=SHORT)
+
+    withdrawn = create_decision(
+        store, subject_id="HOST-LAPSE", subject_type="host", requested_state=RV,
+        actor_authority_id=authority.authority_id, decided_at=LATE,
+        reason="the lapsed grant was found compromised and is withdrawn",
+        evidence_references=evidence(),
+        verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        verification_details=details(), scope=None, expiration=None,
+        revokes_record_id=lapsed_grant.record.record_id,
+        lineage_id=lapsed_grant.lineage.lineage_id)
+    check(withdrawn.record.state == RV,
+          "a grant that already lapsed can still be revoked")
+    check(withdrawn.decision.previous_state == EX,
+          "the revocation records that the previous state was effectively expired")
+    check(withdrawn.lineage.terminated, "revoking a lapsed grant terminates the lineage")
+
+    # And the lineage stays terminal however much time passes afterwards.
+    try:
+        create_decision(
+            store, subject_id="HOST-LAPSE", subject_type="host", requested_state=TR,
+            actor_authority_id=authority.authority_id, decided_at=LATE + timedelta(days=10),
+            reason="attempting to revive a long-revoked lapsed lineage",
+            evidence_references=evidence(),
+            verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+            verification_details=details(), scope=scope, expiration=LATE + timedelta(days=800),
+            lineage_id=lapsed_grant.lineage.lineage_id)
+        bad("a revoked lineage stays terminal however much time passes")
+    except TrustError:
+        ok("a revoked lineage stays terminal however much time passes")
 
 # --- Decisions, lineage, audit, and queries ---------------------------------
 with tempfile.TemporaryDirectory() as tmp:

@@ -71,7 +71,18 @@ BY_DECISION: dict[tuple[str, str], str] = {
     # Expiry continues the lineage: renewal is a decision on the same chain.
     (E, T): "an expired grant may be renewed by a new decision",
     (E, R): "an expired grant may be renewed with a bounded scope",
+    # An expired grant was granted, so it remains withdrawable and remains
+    # quarantinable. Without these, a lapsed subject later found compromised
+    # could only be revoked by first renewing it into trust, which is the
+    # opposite of what an operator needs during an incident.
+    (E, V): "an authority may withdraw a grant that has already lapsed",
+    (E, Q): "a lapsed subject may be quarantined when it becomes suspect",
 }
+
+# Deliberately absent: (expired, rejected). Rejection means trust was never
+# granted, and an expired grant was granted. Permitting it would blur the one
+# distinction ADR-0011 is most emphatic about; withdrawing a lapsed grant is a
+# revocation.
 
 # The only transition time may cause, and only from a usable state.
 BY_TIME: dict[tuple[str, str], str] = {

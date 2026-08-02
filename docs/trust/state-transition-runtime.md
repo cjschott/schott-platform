@@ -24,7 +24,7 @@ Governed by [ADR-0011](../decisions/ADR-0011-trust-plane.md). See also
 | `Trusted` | `Restricted`, `Quarantined`, `Revoked` |
 | `Restricted` | `Trusted`, `Quarantined`, `Revoked` |
 | `Quarantined` | `Trusted`, `Restricted`, `Revoked`, `Rejected` |
-| `Expired` | `Trusted`, `Restricted` — renewal, **same lineage** |
+| `Expired` | `Trusted`, `Restricted` — renewal, **same lineage**; also `Revoked`, `Quarantined` |
 | `Revoked` | nothing — terminal within its lineage |
 | `Rejected` | nothing — terminal within its lineage |
 
@@ -59,6 +59,28 @@ LINEAGE TLIN-000001  (host schmgmt.home.arpa)
 `Revoked` and `Rejected` remain terminal: later approval requires a **new
 lineage**, supplied explicitly, which references the prior history without
 mutating it.
+
+## An expired grant was still a grant
+
+`Expired` may also become `Revoked` or `Quarantined`. A lapsed subject that
+later turns out to have been compromised must be withdrawable *as it stands* —
+without first renewing it into trust, which is the opposite of what an operator
+needs during an incident.
+
+`Expired → Rejected` is **deliberately absent**. Rejection means trust was never
+granted, and an expired grant was granted. Withdrawing a lapsed grant is a
+revocation, and permitting a rejection here would blur the one distinction
+ADR-0011 is most emphatic about.
+
+## The previous state is the state at the moment of decision
+
+Expiry is derived, never written down. A decision therefore computes its
+previous state as the **effective** state at `decided_at`, not the state the
+record happens to store.
+
+Reading the stored value instead would make `Expired` unreachable as a previous
+state, leaving renewal permanently refused as `trusted → trusted` even though
+the table permits `expired → trusted`.
 
 ## Every outcome explains itself
 
