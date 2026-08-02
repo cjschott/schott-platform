@@ -498,6 +498,12 @@ assert_absent_in "${DEV}" '(^|[;&|(]|\$\()[[:space:]]*(ssh|scp|sftp|ssh-keyscan|
 assert_absent_in "${DEV}" '(nmap|masscan|StrictHostKeyChecking)' \
   "developer tooling performs no scanning or host-key configuration"
 
+# --- v0.9.2 trust plane suite wiring ----------------------------------------
+assert_contains "${VALIDATION}" 'tests/test-trust-plane\.sh' \
+  "local validation runs the trust plane suite"
+assert_contains ".github/workflows/ci.yml" 'tests/test-trust-plane\.sh' \
+  "ci runs the trust plane suite"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nDeveloper experience validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

@@ -1843,6 +1843,33 @@ for module in ssh_transport command_catalog models target transport; do
 done
 
 # ---------------------------------------------------------------------------
+# v0.9.2 trust plane: architecture only
+# ---------------------------------------------------------------------------
+
+for trust_artefact in \
+    "docs/decisions/ADR-0011-trust-plane.md" \
+    "docs/trust/trust-plane.md" \
+    "docs/trust/trust-domains.md" \
+    "docs/trust/trust-states.md" \
+    "platform-model/schemas/trust-record.schema.yaml" \
+    "platform-model/schemas/trust-decision.schema.yaml" \
+    "platform-model/schemas/trust-authority.schema.yaml" \
+    "platform-model/schemas/trust-policy.schema.yaml"; do
+  assert_file "${trust_artefact}"
+done
+
+# No trust runtime, no enrollment, no certificate handling, no approval
+# workflow. Those are later releases: a partial trust engine is worse than none
+# because it reads as a control while behaving as a suggestion.
+for trust_impl in tools/trust tools/fabric tools/capability tools/enrollment; do
+  if [[ -e "${ROOT}/${trust_impl}" ]]; then
+    fail "no trust implementation belongs in the architecture sprint: ${trust_impl}"
+  else
+    pass "no trust implementation directory: ${trust_impl}"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
