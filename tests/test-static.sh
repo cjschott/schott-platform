@@ -1701,6 +1701,21 @@ assert_contains ".github/workflows/ci.yml" 'bash tests/test-knowledge-orchestrat
 assert_ignored "observations-local/"
 
 # ---------------------------------------------------------------------------
+# v0.8.0 — operational integrity
+# ---------------------------------------------------------------------------
+
+for module in models snapshot_manager twin_builder integrity_analyzer \
+              confidence recovery_planner cli; do
+  assert_file "tools/integrity/${module}.py"
+done
+assert_file "tests/test-operational-integrity.sh"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-operational-integrity\.sh' \
+  "ci runs the operational integrity suite"
+
+# Derived integrity artefacts are disposable and must never be tracked.
+assert_ignored "integrity-local/"
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
