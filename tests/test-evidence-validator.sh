@@ -34,9 +34,14 @@ if [[ ! -f "${VALIDATOR}" ]]; then
 fi
 pass "validator exists: tools/platform_model/validate_evidence.py"
 
+# Fail closed. The validator under test parses YAML, so without PyYAML this
+# suite would assert nothing while still exiting 0 — a green run that verified
+# nothing is worse than no run at all.
 if ! python3 -c 'import yaml' >/dev/null 2>&1; then
-  printf 'SKIP: PyYAML is not installed; validator behaviour tests were skipped.\n'
-  exit 0
+  printf 'ERROR PyYAML is required for the evidence validator tests and is not importable.\n' >&2
+  printf 'Install the pinned version:\n\n' >&2
+  printf '    python3 -m pip install --require-hashes -r requirements-ci.txt\n\n' >&2
+  exit 1
 fi
 
 WORK="$(mktemp -d)"

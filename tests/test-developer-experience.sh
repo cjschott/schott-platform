@@ -178,7 +178,9 @@ assert_contains "${VALIDATION}" 'EVID-\*|platform-model' "validation includes a 
 
 # --- No suite may skip silently --------------------------------------------
 # The whole point of this increment: a green run must mean the checks ran.
-skipping="$(grep -lE "printf 'SKIP: PyYAML" "${ROOT}"/tests/*.sh 2>/dev/null || true)"
+# This suite is excluded: it necessarily contains the pattern it searches for.
+skipping="$(grep -lE "printf 'SKIP: PyYAML" \
+  --exclude="test-developer-experience.sh" "${ROOT}"/tests/*.sh 2>/dev/null || true)"
 if [[ -z "${skipping}" ]]; then
   pass "no test suite retains a silent PyYAML skip path"
 else
@@ -235,8 +237,15 @@ if [[ -x "${ROOT}/${DEV}/bootstrap.sh" ]]; then
     "bootstrap dry-run creates no files" "bootstrap dry-run modified the repository"
   check "$(grep -qiE 'dry.run' <<<"${dry_output}" && echo 0 || echo 1)" \
     "bootstrap announces dry-run mode" "bootstrap must state that it is running in dry-run mode"
-  check "$(grep -qE 'apt-get install' <<<"${dry_output}" && echo 0 || echo 1)" \
-    "bootstrap prints exact install commands" "bootstrap must print the exact Ubuntu install command"
+  # The apt-get form is asserted against the script, not the output: on a fully
+  # provisioned host nothing is missing, so a correct bootstrap prints no
+  # install command at all. What the output must always carry is an actionable
+  # next step or an explicit statement that there is nothing to do.
+  assert_contains "${DEV}/bootstrap.sh" 'apt-get install --yes' \
+    "bootstrap defines the exact Ubuntu install command"
+  check "$(grep -qE '(apt-get install|pip install|docker pull|Nothing to do)' <<<"${dry_output}" && echo 0 || echo 1)" \
+    "bootstrap dry-run prints an actionable step or reports nothing to do" \
+    "bootstrap must print an actionable command or state that nothing is missing"
   check "$(grep -qE '\-\-apply' <<<"${dry_output}" && echo 0 || echo 1)" \
     "bootstrap documents the explicit apply flag" "bootstrap must name --apply as the way to install"
 

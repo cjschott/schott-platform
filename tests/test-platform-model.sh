@@ -715,7 +715,11 @@ PY
     FAILURES=$((FAILURES + PY_FAILURES))
   fi
 else
-  printf 'SKIP: PyYAML is not installed; structural YAML validation was skipped.\n'
+  printf 'ERROR PyYAML is required for %s and is not importable.\n' "$(basename "${BASH_SOURCE[0]}")" >&2
+  printf 'A skipped behavioural block must never report success, so this is a failure.\n' >&2
+  printf 'Install the pinned version:\n\n' >&2
+  printf '    python3 -m pip install --require-hashes -r requirements-ci.txt\n\n' >&2
+  exit 1
 fi
 
 # --- v0.7.0 observation schemas and ontology -------------------------------
