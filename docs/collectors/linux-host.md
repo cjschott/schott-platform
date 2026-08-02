@@ -74,6 +74,26 @@ Output that a host returned but this collector could not parse yields **no
 fact**, never a zero. An unparseable field means nothing was observed, and
 recording that as `0` would be an invention.
 
+## Atomic collection
+
+Remote collection is atomic at the collector level in v0.9.0. Successful
+intermediate operations are discarded if the collector cannot produce its
+complete declared fact contract — no facts, no fingerprint, and no successful
+intermediate value survives anywhere in the result.
+
+Partial collection is deferred, not approximated. See
+[Remote Read-Only Collection](remote-collection.md#atomic-collection).
+
+## Execution capability
+
+This collector declares `subprocess_access: true`. It does not import
+`subprocess`, construct an argv, or supply executable text; it selects
+code-owned operation identifiers. `SSHRemoteTransport` owns the one audited
+subprocess call, with a fixed executable and fixed client options. The flag
+denotes constrained indirect transport capability, not general subprocess
+authority. See
+[Remote Read-Only Collection](remote-collection.md#what-subprocess_access-true-means-here).
+
 ## No persistence, no identity, no remediation
 
 This collector returns a `CollectorResult` and nothing else. It **never

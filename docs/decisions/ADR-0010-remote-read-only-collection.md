@@ -36,7 +36,8 @@ A plugin still never opens a socket and never composes a command. It names an op
 ### Principles
 
 1. **Remote collectors observe; they never administer.**
-2. **Targets are declared explicitly.** No discovery, no CIDR, no defaults.
+2. **Targets are declared explicitly.** One machine per target, as a DNS name
+   or an explicit IPv4 or IPv6 literal. No discovery, no CIDR, no defaults.
 3. **Every executable operation comes from a code-owned allowlist.**
 4. **Configuration may choose an operation identifier, never supply command text.**
 5. **Host-key verification is mandatory** and cannot be disabled.
@@ -51,6 +52,44 @@ A plugin still never opens a socket and never composes a command. It names an op
 14. **No remote state is changed.**
 15. **Every remote operation is auditable** — the identifier and argv are in the repository, not in configuration.
 16. **The control plane keeps operating if every remote target is unavailable.**
+
+### What a target may be
+
+*Amended during review of the v0.9.0 implementation.*
+
+The first implementation required a DNS name, refusing address ranges and bare
+address literals with a single rule. That was too broad. Requiring a name means
+the platform cannot observe a host precisely when name resolution is what
+broke — and bootstrap and DNS failure are exactly the situations an address
+literal exists for.
+
+A target is therefore **one machine**, expressed as a DNS name, an IPv4
+literal, or an IPv6 literal. Everything expressing a *scope* rather than a host
+stays refused: CIDR ranges, address ranges, wildcards, lists, URLs, embedded
+usernames, and host:port syntax. Malformed literals are refused rather than
+quietly accepted as names, and address literals are parsed by a real address
+parser rather than matched by a pattern.
+
+**Naming one machine by address is not host discovery.** The platform is told
+about one machine; nothing resolves a name, reverses an address, or expands a
+scope. Host-key verification is unchanged for address literals — an IP target
+is verified exactly like a name.
+
+### Why collection is atomic at the collector level
+
+If any required operation fails, the collector returns nothing: no facts, no
+fingerprint, and successful intermediate output is discarded rather than
+reported.
+
+The alternative — returning what did arrive — produces a record that reads as
+complete while silently missing fields, and every layer above treats a
+successful record as a full one. A clean failure with a specific category is
+more useful to an operator than a partial record that has to be second-guessed.
+
+The cost is real: one failing operation loses facts that were successfully
+collected. Partial collection with an explicit completeness marker is a
+reasonable future design, and is deliberately deferred rather than approximated
+here.
 
 ### Why connection failure is not host failure
 

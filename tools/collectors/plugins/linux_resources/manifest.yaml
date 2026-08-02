@@ -27,6 +27,12 @@ permissions:
   - read-remote-host
 
 network_access: true
+# subprocess_access: true denotes constrained, indirect transport capability --
+# this collector causes a process to run, through one audited chokepoint, with
+# a fixed executable and a code-owned argv. It is not general subprocess
+# authority. The collector imports no subprocess, constructs no argv, and
+# supplies no executable text; it selects operation identifiers only.
+# SSHRemoteTransport owns the single remote subprocess call.
 subprocess_access: true
 filesystem_access: false
 read_only: true

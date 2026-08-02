@@ -829,6 +829,61 @@ for category in authentication_failure host_key_failure timeout output_limit \
     "remote collection doc documents the ${category} category"
 done
 
+# A target is one machine, as a name or an explicit address literal. The
+# documentation must say both what is permitted and what stays refused, so a
+# reader cannot infer that explicit addressing implies discovery.
+for form in "DNS name" "IPv4 literal" "IPv6 literal"; do
+  assert_contains "${REMOTE_DOC}" "${form}" \
+    "remote collection doc documents the permitted ${form} target form"
+done
+for refused in "CIDR" "[Aa]ddress range" "[Ww]ildcard" "URL" \
+               "[Ee]mbedded username" "[Mm]alformed literal"; do
+  assert_contains "${REMOTE_DOC}" "${refused}" \
+    "remote collection doc documents that ${refused} stays refused"
+done
+assert_contains "${REMOTE_DOC}" 'not host discovery|not discovery' \
+  "remote collection doc states explicit addressing is not discovery"
+assert_contains "${REMOTE_DOC}" 'bootstrap' \
+  "remote collection doc explains why address literals exist"
+assert_contains "${REMOTE_DOC}" 'unbracketed' \
+  "remote collection doc states IPv6 is stored unbracketed"
+assert_contains "${REMOTE_DOC}" 'RemoteTarget\.port|port field' \
+  "remote collection doc states the port stays a separate field"
+assert_contains "${REMOTE_DOC}" 'known_hosts' \
+  "remote collection doc explains known_hosts identity for address literals"
+assert_contains "${REMOTE_DOC}" 'ipaddress' \
+  "remote collection doc states literals are parsed, not pattern-matched"
+assert_contains "${REMOTE_DOC}" 'refused rather than trimmed|rejected-not-trimmed' \
+  "remote collection doc states whitespace is refused rather than trimmed"
+
+# Enrollment must never be documented as automatic.
+assert_not_contains "${REMOTE_DOC}" '(automatic|automated)[[:space:]]+host.key[[:space:]]+enrollment' \
+  "remote collection doc documents no automatic host-key enrollment"
+
+# Atomic collection, in the approved wording.
+assert_contains "${REMOTE_DOC}" '[Aa]tomic at the collector level' \
+  "remote collection doc states collection is atomic at the collector level"
+assert_contains "${REMOTE_DOC}" '[Ss]uccessful intermediate operations are discarded' \
+  "remote collection doc states intermediate successes are discarded"
+assert_contains "${REMOTE_DOC}" '[Pp]artial collection is deferred' \
+  "remote collection doc records that partial collection is deferred"
+
+# subprocess_access: true must be explained, not left to be read literally.
+assert_contains "${REMOTE_DOC}" 'subprocess_access' \
+  "remote collection doc explains the subprocess_access declaration"
+assert_contains "${REMOTE_DOC}" 'not general subprocess authority|rather than general subprocess authority' \
+  "remote collection doc bounds what subprocess_access means"
+assert_contains "${REMOTE_DOC}" 'SSHRemoteTransport' \
+  "remote collection doc names the transport that owns execution"
+
+for collector_doc in docs/collectors/linux-host.md docs/collectors/linux-resources.md \
+                     docs/collectors/linux-services.md; do
+  assert_contains "${collector_doc}" '[Aa]tomic at the collector level' \
+    "$(basename "${collector_doc}" .md) doc states collection is atomic"
+  assert_contains "${collector_doc}" 'subprocess_access' \
+    "$(basename "${collector_doc}" .md) doc explains subprocess_access"
+done
+
 # Documentation must use synthetic hostnames only; a real one invites a copy
 # and paste straight at production.
 assert_not_contains "${REMOTE_DOC}" '[a-z0-9-]+\.(com|net|org|io)\b' \

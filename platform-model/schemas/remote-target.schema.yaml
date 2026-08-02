@@ -88,12 +88,31 @@ enums:
 
 field_rules:
   hostname:
-    # A DNS name with at least one letter. That requirement refuses a bare
-    # address literal and an address range in one rule, which matters because
-    # hyphens and digits are both legal in labels.
-    pattern: '^(?=.*[A-Za-z])[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+    # Exactly one machine, in one of three forms. Explicit address literals
+    # exist for bootstrap and DNS-failure situations: requiring a name would
+    # mean the platform cannot observe a host precisely when name resolution
+    # is what broke. Naming one machine by address is not discovery.
+    permitted_forms:
+      - dns-name
+      - ipv4-literal
+      - ipv6-literal
+    # Applied to DNS names only. Address literals are parsed by Python's
+    # ipaddress module rather than matched by a pattern, because a permissive
+    # expression accepts malformed literals such as 999.168.86.11.
+    dns_pattern: '^(?=.*[A-Za-z])[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+    address_validation: python-ipaddress
+    # An IPv6 literal is stored canonical, compressed, and unbracketed.
+    # Brackets are URL syntax and never appear in a target value.
+    ipv6_form: canonical-unbracketed
     wildcards: not-permitted
     address_ranges: not-permitted
+    cidr_ranges: not-permitted
+    host_lists: not-permitted
+    urls: not-permitted
+    embedded_username: not-permitted
+    embedded_port: not-permitted
+    surrounding_whitespace: rejected-not-trimmed
+    name_resolution: never-performed
   port:
     minimum: 1
     maximum: 65535

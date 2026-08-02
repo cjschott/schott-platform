@@ -57,14 +57,77 @@ Target files live in an approved directory and are refused if they resolve
 outside it — a symlink pointing elsewhere is refused rather than followed,
 because a containment check that follows links contains nothing.
 
-A hostname must be a DNS name containing at least one letter. That single rule
-refuses wildcards, address ranges, and bare address literals together, which
-matters because hyphens and digits are both legal in DNS labels and
-`192.168.1.1-192.168.1.50` is otherwise hard to distinguish from a name.
+### What a target may be
 
-**Trade-off, stated:** a host with no DNS name cannot be declared. That is a
-real limitation. A name is the reviewable form — an address says nothing about
-which machine it is and silently follows whatever now answers to it.
+A target names **exactly one machine**, in one of three forms:
+
+| Form | Example |
+|---|---|
+| DNS name | `schmgmt.home.arpa`, `schmgmt` |
+| IPv4 literal | `192.168.86.11` |
+| IPv6 literal | `2001:db8::10` |
+
+**Explicit addresses exist for bootstrap and DNS-failure situations.**
+Requiring a name would mean the platform cannot observe a host precisely when
+name resolution is what broke — which is exactly when an operator most needs
+to look, and when a host may not yet have a name at all.
+
+**Naming one machine by address is not host discovery.** The platform is told
+about one machine; it does not go looking for others. Nothing resolves a name,
+reverses an address, or expands a scope.
+
+### What a target may never be
+
+| Rejected | Example | Why |
+|---|---|---|
+| CIDR range | `192.168.86.0/24`, `2001:db8::/64` | A scope, not a host |
+| Address range | `192.168.86.10-192.168.86.20`, `192.168.86.10-20` | A scope, not a host |
+| Wildcard | `*.home.arpa` | Matches more than one host |
+| List | `schmgmt,schai`, `schmgmt schai` | More than one host |
+| URL | `ssh://schmgmt` | Carries a scheme the target does not choose |
+| Embedded username | `cschott@schmgmt` | Identity belongs in `username` |
+| Host with port | `schmgmt:22` | The port has its own field |
+| Bracketed IPv6 | `[2001:db8::10]`, `[2001:db8::10]:22` | Brackets are URL syntax |
+| Malformed literal | `999.168.86.11`, `2001:db8:::10` | Refused, never treated as a name |
+| Surrounding whitespace | `" schmgmt"` | See below |
+| Empty | `""` | Names nothing |
+
+Address literals are parsed by Python's `ipaddress` module, **never by a
+pattern**. A permissive regular expression accepts malformed literals, and
+`999.168.86.11` quietly becoming a "hostname" is precisely the failure this
+avoids. Compound and scope syntax is refused *before* parsing is attempted, so
+no later rule can be tricked into accepting part of a larger value.
+
+Surrounding whitespace is **refused rather than trimmed**. Silently editing a
+declared value means the reviewed target and the used target differ, and the
+difference is invisible in review.
+
+### Storage form
+
+An IPv6 literal is stored **canonical, lower-case, compressed, and
+unbracketed** — the form the ssh client takes as a bare argument, and the same
+value that was reviewed. Brackets belong to URL syntax and never appear in a
+target or in argv.
+
+`RemoteTarget.port` remains the only port field. It is passed through the
+client's own port option and never fused into the host argument, which would
+make an IPv6 literal ambiguous since its colons are already part of the
+address.
+
+### Host keys apply to address literals too
+
+Host-key verification is **not relaxed for an address literal**. An IP target
+is verified exactly like a name.
+
+This matters in practice: OpenSSH keys `known_hosts` entries by the host
+string as given, and a non-standard port is recorded in bracketed form
+(`[192.168.86.11]:2222`). The entry must match the identity OpenSSH actually
+uses, so enrolling `schmgmt` does not cover `192.168.86.11`, and enrolling
+port 22 does not cover port 2222. Enroll the entry for the exact target form
+in use.
+
+The bracketed form appears **only inside the `known_hosts` file**, which is
+OpenSSH's own format. It is never a target value.
 
 ## Host keys
 
@@ -226,10 +289,72 @@ of that.
 `unavailable` means "could not look". `failed` means "looked, and the result
 was not usable". An operator reading a timeline needs to know which happened.
 
-**Failure is all-or-nothing per collector.** If any operation fails, the whole
-collection fails and no observations are emitted. A record mixing fresh facts
-with silently missing ones reads as complete. The cost is real — one failing
-operation loses the facts that did arrive — and it is accepted deliberately.
+## Atomic collection
+
+> **Remote collection is atomic at the collector level in v0.9.0.**
+> **Successful intermediate operations are discarded if the collector cannot**
+> **produce its complete declared fact contract.**
+
+If any required operation fails, the collector returns:
+
+- no observations
+- no content fingerprint
+- a specific failure category describing the attempt
+
+Successful intermediate output does not appear in the returned facts, in the
+errors, in the fingerprint, in logs, or in any temporary file — nothing is
+written to disk on the way, so there is no partial artefact for a later run to
+find. This is verified by a test that makes four operations succeed and one
+fail, then asserts none of the four successful values survives anywhere in the
+result.
+
+**Why.** A record mixing fresh facts with silently missing ones reads as
+complete, and every layer above treats a successful record as a full one. A
+clean failure carrying a specific category is more useful to an operator than
+a partial record that has to be second-guessed.
+
+**The cost is real.** One failing operation loses the facts that did arrive.
+Partial collection is deferred, not approximated: an explicit completeness
+marker is a reasonable future design, and guessing at one now would put the
+weakest part of the contract where operators trust it most.
+
+## What `subprocess_access: true` means here
+
+Remote collector manifests declare `subprocess_access: true`. Read literally
+that sounds like general execution authority. It is not, and the difference is
+worth stating precisely.
+
+**What the collectors do:**
+
+- They do **not** import `subprocess`, and contain no `os.system`, `os.popen`,
+  `Popen`, or `shell=True`.
+- They do **not** construct an argv, and never supply executable text.
+- They select **code-owned operation identifiers** and nothing else.
+
+**Where execution actually lives:**
+
+- `SSHRemoteTransport` owns the one subprocess call in the remote package —
+  asserted by test, which fails if any other module in the package so much as
+  mentions `subprocess`.
+- The executable and every client option are fixed in code.
+- The argv comes from the catalog, always as discrete arguments, never joined.
+
+So `subprocess_access: true` denotes **constrained, indirect transport
+capability** — this collector causes a process to run, through one audited
+chokepoint, with a fixed executable and a code-owned argv.
+It is **not general subprocess authority**.
+
+The manifest field cannot currently express that distinction. Declaring `true`
+is the honest choice of the two available: `false` would claim the collector
+causes no process to run, which is not so. A richer execution-capability
+vocabulary is reserved for a later release, and the schema is deliberately not
+redesigned here.
+
+Remote collection also cannot route through `command_runner.py`, the local
+chokepoint, whose executable allowlist refuses `ssh` outright — correctly, for
+a module whose job is local execution. Rather than punch a hole in that
+allowlist, remote execution has its own audited home with its own rules. Two
+reviewable places, and nowhere else.
 
 ## What remote collectors never do
 
