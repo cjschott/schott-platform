@@ -460,3 +460,54 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Identifies which observations a notion of normal rests on.
+
+  OCCURRED_ON:
+    name: Occurred On
+    description: >-
+      The source occurrence happened to the target entity. Records when
+      something happened; confers no authority over the target.
+    allowed_sources: [occurrence]
+    allowed_targets: [host, service, application, container, network, storage, backup-policy, repository]
+    transitive: false
+    inverse: null
+    operational_impact: Provides the temporal history an incident review reads.
+
+  DERIVED_FROM_EVIDENCE:
+    name: Derived From Evidence
+    description: >-
+      The source occurrence was derived from the target evidence record. Every
+      temporal claim traces back to an observation.
+    allowed_sources: [occurrence]
+    allowed_targets: [evidence, knowledge-event]
+    transitive: false
+    inverse: null
+    operational_impact: An occurrence is only as trustworthy as the evidence behind it.
+
+  MEMBER_OF_SERIES:
+    name: Member Of Series
+    description: The source occurrence is one of the occurrences the target series summarizes.
+    allowed_sources: [occurrence]
+    allowed_targets: [occurrence-series]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies which observations a temporal summary rests on.
+
+  DETECTED_IN:
+    name: Detected In
+    description: >-
+      The source pattern was recognised in the target series. Names a shape
+      that has been observed, never one expected to continue.
+    allowed_sources: [pattern]
+    allowed_targets: [occurrence-series]
+    transitive: false
+    inverse: null
+    operational_impact: A pattern with no series behind it cannot be checked.
+
+  ORDERED_IN:
+    name: Ordered In
+    description: The source occurrence appears at a position in the target timeline.
+    allowed_sources: [occurrence]
+    allowed_targets: [timeline]
+    transitive: false
+    inverse: null
+    operational_impact: Establishes the sequence an operator reads during review.

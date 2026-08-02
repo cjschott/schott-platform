@@ -1,0 +1,97 @@
+---
+# Declarative schema for occurrence records.
+#
+# One thing that happened, at one time. The atom of the temporal layer.
+#
+# Governed by: docs/decisions/ADR-0009-occurrence-timeline.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: occurrence
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0009-occurrence-timeline.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^OCC-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - kind
+  - occurred_at
+  - recorded_at
+  - source
+  - provenance
+
+constant_fields:
+  type: occurrence
+
+entity_reference_fields:
+  - target
+
+evidence_reference_fields:
+  - source
+
+enums:
+  provenance_class:
+    - observed
+
+# Both timestamps are required and distinct. occurred_at is when the thing
+# happened; recorded_at is when the platform noticed. Collapsing them would
+# place every late-arriving observation at the moment it was processed rather
+# than the moment it occurred.
+timestamp_fields:
+  - occurred_at
+  - recorded_at
+
+citation_requirements:
+  must_reference:
+    - source
+  rationale: >-
+    A temporal claim that names no source cannot be audited, and an unauditable
+    claim about when something happened is indistinguishable from a guess.
+
+immutability:
+  revisable: false
+  supersede_only: true
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+# A record read by tooling must never cause an action when parsed, and must
+# never carry a claim about the future.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - prediction
+  - forecast
+  - next_occurrence_at
+  - expected_next
+  - probability
+  - raw_output

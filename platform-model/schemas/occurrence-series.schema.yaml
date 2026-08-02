@@ -1,0 +1,119 @@
+---
+# Declarative schema for occurrence series.
+#
+# Every observed occurrence of one kind, for one target, with the temporal
+# measures derived from them.
+#
+# Governed by: docs/decisions/ADR-0009-occurrence-timeline.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: occurrence-series
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0009-occurrence-timeline.md
+  recorded_at: 2026-08-02
+  last_reviewed: 2026-08-02
+
+id_pattern: '^SERIES-[0-9]{6}$'
+
+required_fields:
+  - id
+  - type
+  - target
+  - kind
+  - generated_at
+  - count
+  - recurrence
+  - provenance
+
+constant_fields:
+  type: occurrence-series
+
+entity_reference_fields:
+  - target
+
+enums:
+  recurrence:
+    - regular
+    - irregular
+    - single
+    - unknown
+  provenance_class:
+    - derived
+
+timestamp_fields:
+  - generated_at
+
+# With no occurrences, or only one, these have nothing to measure. Null means
+# not measurable; rendering it as zero would claim everything happened at once.
+nullable_temporal_fields:
+  - first_seen
+  - last_seen
+  - observation_span_seconds
+  - mean_interval_seconds
+  - median_interval_seconds
+  - minimum_interval_seconds
+  - maximum_interval_seconds
+  - interval_deviation_seconds
+  - frequency_per_day
+null_semantics: >-
+  Null means not measurable from the observations available. It must never be
+  rendered, defaulted, or aggregated as zero.
+
+# frequency_per_day is a count over the observed span. It describes the period
+# actually watched and is not a rate expected to continue.
+frequency_semantics:
+  descriptive_only: true
+  forward_looking: false
+
+confidence_requirements:
+  required_factors:
+    - occurrence_count
+    - observation_span
+    - interval_regularity
+    - data_age
+  bounds: [0.0, 1.0]
+  weights_total: 1.0
+  requires_written_reason_per_factor: true
+  interpretation: >-
+    Confidence describes how much observed history the summary rests on. It is
+    not a probability and says nothing about continuation.
+
+forbidden_secret_keys:
+  - password
+  - passwd
+  - api_key
+  - apikey
+  - secret_key
+  - master_key
+  - private_key
+  - access_token
+  - bearer_token
+  - session_cookie
+  - authorization
+  - auth_header
+  - credentials
+  - token
+
+permitted_secret_metadata_keys:
+  - secret_present
+  - secret_source
+  - secret_length_class
+  - secret_last_rotated
+
+# A record read by tooling must never cause an action when parsed, and must
+# never carry a claim about the future.
+forbidden_fields:
+  - remediation_command
+  - remediation_action
+  - fix_command
+  - apply_command
+  - execute_command
+  - prediction
+  - forecast
+  - next_occurrence_at
+  - expected_next
+  - probability
+  - raw_output
