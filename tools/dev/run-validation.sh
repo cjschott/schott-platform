@@ -21,6 +21,7 @@ set -Eeuo pipefail
 #   - tests/test-platform-model.sh      (848 assertions, the slowest suite)
 #   - tests/test-initial-collectors.sh  (builds temporary git repositories)
 #   - tests/test-knowledge-orchestrator.sh (builds temporary evidence stores)
+#   - tests/test-operational-integrity.sh  (builds temporary integrity stores)
 #   - the three Docker Compose renders  (each spawns the compose binary)
 #
 # Quick mode still runs syntax checking, ShellCheck, both static suites, both
@@ -85,10 +86,10 @@ skipped_note() {
 # four of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=18
+  TOTAL_STEPS=19
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=22
+  TOTAL_STEPS=23
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -129,9 +130,13 @@ run "Collector framework" bash tests/test-collector-framework.sh
 if (( QUICK == 0 )); then
   run "Initial read-only collectors" bash tests/test-initial-collectors.sh
   run "Knowledge orchestrator" bash tests/test-knowledge-orchestrator.sh
+  # Builds temporary evidence and integrity stores, so it belongs with the
+  # other store-building suites rather than in the quick path.
+  run "Operational integrity" bash tests/test-operational-integrity.sh
 else
   skipped_note "Initial read-only collectors"
   skipped_note "Knowledge orchestrator"
+  skipped_note "Operational integrity"
 fi
 
 run "Developer experience" bash tests/test-developer-experience.sh
@@ -223,6 +228,7 @@ if (( QUICK == 1 )); then
     - tests/test-platform-model.sh
     - tests/test-initial-collectors.sh
     - tests/test-knowledge-orchestrator.sh
+    - tests/test-operational-integrity.sh
     - the three Docker Compose renders
 
   Run without --quick before pushing.
