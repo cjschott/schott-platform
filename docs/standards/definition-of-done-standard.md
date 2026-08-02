@@ -122,6 +122,16 @@ The change is discoverable by someone reading history.
 - Breaking changes are called out explicitly.
 - Known limitations and deferred work are listed.
 
+### Local validation
+
+The change was validated locally before review, with the same checks CI runs.
+
+- `tools/dev/run-validation.sh` passes in full, not only `--quick`.
+- The toolchain matches `tools/dev/versions.env`, or every divergence is stated.
+- No suite was skipped. A `SKIP` in a validation log is a finding, not a pass.
+- Nothing was installed on the host without explicit approval.
+- New shell scripts pass ShellCheck at the pinned version.
+
 ### Evidence integrity
 
 Work that produces or consumes evidence preserves the ADR-0004 guarantees.

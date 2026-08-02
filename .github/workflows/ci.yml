@@ -89,6 +89,12 @@ jobs:
       - name: Knowledge orchestrator tests
         run: bash tests/test-knowledge-orchestrator.sh
 
+      # Asserts local tooling stays in parity with this workflow: pinned tool
+      # versions, no suite skipping silently, and no dev script mutating the
+      # host. Uses temp directories and a PYTHONPATH shim; installs nothing.
+      - name: Developer experience tests
+        run: bash tests/test-developer-experience.sh
+
       # Fails the build if a run left generated records behind under
       # platform-model. The suite asserts this itself; this is the backstop for
       # anything else that might write there.

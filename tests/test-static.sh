@@ -1701,6 +1701,23 @@ assert_contains ".github/workflows/ci.yml" 'bash tests/test-knowledge-orchestrat
 assert_ignored "observations-local/"
 
 # ---------------------------------------------------------------------------
+# v0.7.5 — developer experience
+# ---------------------------------------------------------------------------
+
+for script in bootstrap check-toolchain run-validation run-shellcheck run-local-ci; do
+  assert_file "tools/dev/${script}.sh"
+done
+assert_file "tools/dev/versions.env"
+assert_file "tests/test-developer-experience.sh"
+
+# The manifest is the single source of pinned versions. A second copy of a
+# version string is a second place to forget to update.
+assert_contains "tools/dev/versions.env" '^SHELLCHECK_VERSION=' \
+  "toolchain manifest pins the ShellCheck version"
+assert_contains "tools/dev/versions.env" '^PYYAML_VERSION=' \
+  "toolchain manifest pins the PyYAML version"
+
+# ---------------------------------------------------------------------------
 # v0.8.0 — operational integrity
 # ---------------------------------------------------------------------------
 
@@ -1714,6 +1731,19 @@ assert_contains ".github/workflows/ci.yml" 'bash tests/test-operational-integrit
 
 # Derived integrity artefacts are disposable and must never be tracked.
 assert_ignored "integrity-local/"
+
+# ---------------------------------------------------------------------------
+# Combined-state parity: both suites must run locally and in CI. A merge that
+# kept one side's wiring and dropped the other's would leave a suite that
+# exists but is never executed.
+# ---------------------------------------------------------------------------
+
+assert_contains "tools/dev/run-validation.sh" 'tests/test-developer-experience\.sh' \
+  "local validation runs the developer experience suite"
+assert_contains "tools/dev/run-validation.sh" 'tests/test-operational-integrity\.sh' \
+  "local validation runs the operational integrity suite"
+assert_contains ".github/workflows/ci.yml" 'bash tests/test-developer-experience\.sh' \
+  "ci runs the developer experience suite"
 
 # ---------------------------------------------------------------------------
 # Result
