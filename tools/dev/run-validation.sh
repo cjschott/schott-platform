@@ -12,7 +12,7 @@ set -Eeuo pipefail
 # ephemeral, network-isolated, and mounts the repository read-only.
 #
 # Usage:
-#   tools/dev/run-validation.sh           # everything (31 steps)
+#   tools/dev/run-validation.sh           # everything (32 steps)
 #   tools/dev/run-validation.sh --quick   # skip the slowest suites
 #   tools/dev/run-validation.sh --strict  # toolchain warnings become errors
 #
@@ -98,14 +98,14 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 30 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 31 checks plus the closing summary. Quick mode drops
 # nine of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=22
+  TOTAL_STEPS=23
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=31
+  TOTAL_STEPS=32
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -195,6 +195,15 @@ run "Developer experience" bash tests/test-developer-experience.sh
 # --- 10-11. python validators ---------------------------------------------
 run "Evidence and drift definitions" \
   python3 tools/platform_model/validate_evidence.py --root platform-model
+
+# A standard YAML loader keeps only the last value for a repeated key, so an
+# earlier ontology definition disappears during parsing and nothing notices.
+# Fails closed, and names the file, key, and line.
+ontology_duplicate_check() {
+  python3 tools/platform_model/validate_ontology.py --root platform-model
+  python3 tools/platform_model/validate_ontology.py --root . --all-tracked
+}
+run "Ontology duplicate-key validation" ontology_duplicate_check
 run "Collector plugin manifests" \
   python3 tools/collectors/validate_plugins.py --root .
 

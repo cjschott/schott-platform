@@ -891,6 +891,199 @@ fi
 assert_absent 'RTGT-[0-9]{4}.*([0-9]{1,3}\.){3}[0-9]{1,3}' \
   "no remote target is declared with a literal IP address"
 
+# --- Duplicate mapping keys ------------------------------------------------
+#
+# A standard YAML loader silently keeps only the last value for a repeated key.
+# In an ontology that is not a style problem: an earlier relationship
+# definition disappears during parsing, and every reader downstream believes a
+# vocabulary the file does not actually declare. The ontology carried three
+# SUPERSEDES definitions for exactly this reason, and nothing noticed.
+#
+# Ontology YAML is therefore loaded through a duplicate-rejecting loader that
+# fails closed and names the file, the key, and the line.
+
+assert_file "tools/common/yaml_strict.py"
+assert_file "tools/platform_model/validate_ontology.py"
+
+if python3 -c 'import yaml' >/dev/null 2>&1; then
+  STRICT_OUTPUT="$(cd "${ROOT}" && python3 - <<'STRICTPY'
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, ".")
+failures = 0
+
+
+def check(condition, description):
+    global failures
+    if condition:
+        print(f"PASS: {description}")
+    else:
+        print(f"FAIL: {description}", file=sys.stderr)
+        failures += 1
+
+
+try:
+    from tools.common.yaml_strict import DuplicateKeyError, load_strict, loads_strict
+except Exception as exc:  # noqa: BLE001 - the import itself is under test
+    print(f"FAIL: tools.common.yaml_strict is importable ({exc})", file=sys.stderr)
+    print("__FAILURES__=1")
+    sys.exit(0)
+
+check(True, "tools.common.yaml_strict is importable")
+
+
+def rejects(text, description):
+    """The loader must refuse, and the refusal must be identifiable."""
+    try:
+        loads_strict(text, source="fixture.yaml")
+    except DuplicateKeyError as exc:
+        message = str(exc)
+        named_key = "duplicate" in message.lower()
+        located = any(ch.isdigit() for ch in message)
+        check(named_key and located,
+              f"{description} (error names the key and a location)")
+        return
+    except Exception as exc:  # noqa: BLE001
+        check(False, f"{description} (wrong exception type: {type(exc).__name__})")
+        return
+    check(False, f"{description} (loader accepted it)")
+
+
+# Duplicate top-level key.
+rejects(
+    "alpha: 1\n"
+    "beta: 2\n"
+    "alpha: 3\n",
+    "strict loader rejects a duplicate top-level key")
+
+# Duplicate relationship key, the shape the ontology actually had.
+rejects(
+    "relationship_types:\n"
+    "  SUPERSEDES:\n"
+    "    name: Supersedes\n"
+    "  OTHER:\n"
+    "    name: Other\n"
+    "  SUPERSEDES:\n"
+    "    name: Supersedes Again\n",
+    "strict loader rejects a duplicate relationship key")
+
+# Duplicate nested key, below the top two levels.
+rejects(
+    "entity_types:\n"
+    "  host:\n"
+    "    name: Host\n"
+    "    id_prefix: HOST\n"
+    "    name: Host Again\n",
+    "strict loader rejects a duplicate nested key")
+
+# Values differ: the dangerous case, because meaning is silently lost.
+rejects(
+    "policy:\n"
+    "  mode: enforce\n"
+    "  mode: advisory\n",
+    "strict loader rejects a duplicate key whose values differ")
+
+# Values identical: still rejected. A loader that permits harmless duplicates
+# has to decide what harmless means, and it will decide wrongly eventually.
+rejects(
+    "policy:\n"
+    "  mode: enforce\n"
+    "  mode: enforce\n",
+    "strict loader rejects a duplicate key whose values are identical")
+
+# Valid YAML must still load, and load correctly.
+try:
+    parsed = loads_strict(
+        "relationship_types:\n"
+        "  SUPERSEDES:\n"
+        "    name: Supersedes\n"
+        "    allowed_sources: [evidence, verification]\n",
+        source="valid.yaml")
+    ok = (parsed["relationship_types"]["SUPERSEDES"]["name"] == "Supersedes"
+          and parsed["relationship_types"]["SUPERSEDES"]["allowed_sources"]
+          == ["evidence", "verification"])
+    check(ok, "strict loader accepts valid YAML and parses it correctly")
+except Exception as exc:  # noqa: BLE001
+    check(False, f"strict loader accepts valid YAML ({exc})")
+
+# Repeated keys in sibling mappings are not duplicates. A loader that confused
+# these would reject every real ontology file.
+try:
+    parsed = loads_strict(
+        "entity_types:\n"
+        "  host:\n"
+        "    name: Host\n"
+        "  service:\n"
+        "    name: Service\n",
+        source="siblings.yaml")
+    check(len(parsed["entity_types"]) == 2,
+          "strict loader accepts the same key name in sibling mappings")
+except Exception as exc:  # noqa: BLE001
+    check(False, f"strict loader accepts sibling mappings ({exc})")
+
+# The error must name the file it came from, or a failure in CI is a hunt.
+with tempfile.TemporaryDirectory() as tmp:
+    bad = Path(tmp) / "broken-ontology.yaml"
+    bad.write_text("relationship_types:\n  A:\n    name: one\n  A:\n    name: two\n")
+    try:
+        load_strict(bad)
+        check(False, "strict loader rejects a duplicate key read from a file")
+    except DuplicateKeyError as exc:
+        check("broken-ontology.yaml" in str(exc),
+              "strict loader names the file containing the duplicate")
+
+# Every ontology file must load under the strict loader.
+for path in sorted(Path("platform-model/ontology").glob("*.yaml")):
+    try:
+        load_strict(path)
+        check(True, f"ontology file loads with no duplicate keys: {path.name}")
+    except DuplicateKeyError as exc:
+        check(False, f"ontology file has a duplicate key: {exc}")
+
+# Every tracked schema must load under it too. The ontology is where duplicates
+# were found; there is no reason to believe it is the only place they occur.
+for path in sorted(Path("platform-model/schemas").glob("*.yaml")):
+    try:
+        load_strict(path)
+    except DuplicateKeyError as exc:
+        check(False, f"schema file has a duplicate key: {exc}")
+check(True, "every schema file loads with no duplicate keys")
+
+print(f"__FAILURES__={failures}")
+STRICTPY
+)"
+  printf '%s\n' "${STRICT_OUTPUT}" | grep -v '^__FAILURES__=' || true
+  STRICT_FAILURES="$(printf '%s\n' "${STRICT_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+  if [[ -z "${STRICT_FAILURES}" ]]; then
+    fail "strict YAML validation did not report a result"
+  else
+    FAILURES=$((FAILURES + STRICT_FAILURES))
+  fi
+fi
+
+# The ontology validator must be wired into both CI and local validation, or
+# the rejection exists and nothing runs it.
+for wiring in ".github/workflows/ci.yml" "tools/dev/run-validation.sh"; do
+  if grep -qE 'validate_ontology\.py' "${ROOT}/${wiring}"; then
+    pass "${wiring} runs the ontology duplicate-key validator"
+  else
+    fail "${wiring} must run the ontology duplicate-key validator"
+  fi
+done
+
+# --- Exactly one SUPERSEDES -------------------------------------------------
+# Three definitions existed; only the last survived parsing. Consolidated into
+# one, and asserted at the text level so a fourth cannot be reintroduced
+# without this failing.
+SUPERSEDES_COUNT="$(grep -cE '^  SUPERSEDES:' "${ROOT}/${MODEL}/ontology/relationship-types.yaml" || true)"
+if [[ "${SUPERSEDES_COUNT}" == "1" ]]; then
+  pass "relationship catalog declares exactly one SUPERSEDES definition"
+else
+  fail "relationship catalog must declare exactly one SUPERSEDES (found ${SUPERSEDES_COUNT})"
+fi
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nPlatform model validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1
