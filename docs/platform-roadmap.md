@@ -578,6 +578,98 @@ Explicitly deferred to that release, and not implemented before it: no fabric,
 no registry, no placement, and no remote execution of any kind exists in v0.8.6
 or earlier.
 
+### v0.9.6 — Capability Health Monitor
+
+Reserved. **Roadmap reservation only — nothing here is implemented.**
+
+Observe the availability, performance, trust state, and operational condition
+of nodes, endpoints, leases, and capabilities participating in the Distributed
+Capability Fabric.
+
+#### The architectural principle
+
+> Capability health describes whether a trusted capability is available and
+> behaving within its **declared operational envelope**.
+> **Health never grants trust, and trust never implies health.**
+
+These are two axes, not one scale. The temptation this reservation exists to
+refuse is collapsing them: a node that has been healthy for months is not
+thereby trusted, and a node that is trusted is not thereby working.
+
+#### Three questions, three layers
+
+| Layer | Question |
+|---|---|
+| **Trust Plane** | May this subject participate? |
+| **Capability Fabric** | Where can this workload execute? |
+| **Health Monitor** | Is the trusted capability currently available and operating within its declared limits? |
+
+A subject may be **trusted and healthy**, **trusted and degraded**,
+**trusted and unavailable**, or **restricted and healthy**.
+A **quarantined** subject cannot be made usable by any health status, however
+good. An **untrusted** subject cannot be made eligible by excellent health.
+
+**Health must never override trust.** Where the two disagree, trust decides.
+
+#### Scope — what it observes
+
+Availability: node availability, endpoint availability,
+capability availability, transport health, stale heartbeat detection, and
+collector freshness.
+
+Performance: capability latency, queue depth, execution success and failure
+counts, capability degradation.
+
+Resources: resource pressure, GPU utilization, VRAM utilization,
+CPU utilization, and memory utilization.
+
+Placement and governance: lease health, placement history, Trust Plane state,
+quarantine state, maintenance and drain state.
+
+Record-keeping: health history, deterministic health evaluation,
+immutable health observations, and explainable status reasons.
+
+#### Dependency rule
+
+- v0.9.6 **depends on v0.9.5** Fabric entities and placement events. There is
+  nothing to observe until there is something placed.
+- **v1.0.0 requires both** the Fabric and the Capability Health Monitor to be
+  released.
+- The Health Monitor **consumes Trust Plane state**.
+- The Health Monitor **cannot change Trust Plane state**.
+- The Health Monitor **may recommend investigation or draining**.
+- The Health Monitor **cannot execute remediation**.
+
+That asymmetry is the whole design. A monitor that can change trust is a
+monitor that can be induced to grant it, and availability data is the easiest
+signal in the platform to manipulate from outside.
+
+#### Explicit non-goals
+
+- no Fabric implementation
+- no collectors beyond specifications
+- no runtime health engine
+- no automatic rerouting, and **no automatic workload rerouting** in this release
+- **no autonomous remediation**
+- **no automatic node admission**
+- **no automatic trust changes**
+- **no automatic drain**
+- **no automatic quarantine**
+- no trust mutation
+- **no prediction**, **no forecasting**, **no ML anomaly** detector
+
+A health monitor that reroutes, drains, or quarantines on its own is an
+autonomous controller wearing an observability label — the same mistake
+ADR-0010 refused for remote collection, one layer up.
+
+#### Likely future entities
+
+Named so the shape is reviewable, **not implemented and carrying no schema**
+in this reservation:
+
+`capability-health-observation`, `capability-health-state`, `node-heartbeat`,
+`endpoint-health`, `lease-health`, `placement-health`, `degradation-event`.
+
 ### v1.0.0 — Kyri Core Foundation
 
 Reserved. The reasoning layer itself — routing, policy, and memory — built on
