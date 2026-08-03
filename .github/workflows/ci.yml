@@ -64,6 +64,16 @@ jobs:
       - name: Evidence and drift definition validation
         run: python3 tools/platform_model/validate_evidence.py --root platform-model
 
+      # A standard YAML loader keeps only the last value for a repeated key, so
+      # an earlier ontology definition disappears during parsing and nothing
+      # notices. Parsed here with a duplicate-rejecting loader that fails
+      # closed and names the file, key, and line. Sweeps every tracked YAML
+      # file, not only the ontology.
+      - name: Ontology duplicate-key validation
+        run: |
+          python3 tools/platform_model/validate_ontology.py --root platform-model
+          python3 tools/platform_model/validate_ontology.py --root . --all-tracked
+
       - name: Evidence validator behaviour tests
         run: bash tests/test-evidence-validator.sh
 
@@ -165,6 +175,12 @@ jobs:
       # every migrated allow and deny is unchanged from v0.9.3.
       - name: Trust migration tests
         run: bash tests/test-trust-migration.sh
+
+      # Architecture only: ADR-0012, eight immutable schemas, ontology, and
+      # documentation. Asserts the specification is complete and that no fabric
+      # engine, registry service, scheduler, placement, or execution exists.
+      - name: Capability fabric tests
+        run: bash tests/test-capability-fabric.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).

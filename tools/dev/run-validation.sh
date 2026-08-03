@@ -12,7 +12,7 @@ set -Eeuo pipefail
 # ephemeral, network-isolated, and mounts the repository read-only.
 #
 # Usage:
-#   tools/dev/run-validation.sh           # everything (20 steps)
+#   tools/dev/run-validation.sh           # everything (32 steps)
 #   tools/dev/run-validation.sh --quick   # skip the slowest suites
 #   tools/dev/run-validation.sh --strict  # toolchain warnings become errors
 #
@@ -53,6 +53,18 @@ done
 STEP=0
 STARTED_AT="$(date -Is)"
 
+# Existence of the two approved production paths, sampled before any step runs.
+# Reports existence only: reading a root-owned trust store is not this script's
+# business, and it does not have permission to try.
+production_path_state() {
+  local path state=''
+  for path in /var/lib/kyri /etc/kyri; do   # prod-path-reference
+    if [[ -e "${path}" ]]; then state+="${path}:present "; else state+="${path}:absent "; fi
+  done
+  printf '%s' "${state}"
+}
+PRODUCTION_PATH_STATE_AT_START="$(production_path_state)"
+
 section() {
   STEP=$((STEP + 1))
   printf '\n[%02d/%s] %s\n' "${STEP}" "${TOTAL_STEPS}" "$1"
@@ -86,14 +98,14 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 21 checks plus the closing summary. Quick mode drops
-# four of them. A validation tool that miscounts its own steps invites doubt
+# Counted, not guessed: 31 checks plus the closing summary. Quick mode drops
+# nine of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=20
+  TOTAL_STEPS=23
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=29
+  TOTAL_STEPS=32
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -173,11 +185,25 @@ run "Trust plane" bash tests/test-trust-plane.sh
 # quick mode alongside the architecture suite it depends on.
 run "Trust migration" bash tests/test-trust-migration.sh
 
+# Static and documentation only: the fabric is architecture in this release, so
+# there is no engine to exercise. Builds no store, spawns no subprocess,
+# contacts nothing — it runs in quick mode as well.
+run "Capability fabric" bash tests/test-capability-fabric.sh
+
 run "Developer experience" bash tests/test-developer-experience.sh
 
 # --- 10-11. python validators ---------------------------------------------
 run "Evidence and drift definitions" \
   python3 tools/platform_model/validate_evidence.py --root platform-model
+
+# A standard YAML loader keeps only the last value for a repeated key, so an
+# earlier ontology definition disappears during parsing and nothing notices.
+# Fails closed, and names the file, key, and line.
+ontology_duplicate_check() {
+  python3 tools/platform_model/validate_ontology.py --root platform-model
+  python3 tools/platform_model/validate_ontology.py --root . --all-tracked
+}
+run "Ontology duplicate-key validation" ontology_duplicate_check
 run "Collector plugin manifests" \
   python3 tools/collectors/validate_plugins.py --root .
 
@@ -246,7 +272,25 @@ runtime_evidence_check() {
 }
 run "Runtime evidence backstop" runtime_evidence_check
 
-# --- 19. platform-model mutation backstop ----------------------------------
+# --- 19. production-path backstop ------------------------------------------
+# Validation may name the approved production paths; it may never create or
+# change one. Sampled before the first step and compared here, so this reports
+# what the run did rather than what the machine already contained. On a host
+# where an operator has completed the deployment procedure both paths exist,
+# and that is not a finding.
+production_path_check() {
+  local now
+  now="$(production_path_state)"
+  if [[ "${now}" != "${PRODUCTION_PATH_STATE_AT_START}" ]]; then
+    printf 'Validation changed a production path:\n  before: %s\n  after:  %s\n' \
+      "${PRODUCTION_PATH_STATE_AT_START}" "${now}" >&2
+    return 1
+  fi
+  printf '  ok       production paths unchanged (%s)\n' "${now}"
+}
+run "Production path backstop" production_path_check
+
+# --- 20. platform-model mutation backstop ----------------------------------
 # The suites must be read-only with respect to the declared model. This runs
 # last so it observes the state the suites left behind.
 model_mutation_check() {
@@ -260,7 +304,7 @@ model_mutation_check() {
 }
 run "Platform model mutation backstop" model_mutation_check
 
-# --- 20. summary -----------------------------------------------------------
+# --- 21. summary -----------------------------------------------------------
 section "Summary"
 if (( QUICK == 1 )); then
   cat <<EOF

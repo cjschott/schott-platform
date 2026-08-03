@@ -1,0 +1,138 @@
+---
+# Declarative schema for capability instances.
+#
+# An instance is the admitted binding of one package to one host for one
+# contract, and it is the only thing a route may target. It is where trust is
+# composed: a package trusted for the contract meeting a host trusted as a
+# fabric node, with a verified resource match, a fresh advertisement, an
+# unexpired admission, and a non-empty scope intersection.
+#
+# Trusting a package trusts no machine. Trusting a machine trusts no package.
+# An instance is trusted only where both are, and only in the intersection of
+# their scopes.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-instance
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0012-distributed-capability-fabric.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CINST-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+# Absence of a record is never permission. The default is the refusal.
+default_eligibility: ineligible
+scope_composition: intersection
+trust_inheritance: forbidden
+
+required_fields:
+  - instance_id
+  - capability_id
+  - capability_package_id
+  - capability_host_id
+  - contract_id
+  - satisfied_contract_versions
+  # Verified by the platform, not copied from the advertisement.
+  - verified_resource_profile
+  # Human-approved. There is no automatic path to admission.
+  - admission_decision_id
+  - package_trust_record_id
+  - host_trust_record_id
+  # The intersection of package scope, host scope, and admission scope. An
+  # empty intersection is a valid outcome and it means nothing is eligible.
+  - effective_scope
+  - admitted_at
+  - admitted_until
+  - provenance
+
+optional_fields:
+  - advertisement_id
+  - endpoint_reference
+  - supersedes
+  - superseded_by
+  - notes
+
+# Eligibility is a conjunction, enumerated so an implementation cannot quietly
+# drop one condition and still call the result eligible. All eight must hold.
+eligibility_conditions:
+  - id: ELIG-1
+    condition: package trust state is trusted or restricted in the capability-package domain
+  - id: ELIG-2
+    condition: host trust state is trusted or restricted in the fabric-node domain
+  - id: ELIG-3
+    condition: the capability contract is compatible with the requested contract version
+  - id: ELIG-4
+    condition: the package version is compatible with the contract version requested
+  - id: ELIG-5
+    condition: the host verified resource profile satisfies the package resource requirements
+  - id: ELIG-6
+    condition: a fresh advertisement exists, is registered, and is inside its validity window
+  - id: ELIG-7
+    condition: the admission decision exists, was human-approved, and has not expired
+  - id: ELIG-8
+    condition: the effective scope intersection is non-empty and permits the request
+  - id: ELIG-9
+    condition: the request data classification does not exceed the host classification ceiling
+  # Quarantine and drain are separate conditions on purpose. One is a trust
+  # judgement that something is suspect; the other is an operator deliberately
+  # withdrawing a working node. Reporting either as the other destroys a
+  # distinction an operator needs during an incident.
+  - id: ELIG-10
+    condition: the host is not quarantined
+  - id: ELIG-11
+    condition: the capability package is not quarantined
+  - id: ELIG-12
+    condition: the candidate has not been manually drained
+  - id: ELIG-13
+    condition: the candidate is permitted by the route being resolved
+  - id: ELIG-14
+    condition: the contract effect class is routable, which side-effecting is not
+
+# Three independent clocks. Any one lapsing is sufficient, and none renews
+# itself: an expiry that renews itself measures nothing.
+expiry_clocks:
+  - trust-expiry
+  - advertisement-validity
+  - admission-expiry
+automatic_renewal: forbidden
+automatic_readmission: forbidden
+recovery: requires-new-decision
+
+# Health may remove this instance from consideration. It may never add it,
+# reorder it, or restore it. Where health and trust disagree, trust decides.
+health_may_remove: true
+health_may_add: false
+health_may_change_trust: false
+
+forbidden_fields:
+  - trust_score
+  - health_score
+  - auto_admit
+  - auto_renew
+  - auto_failover
+  - auto_remediate
+  - weight
+  - load_factor
+  - peer_instances
+  - quorum
+  - leader
+  - token
+  - secret
+  - credential
+  - command
+  - argv

@@ -10,6 +10,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FAILURES=0
 
+# Production-path state, sampled before any assertion runs and compared after
+# the last one. This suite must leave the two approved production paths exactly
+# as it found them — whether that is absent on a workstation or present on a
+# host where an operator has already run the deployment procedure.
+#
+# It reports existence only. Reading the contents of a root-owned trust store
+# is not this suite's business, and it does not have permission to try.
+prod_path_state() {
+  local path state=''
+  for path in /var/lib/kyri /etc/kyri; do   # prod-path-reference
+    if [[ -e "${path}" ]]; then state+="${path}:present "; else state+="${path}:absent "; fi
+  done
+  printf '%s' "${state}"
+}
+PROD_PATH_STATE_AT_START="$(prod_path_state)"
+
 pass() {
   printf 'PASS: %s\n' "$1"
 }
@@ -1216,14 +1232,109 @@ for gate in "Operator Root Authority instantiated" "production trust store valid
     "roadmap v0.9.5 gate requires: ${gate}"
 done
 
-# A deployment plan creates no deployment.
-for premature in /var/lib/kyri /etc/kyri; do
-  if [[ -e "${premature}" ]]; then
-    fail "the deployment plan must not create ${premature}"
+# --- v0.9.5 Distributed Capability Fabric ------------------------------------
+ADR12="docs/decisions/ADR-0012-distributed-capability-fabric.md"
+assert_file "${ADR12}"
+assert_contains "${ADR12}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0012 is accepted"
+for fabric_doc in capability-fabric capability-lifecycle capability-identity \
+                  capability-routing node-model failure-behaviour \
+                  governance-boundaries; do
+  assert_file "docs/fabric/${fabric_doc}.md"
+done
+
+# The distinction the whole sprint turns on: architecture now, runtime later.
+assert_contains "${ADR12}" '[Ss]pecification may proceed' \
+  "ADR-0012 states specification may proceed before deployment acceptance"
+assert_contains "${ADR12}" '[Nn]o runtime implementation' \
+  "ADR-0012 declares no runtime implementation"
+assert_contains "docs/fabric/governance-boundaries.md" 'Architecture is allowed now' \
+  "governance document states architecture is allowed now"
+assert_contains "docs/fabric/governance-boundaries.md" '[Rr]untime remains forbidden' \
+  "governance document states runtime remains forbidden"
+
+# The roadmap must not quietly promote v0.9.5 past the gate.
+assert_contains "${ROADMAP}" 'ADR-0012' "roadmap cites ADR-0012"
+assert_contains "${ROADMAP}" '[Ii]mplementation still blocked|implementation remains blocked' \
+  "roadmap keeps v0.9.5 implementation blocked"
+
+# --- A deployment plan creates no deployment --------------------------------
+#
+# The previous form of this check asserted that /var/lib/kyri and /etc/kyri did
+# not exist on the filesystem. That was never a test of the repository; it was
+# a test of the machine, and it failed the moment an operator legitimately
+# followed the deployment guide on a production host. Existence proves nothing
+# about who created the path.
+#
+# Documenting a path and creating one are different acts. Only the second is
+# forbidden here, and only when the repository is what does it.
+#
+#   Allowed:   documentation naming these paths; the guide describing their
+#              ownership and permissions; a supervised operator creating them
+#              out of band; runtime using them through explicit configuration.
+#
+#   Forbidden: tests creating them; validation creating them; CI creating them;
+#              repository code defaulting to them; store tests writing outside
+#              a temporary synthetic root.
+#
+# Lines that legitimately name a production path carry the marker
+# `prod-path-reference`, so every exception is visible and greppable rather
+# than hidden inside a regex.
+
+PROD_PATH_RE='/var/lib/kyri|/etc/kyri'          # prod-path-reference
+PROD_CREATE_RE='(mkdir|install +-d|touch|tee|rm +-[rf]|cp |mv |chown|chmod|> *)'
+
+# 1. No test may create, write to, or remove a production path.
+prod_violations="$(grep -rnE "${PROD_CREATE_RE}[^|]*(${PROD_PATH_RE})" \
+  "${ROOT}/tests/" 2>/dev/null | grep -v 'prod-path-reference' || true)"
+if [[ -z "${prod_violations}" ]]; then
+  pass "no test creates or mutates a production path"
+else
+  fail "a test creates a production path: $(head -1 <<<"${prod_violations}")"
+fi
+
+# 2. No repository code may treat a production path as an implicit default.
+#    A default is how a path gets created by something nobody asked to run it.
+prod_defaults="$(grep -rnE "(default|DEFAULT|fallback|=)[^|]*(${PROD_PATH_RE})" \
+  "${ROOT}/tools/" "${ROOT}/scripts/" 2>/dev/null | grep -v 'prod-path-reference' || true)"
+if [[ -z "${prod_defaults}" ]]; then
+  pass "no repository code defaults to a production path"
+else
+  fail "repository code defaults to a production path: $(head -1 <<<"${prod_defaults}")"
+fi
+
+# 3. CI may never create a production path. A workflow runs unattended, which
+#    is the definition of unsupervised.
+prod_ci="$(grep -rnE "${PROD_CREATE_RE}[^|]*(${PROD_PATH_RE})" \
+  "${ROOT}/.github/" 2>/dev/null | grep -v 'prod-path-reference' || true)"
+if [[ -z "${prod_ci}" ]]; then
+  pass "CI creates no production path"
+else
+  fail "CI creates a production path: $(head -1 <<<"${prod_ci}")"
+fi
+
+# 4. Every store-building suite must root its stores in a temporary directory.
+#    A store test that forgot this is exactly how validation would acquire the
+#    ability to write somewhere real. Either mechanism is accepted: these
+#    suites drive Python, which roots its own temporary trees.
+for store_suite in test-trust-runtime test-knowledge-orchestrator \
+                   test-operational-integrity test-experience-engine \
+                   test-occurrence-timeline; do
+  if [[ -f "${ROOT}/tests/${store_suite}.sh" ]] \
+     && grep -qE 'mktemp|tempfile\.TemporaryDirectory|mkdtemp' "${ROOT}/tests/${store_suite}.sh"; then
+    pass "${store_suite} roots its stores in a temporary directory"
   else
-    pass "no production path created: ${premature}"
+    fail "${store_suite} must build stores under a temporary root, never a real path"
   fi
 done
+
+# 5. And this suite itself creates nothing. Recorded at the top of the run and
+#    compared here, so the claim is about what executed rather than about what
+#    the filesystem happened to contain beforehand.
+if [[ "$(prod_path_state)" == "${PROD_PATH_STATE_AT_START}" ]]; then
+  pass "documentation validation created no production path"
+else
+  fail "documentation validation changed a production path"
+fi
 
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2

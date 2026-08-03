@@ -1,0 +1,127 @@
+---
+# Declarative schema for capability routes.
+#
+# A route binds a request class to an explicitly ordered list of candidate
+# instances. The order is written by a human and stored here. A router that
+# orders candidates by observed load, latency, or success rate is deriving
+# placement from reasoning — the ADR-0011 directionality violation wearing an
+# operations hat — and it is unpredictable during the incident when
+# predictability matters most.
+#
+# Human-declared, so identifiers are four digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-route
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0012-distributed-capability-fabric.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CROUTE-[0-9]{4}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+
+required_fields:
+  - route_id
+  # Cutover is a route change, not a package event: a new package version
+  # becomes live when a new route version lists it, never by promoting itself.
+  - route_version
+  - capability_id
+  - contract_id
+  - accepted_contract_versions
+  - locality
+  # Ordered. Position in this list is the selection order.
+  - candidate_instances
+  - data_classification
+  - provenance
+
+optional_fields:
+  - description
+  - overlap_window
+  - supersedes
+  - superseded_by
+  - notes
+
+# A route is durable policy. It is written, reviewed, and versioned; it is not
+# produced per request and it does not record that anything happened.
+record_class: policy-declaration
+is_execution_event: false
+dynamic_optimization: forbidden
+
+candidate_order: declared-explicit
+selection_determinism: deterministic
+selection_rule: first-eligible-in-declared-order
+fallback: declared-candidates-only
+on_no_eligible_candidate: refuse
+on_no_route: refuse
+
+# Several candidates mean there is more than one declared place this may run.
+# They imply nothing about how work is spread across them, because no such
+# policy has been defined and inventing one for zero traffic would be guessing.
+multiple_candidates_imply:
+  - redundancy
+  - declared-alternatives
+
+forbidden_behaviours:
+  - round-robin
+  - weighted
+  - load-balancing
+  - least-loaded
+  - latency-optimization
+  - automatic-failover
+  - parallel-execution
+  - speculative-execution
+  - adaptive-placement
+  - cost-optimization
+
+# Health may remove a candidate and may do nothing else. Until v0.9.6 there is
+# no health monitor, so health is declared or unknown -- and unknown stays
+# unknown. Treating missing data as healthy is how an unmonitored node becomes
+# the preferred one.
+health_may_remove: true
+health_may_reorder: false
+health_may_add: false
+absent_health_means: unknown-never-healthy
+automatic_rerouting: forbidden
+
+# A route targets admitted instances only. Targeting an advertisement would
+# mean routing to a self-report.
+routable_target: capability-instance
+routable_effect_classes:
+  - read-only
+  - compute-only
+
+# Enforced, not advisory. A local-only request refuses rather than leaving the
+# host: degrading to a remote instance because the local one is unavailable is
+# the silent redirection this rule exists to prevent.
+locality_enforcement: refuse-never-degrade
+
+enums:
+  locality:
+    - local-only
+    - operator-controlled-only
+    - any-trusted
+
+forbidden_fields:
+  - weight
+  - load_factor
+  - latency_score
+  - priority_score
+  - trust_score
+  - health_score
+  - auto_failover
+  - auto_scale
+  - auto_reorder
+  - capacity_forecast
+  - predicted_availability
+  - command

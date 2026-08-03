@@ -32,8 +32,12 @@ relationship_types:
   RUNS_ON:
     name: Runs On
     description: The source workload executes on the target deployment target.
-    allowed_sources: [service, application, container, virtual-machine]
-    allowed_targets: [host, virtual-machine, container]
+    # capability-instance and capability-host are permitted rather than given a
+    # synonym relationship: an instance executing on a host is exactly what
+    # RUNS_ON already means, and the ontology forbids competing names for one
+    # meaning. An instance is bound to exactly one host and dies with it.
+    allowed_sources: [service, application, container, virtual-machine, capability-instance]
+    allowed_targets: [host, virtual-machine, container, capability-host]
     transitive: true
     inverse: HOSTS
     operational_impact: Loss of the target removes the source workload.
@@ -199,14 +203,26 @@ relationship_types:
     inverse: null
     operational_impact: Identifies the evidence supporting a compliance claim.
 
+  # Merged from two definitions that shared a name and meant different things:
+  # an operational control reducing exposure, and trust governance applying to
+  # a subject. Only the second survived parsing, so backup and network controls
+  # were silently absent from the vocabulary.
   PROTECTED_BY:
     name: Protected By
-    description: The source is safeguarded by the target control or policy.
-    allowed_sources: [host, virtual-machine, service, application, network, storage, dataset]
-    allowed_targets: [standard, backup-policy, service, network]
+    description: >-
+      The source is safeguarded or governed by the target control, policy, or
+      authority. Covers operational protection and trust governance alike, so
+      an unprotected or ungoverned subject is visible as such rather than
+      merely unlisted.
+    allowed_sources: [host, virtual-machine, service, application, network, storage, dataset,
+                      capability, collector, remote-target, model, trust-record]
+    allowed_targets: [standard, backup-policy, service, network,
+                      trust-policy, trust-authority]
     transitive: false
+    # Restores the pairing BACKED_UP_BY already declares. It was lost when the
+    # surviving definition set this to null.
     inverse: BACKED_UP_BY
-    operational_impact: Identifies the control reducing exposure or data-loss risk.
+    operational_impact: Identifies the control or governance reducing exposure before a subject is used.
 
   OWNS:
     name: Owns
@@ -250,14 +266,24 @@ relationship_types:
     inverse: null
     operational_impact: Identifies what a finding actually rests on; absence makes the finding unfalsifiable.
 
+  # Merged from two definitions: an entity checked by a verification record,
+  # and a trust decision resting on named evidence. Only the second survived
+  # parsing, so every ordinary entity was silently unable to be verified.
+  #
+  # No reasoning record may be a source. Inference that could verify itself
+  # would manufacture its own authority, which ADR-0011 forbids.
   VERIFIED_BY:
     name: Verified By
-    description: The source entity has been evaluated by the target verification record.
-    allowed_sources: [host, virtual-machine, service, application, container, network, storage, backup-policy, platform-role]
-    allowed_targets: [verification]
+    description: >-
+      The source has been checked against the target record or evidence, by a
+      named method. Evidence is referenced, never inlined.
+    allowed_sources: [host, virtual-machine, service, application, container, network,
+                      storage, backup-policy, platform-role,
+                      trust-decision, trust-record]
+    allowed_targets: [verification, evidence]
     transitive: false
     inverse: EVALUATES
-    operational_impact: Absence means the entity is declared but unchecked.
+    operational_impact: Distinguishes a checked assertion from an assumed one; absence means declared but unchecked.
 
   EVALUATES:
     name: Evaluates
@@ -280,14 +306,50 @@ relationship_types:
     inverse: null
     operational_impact: Identifies coverage; an entity no rule targets is unchecked.
 
+  # The single supersession relationship for the whole model.
+  #
+  # This catalog previously declared SUPERSEDES three times — once here, once
+  # in the observation block, and once in the trust block. A standard YAML
+  # loader keeps only the last, so the first two never existed as far as any
+  # consumer was concerned, and evidence and verification were silently absent
+  # from the vocabulary they were written into. The definitions are now merged
+  # into this one, and ontology YAML is parsed by a duplicate-rejecting loader
+  # so a fourth cannot be added without failing validation.
   SUPERSEDES:
     name: Supersedes
-    description: The source record replaces the target while the target is retained for history.
-    allowed_sources: [evidence, verification]
-    allowed_targets: [evidence, verification]
+    description: >-
+      The source record replaces the target as the current record, and the
+      target remains readable. This is how every layer corrects itself:
+      correction is supersession, because an editable record is an audit trail
+      that can be rewritten after the fact.
+    # The union of the three merged definitions.
+    #
+    # capability-selection is deliberately absent. A selection is the immutable
+    # record of one act at one moment; a later selection is a different act,
+    # not a correction of the earlier one. Nothing supersedes it.
+    allowed_sources: [evidence, verification,
+                      trust-record, trust-decision, trust-authority, trust-policy,
+                      capability-definition, capability-contract, capability-package,
+                      capability-host, capability-advertisement, capability-instance,
+                      capability-route]
+    allowed_targets: [evidence, verification,
+                      trust-record, trust-decision, trust-authority, trust-policy,
+                      capability-definition, capability-contract, capability-package,
+                      capability-host, capability-advertisement, capability-instance,
+                      capability-route]
     transitive: true
     inverse: null
-    operational_impact: Preserves correction history without destroying the original observation.
+    # Declared rather than left to prose: supersession replaces nothing in
+    # place, and a chain that loops has lost the ordering that makes it
+    # readable.
+    semantics: immutable-supersession
+    mutation: forbidden
+    deletion: forbidden
+    self_reference: forbidden
+    cycles: forbidden
+    operational_impact: >-
+      Preserves correction history without destroying the original record, so
+      what was believed or trusted at any past moment stays answerable.
 
   # --- Capability model ----------------------------------------------------
   # A capability describes what the platform can do. None of these edges grants
@@ -320,26 +382,47 @@ relationship_types:
     inverse: null
     operational_impact: A capability may be no more mature than the capabilities it requires.
 
+  # Merged from two definitions: human approval recorded against a governing
+  # document, and authorisation by a trust authority. Only the second survived
+  # parsing, so capability and drift-rule approvals were silently absent.
+  #
+  # No reasoning record may be a source, and self-approval is not permitted:
+  # the chain must terminate outside the thing being established, at the
+  # external Operator Root Authority.
   APPROVED_BY:
     name: Approved By
     description: >-
-      The source required and received explicit human approval recorded in the
-      target. Records that approval happened; confers no authority to act.
-    allowed_sources: [capability, verification, drift-rule]
-    allowed_targets: [standard, architecture-decision, runbook]
+      The source required and received explicit approval, recorded in the
+      target document or trust authority. Records that approval happened;
+      confers no authority to act.
+    allowed_sources: [capability, verification, drift-rule,
+                      trust-decision, trust-record, trust-authority, trust-policy]
+    allowed_targets: [standard, architecture-decision, runbook, trust-authority]
     transitive: false
     inverse: null
-    operational_impact: Absence on a high-impact capability means nothing gated it.
+    self_approval: forbidden
+    operational_impact: Answers who authorised something, separately from who performed it; absence means nothing gated it.
 
 
+  # Merged from two definitions: a computed conclusion tracing to its inputs,
+  # and a trust record tracing to its source material. Only the second survived
+  # parsing, so verification and knowledge provenance was silently absent.
+  #
+  # transitive stays false, which is the behaviour that has actually been in
+  # effect. Restoring the first definition's `true` would newly enable
+  # provenance chaining that nothing has been relying on, and that is a
+  # separate decision from repairing a duplicate key.
   DERIVED_FROM:
     name: Derived From
     description: >-
-      The source was computed from the target. Records provenance for anything
-      inferred, so a conclusion can always be traced back to its inputs.
-    allowed_sources: [verification, knowledge-event, observation]
-    allowed_targets: [evidence, observation, verification]
-    transitive: true
+      The source was computed or established from the target - inputs for
+      anything inferred, source material for anything asserted. Names the
+      origin, distinct from the actor who recorded it.
+    allowed_sources: [verification, knowledge-event, observation,
+                      trust-record, trust-decision]
+    allowed_targets: [evidence, observation, verification,
+                      configuration-snapshot, capability]
+    transitive: false
     inverse: null
     operational_impact: A derived fact is only as trustworthy as what it was derived from.
 
@@ -355,16 +438,8 @@ relationship_types:
     inverse: null
     operational_impact: Absence over time means a fact is aging even though nothing contradicts it.
 
-  SUPERSEDES:
-    name: Supersedes
-    description: >-
-      The source replaces the target as the current record of a fact. The
-      superseded record remains readable; correction never edits in place.
-    allowed_sources: [evidence, verification]
-    allowed_targets: [evidence, verification]
-    transitive: true
-    inverse: null
-    operational_impact: The superseded record stays citable, so past conclusions remain legible.
+  # SUPERSEDES is declared once, above. Observation records supersede through
+  # that single definition.
 
   SUPPORTS_KNOWLEDGE:
     name: Supports Knowledge
@@ -561,28 +636,9 @@ relationship_types:
     inverse: null
     operational_impact: Records what the platform is permitted to rely on, and why.
 
-  VERIFIED_BY:
-    name: Verified By
-    description: >-
-      The source trust decision rested on the target evidence, checked by a
-      named verification method. Evidence is referenced, never inlined.
-    allowed_sources: [trust-decision, trust-record]
-    allowed_targets: [evidence, verification]
-    transitive: false
-    inverse: null
-    operational_impact: Distinguishes a checked assertion from an assumed one.
-
-  APPROVED_BY:
-    name: Approved By
-    description: >-
-      The source decision, record, authority, or policy was authorised by the
-      target trust authority. Self-approval is not permitted: the chain must
-      terminate outside the thing being established.
-    allowed_sources: [trust-decision, trust-record, trust-authority, trust-policy]
-    allowed_targets: [trust-authority]
-    transitive: false
-    inverse: null
-    operational_impact: Answers who authorised a grant, separately from who performed it.
+  # VERIFIED_BY and APPROVED_BY are each declared once, above. A trust decision
+  # resting on evidence, and authorisation by a trust authority, are expressed
+  # through those single definitions.
 
   REVOKES:
     name: Revokes
@@ -596,39 +652,118 @@ relationship_types:
     inverse: null
     operational_impact: Makes withdrawal a recorded act rather than an edit.
 
-  SUPERSEDES:
-    name: Supersedes
-    description: >-
-      The source record replaces the target record, which remains readable.
-      This is how trust changes: correction is supersession, because an
-      editable audit trail can be rewritten after the fact.
-    allowed_sources: [trust-record, trust-decision, trust-authority, trust-policy]
-    allowed_targets: [trust-record, trust-decision, trust-authority, trust-policy]
-    transitive: true
-    inverse: null
-    operational_impact: Preserves what was trusted at any past moment.
+  # SUPERSEDES is declared once, above. Trust and Fabric records supersede
+  # through that single definition: a new package version is a new subject, and
+  # cutover is a new route version rather than an edit to the old one.
 
-  DERIVED_FROM:
-    name: Derived From
+  # DERIVED_FROM and PROTECTED_BY are each declared once, above. A trust record
+  # tracing to its source material, and a subject governed by a trust policy or
+  # authority, are expressed through those single definitions.
+
+  # --- Distributed Capability Fabric (ADR-0012) ------------------------------
+  # None of these edges grants authority. Eligibility comes from the Trust
+  # Plane; these edges describe how the fabric's records relate, and the
+  # separations between them are what let a capability survive host migration.
+  #
+  # Deliberately absent: PLACES_WORKLOAD, LEASES, SCHEDULES_ON. There is no
+  # scheduler in this release, so acquiring its vocabulary would claim more
+  # than was built.
+
+  CONTRACT_FOR:
+    name: Contract For
     description: >-
-      The source trust record was established from the target source material -
-      a signed release, an offline authority, a documented out-of-band
-      verification. Names the origin of an assertion, distinct from the actor
-      who acted on it.
-    allowed_sources: [trust-record, trust-decision]
-    allowed_targets: [evidence, configuration-snapshot, capability]
+      The source contract defines a versioned interface for the target
+      capability. A capability may have many contract versions; the capability
+      identity does not change when one is added.
+    allowed_sources: [capability-contract]
+    allowed_targets: [capability-definition]
+    transitive: false
+    inverse: HAS_CONTRACT
+    operational_impact: Identifies which interfaces a consumer may negotiate against.
+
+  HAS_CONTRACT:
+    name: Has Contract
+    description: The source capability is reached through the target contract version.
+    allowed_sources: [capability-definition]
+    allowed_targets: [capability-contract]
+    transitive: false
+    inverse: CONTRACT_FOR
+    operational_impact: A capability with no contract cannot be called at all.
+
+  IMPLEMENTS_CONTRACT:
+    name: Implements Contract
+    description: >-
+      The source package claims to satisfy the target contract at explicitly
+      declared versions. A claim about an interface, never a grant of trust in
+      the package making it.
+    allowed_sources: [capability-package]
+    allowed_targets: [capability-contract]
     transitive: false
     inverse: null
-    operational_impact: Separates where an assertion came from and who recorded it.
+    operational_impact: Version negotiation resolves against this declaration, never against a version number.
 
-  PROTECTED_BY:
-    name: Protected By
+  ADVERTISES:
+    name: Advertises
     description: >-
-      The source subject is governed by the target trust policy or authority.
-      Present so that an ungoverned subject is visible as ungoverned rather
-      than merely unlisted.
-    allowed_sources: [host, service, capability, collector, remote-target, model, trust-record]
-    allowed_targets: [trust-policy, trust-authority]
+      The source host published the target self-report. The advertisement is a
+      claim: it confers no trust, creates no eligibility, and admits nothing,
+      including itself.
+    allowed_sources: [capability-host]
+    allowed_targets: [capability-advertisement]
+    transitive: false
+    inverse: ADVERTISED_BY
+    operational_impact: Absence means the capability is absent, never that it is probably still there.
+
+  ADVERTISED_BY:
+    name: Advertised By
+    description: The source self-report was published by the target host.
+    allowed_sources: [capability-advertisement]
+    allowed_targets: [capability-host]
+    transitive: false
+    inverse: ADVERTISES
+    operational_impact: Names whose claim this was, so an unverified claim stays attributable.
+
+  ADMITTED_AS:
+    name: Admitted As
+    description: >-
+      The source advertisement was corroborated and admitted as the target
+      instance by a human-approved decision. This edge is the only path from a
+      claim to something routable, and it never forms automatically.
+    allowed_sources: [capability-advertisement]
+    allowed_targets: [capability-instance]
     transitive: false
     inverse: null
-    operational_impact: Shows which governance applies before a subject is used.
+    operational_impact: Marks where a self-report stopped being taken at face value.
+
+  ROUTES_TO:
+    name: Routes To
+    description: >-
+      The source route lists the target instance as a candidate, at a declared
+      position. Only admitted instances are routable; a route may never target
+      an advertisement.
+    allowed_sources: [capability-route]
+    allowed_targets: [capability-instance]
+    transitive: false
+    inverse: ROUTED_BY
+    operational_impact: Defines the complete candidate set; nothing outside it ever receives work.
+
+  ROUTED_BY:
+    name: Routed By
+    description: The source instance is a declared candidate of the target route.
+    allowed_sources: [capability-instance]
+    allowed_targets: [capability-route]
+    transitive: false
+    inverse: ROUTES_TO
+    operational_impact: Shows what would stop being reachable if the instance were removed.
+
+  SELECTS:
+    name: Selects
+    description: >-
+      The source selection record chose the target instance for one request.
+      The record also names every candidate excluded and why, so the decision
+      stays reconstructable after the route changes.
+    allowed_sources: [capability-selection]
+    allowed_targets: [capability-instance]
+    transitive: false
+    inverse: null
+    operational_impact: Answers "why did this run there?" from records rather than logs.

@@ -1,0 +1,90 @@
+---
+# Declarative schema for capability packages.
+#
+# A package is the reviewable artefact implementing a contract, and it is the
+# trust subject in the `capability-package` domain ADR-0011 reserved. A package
+# is trusted independently of any machine it might run on: trusting a package
+# trusts no host, and trusting a host trusts no package.
+#
+# Human-declared, so identifiers are four digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-package
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0012-distributed-capability-fabric.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CPKG-[0-9]{4}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+
+# ADR-0011 forbids automatic capability approval. "It is a patch release of
+# something we already trust" is exactly the automatic approval it forbids, so
+# each version is a separate subject with its own evidence and its own decision.
+trust_domain: capability-package
+approval: requires-new-decision-per-version
+
+# One package implements one capability definition against one contract. A
+# package spanning two capabilities could not be trusted for one and refused
+# for the other, which is the granularity trust decisions are made at.
+implements: one-definition-one-contract
+
+required_fields:
+  - capability_package_id
+  - capability_id
+  - contract_id
+  # Explicit list. A package that claims a range would be asserting
+  # compatibility the contract has not declared.
+  - satisfied_contract_versions
+  - package_version
+  # Reference, never embedded content: a package record identifies an artefact,
+  # it is not a copy of one.
+  - artifact_reference
+  # Declared in the same controlled vocabulary a host uses to describe itself,
+  # so that matching is containment rather than interpretation.
+  - resource_requirements
+  - trust_domain
+  - provenance
+
+optional_fields:
+  - description
+  - manifest_reference
+  - signature_reference
+  - supersedes
+  - superseded_by
+  - notes
+
+# Matching compares requirements against the host's VERIFIED profile, never the
+# advertised one. The advertised profile is a self-report, and the resource
+# profile is the one field an attacker would edit to attract workloads.
+resource_matching: containment-against-verified-profile
+
+forbidden_fields:
+  - capability_host_id
+  - instance_id
+  - trust_state
+  - trust_score
+  - health_state
+  - auto_approve
+  - auto_install
+  - auto_upgrade
+  - self_admit
+  - private_key
+  - password
+  - passphrase
+  - token
+  - secret
+  - credential
+  - command
+  - argv

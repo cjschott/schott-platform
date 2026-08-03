@@ -1386,6 +1386,26 @@ assert_contains "${CI_WF}" 'pull_request:' "ci triggers on pull_request"
 assert_contains "${CI_WF}" '^concurrency:' "ci uses concurrency cancellation"
 assert_contains "${CI_WF}" 'bash -n scripts/\*\.sh' "ci runs shell syntax check"
 assert_contains "${CI_WF}" 'bash -n tests/\*\.sh' "ci syntax-checks every test file"
+# --- v0.9.5 Distributed Capability Fabric: architecture only -----------------
+# No runtime package of any kind may appear. Each name is a different way the
+# same line gets crossed, so each is checked rather than inferred from one.
+for fabric_pkg in tools/fabric tools/capability tools/scheduler tools/placement \
+                  tools/clustering tools/routing tools/health tools/discovery \
+                  tools/lease tools/admission tools/capability_fabric; do
+  if [[ -d "${ROOT}/${fabric_pkg}" ]]; then
+    fail "v0.9.5 is architecture only; ${fabric_pkg} must not exist"
+  else
+    pass "no fabric runtime package: ${fabric_pkg}"
+  fi
+done
+
+# The fabric suite and the ontology duplicate-key validator must both be wired
+# into CI, or they exist and nothing runs them.
+assert_contains "${CI_WF}" 'bash tests/test-capability-fabric\.sh' \
+  "ci runs the capability fabric suite"
+assert_contains "${CI_WF}" 'validate_ontology\.py' \
+  "ci runs the ontology duplicate-key validator"
+
 assert_contains "${CI_WF}" 'bash tests/test-static\.sh' "ci runs the static test suite"
 assert_contains "${CI_WF}" 'bash tests/test-docs-static\.sh' "ci runs the documentation test suite"
 assert_contains "${CI_WF}" 'bash tests/test-platform-model\.sh' "ci runs the platform model test suite"

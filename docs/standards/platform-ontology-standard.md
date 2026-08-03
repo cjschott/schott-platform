@@ -84,6 +84,21 @@ The initial controlled vocabulary includes:
 - `alert`
 - `backup-policy`
 
+### Distributed Capability Fabric
+
+Added by [ADR-0012](../decisions/ADR-0012-distributed-capability-fabric.md) as a documented ontology change:
+
+- `capability-definition`
+- `capability-contract`
+- `capability-package`
+- `capability-host`
+- `capability-advertisement`
+- `capability-instance`
+- `capability-route`
+- `capability-selection`
+
+These describe **executable** things. The `capability` type above describes a stated ability of the platform and carries a maturity claim; nothing routes to it. They are separate types, with separate identifier spaces, precisely so the two meanings cannot be conflated — see the [Capability Model Standard](capability-model-standard.md).
+
 Additional entity types require a documented ontology change. Do not represent the same concept with multiple competing type names.
 
 ## Stable Identifier Conventions

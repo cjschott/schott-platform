@@ -1,0 +1,105 @@
+---
+# Declarative schema for capability advertisements.
+#
+# An advertisement is a host's SELF-REPORT: "I hold this package, I satisfy
+# these contract versions, my resources are these, as of now, valid until
+# then." It is a claim and never a grant. It confers no trust, creates no
+# eligibility, and cannot admit anything — including itself.
+#
+# Believing the first advertisement a host sends is trust on first use with a
+# new spelling, and it is forbidden for the same reason.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-advertisement
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0012-distributed-capability-fabric.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CADV-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+# Stated as fields so that no implementation can treat an advertisement as
+# anything other than what it is.
+record_class: claim
+confers_trust: false
+confers_eligibility: false
+creates_instance: false
+
+# Ordering. An advertisement is not an application to join: the subject is
+# identified, a trust decision is made, and the subject is admitted, and only
+# then may it register anything. An advertisement from an unadmitted subject is
+# not a pending record — it is not a record at all.
+requires_admitted_subject: true
+queryable_after: admission
+unsolicited: rejected
+
+# The one direction that must never reverse. A host describes itself; the Trust
+# Plane decides whether the description is believed. An advertisement that
+# could move a trust state would let a subject grant itself standing by
+# talking about itself.
+may_modify_trust_state: false
+
+required_fields:
+  - advertisement_id
+  - capability_host_id
+  - capability_package_id
+  - contract_id
+  - satisfied_contract_versions
+  # Advertised, not verified. The name carries the distinction because the
+  # distinction is the entire point of this record.
+  - advertised_resource_profile
+  - observed_at
+  - valid_until
+  - provenance
+
+optional_fields:
+  - supersedes
+  - superseded_by
+  - notes
+
+# An absent advertisement means the capability is absent, not "probably still
+# there". A stale advertisement makes an instance ineligible; it never renews
+# an admission or a trust record, or a host could keep itself eligible
+# indefinitely by talking.
+on_absent: capability-absent
+on_stale: instance-ineligible
+renews_admission: false
+renews_trust: false
+
+# A host may describe itself. It may not describe its own standing, its own
+# admission, or its position in anyone's route.
+forbidden_fields:
+  - trust_state
+  - trusted
+  - trust_score
+  - auto_admit
+  - auto_enroll
+  - auto_approve
+  - scope_grant
+  - admitted
+  - admission_decision_id
+  - route_id
+  - priority
+  - weight
+  - peer_hosts
+  - token
+  - secret
+  - credential
+  - private_key
+  - password
+  - command

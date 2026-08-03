@@ -285,3 +285,58 @@ entity_types:
     description: Declared defaults, permitted transitions, and review cadence for one trust domain.
     id_prefix: TPOL
     lifecycle_supported: [declared, archived]
+
+  # --- Distributed Capability Fabric (ADR-0012) ------------------------------
+  # These are executable things. The `capability` type above is a governance
+  # claim about what the platform can do and carries a maturity; nothing routes
+  # to it. The two concepts never share an identifier space, because the first
+  # request routed to a "planned" capability discovers the difference in
+  # production.
+
+  capability-definition:
+    name: Capability Definition
+    description: An abstract named ability, independent of code, version, host, and hardware. The identity anchor.
+    id_prefix: CAPDEF
+    lifecycle_supported: [declared, archived]
+
+  capability-contract:
+    name: Capability Contract
+    description: The versioned interface a capability is reached through. Version negotiation happens against contracts.
+    id_prefix: CCON
+    lifecycle_supported: [declared, archived]
+
+  capability-package:
+    name: Capability Package
+    description: The reviewable artefact implementing a contract. Trust subject in the capability-package domain.
+    id_prefix: CPKG
+    lifecycle_supported: [declared, archived]
+
+  capability-host:
+    name: Capability Host
+    description: A machine offering execution capacity. Trust subject in the fabric-node domain.
+    id_prefix: CHOST
+    lifecycle_supported: [declared, archived]
+
+  capability-advertisement:
+    name: Capability Advertisement
+    description: A host's self-report about what it holds. A claim, never a grant; confers no trust and expires.
+    id_prefix: CADV
+    lifecycle_supported: [declared, archived]
+
+  capability-instance:
+    name: Capability Instance
+    description: The admitted binding of one package to one host for one contract. The only routable thing.
+    id_prefix: CINST
+    lifecycle_supported: [declared, archived]
+
+  capability-route:
+    name: Capability Route
+    description: Declared policy binding a request class to an explicitly ordered candidate list. Order is human-written.
+    id_prefix: CROUTE
+    lifecycle_supported: [declared, archived]
+
+  capability-selection:
+    name: Capability Selection
+    description: One recorded act of choosing, with every candidate considered and why each was excluded.
+    id_prefix: CSEL
+    lifecycle_supported: [declared, archived]
