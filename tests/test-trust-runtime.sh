@@ -66,7 +66,12 @@ assert_absent_in "${TRUST}" \
   "the trust runtime imports no network or subprocess module"
 assert_absent_in "${TRUST}" '(subprocess\.[a-zA-Z_]|os\.system\(|os\.popen\(|\beval\(|\bexec\()' \
   "the trust runtime executes nothing"
-assert_absent_in "${TRUST}" '(ssh|scp|sftp|ssh-keyscan|known_hosts)' \
+# Matched against SSH *operations and configuration*, not the vocabulary:
+# from v0.9.4 the package names ADR-0011's 'ssh-host-key' domain, and a pattern
+# that flagged the domain name would punish the model for using the ADR's own
+# words.
+assert_absent_in "${TRUST}" \
+  '(ssh-keyscan|ssh-copy-id|StrictHostKeyChecking|known_hosts|["'"'"']ssh["'"'"']|subprocess[^\n]*ssh)' \
   "the trust runtime performs no SSH or known_hosts operation"
 assert_absent_in "${TRUST}" '(docker|podman|kubectl)' \
   "the trust runtime performs no container runtime operation"

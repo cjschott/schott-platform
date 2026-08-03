@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...trust import gateway as trust_gateway
 from ..base import CollectorPlugin
 from ..exceptions import CollectorConfigurationError
 from ..models import CollectionContext, Observation
@@ -79,13 +80,13 @@ class RemoteCollectorPlugin(CollectorPlugin):
                 f"'{self.manifest_platform}' targets"
             )
 
+        # Host authorization is a trust decision, so it is asked rather than
+        # made here. The gateway owns the rule; this module owns the lifecycle.
         for operation_id in self.required_operations(context):
-            if not target.permits(operation_id):
-                raise CollectorConfigurationError(
-                    f"target '{target.target_id}' does not authorize operation "
-                    f"'{operation_id}'; the target's allowed_operation_ids is "
-                    "the authorization boundary"
-                )
+            verdict = trust_gateway.query(
+                domain="host", subject_id=target.target_id, action=operation_id,
+                context={"target": target})
+            verdict.require(CollectorConfigurationError)
 
     @property
     def manifest_platform(self) -> str:

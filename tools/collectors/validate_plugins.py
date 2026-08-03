@@ -38,14 +38,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from tools.collectors.base import CollectorPlugin  # noqa: E402
 from tools.collectors.models import (  # noqa: E402
-    APPROVED_PERMISSIONS,
-    APPROVED_SOURCE_TYPES,
-    FORBIDDEN_PERMISSIONS,
     SECRET_BEARING_KEYS,
     PERMITTED_SECRET_METADATA_KEYS,
-    REMOTE_PERMISSION,
     CollectionContext,
 )
+from tools.trust import gateway as trust_gateway  # noqa: E402
 from tools.collectors.plugins.configuration_render.collector import ConfigurationRenderCollector  # noqa: E402
 from tools.collectors.plugins.example.collector import ExampleSyntheticCollector  # noqa: E402
 from tools.collectors.plugins.git_repository.collector import GitRepositoryCollector  # noqa: E402
@@ -111,47 +108,17 @@ def check_manifest(path: Path, manifest: dict, capability_ids: set[str], finding
     else:
         seen[identifier] = path
 
-    source_type = manifest.get("source_type")
-    if source_type not in APPROVED_SOURCE_TYPES:
-        findings.error(location, f"source_type '{source_type}' is not an approved evidence source type")
-
-    for permission in manifest.get("permissions") or []:
-        if permission in FORBIDDEN_PERMISSIONS:
-            findings.error(
-                location,
-                f"permission '{permission}' is forbidden; it lies outside the collector trust boundary",
-            )
-        elif permission not in APPROVED_PERMISSIONS:
-            findings.error(location, f"permission '{permission}' is not approved")
-
-    # Network access was refused unconditionally through v0.8.6. From v0.9.0 it
-    # is narrowed rather than relaxed: permitted only alongside the
-    # read-remote-host permission, and checked in both directions. Network
-    # access without the permission is an undeclared capability; the permission
-    # without network access is a manifest claiming a boundary it does not sit
-    # behind. Subprocess and read-only filesystem access are declarable from
-    # v0.6.0, but only in the narrowed forms the framework enforces.
-    wants_network = manifest.get("network_access")
-    has_remote_permission = REMOTE_PERMISSION in (manifest.get("permissions") or [])
-    if wants_network not in (True, False):
-        findings.error(location, "'network_access' must be a boolean")
-    elif wants_network and not has_remote_permission:
-        findings.error(
-            location,
-            f"'network_access' requires the '{REMOTE_PERMISSION}' permission",
-        )
-    elif has_remote_permission and not wants_network:
-        findings.error(
-            location,
-            f"the '{REMOTE_PERMISSION}' permission requires 'network_access' to be true",
-        )
-    if manifest.get("subprocess_access") not in (True, False):
-        findings.error(location, "'subprocess_access' must be a boolean")
-    if manifest.get("filesystem_access") not in (False, "read-only"):
-        findings.error(
-            location,
-            "'filesystem_access' must be false or 'read-only'; write access is not permitted",
-        )
+    # Manifest authorization is a trust decision, and from v0.9.4 the platform
+    # makes those in exactly one place. This validator reports what the gateway
+    # refuses; it no longer re-derives the rules, which is how two copies of a
+    # security check drift apart.
+    verdict = trust_gateway.query(
+        domain="collector-plugin", subject_id=str(identifier or ""),
+        action="validate-manifest", context={"manifest": manifest})
+    for reason in verdict.reasons:
+        if reason.startswith("collector id "):
+            continue  # already reported above, with this validator's wording
+        findings.error(location, reason)
 
     for capability in manifest.get("capabilities") or []:
         if capability_ids and capability not in capability_ids:
