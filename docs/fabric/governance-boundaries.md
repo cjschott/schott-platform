@@ -105,43 +105,36 @@ is not a pending record, it is not a record at all.
 
 **Reachability never implies admission.**
 
-## The deployment gate
+## The runtime and production-transition gates
 
-**Specification may proceed before Operator Root deployment acceptance.**
-Writing this architecture does not open the gate.
+The Operator Root Authority ceremony completed the architectural gate for
+Fabric Runtime. Fabric implementation is not gated by TrustGateway cutover.
 
-**Blocked until the Trust Plane deployment gate passes:**
+The corrected dependency sequence is:
 
-- **Runtime implementation** — no fabric engine of any kind
-- **Node admission** — no host enters the fabric
-- **Capability registration** — no advertisement is registered
-- **Routing** — no route is resolved
-- **Selection** — no candidate is chosen
-- **Execution** — nothing runs anywhere
+1. **Operator Root Authority ceremony completed.**
+2. **ENG-0001** persists allocated TLIN lineage records and is independently
+   reviewed, released, and merged.
+3. **ENG-0002** makes `validate-store` genuinely read-only and is independently
+   reviewed, released, and merged.
+4. **Fabric Runtime** is implemented and validated incrementally.
+5. **Health Runtime** is implemented and validated against the Fabric.
+6. **subject seeding** establishes the production subjects required for
+   cutover.
+7. **TrustGateway cutover** is the final production transition.
 
-A fabric node trusted through a chain terminating inside the platform is not
-trusted at all, which is why none of the above may begin first.
+Both defect fixes must merge before Fabric Runtime implementation begins. Node
+admission, capability registration, routing, selection, and execution remain
+subject to the trust and governance rules in this architecture, but their
+implementation no longer waits for production gateway traffic to move away
+from code-owned policy.
 
-**The gate requires all seven:**
+Cutover still requires the acceptance evidence, rollback procedure, seeded
+subjects, `trust-plane-runtime` verdict source, and absence of silent fallback
+defined by the deployment guide and validation checklist.
 
-1. **Operator Root Authority instantiated** from an external identity, out of
-   band, by a human.
-2. **production trust store validated** — structurally clean, correct ownership
-   and permissions, outside the repository.
-3. **initial migrated subjects seeded** — collector plugins, source types,
-   remote targets, remote operations, host identity, policy version, and
-   gateway configuration.
-4. **TrustGateway source confirmed as `trust-plane-runtime`** for every
-   migrated request.
-5. **no migrated request using code-owned fallback.**
-6. **rollback procedure validated** as configuration rollback, never
-   trust-history rollback.
-7. **deployment evidence retained** — exit codes, identifiers, fingerprints,
-   audit events, permissions, and before/after repository state.
-
-Architecture is allowed now. Runtime remains forbidden.
-
-See the [deployment guide](../trust/operator-root-authority-deployment.md) and
+See the [runtime sequencing correction](../history/0002-runtime-sequencing-correction.md),
+[deployment guide](../trust/operator-root-authority-deployment.md), and
 [validation checklist](../trust/operator-root-authority-validation-checklist.md).
 
 ## Related

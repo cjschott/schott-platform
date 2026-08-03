@@ -130,10 +130,9 @@ assert_contains "${ADR}" '[Nn]o new trust domain' \
 assert_contains "${ADR}" 'capability-package' "ADR-0012 uses the capability-package trust domain"
 assert_contains "${ADR}" 'fabric-node' "ADR-0012 uses the fabric-node trust domain"
 
-# --- The deployment gate is not dissolved by writing a specification ---------
-# v0.9.5 implementation is blocked on the Operator Root Authority deployment
-# gate. An ADR that quietly drops the gate would be the most valuable thing in
-# this sprint to get wrong.
+# --- The runtime gate terminates at Operator Root Authority -------------------
+# Fabric implementation is gated by establishment of the Operator Root
+# Authority and the released-defect sprint, not by TrustGateway cutover.
 assert_contains "${ADR}" '[Dd]eployment gate' "ADR-0012 preserves the deployment gate"
 assert_contains "${ADR}" 'Operator Root Authority' "ADR-0012 terminates at the Operator Root Authority"
 
@@ -644,30 +643,19 @@ assert_contains "docs/standards/capability-model-standard.md" 'CAPDEF' \
 assert_contains "docs/standards/platform-ontology-standard.md" 'capability-instance' \
   "ontology standard records the fabric entity types as a documented change"
 
-# --- Deployment gate: specification allowed, runtime blocked -----------------
-# The distinction this sprint turns on. Architecture may be written now; none
-# of it may run until the Operator Root Authority gate passes. Stated in both
-# directions, because a document that only says "blocked" invites someone to
-# conclude the specification was premature, and one that only says "allowed"
-# invites someone to start building.
+# --- Runtime sequence: root, defects, Fabric, Health, seed, cutover -----------
 assert_contains "${ADR}" '[Ss]pecification may proceed' \
   "ADR-0012 states specification may proceed before deployment acceptance"
-for blocked in '[Rr]untime implementation' '[Nn]ode admission' \
-               '[Cc]apability registration' '[Rr]outing' '[Ss]election' \
-               '[Ee]xecution'; do
-  assert_contains "${GOVERNANCE_DOC}" "${blocked}" \
-    "governance document names ${blocked} as blocked until the gate passes"
+for requirement in 'Operator Root Authority ceremony completed' \
+                   'ENG-0001' 'ENG-0002' \
+                   'Fabric Runtime' 'Health Runtime' \
+                   'subject seeding' 'TrustGateway cutover'; do
+  assert_contains "${GOVERNANCE_DOC}" "${requirement}" \
+    "governance document records the corrected sequence item: ${requirement}"
 done
-for gate in 'Operator Root Authority instantiated' \
-            'production trust store validated' \
-            'initial migrated subjects seeded' \
-            'trust-plane-runtime' \
-            'code-owned fallback' \
-            'rollback procedure validated' \
-            'deployment evidence retained'; do
-  assert_contains "${GOVERNANCE_DOC}" "${gate}" \
-    "governance document restates the gate requirement: ${gate}"
-done
+assert_contains "${GOVERNANCE_DOC}" \
+  '[Tt]rustGateway cutover.*not.*gate|not.*gated by TrustGateway cutover' \
+  "governance document states cutover is not the Fabric Runtime gate"
 
 # --- Governed discovery ------------------------------------------------------
 assert_contains "${ADR}" '^### Governed discovery' "ADR-0012 defines governed discovery"

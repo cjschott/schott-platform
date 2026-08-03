@@ -138,8 +138,10 @@ only one that matters after an incident.
 - The Health Plane **depends on v0.9.5 Fabric entities**. There is nothing to
   observe until something has been admitted.
 - **v1.0.0 requires both** the Fabric and the Health Plane.
-- **No health runtime exists in this release**, and the Fabric runtime remains
-  blocked by the Operator Root Authority deployment gate.
+- **No health runtime exists in this release.** Health Runtime begins only
+  after Fabric Runtime exists and has been validated. The Operator Root
+  ceremony gate is complete; TrustGateway cutover remains the final production
+  transition after required subject seeding.
 
 ## Related
 

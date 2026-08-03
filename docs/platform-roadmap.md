@@ -549,35 +549,34 @@ because nothing executes yet.
 
 See the [Fabric overview](fabric/capability-fabric.md).
 
-> **Blocked until the Trust Plane is deployed, not merely implemented.** The
-> Distributed Capability Fabric cannot begin until v0.9.2, v0.9.3, and v0.9.4
-> have shipped **and** the deployment gate below has passed.
+> **The Operator Root ceremony was the Fabric Runtime gate.** The external
+> Operator Root Authority has been established as `TAUTH-000001`; production
+> TrustGateway cutover is intentionally not the gate for Fabric Runtime.
 >
-> **Deployment gate — all seven required:**
+> **Required execution order:**
 >
-> 1. **Operator Root Authority instantiated** from an external identity, out of
->    band, by a human.
-> 2. **production trust store validated** — structurally clean, correct
->    ownership and permissions, outside the repository.
-> 3. **initial migrated subjects seeded** — collector plugins, source types,
->    remote targets, remote operations, host identity, policy version, and
->    gateway configuration.
-> 4. **TrustGateway source confirmed as `trust-plane-runtime`** for every
->    migrated request.
-> 5. **no migrated request using code-owned fallback.**
-> 6. **rollback procedure validated** as configuration rollback, never
->    trust-history rollback.
-> 7. **deployment evidence retained** — exit codes, identifiers, fingerprints,
->    audit events, permissions, and before/after repository state.
+> 1. **Operator Root Authority ceremony completed.**
+> 2. **ENG-0001 released and merged** — persist the allocated TLIN lineage
+>    record, using a test-first Red -> Green change.
+> 3. **ENG-0002 released and merged** — make `validate-store` genuinely
+>    read-only, using a separate test-first Red -> Green change.
+> 4. **Fabric Runtime implemented and validated** in small, independently
+>    reviewable increments.
+> 5. **Health Runtime implemented and validated** against the existing Fabric.
+> 6. **Required subject seeding completed** for the production transition.
+> 7. **TrustGateway cutover performed** as the final production transition,
+>    with `trust-plane-runtime` as the verdict source and no silent fallback.
 >
-> This is a **deployment gate, not a release milestone**: no version number is
-> assigned to it, because the work is performed by an operator rather than by a
-> sprint. Until it passes, the platform has one decision point whose rules are
-> still code-owned rather than root-terminated, and a fabric node would be
-> trusted through a chain that terminates inside the platform it governs.
+> ENG-0001 and ENG-0002 are independently reviewable and independently
+> releasable. Both must be merged before Fabric Runtime implementation begins.
+> Subject seeding and TrustGateway cutover depend on the runtimes they validate;
+> they do not block construction of those runtimes.
 >
 > See [the deployment guide](trust/operator-root-authority-deployment.md) and
-> [validation checklist](trust/operator-root-authority-validation-checklist.md).
+> [validation checklist](trust/operator-root-authority-validation-checklist.md)
+> for the final production transition, and the
+> [post-root runtime sequence](superpowers/plans/2026-08-03-post-root-runtime-sequence.md)
+> for current engineering order.
 > v0.9.3 supplies the instantiated root authority, enforced state transitions,
 > scope enforcement, quarantine, revocation lineage, and the trust query
 > service the gate requires. Migration of the existing trust mechanisms is

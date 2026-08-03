@@ -1256,14 +1256,27 @@ done
 assert_contains "${DEPLOY_GUIDE}" '[Nn]ot trust-history rollback|not a trust-history' \
   "guide distinguishes configuration rollback from trust-history rollback"
 
-# The v0.9.5 gate now requires deployment acceptance, not just the runtime.
-for gate in "Operator Root Authority instantiated" "production trust store validated" \
-            "initial migrated subjects seeded" "trust-plane-runtime" \
-            "code-owned fallback" "rollback procedure validated" \
-            "deployment evidence retained"; do
-  assert_contains "docs/platform-roadmap.md" "${gate}" \
-    "roadmap v0.9.5 gate requires: ${gate}"
+# The post-root sequence keeps cutover last and makes both released defects
+# independent gates before Fabric Runtime begins.
+SEQUENCE_PLAN="docs/superpowers/plans/2026-08-03-post-root-runtime-sequence.md"
+SEQUENCE_RECORD="docs/history/0002-runtime-sequencing-correction.md"
+for sequence_doc in "${SEQUENCE_PLAN}" "${SEQUENCE_RECORD}"; do
+  assert_file "${sequence_doc}"
+  assert_contains "${sequence_doc}" '^# ' "$(basename "${sequence_doc}" .md) has a title"
+  assert_markdown_links "${sequence_doc}"
 done
+for item in "Operator Root Authority" "ENG-0001" "ENG-0002" \
+            "Fabric Runtime" "Health Runtime" "subject seeding" \
+            "TrustGateway cutover"; do
+  assert_contains "docs/platform-roadmap.md" "${item}" \
+    "roadmap records corrected sequence item: ${item}"
+done
+assert_contains "docs/platform-roadmap.md" \
+  '[Tt]rustGateway cutover.*not.*gate|not.*gated by TrustGateway cutover' \
+  "roadmap states cutover is not the Fabric Runtime gate"
+assert_contains "docs/history/v1.0-engineering-ledger.md" \
+  'ENG-0001.*ENG-0002.*ENG-0004.*ENG-0006.*ENG-0003' \
+  "engineering ledger orders defects, Fabric, Health, then cutover"
 
 # --- v0.9.5 Distributed Capability Fabric ------------------------------------
 ADR12="docs/decisions/ADR-0012-distributed-capability-fabric.md"
@@ -1275,15 +1288,18 @@ for fabric_doc in capability-fabric capability-lifecycle capability-identity \
   assert_file "docs/fabric/${fabric_doc}.md"
 done
 
-# The distinction the whole sprint turns on: architecture now, runtime later.
+# ADR-0012 remains the accepted architecture. The live governance document now
+# records the post-ceremony defect gate rather than the superseded cutover gate.
 assert_contains "${ADR12}" '[Ss]pecification may proceed' \
   "ADR-0012 states specification may proceed before deployment acceptance"
 assert_contains "${ADR12}" '[Nn]o runtime implementation' \
   "ADR-0012 declares no runtime implementation"
-assert_contains "docs/fabric/governance-boundaries.md" 'Architecture is allowed now' \
-  "governance document states architecture is allowed now"
-assert_contains "docs/fabric/governance-boundaries.md" '[Rr]untime remains forbidden' \
-  "governance document states runtime remains forbidden"
+assert_contains "docs/fabric/governance-boundaries.md" \
+  '[Bb]oth defect fixes must merge before Fabric Runtime implementation begins' \
+  "governance document gates Fabric Runtime on both defect fixes"
+assert_contains "docs/fabric/governance-boundaries.md" \
+  '[Ff]inal production transition' \
+  "governance document keeps TrustGateway cutover last"
 
 # The roadmap must not quietly promote v0.9.5 past the gate.
 assert_contains "${ROADMAP}" 'ADR-0012' "roadmap cites ADR-0012"

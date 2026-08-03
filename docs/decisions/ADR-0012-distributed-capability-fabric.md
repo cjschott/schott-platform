@@ -21,7 +21,14 @@
 > written first, deliberately, so that the thing being governed does not get to
 > shape its own governance. Architecture is allowed now; runtime remains
 > forbidden. See [Governance boundaries](../fabric/governance-boundaries.md)
-> for the seven gate requirements.
+> for the gate requirements.
+
+> **Post-acceptance sequencing note (2026-08-03).** The Operator Root Authority
+> ceremony completed this architectural gate. ENG-0001 and ENG-0002 must now be
+> released and merged before Fabric Runtime begins. TrustGateway cutover is not
+> the Fabric Runtime gate; it is the final production transition after Fabric,
+> Health, and required subject seeding. See the
+> [superseding sequencing record](../history/0002-runtime-sequencing-correction.md).
 
 ## Context
 
@@ -671,10 +678,10 @@ about that is fast, and there is no fast path by design. Declared-order routing
 will underuse hardware compared with any load-aware scheduler. Every new
 capability requires a contract before it requires code.
 
-**The deployment gate is unchanged.** This specification does not open it.
-Implementation of the fabric remains blocked until the Operator Root Authority
-deployment gate passes, because a fabric node trusted through a chain that
-terminates inside the platform is not trusted at all.
+**The deployment gate was not opened by this specification.** It was later
+completed by the Operator Root Authority ceremony. Fabric implementation now
+waits only for the independently released ENG-0001 and ENG-0002 defect fixes;
+TrustGateway cutover remains the final production transition.
 
 **Accepted risks.**
 
