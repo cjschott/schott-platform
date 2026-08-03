@@ -1,0 +1,79 @@
+---
+# Declarative schema for capability heartbeats.
+#
+# A liveness signal from a subject about itself. Like a capability
+# advertisement, it is a claim and never a grant: it confers no trust, no
+# eligibility, and no standing of any kind. A subject saying it is alive is
+# evidence that something sent a message, which is not the same as the
+# capability working.
+#
+# Generalised from the reserved `node-heartbeat`. Instances have liveness too,
+# and one record with a subject type is better than two nearly identical ones.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0013-capability-health-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-heartbeat
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0013-capability-health-plane.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CHBEAT-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+record_class: claim
+confers_trust: false
+confers_eligibility: false
+
+# The same rule the advertisement carries: silence is not reassurance, and it
+# is not proof of failure either. It is the absence of a signal.
+absent_heartbeat_means: unknown-never-healthy
+
+may_modify_trust_state: false
+may_execute: false
+
+required_fields:
+  - heartbeat_id
+  - subject_type
+  - subject_id
+  - observed_at
+  - provenance
+
+optional_fields:
+  - sequence
+  - reported_uptime_seconds
+  - notes
+
+enums:
+  subject_type:
+    - capability-instance
+    - capability-host
+
+# A subject describes its own liveness. It never describes its own standing,
+# its own health verdict, or its position in anyone's route.
+forbidden_fields:
+  - health_state
+  - trust_state
+  - trusted
+  - eligibility
+  - admitted
+  - route_id
+  - priority
+  - health_score
+  - token
+  - secret
+  - credential
+  - command

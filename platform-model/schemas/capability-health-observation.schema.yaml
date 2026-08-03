@@ -1,0 +1,122 @@
+---
+# Declarative schema for capability health observations.
+#
+# One measurement, of one dimension, of one subject, at one moment, from one
+# named source. It is evidence and it carries no verdict: no state, no
+# conclusion, no score. An observation that concluded would be a measurement
+# that had already decided.
+#
+# The most important field here is collection_status. A collector that cannot
+# reach a host records that it failed; it concludes nothing about the host. A
+# monitor that read its own outage as the subject being broken would
+# manufacture findings out of its own failures, and would do so most
+# enthusiastically during a network incident -- when its findings are least
+# reliable and most likely to be acted on.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0013-capability-health-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-health-observation
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0013-capability-health-plane.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CHOBS-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+record_class: evidence
+
+# The rule the collector standard establishes one layer down, restated because
+# this is the layer most tempted to break it.
+collection_failure_implies_subject_failure: false
+
+may_modify_trust_state: false
+may_execute: false
+
+required_fields:
+  - observation_id
+  - subject_type
+  - subject_id
+  - dimension
+  # Null when collection_status is not "collected". A failed collection has no
+  # measurement, and recording a zero would be inventing one.
+  - measured_value
+  - unit
+  - observed_at
+  # The named source that produced it. A measurement with no source cannot be
+  # weighed against a contradicting one.
+  - source
+  - collection_status
+  - provenance
+
+optional_fields:
+  - collection_error
+  - freshness
+  - sample_window_seconds
+  - notes
+
+enums:
+  subject_type:
+    - capability-instance
+    - capability-host
+    - capability-package
+  collection_status:
+    - collected
+    - failed
+    - unavailable
+  dimension:
+    # Availability and liveness
+    - availability
+    - heartbeat-freshness
+    - transport-health
+    # Performance
+    - latency
+    - queue-depth
+    - success-count
+    - failure-count
+    # Resource pressure
+    - cpu-utilization
+    - memory-utilization
+    - gpu-utilization
+    - vram-utilization
+    - storage-pressure
+    # The observability layer observing itself. A stale collector is a fact
+    # about the collector, not about the subject.
+    - collector-freshness
+  # Reused from the Confidence and Freshness Standard rather than redefined.
+  # A null policy produces unknown, never a default maximum age.
+  freshness:
+    - current
+    - aging
+    - stale
+    - unknown
+
+# An observation measures. It never concludes, predicts, or scores, and it
+# never carries the standing of the thing it measured.
+forbidden_fields:
+  - health_state
+  - verdict
+  - conclusion
+  - assessment
+  - trust_state
+  - eligibility
+  - predicted_value
+  - forecast
+  - anomaly_score
+  - health_score
+  - recommendation
+  - command
+  - argv

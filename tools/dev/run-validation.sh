@@ -12,7 +12,7 @@ set -Eeuo pipefail
 # ephemeral, network-isolated, and mounts the repository read-only.
 #
 # Usage:
-#   tools/dev/run-validation.sh           # everything (32 steps)
+#   tools/dev/run-validation.sh           # everything (33 steps)
 #   tools/dev/run-validation.sh --quick   # skip the slowest suites
 #   tools/dev/run-validation.sh --strict  # toolchain warnings become errors
 #
@@ -98,14 +98,14 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 31 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 32 checks plus the closing summary. Quick mode drops
 # nine of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=23
+  TOTAL_STEPS=24
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=32
+  TOTAL_STEPS=33
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -189,6 +189,11 @@ run "Trust migration" bash tests/test-trust-migration.sh
 # there is no engine to exercise. Builds no store, spawns no subprocess,
 # contacts nothing — it runs in quick mode as well.
 run "Capability fabric" bash tests/test-capability-fabric.sh
+
+# Static and documentation only: the health plane is architecture in this
+# release, so there is no engine, collector, or probe to exercise. Builds no
+# store, spawns no subprocess, contacts nothing — it runs in quick mode too.
+run "Capability health" bash tests/test-capability-health.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 
