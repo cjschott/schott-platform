@@ -388,6 +388,10 @@ check("side-effecting" not in (contract.get("routable_effect_classes") or []),
 check(contract.get("effect_class_override") == "forbidden",
       "no route or selection may override the side-effecting prohibition")
 
+check(set(effect_classes) - set(contract.get("routable_effect_classes") or [])
+      == {"side-effecting"},
+      "side-effecting is the only effect class that is not routable")
+
 # A contract describes an interface, not a machine. Binding one to a host would
 # make the interface unrepeatable somewhere else.
 check(contract.get("host_bound") is False, "a contract is not host-bound")
@@ -479,6 +483,19 @@ check(route.get("dynamic_optimization") == "forbidden",
       "a route carries no dynamic optimization")
 check(route.get("selection_rule") == "first-eligible-in-declared-order",
       "selection takes the first eligible candidate in declared order")
+
+# The route carries its own copy of the routable list. Asserting each against a
+# literal let the two drift: the route kept an effect class the contract had
+# renamed, and every assertion still passed. They are compared against each
+# other now, and against the enum, so a rename cannot leave one behind.
+route_routable = route.get("routable_effect_classes") or []
+contract_routable = contract.get("routable_effect_classes") or []
+check(route_routable == contract_routable,
+      "route and contract agree on which effect classes are routable")
+check(set(route_routable) <= set(effect_classes),
+      "every routable effect class is a defined effect class")
+check("side-effecting" not in route_routable,
+      "no route may select a side-effecting contract")
 # Multiple candidates mean redundancy and declared alternatives, and imply no
 # distribution policy whatever.
 implies = route.get("multiple_candidates_imply") or []
