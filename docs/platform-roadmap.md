@@ -531,8 +531,35 @@ but not yet decided at runtime, and deny with a reason naming the gap.
 Reserved. Lets the platform use capacity that is not on this host, without any
 node becoming the platform.
 
-> **Blocked until the Trust Plane is implemented, not merely specified.** The
-> Distributed Capability Fabric cannot begin until v0.9.2 and v0.9.3 both ship.
+> **Blocked until the Trust Plane is deployed, not merely implemented.** The
+> Distributed Capability Fabric cannot begin until v0.9.2, v0.9.3, and v0.9.4
+> have shipped **and** the deployment gate below has passed.
+>
+> **Deployment gate — all seven required:**
+>
+> 1. **Operator Root Authority instantiated** from an external identity, out of
+>    band, by a human.
+> 2. **production trust store validated** — structurally clean, correct
+>    ownership and permissions, outside the repository.
+> 3. **initial migrated subjects seeded** — collector plugins, source types,
+>    remote targets, remote operations, host identity, policy version, and
+>    gateway configuration.
+> 4. **TrustGateway source confirmed as `trust-plane-runtime`** for every
+>    migrated request.
+> 5. **no migrated request using code-owned fallback.**
+> 6. **rollback procedure validated** as configuration rollback, never
+>    trust-history rollback.
+> 7. **deployment evidence retained** — exit codes, identifiers, fingerprints,
+>    audit events, permissions, and before/after repository state.
+>
+> This is a **deployment gate, not a release milestone**: no version number is
+> assigned to it, because the work is performed by an operator rather than by a
+> sprint. Until it passes, the platform has one decision point whose rules are
+> still code-owned rather than root-terminated, and a fabric node would be
+> trusted through a chain that terminates inside the platform it governs.
+>
+> See [the deployment guide](trust/operator-root-authority-deployment.md) and
+> [validation checklist](trust/operator-root-authority-validation-checklist.md).
 > v0.9.3 supplies the instantiated root authority, enforced state transitions,
 > scope enforcement, quarantine, revocation lineage, and the trust query
 > service the gate requires. Migration of the existing trust mechanisms is
