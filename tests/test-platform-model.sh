@@ -1089,8 +1089,9 @@ done
 
 # No fabric runtime record may be committed. These are machine-generated and
 # belong in a store outside the repository, like every other runtime record.
-FABRIC_RECORDS="$(cd "${ROOT}" && git ls-files \
-  "${MODEL}/**/CADV-*" "${MODEL}/**/CINST-*" "${MODEL}/**/CSEL-*" 2>/dev/null || true)"
+FABRIC_RECORDS="$(git -C "${ROOT}" ls-files \
+  "${MODEL}/**/CADV-*" "${MODEL}/**/CINST-*" "${MODEL}/**/CSEL-*" 2>/dev/null)" \
+  || FABRIC_RECORDS=""
 if [[ -z "${FABRIC_RECORDS}" ]]; then
   pass "no fabric runtime records are committed under the model"
 else

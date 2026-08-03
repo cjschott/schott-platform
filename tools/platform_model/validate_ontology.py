@@ -49,7 +49,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def targets(root: Path, all_tracked: bool) -> list[Path]:
     if all_tracked:
-        return sorted(p for p in root.rglob("*.yaml") if p.is_file())
+        # Both extensions. Workflows are .yml, and a duplicate key in a
+        # workflow is the same silent loss as one in the ontology.
+        found = set()
+        for pattern in ("*.yaml", "*.yml"):
+            found.update(p for p in root.rglob(pattern) if p.is_file())
+        return sorted(p for p in found if ".git/" not in str(p))
     ontology = root / "ontology"
     if not ontology.is_dir():
         # Tolerate being pointed at the ontology directory itself.

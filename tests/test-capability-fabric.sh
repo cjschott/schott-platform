@@ -735,10 +735,10 @@ done
 
 # No fabric runtime records may be committed. These are machine-generated and
 # belong in a store outside the repository, exactly like trust runtime records.
-FABRIC_RUNTIME_RECORDS="$(cd "${ROOT}" && git ls-files \
+FABRIC_RUNTIME_RECORDS="$(git -C "${ROOT}" ls-files \
   '*CADV-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
   '*CINST-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
-  '*CSEL-[0-9][0-9][0-9][0-9][0-9][0-9]*' 2>/dev/null || true)"
+  '*CSEL-[0-9][0-9][0-9][0-9][0-9][0-9]*' 2>/dev/null)" || FABRIC_RUNTIME_RECORDS=""
 if [[ -z "${FABRIC_RUNTIME_RECORDS}" ]]; then
   pass "no fabric runtime records are committed"
 else
