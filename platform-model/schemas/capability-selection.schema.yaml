@@ -1,0 +1,74 @@
+---
+# Declarative schema for capability selections.
+#
+# One recorded act of choosing. This is the record that answers "why did this
+# run there?" without reconstructing anything from logs, which is the question
+# a distributed system becomes unreviewable without.
+#
+# It records every candidate considered and the exclusion reason for each one
+# rejected. A selection that recorded only the winner would document the
+# outcome while hiding the decision.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-selection
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0012-distributed-capability-fabric.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CSEL-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+records_exclusion_reason: true
+
+required_fields:
+  - selection_id
+  - route_id
+  # The route version that applied at the moment of selection, so a later route
+  # edit cannot change the explanation of a past choice.
+  - route_version
+  - request_class
+  - considered_candidates
+  - excluded_candidates
+  # Null is a valid value and means the fabric refused. A refusal is an
+  # outcome, and it is recorded exactly like a selection.
+  - selected_instance_id
+  - selection_reason
+  - selected_at
+  - provenance
+
+optional_fields:
+  - refusal_reason
+  - notes
+
+# A refusal is written down. Silence is not an outcome.
+records_refusal: true
+
+# The selection record describes a decision. It is not a transcript: prompts,
+# payloads, and responses are never written here.
+forbidden_fields:
+  - prompt
+  - prompt_content
+  - request_payload
+  - response_payload
+  - response_content
+  - trust_score
+  - health_score
+  - token
+  - secret
+  - credential
+  - command

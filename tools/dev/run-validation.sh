@@ -12,7 +12,7 @@ set -Eeuo pipefail
 # ephemeral, network-isolated, and mounts the repository read-only.
 #
 # Usage:
-#   tools/dev/run-validation.sh           # everything (20 steps)
+#   tools/dev/run-validation.sh           # everything (30 steps)
 #   tools/dev/run-validation.sh --quick   # skip the slowest suites
 #   tools/dev/run-validation.sh --strict  # toolchain warnings become errors
 #
@@ -86,14 +86,14 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 21 checks plus the closing summary. Quick mode drops
-# four of them. A validation tool that miscounts its own steps invites doubt
+# Counted, not guessed: 29 checks plus the closing summary. Quick mode drops
+# nine of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=20
+  TOTAL_STEPS=21
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=29
+  TOTAL_STEPS=30
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -172,6 +172,11 @@ run "Trust plane" bash tests/test-trust-plane.sh
 # subprocess: the migration suite drives the gateway directly, so it runs in
 # quick mode alongside the architecture suite it depends on.
 run "Trust migration" bash tests/test-trust-migration.sh
+
+# Static and documentation only: the fabric is architecture in this release, so
+# there is no engine to exercise. Builds no store, spawns no subprocess,
+# contacts nothing — it runs in quick mode as well.
+run "Capability fabric" bash tests/test-capability-fabric.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 

@@ -1,0 +1,129 @@
+---
+# Declarative schema for capability hosts.
+#
+# A capability host is a machine offering execution capacity, and it is the
+# trust subject in the `fabric-node` domain ADR-0011 reserved. The record says
+# what the machine IS and what it may ever see. It never says what it is
+# allowed to run: that is a property of the instance, because it depends on the
+# package as much as on the machine.
+#
+# No host, GPU, or vendor is named in this schema. The workstation, the
+# reference host, the virtualisation host, and any future cloud node are all
+# records with different attribute values.
+#
+# Human-declared, so identifiers are four digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-host
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0012-distributed-capability-fabric.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CHOST-[0-9]{4}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+
+trust_domain: fabric-node
+
+required_fields:
+  - capability_host_id
+  # Declared by an operator and verified out of band. A hostname is a label,
+  # not an identity: renaming a machine changes nothing, reinstalling it makes
+  # a new subject requiring a new decision.
+  - node_identity_reference
+  - fabric_node_trust_record_id
+  # Verified, not advertised. The advertised profile lives on the
+  # advertisement, where it is visibly a claim.
+  - verified_resource_profile
+  - location_class
+  # The highest classification of data this machine may ever see. Enforced at
+  # routing time; a request above the ceiling is refused, never downgraded.
+  - data_classification_ceiling
+  # Declared by an operator: in service, or deliberately withheld. This is how
+  # a node is removed from service on purpose rather than by failing.
+  - availability_intent
+  - provenance
+
+optional_fields:
+  - name
+  - description
+  - verification_reference
+  - supersedes
+  - superseded_by
+  - notes
+
+# The controlled vocabulary for heterogeneous hardware. Expressed in terms no
+# vendor owns, so a new accelerator generation is a value, not a schema change.
+resource_profile_vocabulary:
+  accelerator_class:
+    description: The kind of acceleration available, if any.
+    values:
+      - none
+      - integrated-gpu
+      - discrete-gpu
+      - dedicated-accelerator
+      - remote-service
+  accelerator_memory_mb:
+    description: Usable accelerator memory in mebibytes.
+    type: integer
+  accelerator_compute_capability:
+    description: >-
+      Opaque vendor capability string. Compared only by declared match rules,
+      never ordered numerically: ordering vendor strings works until the
+      generation where it does not.
+    type: string
+    comparison: declared-match-rules-only
+  host_memory_mb:
+    description: Usable system memory in mebibytes.
+    type: integer
+  host_cpu_cores:
+    description: Usable CPU cores.
+    type: integer
+  architecture:
+    description: Instruction set architecture of the host.
+    type: string
+
+enums:
+  location_class:
+    - on-premises
+    - operator-controlled-remote
+    - third-party-hosted
+  availability_intent:
+    - in-service
+    - draining
+    - withheld
+
+# A host describes itself. It never establishes its own standing, and it holds
+# no credential material: the record proves a machine was verified, it is not a
+# way to authenticate as one.
+forbidden_fields:
+  - auto_register
+  - auto_enroll
+  - auto_admit
+  - self_admit
+  - trust_on_first_use
+  - trust_state
+  - trust_score
+  - scope_grant
+  - route_id
+  - peer_hosts
+  - cluster_members
+  - private_key
+  - private_key_content
+  - password
+  - passphrase
+  - token
+  - secret
+  - credential
+  - command

@@ -32,8 +32,12 @@ relationship_types:
   RUNS_ON:
     name: Runs On
     description: The source workload executes on the target deployment target.
-    allowed_sources: [service, application, container, virtual-machine]
-    allowed_targets: [host, virtual-machine, container]
+    # capability-instance and capability-host are permitted rather than given a
+    # synonym relationship: an instance executing on a host is exactly what
+    # RUNS_ON already means, and the ontology forbids competing names for one
+    # meaning. An instance is bound to exactly one host and dies with it.
+    allowed_sources: [service, application, container, virtual-machine, capability-instance]
+    allowed_targets: [host, virtual-machine, container, capability-host]
     transitive: true
     inverse: HOSTS
     operational_impact: Loss of the target removes the source workload.
@@ -602,8 +606,17 @@ relationship_types:
       The source record replaces the target record, which remains readable.
       This is how trust changes: correction is supersession, because an
       editable audit trail can be rewritten after the fact.
-    allowed_sources: [trust-record, trust-decision, trust-authority, trust-policy]
-    allowed_targets: [trust-record, trust-decision, trust-authority, trust-policy]
+    # Fabric records supersede the same way, and for the same reason: a new
+    # package version is a new subject, and cutover is a new route version
+    # rather than an edit to the old one.
+    allowed_sources: [trust-record, trust-decision, trust-authority, trust-policy,
+                      capability-definition, capability-contract, capability-package,
+                      capability-host, capability-advertisement, capability-instance,
+                      capability-route]
+    allowed_targets: [trust-record, trust-decision, trust-authority, trust-policy,
+                      capability-definition, capability-contract, capability-package,
+                      capability-host, capability-advertisement, capability-instance,
+                      capability-route]
     transitive: true
     inverse: null
     operational_impact: Preserves what was trusted at any past moment.
@@ -632,3 +645,111 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Shows which governance applies before a subject is used.
+
+  # --- Distributed Capability Fabric (ADR-0012) ------------------------------
+  # None of these edges grants authority. Eligibility comes from the Trust
+  # Plane; these edges describe how the fabric's records relate, and the
+  # separations between them are what let a capability survive host migration.
+  #
+  # Deliberately absent: PLACES_WORKLOAD, LEASES, SCHEDULES_ON. There is no
+  # scheduler in this release, so acquiring its vocabulary would claim more
+  # than was built.
+
+  CONTRACT_FOR:
+    name: Contract For
+    description: >-
+      The source contract defines a versioned interface for the target
+      capability. A capability may have many contract versions; the capability
+      identity does not change when one is added.
+    allowed_sources: [capability-contract]
+    allowed_targets: [capability-definition]
+    transitive: false
+    inverse: HAS_CONTRACT
+    operational_impact: Identifies which interfaces a consumer may negotiate against.
+
+  HAS_CONTRACT:
+    name: Has Contract
+    description: The source capability is reached through the target contract version.
+    allowed_sources: [capability-definition]
+    allowed_targets: [capability-contract]
+    transitive: false
+    inverse: CONTRACT_FOR
+    operational_impact: A capability with no contract cannot be called at all.
+
+  IMPLEMENTS_CONTRACT:
+    name: Implements Contract
+    description: >-
+      The source package claims to satisfy the target contract at explicitly
+      declared versions. A claim about an interface, never a grant of trust in
+      the package making it.
+    allowed_sources: [capability-package]
+    allowed_targets: [capability-contract]
+    transitive: false
+    inverse: null
+    operational_impact: Version negotiation resolves against this declaration, never against a version number.
+
+  ADVERTISES:
+    name: Advertises
+    description: >-
+      The source host published the target self-report. The advertisement is a
+      claim: it confers no trust, creates no eligibility, and admits nothing,
+      including itself.
+    allowed_sources: [capability-host]
+    allowed_targets: [capability-advertisement]
+    transitive: false
+    inverse: ADVERTISED_BY
+    operational_impact: Absence means the capability is absent, never that it is probably still there.
+
+  ADVERTISED_BY:
+    name: Advertised By
+    description: The source self-report was published by the target host.
+    allowed_sources: [capability-advertisement]
+    allowed_targets: [capability-host]
+    transitive: false
+    inverse: ADVERTISES
+    operational_impact: Names whose claim this was, so an unverified claim stays attributable.
+
+  ADMITTED_AS:
+    name: Admitted As
+    description: >-
+      The source advertisement was corroborated and admitted as the target
+      instance by a human-approved decision. This edge is the only path from a
+      claim to something routable, and it never forms automatically.
+    allowed_sources: [capability-advertisement]
+    allowed_targets: [capability-instance]
+    transitive: false
+    inverse: null
+    operational_impact: Marks where a self-report stopped being taken at face value.
+
+  ROUTES_TO:
+    name: Routes To
+    description: >-
+      The source route lists the target instance as a candidate, at a declared
+      position. Only admitted instances are routable; a route may never target
+      an advertisement.
+    allowed_sources: [capability-route]
+    allowed_targets: [capability-instance]
+    transitive: false
+    inverse: ROUTED_BY
+    operational_impact: Defines the complete candidate set; nothing outside it ever receives work.
+
+  ROUTED_BY:
+    name: Routed By
+    description: The source instance is a declared candidate of the target route.
+    allowed_sources: [capability-instance]
+    allowed_targets: [capability-route]
+    transitive: false
+    inverse: ROUTES_TO
+    operational_impact: Shows what would stop being reachable if the instance were removed.
+
+  SELECTS:
+    name: Selects
+    description: >-
+      The source selection record chose the target instance for one request.
+      The record also names every candidate excluded and why, so the decision
+      stays reconstructable after the route changes.
+    allowed_sources: [capability-selection]
+    allowed_targets: [capability-instance]
+    transitive: false
+    inverse: null
+    operational_impact: Answers "why did this run there?" from records rather than logs.

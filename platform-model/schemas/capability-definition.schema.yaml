@@ -1,0 +1,83 @@
+---
+# Declarative schema for capability definitions.
+#
+# A capability definition is the identity anchor of the fabric: an abstract,
+# named ability independent of code, version, host, and hardware. Everything
+# else in the fabric can change while this stays the same, which is what makes
+# a capability survive host migration.
+#
+# THIS IS NOT THE CAP-0000 CAPABILITY RECORD. That record states what the
+# platform can do and carries a maturity claim; nothing routes to it. This
+# record names something executable. The two never share an identifier space.
+#
+# Human-declared, so identifiers are four digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-definition
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0012-distributed-capability-fabric.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CAPDEF-[0-9]{4}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+
+required_fields:
+  - capability_id
+  - name
+  - description
+  - effect_class
+  - contract_ids
+  - provenance
+
+optional_fields:
+  - supersedes
+  - superseded_by
+  - notes
+
+# The whole reason this record is separate from the contract. If identity lived
+# on the contract, a version 2 interface would be a different capability and
+# every consumer would have to be updated to follow it.
+identity_survives:
+  - contract-version-change
+  - package-change
+  - package-version-change
+  - host-change
+  - host-migration
+  - hardware-change
+
+# A capability is a name. It is never a permission, a route, or a claim about
+# availability, and it never carries the machine it happens to run on.
+forbidden_fields:
+  - capability_host_id
+  - capability_package_id
+  - instance_id
+  - route_id
+  - trust_state
+  - health_state
+  - maturity
+  - endpoint
+  - command
+
+enums:
+  effect_class:
+    - read-only
+    - compute-only
+    - side-effecting
+
+# The fabric core carries no capability semantics. A definition names an
+# ability; the core never learns what the ability means. That is what lets a
+# new modality arrive as records rather than as a core change, and it is why no
+# modality is named in this schema.
+core_knows_capability_semantics: false

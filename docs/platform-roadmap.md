@@ -528,8 +528,26 @@ but not yet decided at runtime, and deny with a reason naming the gap.
 
 ### v0.9.5 — Distributed Capability Fabric
 
-Reserved. Lets the platform use capacity that is not on this host, without any
-node becoming the platform.
+**Architecture defined; implementation still blocked.** Lets the platform use
+capacity that is not on this host, without any node becoming the platform.
+
+[ADR-0012](decisions/ADR-0012-distributed-capability-fabric.md) specifies the
+Fabric: nine concepts, eight schemas, eight ontology entity types, and the
+routing, expiry, supersession, failure, and audit rules. **No runtime exists** —
+no fabric engine, no registry service, no scheduler, no placement, no
+networking, no execution, no remediation.
+
+Writing that specification **does not open the deployment gate below**. It is
+the same sequence the Trust Plane followed: architecture first, deliberately,
+so the thing being governed does not shape its own governance.
+
+Two results are worth recording. The Fabric needed **no new trust domain** —
+ADR-0011's `capability-package` and `fabric-node` absorbed it unchanged, which
+is evidence the trust model was built at the right altitude. And it needed **no
+scheduler vocabulary**: placement, leasing, and scheduling stay reserved,
+because nothing executes yet.
+
+See the [Fabric overview](fabric/capability-fabric.md).
 
 > **Blocked until the Trust Plane is deployed, not merely implemented.** The
 > Distributed Capability Fabric cannot begin until v0.9.2, v0.9.3, and v0.9.4
@@ -604,6 +622,27 @@ Verification — what came back:
 Explicitly deferred to that release, and not implemented before it: no fabric,
 no registry, no placement, and no remote execution of any kind exists in v0.8.6
 or earlier.
+
+**What ADR-0012 specifies, against the reservation above:**
+
+| Reserved | Specified as |
+|---|---|
+| Node registry | `capability-host` records |
+| Capability registry | `capability-definition`, `capability-contract`, `capability-package`, and admitted `capability-instance` records |
+| Model endpoint registry | an instance's `endpoint_reference`, behind the ADR-0003 gateway contract; no `model-endpoint` entity is added |
+| Resource metadata | a controlled resource-profile vocabulary, verified rather than advertised |
+| Health and availability states | `availability_intent` here; the health model itself is v0.9.6 |
+| Trust and privacy classifications | `location_class` and `data_classification_ceiling`, governed by the Trust Plane |
+| Deterministic, policy-aware placement | deterministic routing over a human-declared candidate order |
+| Preferred and fallback placement | the declared candidate order; fallback never leaves it |
+| Local-only enforcement | `locality: local-only`, which refuses rather than degrades |
+| Result validation | remote output is checked before it is trusted; an execution result is never trust |
+| Placement audit events | `capability-selection`, which records refusals as well as choices |
+
+**Still deferred by ADR-0012, deliberately:** workload leases and expiry, and
+maintenance and drain beyond an operator-set `availability_intent`. Both belong
+to a scheduler, and there is no scheduler — a lease describing the lifetime of
+an execution that cannot occur would be vocabulary without a referent.
 
 ### v0.9.6 — Capability Health Monitor
 

@@ -18,9 +18,19 @@ Applies to records under `platform-model/capabilities/`.
 
 A capability that is designed, documented, and schema-complete but has never processed real input is `foundation`, not `operational`. Recording it as operational would make the model assert something the platform cannot do.
 
+## Not the Capability Fabric's capability
+
+This standard governs `CAP-0000` records: **a stated ability of the platform**, carrying a maturity claim. It is a governance artefact, and **nothing routes to it**.
+
+The Distributed Capability Fabric ([ADR-0012](../decisions/ADR-0012-distributed-capability-fabric.md)) uses the word for something else: an executable ability, recorded as a `capability-definition` (`CAPDEF-0000`) and reached through a versioned contract. The two are related — a `CAP` record may be *realised by* one or more fabric capabilities — but they are never the same record and never share an identifier space.
+
+Collapsing them would let a maturity claim be routed to, and the first person to route a request at a `planned` capability discovers the difference in production.
+
 ## Identifiers
 
 `CAP-0001` through `CAP-9999`. Four digits, never reused, filenames are the bare slug.
+
+Distinct from the fabric's `CAPDEF`, `CCON`, `CPKG`, `CHOST`, `CADV`, `CINST`, `CROUTE`, and `CSEL` identifier spaces.
 
 ## Required Fields
 
