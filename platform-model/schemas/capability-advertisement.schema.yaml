@@ -40,6 +40,20 @@ confers_trust: false
 confers_eligibility: false
 creates_instance: false
 
+# Ordering. An advertisement is not an application to join: the subject is
+# identified, a trust decision is made, and the subject is admitted, and only
+# then may it register anything. An advertisement from an unadmitted subject is
+# not a pending record — it is not a record at all.
+requires_admitted_subject: true
+queryable_after: admission
+unsolicited: rejected
+
+# The one direction that must never reverse. A host describes itself; the Trust
+# Plane decides whether the description is believed. An advertisement that
+# could move a trust state would let a subject grant itself standing by
+# talking about itself.
+may_modify_trust_state: false
+
 required_fields:
   - advertisement_id
   - capability_host_id

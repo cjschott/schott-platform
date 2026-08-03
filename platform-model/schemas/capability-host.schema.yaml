@@ -36,6 +36,11 @@ supersession: new-record-only
 
 trust_domain: fabric-node
 
+# Being reachable is not a qualification. A machine that answers on the network
+# has demonstrated that it is on the network, and nothing else.
+reachability_implies_trust: false
+reachability_implies_admission: false
+
 required_fields:
   - capability_host_id
   # Declared by an operator and verified out of band. A hostname is a label,

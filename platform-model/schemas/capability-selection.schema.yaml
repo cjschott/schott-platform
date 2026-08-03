@@ -33,7 +33,15 @@ delete_methods: none
 supersession: new-record-only
 append_only_history: true
 
+record_class: audit
 records_exclusion_reason: true
+
+# A selection points at the policy that governed it and does not carry a copy.
+# A copy would drift from the route, and the audit record would then describe a
+# policy that never applied — which is worse than no record, because it reads
+# as authoritative.
+references_governing_route: true
+duplicates_route_policy: false
 
 required_fields:
   - selection_id

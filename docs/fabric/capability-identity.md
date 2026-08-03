@@ -59,6 +59,27 @@ There is **no cluster**: no shared state, no leader, no quorum, no replication,
 no coordination between hosts, and no awareness among them that the others
 exist. Each host knows only what the core routed to it.
 
+### What multiple instances mean
+
+Multiple instances provide **redundancy and declared alternatives**: more than
+one place a request may run, written down in advance.
+
+**They do not imply any of the following**, none of which exists in this
+architecture:
+
+- round-robin
+- weighted routing
+- load balancing
+- least-loaded selection
+- latency optimization
+- automatic failover
+- parallel execution
+- speculative execution
+- adaptive placement
+- cost optimization
+
+Selection takes the **first eligible candidate in human-declared route order**.
+
 Distribution across instances, if it is ever wanted, must arrive as a
 **declared, deterministic rule in a route** — never as a load measurement. No
 such rule is defined in this release, because nothing executes yet and

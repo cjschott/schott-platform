@@ -34,9 +34,31 @@ An instance is eligible only when **all** hold:
 
 Any one missing makes the instance ineligible. **The default is ineligible.**
 
+## A route is policy; a selection is an act
+
+Two records, two lifetimes, and they must not merge.
+
+| | Capability Route | Capability Selection |
+|---|---|---|
+| **Is** | A **policy declaration** | An **immutable audit record** |
+| **Written by** | A human, in advance | The fabric, per request |
+| **Lifetime** | Durable, versioned | One moment, never edited |
+| **Records** | Which candidates, in what order | Which candidate was chosen, and why each other was not |
+
+A route is **not an execution event**. It says nothing about anything having
+run; it says where something *may* run.
+
+A selection **must reference the governing route and its version**, and
+**does not duplicate route policy**. A copy would drift from the route, and the
+audit record would then describe a policy that never applied — which is worse
+than no record, because it reads as authoritative.
+
 ## Order is written, never computed
 
-The candidate order lives in the route and is written by a human.
+The candidate order lives in the route and is **human-authored**.
+
+Selection takes the **first eligible candidate in human-declared route order**.
+That is the whole rule.
 
 **No load-based routing, no latency-based routing, no score-based routing, no
 weighting, no automatic scaling, no automatic reordering.**
@@ -76,6 +98,19 @@ decision gets made by string comparison.
 
 **No automatic upgrade, no automatic downgrade, no nearest match, no
 best-effort.** A request that cannot be satisfied exactly is refused.
+
+## Health, before there is a health monitor
+
+The Capability Health Monitor is v0.9.6. Until it exists:
+
+- Health may be **declared or unknown**.
+- Health **must not reorder** candidates. It may only remove them.
+- **Absence of health data must not be converted into a positive health
+  claim.** Unknown stays unknown — treating missing data as healthy is how an
+  unmonitored node becomes the preferred one.
+- **No automatic rerouting.**
+
+Where health and trust disagree, trust decides.
 
 ## Only instances are routable
 

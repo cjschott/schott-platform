@@ -1073,6 +1073,30 @@ for wiring in ".github/workflows/ci.yml" "tools/dev/run-validation.sh"; do
   fi
 done
 
+# --- Fabric entity types and schemas ----------------------------------------
+# All eight are retained. Each exists to make one identity survive one kind of
+# change, and merging any pair would mean one record described two things.
+for fabric_schema in capability-definition capability-contract capability-package \
+                     capability-host capability-advertisement capability-instance \
+                     capability-route capability-selection; do
+  assert_file "${MODEL}/schemas/${fabric_schema}.schema.yaml"
+  if grep -qE "^  ${fabric_schema}:" "${ROOT}/${MODEL}/ontology/entity-types.yaml"; then
+    pass "ontology declares the ${fabric_schema} entity type"
+  else
+    fail "ontology must declare the ${fabric_schema} entity type"
+  fi
+done
+
+# No fabric runtime record may be committed. These are machine-generated and
+# belong in a store outside the repository, like every other runtime record.
+FABRIC_RECORDS="$(cd "${ROOT}" && git ls-files \
+  "${MODEL}/**/CADV-*" "${MODEL}/**/CINST-*" "${MODEL}/**/CSEL-*" 2>/dev/null || true)"
+if [[ -z "${FABRIC_RECORDS}" ]]; then
+  pass "no fabric runtime records are committed under the model"
+else
+  fail "fabric runtime records must not be committed: ${FABRIC_RECORDS}"
+fi
+
 # --- Exactly one SUPERSEDES -------------------------------------------------
 # Three definitions existed; only the last survived parsing. Consolidated into
 # one, and asserted at the text level so a fourth cannot be reintroduced

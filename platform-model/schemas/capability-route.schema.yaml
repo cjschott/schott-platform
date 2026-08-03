@@ -52,11 +52,47 @@ optional_fields:
   - superseded_by
   - notes
 
+# A route is durable policy. It is written, reviewed, and versioned; it is not
+# produced per request and it does not record that anything happened.
+record_class: policy-declaration
+is_execution_event: false
+dynamic_optimization: forbidden
+
 candidate_order: declared-explicit
 selection_determinism: deterministic
+selection_rule: first-eligible-in-declared-order
 fallback: declared-candidates-only
 on_no_eligible_candidate: refuse
 on_no_route: refuse
+
+# Several candidates mean there is more than one declared place this may run.
+# They imply nothing about how work is spread across them, because no such
+# policy has been defined and inventing one for zero traffic would be guessing.
+multiple_candidates_imply:
+  - redundancy
+  - declared-alternatives
+
+forbidden_behaviours:
+  - round-robin
+  - weighted
+  - load-balancing
+  - least-loaded
+  - latency-optimization
+  - automatic-failover
+  - parallel-execution
+  - speculative-execution
+  - adaptive-placement
+  - cost-optimization
+
+# Health may remove a candidate and may do nothing else. Until v0.9.6 there is
+# no health monitor, so health is declared or unknown -- and unknown stays
+# unknown. Treating missing data as healthy is how an unmonitored node becomes
+# the preferred one.
+health_may_remove: true
+health_may_reorder: false
+health_may_add: false
+absent_health_means: unknown-never-healthy
+automatic_rerouting: forbidden
 
 # A route targets admitted instances only. Targeting an advertisement would
 # mean routing to a self-report.

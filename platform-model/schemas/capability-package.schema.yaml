@@ -35,6 +35,11 @@ supersession: new-record-only
 trust_domain: capability-package
 approval: requires-new-decision-per-version
 
+# One package implements one capability definition against one contract. A
+# package spanning two capabilities could not be trusted for one and refused
+# for the other, which is the granularity trust decisions are made at.
+implements: one-definition-one-contract
+
 required_fields:
   - capability_package_id
   - capability_id

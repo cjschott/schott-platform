@@ -38,6 +38,10 @@ required_fields:
   - response_shape
   - failure_modes
   - determinism_class
+  # The resources the interface itself requires, in the host resource-profile
+  # vocabulary. A package may declare more for its own implementation; it may
+  # never declare less than its contract.
+  - resource_requirements
   # Explicit list of prior contract versions this one is compatible with.
   # Empty means compatible with nothing, which is a valid and honest answer.
   - compatible_with
@@ -58,11 +62,20 @@ version_inference: forbidden
 negotiation: exact-set-intersection
 on_empty_intersection: refuse
 
+# A contract describes an interface, not a machine. Binding one to a host would
+# make the interface unrepeatable anywhere else, which is the property the
+# whole identity model depends on.
+host_bound: false
+
 enums:
   effect_class:
-    - read-only
-    - compute-only
-    - side-effecting
+    # What the capability changes, which is the axis governance cares about.
+    # Separated from determinism because a deterministic capability can still
+    # change the world, and a nondeterministic one need not.
+    - read-only            # observes; changes nothing
+    - computational        # computes; changes nothing outside the request
+    - content-generating   # produces new content; changes nothing outside the request
+    - side-effecting       # changes state outside the request
   determinism_class:
     - deterministic
     - bounded-nondeterministic
@@ -74,7 +87,12 @@ enums:
 # fabric becomes an autonomous controller. Opening this requires a future ADR.
 routable_effect_classes:
   - read-only
-  - compute-only
+  - computational
+  - content-generating
+
+# No route and no selection may override the prohibition. If the restriction
+# could be lifted per-route, it would be lifted during an incident.
+effect_class_override: forbidden
 
 forbidden_fields:
   - capability_host_id

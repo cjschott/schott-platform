@@ -73,8 +73,14 @@ forbidden_fields:
 enums:
   effect_class:
     - read-only
-    - compute-only
+    - computational
+    - content-generating
     - side-effecting
+
+# A definition names an ability. Routing to it directly would mean routing to a
+# name, with no host, package, or contract version behind it. Routes target
+# admitted instances; consumers name a capability and a contract version range.
+directly_routable: false
 
 # The fabric core carries no capability semantics. A definition names an
 # ability; the core never learns what the ability means. That is what lets a

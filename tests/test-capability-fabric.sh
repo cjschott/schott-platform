@@ -158,9 +158,21 @@ assert_contains "${ADR}" '[Tt]rust on first use' "ADR-0012 names trust on first 
 # --- Effect classes: the door for robotics is open and closed ----------------
 # A future actuating capability must not arrive under the governance written
 # for text generation. The slot exists; nothing may route to it yet.
-assert_contains "${ADR}" 'side-effecting' "ADR-0012 defines the side-effecting effect class"
-assert_contains "${ADR}" '[Rr]ead-only' "ADR-0012 defines the read-only effect class"
-assert_contains "${ADR}" 'compute-only' "ADR-0012 defines the compute-only effect class"
+for effect in 'read-only' 'computational' 'content-generating' 'side-effecting'; do
+  assert_contains "${ADR}" "${effect}" "ADR-0012 defines the ${effect} effect class"
+done
+assert_contains "${ADR}" '^### Effect classes' "ADR-0012 defines effect classes under a heading"
+assert_contains "${ADR}" '[Uu]nroutable|may not be routed|no route may select' \
+  "ADR-0012 states side-effecting is unroutable"
+
+# Enabling actuation later must cost something. Naming the price here is what
+# stops it being paid by accident in a pull request that looks like a model.
+for requirement in '[Nn]ew ADR' '[Aa]pproval model' '[Ee]ffect authorization' \
+                   '[Rr]emediation boundaries' '[Aa]udit requirements' \
+                   '[Hh]uman approval semantics'; do
+  assert_contains "${ADR}" "${requirement}" \
+    "ADR-0012 requires ${requirement} before side-effecting is enabled"
+done
 
 # --- The named hosts are records, never code ---------------------------------
 # The sprint must support MainPC, schai, and schoxmox1 without any of them
@@ -307,7 +319,12 @@ check(len(eligibility) >= 8,
       "instance declares every eligibility condition (at least eight)")
 joined = " ".join(str(item) for item in eligibility).lower()
 for requirement in ("package", "host", "contract", "resource", "advertisement",
-                    "admission", "scope", "classification"):
+                    "admission", "scope", "classification",
+                    # Quarantine and drain are separate conditions: one is a
+                    # trust judgement, the other an operator's deliberate
+                    # withdrawal, and reporting either as the other destroys a
+                    # distinction an operator needs during an incident.
+                    "quarantin", "drain", "effect class", "version", "route"):
     check(requirement in joined,
           f"instance eligibility covers {requirement}")
 
@@ -355,15 +372,27 @@ for field in ("contract_id", "capability_id", "contract_version", "effect_class"
     check(field in (contract.get("required_fields") or []),
           f"contract requires {field}")
 effect_classes = (contract.get("enums") or {}).get("effect_class") or []
-for value in ("read-only", "compute-only", "side-effecting"):
+for value in ("read-only", "computational", "content-generating", "side-effecting"):
     check(value in effect_classes, f"effect class includes {value}")
+check(len(effect_classes) == 4, "exactly four effect classes are defined")
 
 # Compatibility is declared, never inferred. A platform that reads meaning into
 # a version number has guessed, and it will guess wrong during an upgrade.
 check(contract.get("version_compatibility") == "declared-only",
       "contract compatibility is declared, never inferred from version numbers")
-check(contract.get("routable_effect_classes") == ["read-only", "compute-only"],
+check(contract.get("routable_effect_classes")
+      == ["read-only", "computational", "content-generating"],
       "no route may select a side-effecting contract in this architecture")
+check("side-effecting" not in (contract.get("routable_effect_classes") or []),
+      "side-effecting is representable but unroutable")
+check(contract.get("effect_class_override") == "forbidden",
+      "no route or selection may override the side-effecting prohibition")
+
+# A contract describes an interface, not a machine. Binding one to a host would
+# make the interface unrepeatable somewhere else.
+check(contract.get("host_bound") is False, "a contract is not host-bound")
+check("resource_requirements" in (contract.get("required_fields") or []),
+      "contract declares the resource requirements of its interface")
 
 # --- Package: the trust subject ---------------------------------------------
 package = schemas.get("capability-package", {})
@@ -377,6 +406,26 @@ check(package.get("trust_domain") == "capability-package",
       "a package is a subject in the capability-package trust domain")
 check(package.get("approval") == "requires-new-decision-per-version",
       "each package version is a new trust subject requiring its own decision")
+check(package.get("implements") == "one-definition-one-contract",
+      "a package implements exactly one capability definition and contract")
+
+# --- Host: reachability is not standing -------------------------------------
+check(host.get("reachability_implies_trust") is False,
+      "reachability implies no trust")
+check(host.get("reachability_implies_admission") is False,
+      "reachability implies no admission")
+
+# --- Advertisement: registered by an admitted subject, then queryable -------
+# The ordering matters. An advertisement from a subject that has not been
+# admitted is not a pending application; it is not a record at all.
+check(adv.get("requires_admitted_subject") is True,
+      "only an admitted subject may register an advertisement")
+check(adv.get("queryable_after") == "admission",
+      "an advertisement becomes queryable only after admission")
+check(adv.get("may_modify_trust_state") is False,
+      "an advertisement may never modify trust state")
+check(adv.get("unsolicited") == "rejected",
+      "an unsolicited advertisement is rejected")
 
 # --- Route: declared, deterministic, explainable -----------------------------
 route = schemas.get("capability-route", {})
@@ -411,6 +460,45 @@ for field in ("selection_id", "route_id", "route_version", "request_class",
           f"selection requires {field}")
 check(selection.get("records_exclusion_reason") is True,
       "a selection records why each candidate was excluded")
+# A selection points at the policy that governed it; it does not carry a copy.
+# A copy would drift, and the audit record would then describe a policy that
+# never applied.
+check(selection.get("references_governing_route") is True,
+      "a selection must reference the route that governed it")
+check(selection.get("duplicates_route_policy") is False,
+      "a selection does not duplicate route policy")
+check(selection.get("record_class") == "audit",
+      "a selection is an audit record")
+
+# --- Route: policy, not an execution event ----------------------------------
+check(route.get("record_class") == "policy-declaration",
+      "a route is a policy declaration")
+check(route.get("is_execution_event") is False,
+      "a route is not an execution event")
+check(route.get("dynamic_optimization") == "forbidden",
+      "a route carries no dynamic optimization")
+check(route.get("selection_rule") == "first-eligible-in-declared-order",
+      "selection takes the first eligible candidate in declared order")
+# Multiple candidates mean redundancy and declared alternatives, and imply no
+# distribution policy whatever.
+implies = route.get("multiple_candidates_imply") or []
+check(implies == [] or implies == ["redundancy", "declared-alternatives"],
+      "multiple candidates imply redundancy only, never a distribution policy")
+for forbidden_behaviour in ("round-robin", "weighted", "load-balancing",
+                            "least-loaded", "latency-optimization",
+                            "automatic-failover", "parallel-execution",
+                            "speculative-execution", "adaptive-placement",
+                            "cost-optimization"):
+    check(forbidden_behaviour in (route.get("forbidden_behaviours") or []),
+          f"route forbids {forbidden_behaviour}")
+
+# Health, before v0.9.6 exists to supply it.
+check(route.get("health_may_reorder") is False,
+      "health may not reorder route candidates")
+check(route.get("absent_health_means") == "unknown-never-healthy",
+      "absent health is never converted into a positive health claim")
+check(route.get("automatic_rerouting") == "forbidden",
+      "no automatic rerouting before v0.9.6")
 
 # --- Definition: the identity anchor ----------------------------------------
 definition = schemas.get("capability-definition", {})
@@ -420,6 +508,10 @@ for field in ("capability_id", "name", "description", "effect_class",
           f"capability definition requires {field}")
 check(definition.get("identity_survives") is not None,
       "capability definition declares what its identity survives")
+# A definition names an ability. Routing to it directly would mean routing to
+# a name, with no host, package, or contract version behind it.
+check(definition.get("directly_routable") is False,
+      "a capability definition is not directly routable")
 survives = " ".join(str(item) for item in (definition.get("identity_survives") or [])).lower()
 for event in ("host", "package", "contract"):
     check(event in survives, f"capability identity survives a {event} change")
@@ -534,6 +626,156 @@ assert_contains "docs/standards/capability-model-standard.md" 'CAPDEF' \
   "capability model standard distinguishes itself from the fabric capability"
 assert_contains "docs/standards/platform-ontology-standard.md" 'capability-instance' \
   "ontology standard records the fabric entity types as a documented change"
+
+# --- Deployment gate: specification allowed, runtime blocked -----------------
+# The distinction this sprint turns on. Architecture may be written now; none
+# of it may run until the Operator Root Authority gate passes. Stated in both
+# directions, because a document that only says "blocked" invites someone to
+# conclude the specification was premature, and one that only says "allowed"
+# invites someone to start building.
+assert_contains "${ADR}" '[Ss]pecification may proceed' \
+  "ADR-0012 states specification may proceed before deployment acceptance"
+for blocked in '[Rr]untime implementation' '[Nn]ode admission' \
+               '[Cc]apability registration' '[Rr]outing' '[Ss]election' \
+               '[Ee]xecution'; do
+  assert_contains "${GOVERNANCE_DOC}" "${blocked}" \
+    "governance document names ${blocked} as blocked until the gate passes"
+done
+for gate in 'Operator Root Authority instantiated' \
+            'production trust store validated' \
+            'initial migrated subjects seeded' \
+            'trust-plane-runtime' \
+            'code-owned fallback' \
+            'rollback procedure validated' \
+            'deployment evidence retained'; do
+  assert_contains "${GOVERNANCE_DOC}" "${gate}" \
+    "governance document restates the gate requirement: ${gate}"
+done
+
+# --- Governed discovery ------------------------------------------------------
+assert_contains "${ADR}" '^### Governed discovery' "ADR-0012 defines governed discovery"
+assert_contains "${ADR}" '[Rr]eachability never implies admission' \
+  "ADR-0012 states reachability never implies admission"
+for forbidden in '[Nn]etwork scanning' '[Ss]ubnet scanning' '[Mm]ulticast' \
+                 '[Bb]roadcast' '[Uu]nsolicited advertisement' \
+                 '[Aa]utomatic registration' '[Aa]utomatic node admission' \
+                 'DNS discovery' 'bypass'; do
+  assert_contains "${ADR}" "${forbidden}" "ADR-0012 forbids ${forbidden} in discovery"
+done
+
+# The seven-step sequence, in order. An advertisement is queryable only after
+# its subject was admitted, which is what makes "governed lookup" mean
+# something other than "lookup".
+assert_contains "${GOVERNANCE_DOC}" '[Qq]ueryable' \
+  "governance document states when an advertisement becomes queryable"
+assert_contains "${ADR}" '[Aa]dvertisement.*queryable|queryable.*admission' \
+  "ADR-0012 ties advertisement queryability to admission"
+
+# --- Route versus selection --------------------------------------------------
+# Two records, two lifetimes. A route is durable policy; a selection is one
+# recorded act. Collapsing them would mean either that policy is rewritten per
+# request, or that the audit record carries policy it does not own.
+assert_contains "${ROUTING_DOC}" '[Pp]olicy declaration' \
+  "routing document calls a route a policy declaration"
+assert_contains "${ROUTING_DOC}" 'not an execution event|never an execution event' \
+  "routing document states a route is not an execution event"
+assert_contains "${ROUTING_DOC}" '[Hh]uman-authored|human-written' \
+  "routing document states candidate order is human-authored"
+assert_contains "${ROUTING_DOC}" 'first eligible candidate' \
+  "routing document states first-eligible-candidate selection"
+assert_contains "${ROUTING_DOC}" 'does not duplicate|never duplicates' \
+  "routing document states a selection does not duplicate route policy"
+
+# --- Multi-instance restraint ------------------------------------------------
+assert_contains "${IDENTITY_DOC}" '[Rr]edundancy' \
+  "identity document frames multiple instances as redundancy"
+for absent in '[Rr]ound-robin' '[Ww]eighted routing' '[Ll]oad balancing' \
+              '[Ll]east-loaded' '[Ll]atency optimi' '[Aa]utomatic failover' \
+              '[Pp]arallel execution' '[Ss]peculative execution' \
+              '[Aa]daptive placement' '[Cc]ost optimi'; do
+  assert_contains "${IDENTITY_DOC}" "${absent}" \
+    "identity document states multiple instances do not imply ${absent}"
+done
+
+# Health, before there is a health monitor to provide it.
+assert_contains "${ROUTING_DOC}" '[Dd]eclared or unknown' \
+  "routing document allows health to be declared or unknown"
+assert_contains "${ROUTING_DOC}" '[Mm]ust not reorder|never reorder' \
+  "routing document forbids health reordering candidates"
+assert_contains "${ROUTING_DOC}" '[Aa]bsence of health' \
+  "routing document forbids converting absent health into a positive claim"
+
+# --- Trust, Fabric, Health separation ----------------------------------------
+assert_contains "${ADR}" '^### Trust, Fabric, and Health' \
+  "ADR-0012 defines the three-layer separation"
+for rule in '[Tt]rust precedes admission' \
+            '[Hh]ealth cannot grant trust' \
+            '[Hh]ealth cannot override quarantine' \
+            '[Hh]ealth cannot broaden scope' \
+            '[Hh]ealth cannot admit' \
+            '[Ff]abric cannot create trust decisions' \
+            '[Ff]abric cannot mutate trust state'; do
+  assert_contains "${ADR}" "${rule}" "ADR-0012 states: ${rule}"
+done
+assert_contains "${ADR}" '[Rr]outing outcomes|routing outcome' \
+  "ADR-0012 forbids the Trust Plane using routing outcomes as evidence"
+
+# --- No runtime of any kind --------------------------------------------------
+# Named individually because each is a different way the same line gets
+# crossed, and a single directory check would miss most of them.
+for forbidden_dir in tools/fabric tools/capability tools/scheduler tools/placement \
+                     tools/clustering tools/routing tools/health tools/discovery \
+                     tools/lease tools/admission; do
+  if [[ -d "${ROOT}/${forbidden_dir}" ]]; then
+    fail "architecture only; ${forbidden_dir} must not exist"
+  else
+    pass "no implementation directory: ${forbidden_dir}"
+  fi
+done
+
+# No fabric runtime records may be committed. These are machine-generated and
+# belong in a store outside the repository, exactly like trust runtime records.
+FABRIC_RUNTIME_RECORDS="$(cd "${ROOT}" && git ls-files \
+  '*CADV-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
+  '*CINST-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
+  '*CSEL-[0-9][0-9][0-9][0-9][0-9][0-9]*' 2>/dev/null || true)"
+if [[ -z "${FABRIC_RUNTIME_RECORDS}" ]]; then
+  pass "no fabric runtime records are committed"
+else
+  fail "fabric runtime records must not be committed: ${FABRIC_RUNTIME_RECORDS}"
+fi
+
+# The fabric documentation must not acquire an execution vocabulary. Each of
+# these would be a different claim that something runs.
+for doc in "${FABRIC_DOC}" "${ROUTING_DOC}" "${GOVERNANCE_DOC}" "${NODE_DOC}"; do
+  assert_absent_in "${doc}" \
+    '(docker (run|exec|compose up)|ssh +[a-z]|systemctl (start|restart)|apt-get install|pip install)' \
+    "$(basename "${doc}") contains no execution command"
+done
+
+# --- Scheduler vocabulary stays absent ---------------------------------------
+# There is no scheduler, so the words that describe one must not appear as
+# though something implements them.
+#
+# The ADR's Rejected Alternatives section is excluded from the scan. Naming a
+# mechanism in order to refuse it is the opposite of claiming it, and a rule
+# that forbade the naming would make the rejections unwritable.
+SCHEDULER_SCAN="$(mktemp)"
+trap 'rm -f "${SCHEDULER_SCAN}"' EXIT
+sed '/^## Rejected Alternatives/,$d' "${ROOT}/${ADR}" > "${SCHEDULER_SCAN}"
+cat "${ROOT}"/docs/fabric/*.md \
+    "${ROOT}"/platform-model/schemas/capability-*.schema.yaml >> "${SCHEDULER_SCAN}"
+
+for schedulerism in 'workload lease' 'placement engine' 'bin.pack' \
+                    'autoscal' 'queue depth' 'work.steal'; do
+  matches="$(grep -rIniE -e "${schedulerism}" "${SCHEDULER_SCAN}" 2>/dev/null \
+    | grep -viE 'no |never |not |without |forbidden|absent|deferred|reserved' || true)"
+  if [[ -z "${matches}" ]]; then
+    pass "no scheduler vocabulary asserted: ${schedulerism}"
+  else
+    fail "scheduler vocabulary appears as a claim: ${schedulerism}"
+  fi
+done
 
 # --- Summary -----------------------------------------------------------------
 if (( FAILURES == 0 )); then
