@@ -58,6 +58,32 @@ however good. An untrusted subject cannot be made eligible by excellent health.
 
 **Health must never override trust. Where the two disagree, trust decides.**
 
+### Principles
+
+Fifteen, stated individually because each is a distinct way an observability
+layer turns into a controller or into false reassurance.
+
+1. **Unknown is inert on eligibility but always visible.** It changes no
+   routing decision and it never disappears from an explanation.
+2. **Unknown cannot support a positive claim.** Absence of evidence is not
+   evidence of health.
+3. **Health state is inseparable from freshness.** A state without an age is
+   not an assessment.
+4. **Health removes eligibility only on fresh positive evidence of an
+   ineligible condition.** Never on silence, and never on stale evidence.
+5. **Health cannot grant eligibility.** It only ever subtracts from what trust
+   already allowed.
+6. **Collection failure is not capability failure.**
+7. **Thresholds are human-declared.**
+8. **Experience may inform an operator but cannot author policy.**
+9. **Health recommendations cannot mutate Trust or Fabric state.**
+10. **Health has no aggregate score.**
+11. **Health observations are not Trust evidence by default.**
+12. **Health history is append-only.**
+13. **Envelope supersession never rewrites prior evaluations.**
+14. **Withheld is distinct from Fabric availability intent.**
+15. **Manual drain is Fabric-local and operator-controlled.**
+
 ### Trust, Fabric, and Health
 
 | Layer | Question | May it grant eligibility? |
@@ -135,10 +161,40 @@ Six states. **`unknown` is the default.**
 | `unavailable` | Not responding, or heartbeat stale beyond its declared threshold. | No |
 | `withheld` | The operator set the host's availability intent to draining or withheld. | Not a health finding |
 
-`withheld` is **reported, not derived**. It exists so that "not serving because
-an operator withdrew it" is never displayed as "not serving because it is
-broken" — a distinction that matters most during a planned maintenance window,
-when every other signal looks like an incident.
+### Withheld is not the Fabric's availability intent
+
+These were the same thing in the first draft of this ADR, and that was wrong in
+a way worth recording.
+
+A health state that meant "the operator withdrew this node" is a second name
+for the Fabric's `availability_intent`, and it makes a *health state* into a
+*selection control*. It also left the health layer with no way to express
+something it genuinely needs: that it is deliberately not asserting a
+conclusion.
+
+| | Fabric `availability_intent` | Health `withheld` |
+|---|---|---|
+| **Owner** | The Fabric operator | The Health Plane |
+| **Says** | Whether the capability should be offered for selection | Whether health conclusions are being asserted or published |
+| **Controls selection** | **Yes** — it is the selection-control declaration | **No** |
+| **Can set the other** | May influence whether Health evaluates or publishes | **Never** sets `availability_intent` |
+
+So, precisely:
+
+- `withheld` **does not mean healthy**, degraded, or unavailable.
+- `withheld` **does not itself remove Fabric eligibility.**
+- `withheld` is **not a synonym for do-not-select.**
+- **Health cannot set** `availability_intent`.
+- `availability_intent` **may** influence whether Health evaluates or publishes
+  — a node an operator has withdrawn is a reasonable one to stop publishing
+  conclusions about.
+
+The two coincide often. During a maintenance window the Fabric's intent is
+`withheld` *and* the health state is `withheld`, and an operator reading either
+one alone would draw the same conclusion. They are still different facts, and
+the moment they diverge — a published health finding on a node nobody withdrew,
+or a withdrawn node still reporting healthy — is exactly the moment the
+distinction earns its keep.
 
 ### Why unknown does not remove a candidate
 
@@ -250,8 +306,14 @@ only one that matters after an incident.
 - **No prediction.**
 - **No forecasting** of availability, capacity, or demand.
 - **No machine-learned anomaly detection**, and no learned thresholds.
-- **No health scores.** A number expressing degree of health invites a
-  threshold nobody chose to become the operational boundary.
+- **No aggregate health score**, in any spelling: `health_score`,
+  `aggregate_score`, `composite_score`, `weighted_health`,
+  `overall_numeric_health`, or any numeric ranking across dimensions. A number
+  expressing degree of health invites a threshold nobody chose to become the
+  operational boundary, and collapsing dimensions destroys the only thing that
+  makes a finding actionable — *which* dimension moved. Availability, freshness,
+  latency, queue depth, resource pressure, execution outcomes, heartbeat,
+  transport health, and collector freshness stay individually explainable.
 - **No collector concluding about a subject it could not reach.**
 
 ## Rejected Alternatives
@@ -308,6 +370,23 @@ This will feel like bureaucracy until the first incident where a threshold
 nobody chose would have hidden the problem. Nothing is automatic, so every
 recommendation costs human attention.
 
+**Accepted consequences.**
+
+- **A truly broken but unmonitored capability may remain eligible.** This is
+  the direct cost of `unknown` being inert, and it is accepted so that a
+  monitoring outage cannot disable the platform.
+- **Missing monitoring must remain conspicuous.** `unmonitored` and
+  `insufficient-policy` are visible states rather than quiet passes, because
+  the previous consequence is only tolerable if the gap is obvious.
+- **Declared thresholds may initially be imperfect.** A hand-authored limit is
+  a guess until real traffic exists. It is a recorded guess with an author,
+  which a learned threshold is not.
+- **Human approval remains a bottleneck.** Every envelope and every
+  recommendation costs someone's attention, and there is no fast path.
+- **Health may identify concern without controlling admission.** The layer can
+  be certain something is wrong and still be unable to act on it. That is the
+  design, not a gap in it.
+
 **Accepted risks.**
 
 - **A specification is not a control.** Nothing here enforces anything yet.
@@ -317,8 +396,10 @@ recommendation costs human attention.
 - **Declared thresholds will be wrong at first.** Hand-authored limits are a
   guess until real traffic exists. They are at least a recorded guess with an
   author, which a learned threshold is not.
-- **`withheld` overlaps with the Fabric's `availability_intent`** and may prove
-  to be a duplicate view of one fact rather than a state of its own.
+- **`withheld` was reviewed against the Fabric's `availability_intent`** and
+  redefined, because the first draft made them the same fact. The corrected
+  meaning may still prove thin: a layer that needs a state for "not asserting"
+  may be a layer whose publication rules belong somewhere else.
 - **The inert treatment of `unknown` means a genuinely broken but unmonitored
   subject stays eligible.** That is the accepted cost of not letting a
   monitoring outage disable the platform, and it is why `unmonitored` is

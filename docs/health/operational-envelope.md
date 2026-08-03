@@ -46,18 +46,57 @@ machinery to learn thresholds exists. Using it here would be a mistake:
 A hand-authored limit will be wrong at first. It is at least a recorded guess
 with an author, which a learned threshold is not.
 
-## No envelope means unmonitored
+### Experience may inform, but cannot author
 
-**A subject with no envelope is `unmonitored`, not healthy.**
+The separation matters, because the useful half of the Experience layer is
+available without the dangerous half.
 
-There is nothing to compare a measurement against, and saying so is the honest
-answer. This mirrors the Null Policy Rule in the
+| Experience **may** | Experience **may not** |
+|---|---|
+| be **referenced as supporting evidence** for a human's judgement | **write** an envelope |
+| be read by an operator deciding where a threshold belongs | **mutate** an envelope |
+| appear in the reasoning recorded alongside a threshold | have a **baseline promoted** to a threshold |
+
+- **No baseline automatically becomes a threshold.** A person may look at one
+  and choose the same number; that is a human decision with an author.
+- **Frequent violations cannot widen a threshold.** A limit that relaxes
+  because it keeps being exceeded measures nothing — the violations *are* the
+  finding.
+- **Envelope changes require immutable approval.** A new envelope version is a
+  new record with an approving identity, not an edit.
+
+## No envelope means unmonitored; no threshold means insufficient-policy
+
+**A subject with no envelope is `unmonitored`, not healthy.** There is nothing
+to compare a measurement against.
+
+**A metric with no declared threshold produces `insufficient-policy`, never
+`healthy`.** The Null Policy Rule applies **independently per metric**: an
+envelope covering four dimensions and declaring three of them must not report
+the fourth as satisfied.
+
+Both mirror the Null Policy Rule in the
 [Confidence and Freshness Standard](../standards/confidence-freshness-standard.md)
 exactly: the absence of a policy produces an explicit "not defined", never a
 favourable default.
 
-`unmonitored` is deliberately visible. It creates pressure to write an
+Both are deliberately visible. They create pressure to write or finish an
 envelope, rather than passing quietly as though the subject had been checked.
+
+## Supersession never reaches back
+
+An envelope is **superseded, never edited**, and each version is numbered.
+
+Every health state records the **envelope version** it was evaluated against.
+That is what makes the following safe:
+
+> **One observation evaluated against two envelope versions may yield two
+> different results, and both remain auditable.**
+
+A tightened threshold does not retroactively make last week's assessment wrong.
+The old evaluation stands as what was believed at the time — which is precisely
+what an incident review needs — and a re-evaluation is a new record rather than
+a correction. See [worked example 7](worked-examples.md).
 
 ## Evaluation
 

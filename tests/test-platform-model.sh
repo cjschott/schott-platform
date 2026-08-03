@@ -1098,6 +1098,29 @@ else
   fail "fabric runtime records must not be committed: ${FABRIC_RECORDS}"
 fi
 
+# --- Health entity types and the advisory boundary --------------------------
+for health_schema in capability-health-envelope capability-heartbeat \
+                     capability-health-observation capability-health-state \
+                     capability-degradation-event capability-health-recommendation; do
+  assert_file "${MODEL}/schemas/${health_schema}.schema.yaml"
+  if grep -qE "^  ${health_schema}:" "${ROOT}/${MODEL}/ontology/entity-types.yaml"; then
+    pass "ontology declares the ${health_schema} entity type"
+  else
+    fail "ontology must declare the ${health_schema} entity type"
+  fi
+done
+
+# No health relationship may imply route or selection mutation. A relationship
+# named for a change is a change somebody will eventually implement.
+for premature in MUTATES_ROUTE CHANGES_SELECTION DRAINS QUARANTINES \
+                 APPROVES_TRUST GRANTS_ELIGIBILITY; do
+  if grep -qE "^  ${premature}:" "${ROOT}/${MODEL}/ontology/relationship-types.yaml"; then
+    fail "no health relationship may imply mutation (${premature})"
+  else
+    pass "no mutating health relationship is added (${premature})"
+  fi
+done
+
 # --- Exactly one SUPERSEDES -------------------------------------------------
 # Three definitions existed; only the last survived parsing. Consolidated into
 # one, and asserted at the text level so a fourth cannot be reintroduced

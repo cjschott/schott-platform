@@ -37,6 +37,33 @@ supersession: new-record-only
 authored_by: human
 threshold_source: declared-only
 
+# Experience may be cited as supporting evidence for a human's judgement about
+# where a threshold belongs. It may never author or mutate the policy: a
+# threshold the platform derived from a subject's own history is one that
+# subject chose, and "degraded" would then mean "unlike its recent behaviour".
+experience_may_reference: true
+experience_may_author: false
+experience_may_mutate: false
+baseline_promotion: forbidden
+
+# A threshold that widens because it keeps being exceeded measures nothing. The
+# violations are the finding.
+violation_widens_threshold: false
+
+change_requires: immutable-approval
+
+# The Null Policy Rule, applied per metric rather than per envelope. An
+# envelope covering four dimensions and declaring three of them must not report
+# the fourth as satisfied -- it must say it has no policy for it.
+null_policy_scope: per-metric
+absent_threshold_means: insufficient-policy
+absent_threshold_never_means: healthy
+
+# A later envelope never reaches back. One observation evaluated against two
+# envelope versions may legitimately yield two different results, and both
+# evaluations remain readable.
+supersession_rewrites_prior_evaluations: false
+
 # Mirrors the Null Policy Rule in the Confidence and Freshness Standard: the
 # absence of a declared limit produces an explicit "not assessable", never a
 # favourable default. A subject nobody has written an envelope for is not
@@ -50,6 +77,9 @@ may_execute: false
 
 required_fields:
   - envelope_id
+  # Supersession chains by version, so "which envelope was this evaluated
+  # against" has an answer after the envelope has moved on.
+  - envelope_version
   - subject_type
   - subject_id
   # Per-dimension limits. Each dimension declares its own entry and exit

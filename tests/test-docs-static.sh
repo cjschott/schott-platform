@@ -1092,6 +1092,22 @@ for defined in capability-health-envelope capability-heartbeat \
   assert_file "platform-model/schemas/${defined}.schema.yaml"
 done
 
+# The seven worked examples. Each is a combination an operator will actually
+# meet, and each is a case where reading one layer as another gives the wrong
+# answer.
+HEALTH_EXAMPLES="docs/health/worked-examples.md"
+assert_file "${HEALTH_EXAMPLES}"
+for example in "Fabric-eligible.*[Hh]ealth unknown" \
+               "manually drained.*[Hh]ealth healthy" \
+               "[Qq]uarantined.*[Hh]ealth healthy" \
+               "withheld for maintenance" \
+               "[Ss]tale degraded" \
+               "[Mm]issing threshold" \
+               "two envelope versions"; do
+  assert_contains "${HEALTH_EXAMPLES}" "${example}" \
+    "worked examples cover: ${example}"
+done
+
 # Architecture defines nothing that runs.
 for premature in tools/health tools/fabric tools/capability tools/monitor \
                  tools/heartbeat tools/probe tools/telemetry; do

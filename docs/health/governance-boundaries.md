@@ -52,17 +52,55 @@ derived *to* trust.
 
 The single output that touches operations.
 
-A `capability-health-recommendation` may recommend:
+A `capability-health-recommendation` draws from a **closed vocabulary of
+exactly four**. Closed rather than merely enumerated: an open list is one pull
+request away from containing `restart`, and the argument for adding it will be
+made during an incident.
 
-- **`investigate`** — ask a human to look. The safe default and the usual
-  answer.
-- **`drain`** — ask a human to withdraw a node deliberately. Draining is
-  reversible and changes no trust state, which is why it is the only
-  operational recommendation permitted.
+| Kind | Asks a human to |
+|---|---|
+| **`investigate`** | Look. The safe default and the usual answer. |
+| **`review-envelope`** | Check whether the threshold is wrong. A capability repeatedly outside a limit nobody has revisited is as likely to be a wrong limit as a broken capability. |
+| **`verify-observation-source`** | Check whether the *measurement* is wrong. A failing collector produces the same shape of evidence as a failing capability, and they are not the same problem. |
+| **`consider-manual-drain`** | Consider withdrawing a node. **Consider, not do.** |
 
-It may **never** propose quarantine, revocation, rerouting, restart, or
-remediation. Those are trust decisions or fabric changes, and neither belongs
+Every recommendation carries its kind, the health evaluation it followed from,
+a written reason, `created_at`, `review_required: true`, and
+`advisory_only: true` — carried on the record rather than assumed from the
+record type, so a consumer reading one in isolation still knows it is advice.
+
+It may **never** propose quarantine, revocation, trust changes, approval, scope
+broadening, rerouting, restart, stop, kill, repair, remediation, execution, or
+application. Those are trust decisions or fabric changes, and neither belongs
 to an observer.
+
+It carries **no execution surface**: no execution target, command, script,
+shell, action payload, route identifier, or trust decision identifier. These
+are named as forbidden fields on the schema rather than merely omitted, so a
+future runtime cannot quietly add one and still pass its tests.
+
+## Manual drain
+
+A **Fabric-local administrative drain**, defined here because it is the
+boundary health must not cross.
+
+A manual drain:
+
+- **prevents new selections**
+- **does not alter trust**
+- **does not quarantine**
+- **does not revoke**
+- **does not broaden or narrow trust scope**
+- **does not terminate existing work** unless separately approved
+- is **reversible only by an explicit Fabric decision**
+- **cannot be executed by Health**
+
+It is expressed through the Fabric's `availability_intent`, is an operator
+decision, and **remains architectural only until the Fabric runtime exists**.
+
+**Health may recommend `consider-manual-drain`. Health may not perform one**,
+trigger one, or reverse one. A fresh `healthy` state does not undo a drain
+either — see [worked example 2](worked-examples.md).
 
 **It requires a human to act on it, and is never executed automatically.**
 

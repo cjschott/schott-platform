@@ -52,6 +52,69 @@ may_add_to_eligibility: false
 may_reorder_candidates: false
 unknown_effect_on_eligibility: inert
 
+# Only a fresh, positive observation of an ineligible condition subtracts. An
+# absence of evidence never removes a candidate, and never clears a finding
+# either -- silence is not recovery.
+removal_requires: fresh-positive-evidence
+unknown_may_clear_prior_finding: false
+stale_may_support_healthy: false
+
+# Exactly one state supports a positive claim. Everything else is an absence of
+# one, and an absence must never be rendered as reassurance.
+states_supporting_positive_claim:
+  - healthy
+inert_states:
+  - unknown
+  - unmonitored
+  - insufficient-policy
+  - withheld
+
+# The renderings that convert an absence of evidence into a positive claim.
+# Declared as forbidden on the record rather than discouraged in prose, because
+# this is exactly the wording a dashboard reaches for when a tile is empty.
+forbidden_renderings:
+  - assumed-healthy
+  - probably-available
+  - no-known-issues
+  - healthy-by-default
+
+# Required on every state, including unknown. A state with neither cannot be
+# argued with, and an unknown that carries no reason is indistinguishable from
+# one nobody looked at.
+freshness_required_for_all_states: true
+reason_required_for_all_states: true
+
+# A later envelope never reaches back. Re-evaluating one observation against a
+# newer envelope produces a new record; the old one stands as what was believed
+# at the time, which is the only thing that makes an incident review possible.
+supersession_rewrites_prior_evaluations: false
+
+# Health subtracts from what other layers allowed. It never overrides any of
+# these, however good the reading is.
+cannot_override:
+  - manual-drain
+  - restricted-scope
+  - quarantine
+  - revocation
+  - availability-intent
+
+# withheld, corrected. It previously restated the Fabric's availability intent,
+# which left the health layer with no way to say "we are deliberately not
+# asserting a conclusion" -- and made a health state into a selection control.
+withheld_semantics:
+  means: health-conclusion-not-asserted-or-published
+  implies_healthy: false
+  implies_degraded: false
+  implies_unavailable: false
+  # The correction. A health state describes what health knows, and never
+  # decides whether a capability is offered.
+  removes_eligibility: false
+  equivalent_to_do_not_select: false
+  may_set_availability_intent: false
+  # The influence runs one way: an operator withdrawing a node is a reason to
+  # stop publishing conclusions about it, not the other way round.
+  availability_intent_may_influence_publication: true
+
 required_fields:
   - state_id
   - subject_type
@@ -60,6 +123,9 @@ required_fields:
   # Null only when state is `unmonitored`, which is precisely the case of
   # having no envelope to evaluate against.
   - envelope_id
+  # The version evaluated against, recorded so a later supersession cannot
+  # change what a past assessment meant.
+  - envelope_version
   # The evidence. A state that cited nothing could not be re-checked, which
   # would make it an opinion.
   - derived_from_observation_ids
@@ -84,19 +150,23 @@ enums:
   state:
     # No fresh observation exists. The default, and inert for eligibility.
     - unknown
-    # No envelope declared, so health is not assessable. Distinct from unknown:
-    # one means "we have not looked", the other "there is nothing to look
-    # against".
+    # No envelope declared at all, so health is not assessable. Distinct from
+    # unknown: one means "we have not looked", the other "there is nothing to
+    # look against".
     - unmonitored
+    # An envelope exists but a metric it should govern has no declared
+    # threshold. The Null Policy Rule applied per metric: an envelope covering
+    # four dimensions and declaring three must not report the fourth as
+    # satisfied.
+    - insufficient-policy
     - healthy
     # Outside the envelope on at least one dimension, still responding.
     - degraded
     # Not responding, or heartbeat stale beyond its declared threshold.
     - unavailable
-    # Reported, never derived: the operator set the host's availability intent.
-    # Exists so that "withdrawn on purpose" is never displayed as "broken",
-    # which matters most during a planned maintenance window when every other
-    # signal looks like an incident.
+    # Health conclusions are intentionally not asserted or published for this
+    # subject. Not a statement that it is healthy, degraded, or unavailable,
+    # and not a selection control -- see withheld_semantics below.
     - withheld
   # Reused from the Confidence and Freshness Standard rather than redefined.
   freshness:

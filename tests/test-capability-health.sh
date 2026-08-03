@@ -342,6 +342,40 @@ for forbidden in ("learned_threshold", "auto_threshold", "baseline_threshold",
     check(forbidden in (env.get("forbidden_fields") or []),
           f"envelope forbids {forbidden}")
 
+# Experience may be cited as supporting evidence for a human's judgement. It
+# may never author or mutate the policy, or the threshold becomes one the
+# subject taught the platform.
+check(env.get("experience_may_reference") is True,
+      "Experience output may be referenced as supporting evidence")
+check(env.get("experience_may_author") is False,
+      "Experience cannot author an envelope")
+check(env.get("experience_may_mutate") is False,
+      "Experience cannot mutate an envelope")
+check(env.get("baseline_promotion") == "forbidden",
+      "no baseline automatically becomes a threshold")
+check(env.get("violation_widens_threshold") is False,
+      "frequent violations cannot widen a threshold")
+check(env.get("change_requires") == "immutable-approval",
+      "envelope changes require immutable approval")
+
+# The Null Policy Rule, applied per metric rather than per envelope. An
+# envelope covering four dimensions and declaring three of them must not report
+# the fourth as satisfied.
+check(env.get("null_policy_scope") == "per-metric",
+      "the null policy rule applies independently per metric")
+check(env.get("absent_threshold_means") == "insufficient-policy",
+      "a metric with no threshold produces insufficient-policy")
+check(env.get("absent_threshold_never_means") == "healthy",
+      "a missing threshold never produces healthy")
+
+# Supersession keeps the chain readable, and never reaches back.
+check("envelope_version" in (env.get("required_fields") or []),
+      "envelope records its version")
+check(env.get("supersession") == "new-record-only",
+      "an envelope is superseded, never edited")
+check(env.get("supersession_rewrites_prior_evaluations") is False,
+      "superseding an envelope never rewrites evaluations made against the old one")
+
 # --- Observation: evidence, never a conclusion ------------------------------
 obs = schemas.get("capability-health-observation", {})
 for field in ("observation_id", "subject_type", "subject_id", "dimension",
@@ -380,10 +414,73 @@ check(state.get("evaluation") == "deterministic",
 check(state.get("default_state") == "unknown",
       "the default health state is unknown")
 health_states = (state.get("enums") or {}).get("state") or []
-for value in ("unknown", "unmonitored", "healthy", "degraded", "unavailable",
-              "withheld"):
+for value in ("unknown", "unmonitored", "insufficient-policy", "healthy",
+              "degraded", "unavailable", "withheld"):
     check(value in health_states, f"health state enum includes {value}")
-check(len(health_states) == 6, "exactly six health states are defined")
+check(len(health_states) == 7, "exactly seven health states are defined")
+
+# Only these may support a positive claim. Everything else is an absence of
+# one, and an absence must never be rendered as reassurance.
+check(state.get("states_supporting_positive_claim") == ["healthy"],
+      "only healthy supports a positive claim")
+check(set(state.get("inert_states") or [])
+      == {"unknown", "unmonitored", "insufficient-policy", "withheld"},
+      "unknown, unmonitored, insufficient-policy, and withheld are inert on eligibility")
+# Fresh positive evidence of an ineligible condition is the only thing that
+# subtracts. An absence never clears a finding either.
+check(state.get("removal_requires") == "fresh-positive-evidence",
+      "removal from eligibility requires fresh positive evidence")
+check(state.get("unknown_may_clear_prior_finding") is False,
+      "unknown cannot clear a prior degraded or unavailable finding")
+check(state.get("stale_may_support_healthy") is False,
+      "stale evidence cannot support a healthy claim")
+
+# Rendering rules. The four phrasings that convert an absence of evidence into
+# a positive claim are forbidden on the record, not merely discouraged in prose.
+forbidden_renderings = state.get("forbidden_renderings") or []
+for phrasing in ("assumed-healthy", "probably-available", "no-known-issues",
+                 "healthy-by-default"):
+    check(phrasing in forbidden_renderings,
+          f"health state forbids rendering unknown as {phrasing}")
+
+# Freshness and reason are required on every state, including unknown. A state
+# with neither cannot be argued with.
+check(state.get("freshness_required_for_all_states") is True,
+      "every health state carries freshness, including unknown")
+check(state.get("reason_required_for_all_states") is True,
+      "every health state carries a reason, including unknown")
+
+# The envelope version the evaluation used, so a later supersession cannot
+# change what a past assessment meant.
+check("envelope_version" in (state.get("required_fields") or []),
+      "health state records the envelope version it was evaluated against")
+check(state.get("supersession_rewrites_prior_evaluations") is False,
+      "envelope supersession never rewrites prior evaluations")
+
+# A fresh healthy reading overrides nothing. Health subtracts; it never adds.
+cannot_override = set(state.get("cannot_override") or [])
+for governed in ("manual-drain", "restricted-scope", "quarantine", "revocation",
+                 "availability-intent"):
+    check(governed in cannot_override,
+          f"a healthy state cannot override {governed}")
+
+# withheld, corrected. It was a second name for the Fabric's availability
+# intent, which left the health layer with no way to say "we are deliberately
+# not asserting a conclusion".
+withheld = state.get("withheld_semantics") or {}
+check(withheld.get("means") == "health-conclusion-not-asserted-or-published",
+      "withheld means a health conclusion is intentionally not asserted or published")
+check(withheld.get("implies_healthy") is False, "withheld does not mean healthy")
+check(withheld.get("implies_degraded") is False, "withheld does not mean degraded")
+check(withheld.get("implies_unavailable") is False, "withheld does not mean unavailable")
+check(withheld.get("removes_eligibility") is False,
+      "withheld does not itself remove Fabric eligibility")
+check(withheld.get("equivalent_to_do_not_select") is False,
+      "withheld is not a synonym for do-not-select")
+check(withheld.get("may_set_availability_intent") is False,
+      "health may never set the Fabric availability intent")
+check(withheld.get("availability_intent_may_influence_publication") is True,
+      "Fabric availability intent may influence whether health publishes")
 freshness = (state.get("enums") or {}).get("freshness") or []
 check(freshness == ["current", "aging", "stale", "unknown"],
       "health state reuses the four existing freshness states")
@@ -425,18 +522,38 @@ check(deg.get("hysteresis") == "declared-required",
 rec = schemas.get("capability-health-recommendation", {})
 for field in ("recommendation_id", "subject_type", "subject_id",
               "recommendation", "reason", "derived_from_state_id",
-              "raised_at", "provenance"):
+              "created_at", "provenance"):
     check(field in (rec.get("required_fields") or []), f"recommendation requires {field}")
+# A closed vocabulary of exactly four. Closed rather than merely enumerated:
+# an open list is one pull request away from containing "restart".
 kinds = (rec.get("enums") or {}).get("recommendation") or []
-for value in ("investigate", "drain"):
-    check(value in kinds, f"recommendation kind includes {value}")
-for value in ("quarantine", "revoke", "reroute", "restart", "remediate"):
+check(kinds == ["investigate", "review-envelope", "verify-observation-source",
+                "consider-manual-drain"],
+      "recommendation vocabulary is exactly the four approved kinds")
+check(rec.get("vocabulary") == "closed", "the recommendation vocabulary is closed")
+for value in ("quarantine", "revoke", "trust", "approve", "broaden-scope",
+              "reroute", "restart", "stop", "kill", "repair", "remediate",
+              "execute", "apply"):
     check(value not in kinds, f"recommendation may never propose {value}")
+
 check(rec.get("is_action") is False, "a recommendation is not an action")
+check(rec.get("advisory_only") is True, "a recommendation is advisory only")
 check(rec.get("requires_human_action") is True,
       "a recommendation requires a human to act on it")
 check(rec.get("auto_execution") == "forbidden",
       "a recommendation is never executed automatically")
+for field in ("review_required", "advisory_only", "created_at"):
+    check(field in (rec.get("required_fields") or []),
+          f"recommendation requires {field}")
+
+# Named as forbidden fields so a future runtime cannot quietly add an execution
+# surface and still pass. Each is a different way the advisory boundary breaks.
+for field in ("execution_target", "command", "script", "shell", "action_payload",
+              "route_id", "trust_decision_id", "auto_apply", "auto_execute",
+              "auto_drain", "auto_quarantine", "mutates_route",
+              "mutates_trust_state"):
+    check(field in (rec.get("forbidden_fields") or []),
+          f"recommendation forbids the field {field}")
 
 # --- Ontology ---------------------------------------------------------------
 types = (load("platform-model/ontology/entity-types.yaml") or {}).get("entity_types") or {}
@@ -497,6 +614,139 @@ set -e
 if (( PY_STATUS != 0 )); then
   FAILURES=$((FAILURES + 1))
 fi
+
+# --- Reviewer clarifications: unknown health --------------------------------
+# unknown is inert on eligibility but must never be invisible. An unknown that
+# nobody sees is indistinguishable from a healthy one at the moment it matters.
+UNKNOWN_DOC="docs/health/unknown-and-freshness.md"
+assert_file "${UNKNOWN_DOC}"
+for rule in '[Ii]nert on eligibility' \
+            '[Nn]ever invisible|not invisible|always visible' \
+            '[Cc]annot support a (positive|healthy) claim' \
+            '[Cc]annot clear' \
+            '[Mm]ust carry freshness' \
+            '[Mm]ust carry a reason'; do
+  assert_contains "${UNKNOWN_DOC}" "${rule}" "unknown document states: ${rule}"
+done
+
+# The four phrasings an unknown must never be rendered as. Each converts an
+# absence of evidence into a positive claim, which is the one thing this layer
+# exists to prevent.
+for phrasing in 'assumed healthy' 'probably available' 'no known issues' \
+                'healthy by default'; do
+  assert_contains "${UNKNOWN_DOC}" "${phrasing}" \
+    "unknown document forbids the phrasing: ${phrasing}"
+done
+
+# And the worked example a future runtime must be able to produce.
+for field in 'eligible_by_fabric' 'health_state' 'health_effect' 'health_warning'; do
+  assert_contains "${UNKNOWN_DOC}" "${field}" \
+    "unknown document shows the ${field} example field"
+done
+
+# --- Freshness ---------------------------------------------------------------
+for rule in '[Ss]tale evidence cannot support' \
+            '[Ss]tale.*degraded|degraded.*stale' \
+            '[Cc]ollection failure is not' \
+            '[Mm]issing evidence is not' \
+            '[Ii]ndependently per'; do
+  assert_contains "${UNKNOWN_DOC}" "${rule}" "freshness rule stated: ${rule}"
+done
+
+# A fresh healthy reading overrides nothing. Health subtracts; it never adds.
+for override in '[Mm]anual drain' '[Rr]estricted' '[Qq]uarantine' '[Rr]evocation' \
+                'availability intent|availability_intent'; do
+  assert_contains "${UNKNOWN_DOC}" "${override}" \
+    "fresh healthy cannot override ${override}"
+done
+
+# --- Envelopes and the Experience separation ---------------------------------
+for rule in '[Ee]xperience' '[Cc]annot (write|author)' '[Nn]o baseline' \
+            '[Ff]requent violation' '[Ii]mmutable approval'; do
+  assert_contains "${ENVELOPE_DOC}" "${rule}" "envelope document states: ${rule}"
+done
+assert_contains "${ENVELOPE_DOC}" 'insufficient-policy' \
+  "a metric with no threshold produces insufficient-policy"
+assert_contains "${ENVELOPE_DOC}" '[Pp]er metric|independently per' \
+  "the null policy rule applies per metric"
+assert_contains "${ENVELOPE_DOC}" '[Ss]upersed' "envelope supersession is defined"
+assert_contains "${ENVELOPE_DOC}" '[Bb]oth remain auditable|remain auditable' \
+  "two envelope versions may yield different results, both auditable"
+
+# --- Manual drain ------------------------------------------------------------
+for rule in '[Pp]revents new selections' \
+            '[Dd]oes not alter trust' \
+            '[Dd]oes not quarantine' \
+            '[Dd]oes not revoke' \
+            '[Rr]eversible only by an explicit [Ff]abric decision' \
+            '[Cc]annot be executed by [Hh]ealth'; do
+  assert_contains "${GOVERNANCE_DOC}" "${rule}" "manual drain: ${rule}"
+done
+assert_contains "${GOVERNANCE_DOC}" 'consider-manual-drain' \
+  "health may recommend considering a manual drain"
+
+# --- withheld versus availability intent -------------------------------------
+# These were the same thing. If withheld means "the operator withdrew the
+# node", it is a second name for availability_intent and the health layer has
+# no state of its own for "we are deliberately not asserting a conclusion".
+for rule in '[Nn]ot asserted|not published' \
+            '[Dd]oes not mean healthy' \
+            '[Dd]oes not mean degraded' \
+            '[Dd]oes not mean unavailable' \
+            '[Dd]oes not itself remove' \
+            '[Nn]ot a synonym for do-not-select'; do
+  assert_contains "${STATES_DOC}" "${rule}" "withheld: ${rule}"
+done
+assert_contains "${STATES_DOC}" '[Hh]ealth cannot set' \
+  "health cannot set the Fabric availability intent"
+
+# --- Selection visibility ----------------------------------------------------
+SELECTION_DOC="docs/health/selection-visibility.md"
+assert_file "${SELECTION_DOC}"
+for exposure in '[Hh]ealth state' '[Ff]reshness' '[Ww]hether [Hh]ealth changed eligibility' \
+                '[Ee]xplanation' '[Ee]nvelope version' '[Ww]arning'; do
+  assert_contains "${SELECTION_DOC}" "${exposure}" \
+    "future selection must expose ${exposure}"
+done
+assert_contains "${SELECTION_DOC}" '[Nn]ever silently disappear|must never silently' \
+  "health may never silently disappear from a selection explanation"
+
+# --- No aggregate score ------------------------------------------------------
+# Named individually because each is a different spelling of the same mistake:
+# a threshold nobody chose becoming the operational boundary.
+for score in 'health_score' 'aggregate_score' 'composite_score' \
+             'weighted_health' 'overall_numeric_health'; do
+  assert_contains "${ADR}" "${score}" "ADR-0013 forbids the field ${score}"
+done
+assert_contains "${ADR}" '[Nn]o aggregate' "ADR-0013 forbids an aggregate health score"
+
+# --- The fifteen stated principles -------------------------------------------
+assert_contains "${ADR}" '^### Principles' "ADR-0013 states its principles under a heading"
+for principle in '[Uu]nknown is inert on eligibility but always visible' \
+                 '[Uu]nknown cannot support a positive claim' \
+                 '[Hh]ealth state is inseparable from freshness' \
+                 'only on fresh positive evidence' \
+                 '[Hh]ealth cannot grant eligibility' \
+                 '[Cc]ollection failure is not capability failure' \
+                 '[Tt]hresholds are human-declared' \
+                 '[Ee]xperience may inform an operator but cannot author policy' \
+                 '[Hh]ealth has no aggregate score' \
+                 '[Hh]ealth observations are not [Tt]rust evidence by default' \
+                 '[Hh]ealth history is append-only' \
+                 '[Ee]nvelope supersession never rewrites prior evaluations' \
+                 '[Ww]ithheld is distinct from [Ff]abric availability intent' \
+                 '[Mm]anual drain is [Ff]abric-local and operator-controlled'; do
+  assert_contains "${ADR}" "${principle}" "ADR-0013 principle: ${principle}"
+done
+
+# --- Accepted consequences ---------------------------------------------------
+for consequence in 'unmonitored capability may remain eligible' \
+                   '[Mm]issing monitoring must remain conspicuous' \
+                   '[Dd]eclared thresholds may initially be imperfect' \
+                   '[Hh]uman approval remains a bottleneck' \
+                   'without controlling admission'; do
+  assert_contains "${ADR}" "${consequence}" "ADR-0013 accepts: ${consequence}"
+done
 
 # --- Roadmap -----------------------------------------------------------------
 assert_contains "${ROADMAP}" 'v0\.9\.6 — Capability Health Monitor' "roadmap keeps the v0.9.6 heading"

@@ -37,8 +37,14 @@ supersession: new-record-only
 append_only_history: true
 
 is_action: false
+advisory_only: true
 requires_human_action: true
 auto_execution: forbidden
+
+# Closed, not merely enumerated. An open vocabulary is one pull request away
+# from containing "restart", and the argument for adding it will be made during
+# an incident.
+vocabulary: closed
 
 may_modify_trust_state: false
 may_execute: false
@@ -51,10 +57,14 @@ required_fields:
   # Written, not a code. A recommendation an operator cannot evaluate is one
   # they will either ignore or approve without reading.
   - reason
-  # The assessment it followed from, so the recommendation can be traced to the
-  # evidence rather than taken on faith.
+  # The health evaluation it followed from, so the recommendation can be traced
+  # to the evidence rather than taken on faith.
   - derived_from_state_id
-  - raised_at
+  - created_at
+  # Carried on every record rather than assumed from the record type, so that a
+  # consumer reading one recommendation in isolation still knows it is advice.
+  - review_required
+  - advisory_only
   - provenance
 
 optional_fields:
@@ -71,25 +81,56 @@ enums:
   recommendation:
     # Ask a human to look. The safe default and the usual answer.
     - investigate
-    # Ask a human to withdraw a node deliberately. Draining is reversible and
-    # changes no trust state, which is why it is the only operational
-    # recommendation permitted.
-    - drain
+    # The finding may be the threshold rather than the subject. A capability
+    # repeatedly outside a limit nobody has revisited is as likely to be a
+    # wrong limit as a broken capability.
+    - review-envelope
+    # The finding may be the measurement rather than the subject. A collector
+    # that has started failing produces the same shape of evidence as a
+    # capability that has started failing, and they are not the same problem.
+    - verify-observation-source
+    # Ask a human to consider a Fabric-local drain. Consider, not do: the drain
+    # is a Fabric decision by an operator, and health neither performs nor
+    # triggers it. Draining is reversible and changes no trust state, which is
+    # why it is the only operational recommendation permitted at all.
+    - consider-manual-drain
 
 # Named as forbidden fields rather than merely omitted from the enum, so that
 # no future field can reintroduce them under another spelling.
+# Named as forbidden fields rather than merely omitted, so a future runtime
+# cannot quietly add an execution surface and still pass its tests. Each is a
+# different way the advisory boundary breaks.
 forbidden_fields:
+  # Kinds that would make this an instruction rather than advice.
   - quarantine
   - revoke
+  - trust
+  - approve
+  - broaden_scope
   - reroute
   - restart
+  - stop
+  - kill
+  - repair
   - remediate
   - remediation
-  - auto_execute
-  - auto_apply
-  - execute_at
-  - trust_state
-  - trust_decision_id
-  - health_score
+  # Anything that could carry or trigger execution.
+  - execution_target
+  - action_payload
   - command
   - argv
+  - script
+  - shell
+  - auto_execute
+  - auto_apply
+  - auto_drain
+  - auto_quarantine
+  - execute_at
+  # Identifiers whose presence would imply something is meant to be changed.
+  - route_id
+  - selection_id
+  - trust_state
+  - trust_decision_id
+  - mutates_route
+  - mutates_trust_state
+  - health_score
