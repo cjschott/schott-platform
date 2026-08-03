@@ -97,9 +97,15 @@ automatic_rerouting: forbidden
 # A route targets admitted instances only. Targeting an advertisement would
 # mean routing to a self-report.
 routable_target: capability-instance
+
+# Must match capability-contract.schema.yaml exactly. The contract is the
+# authority on which effect classes exist; this list is the route's copy of
+# which of them it may select, and a route that permitted a class the contract
+# does not define would be unimplementable.
 routable_effect_classes:
   - read-only
-  - compute-only
+  - computational
+  - content-generating
 
 # Enforced, not advisory. A local-only request refuses rather than leaving the
 # host: degrading to a remote instance because the local one is unavailable is
