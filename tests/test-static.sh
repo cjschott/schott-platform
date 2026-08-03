@@ -1894,6 +1894,23 @@ for still_forbidden in tools/fabric tools/capability tools/enrollment; do
 done
 
 # ---------------------------------------------------------------------------
+# v0.9.4 trust mechanism migration
+# ---------------------------------------------------------------------------
+
+assert_file "tools/trust/gateway.py"
+assert_file "tools/trust/policy.py"
+assert_file "docs/trust/trust-migration.md"
+
+# The Fabric stays out. This sprint unifies trust; it does not begin placement.
+for still_forbidden in tools/fabric tools/capability tools/clustering tools/scheduler; do
+  if [[ -e "${ROOT}/${still_forbidden}" ]]; then
+    fail "v0.9.4 migrates trust only: ${still_forbidden} must not exist"
+  else
+    pass "no premature implementation: ${still_forbidden}"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 

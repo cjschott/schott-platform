@@ -961,6 +961,18 @@ done
 assert_contains "docs/platform-roadmap.md" '^### v0\.9\.3 — Trust Plane Runtime Foundation' \
   "roadmap records v0.9.3"
 
+# --- v0.9.4 trust migration documentation ------------------------------------
+MIGRATION_DOC="docs/trust/trust-migration.md"
+assert_file "${MIGRATION_DOC}"
+assert_contains "${MIGRATION_DOC}" '^# ' "trust migration doc has a title"
+assert_markdown_links "${MIGRATION_DOC}"
+for topic in "[Ii]nventory" "[Ss]ingle decision point|one decision point" \
+             "[Dd]omain" "[Rr]emaining" "[Bb]ehaviour|[Bb]ehavior"; do
+  assert_contains "${MIGRATION_DOC}" "${topic}" "trust migration doc covers ${topic}"
+done
+assert_contains "docs/platform-roadmap.md" '^### v0\.9\.4 — Trust Mechanism Migration' \
+  "roadmap records v0.9.4"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

@@ -514,6 +514,12 @@ for trust_prefix in TAUTH TREC TDEC TSCOPE TEVID TAUDIT; do
     "the runtime-record backstop covers ${trust_prefix}"
 done
 
+# --- v0.9.4 trust migration suite wiring ------------------------------------
+assert_contains "${VALIDATION}" 'tests/test-trust-migration\.sh' \
+  "local validation runs the trust migration suite"
+assert_contains ".github/workflows/ci.yml" 'tests/test-trust-migration\.sh' \
+  "ci runs the trust migration suite"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nDeveloper experience validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1
