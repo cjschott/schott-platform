@@ -25,6 +25,7 @@ set -Eeuo pipefail
 #   - tests/test-experience-engine.sh      (builds temporary experience stores)
 #   - tests/test-occurrence-timeline.sh    (builds temporary occurrence stores)
 #   - tests/test-remote-collectors.sh      (drives a fake transport; spawns the CLI)
+#   - tests/test-trust-runtime.sh          (builds synthetic trust stores; spawns the CLI)
 #   - the three Docker Compose renders  (each spawns the compose binary)
 #
 # Quick mode still runs syntax checking, ShellCheck, both static suites, both
@@ -92,7 +93,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=19
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=27
+  TOTAL_STEPS=28
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -147,6 +148,11 @@ if (( QUICK == 0 )); then
   # exclusively and contacts no host, but it spawns the CLI, so it sits with
   # the other subprocess-driving suites rather than in the quick path.
   run "Remote collectors" bash tests/test-remote-collectors.sh
+  # After the trust architecture suite: the runtime enforces what ADR-0011
+  # specifies, so it is validated downstream of the specification. It builds
+  # synthetic stores in temp directories and spawns the CLI, so it sits with
+  # the other subprocess-driving suites rather than in the quick path.
+  run "Trust runtime" bash tests/test-trust-runtime.sh
 else
   skipped_note "Initial read-only collectors"
   skipped_note "Knowledge orchestrator"
@@ -154,6 +160,7 @@ else
   skipped_note "Experience engine"
   skipped_note "Occurrence timeline"
   skipped_note "Remote collectors"
+  skipped_note "Trust runtime"
 fi
 
 # Static and documentation only: the trust plane is architecture in this
@@ -213,7 +220,13 @@ runtime_evidence_check() {
     'platform-model/evidence/EVID-*' \
     'platform-model/verifications/VER-*' \
     'platform-model/knowledge-events/MEM-*' \
-    'platform-model/observations/OBS-*')"
+    'platform-model/observations/OBS-*' \
+    '*TAUTH-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
+    '*TREC-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
+    '*TDEC-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
+    '*TSCOPE-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
+    '*TEVID-[0-9][0-9][0-9][0-9][0-9][0-9]*' \
+    '*TAUDIT-[0-9][0-9][0-9][0-9][0-9][0-9]*')"
   if [[ -n "${committed}" ]]; then
     printf 'Generated runtime records must not be committed:\n%s\n' "${committed}" >&2
     return 1
@@ -254,6 +267,7 @@ if (( QUICK == 1 )); then
     - tests/test-experience-engine.sh
     - tests/test-occurrence-timeline.sh
     - tests/test-remote-collectors.sh
+    - tests/test-trust-runtime.sh
     - the three Docker Compose renders
 
   Run without --quick before pushing.

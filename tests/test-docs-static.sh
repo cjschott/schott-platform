@@ -931,6 +931,36 @@ assert_contains "${ADR11}" 'v0\.9\.0' "ADR-0011 cites the v0.9.0 validation that
 assert_not_contains "docs/trust/trust-plane.md" '[a-z0-9-]+\.(com|net|org|io)\b' \
   "trust plane doc uses synthetic hostnames only"
 
+# --- v0.9.3 trust runtime documentation --------------------------------------
+for runtime_doc in docs/trust/runtime-overview.md \
+                   docs/trust/root-authority-operations.md \
+                   docs/trust/state-transition-runtime.md \
+                   docs/trust/trust-query-reference.md; do
+  assert_file "${runtime_doc}"
+  assert_contains "${runtime_doc}" '^# ' "$(basename "${runtime_doc}" .md) has a title"
+  assert_markdown_links "${runtime_doc}"
+done
+
+RUNTIME_DOC="docs/trust/runtime-overview.md"
+for topic in "[Ss]tore layout" "[Ss]tored versus effective|stored and effective" \
+             "[Ff]ailure semantics" "[Nn]on-goal" "single-host"; do
+  assert_contains "${RUNTIME_DOC}" "${topic}" "runtime overview covers ${topic}"
+done
+assert_contains "${RUNTIME_DOC}" '[Mm]igration' \
+  "runtime overview records that migration is still deferred"
+assert_contains "${RUNTIME_DOC}" '[Ff]abric' \
+  "runtime overview records that the Fabric is still blocked"
+
+# Synthetic identities only: a real one invites a copy and paste at production.
+for runtime_doc in docs/trust/runtime-overview.md \
+                   docs/trust/root-authority-operations.md; do
+  assert_not_contains "${runtime_doc}" '[a-z0-9-]+\.(com|net|org|io)\b' \
+    "$(basename "${runtime_doc}" .md) uses synthetic identities only"
+done
+
+assert_contains "docs/platform-roadmap.md" '^### v0\.9\.3 — Trust Plane Runtime Foundation' \
+  "roadmap records v0.9.3"
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

@@ -504,6 +504,16 @@ assert_contains "${VALIDATION}" 'tests/test-trust-plane\.sh' \
 assert_contains ".github/workflows/ci.yml" 'tests/test-trust-plane\.sh' \
   "ci runs the trust plane suite"
 
+# --- v0.9.3 trust runtime suite wiring --------------------------------------
+assert_contains "${VALIDATION}" 'tests/test-trust-runtime\.sh' \
+  "local validation runs the trust runtime suite"
+assert_contains ".github/workflows/ci.yml" 'tests/test-trust-runtime\.sh' \
+  "ci runs the trust runtime suite"
+for trust_prefix in TAUTH TREC TDEC TSCOPE TEVID TAUDIT; do
+  assert_contains "${VALIDATION}" "${trust_prefix}" \
+    "the runtime-record backstop covers ${trust_prefix}"
+done
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nDeveloper experience validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1

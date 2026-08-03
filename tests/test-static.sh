@@ -1858,14 +1858,38 @@ for trust_artefact in \
   assert_file "${trust_artefact}"
 done
 
-# No trust runtime, no enrollment, no certificate handling, no approval
-# workflow. Those are later releases: a partial trust engine is worse than none
-# because it reads as a control while behaving as a suggestion.
-for trust_impl in tools/trust tools/fabric tools/capability tools/enrollment; do
+# v0.9.2 forbade tools/trust outright because that sprint was architecture only.
+# v0.9.3 is the release that implements it, so the runtime is now expected --
+# and the Fabric, enrollment, and capability packages remain forbidden. The
+# boundary moved by one release; it did not dissolve.
+for trust_impl in tools/fabric tools/capability tools/enrollment; do
   if [[ -e "${ROOT}/${trust_impl}" ]]; then
     fail "no trust implementation belongs in the architecture sprint: ${trust_impl}"
   else
     pass "no trust implementation directory: ${trust_impl}"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# v0.9.3 trust plane runtime
+# ---------------------------------------------------------------------------
+
+for trust_module in __init__ models errors identifiers root_authority store \
+                    lineage transitions scope expiry evaluator query audit cli; do
+  assert_file "tools/trust/${trust_module}.py"
+done
+
+for trust_runtime_doc in runtime-overview root-authority-operations \
+                         state-transition-runtime trust-query-reference; do
+  assert_file "docs/trust/${trust_runtime_doc}.md"
+done
+
+# The Fabric stays blocked. Trust runtime does not smuggle it in.
+for still_forbidden in tools/fabric tools/capability tools/enrollment; do
+  if [[ -e "${ROOT}/${still_forbidden}" ]]; then
+    fail "v0.9.3 implements trust only: ${still_forbidden} must not exist"
+  else
+    pass "no premature implementation: ${still_forbidden}"
   fi
 done
 
