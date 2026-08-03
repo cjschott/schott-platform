@@ -500,6 +500,32 @@ trust mechanisms — `known_hosts`, the plugin registry, the operation catalog,
 target allowlists — keep working unchanged and are **not migrated**, so the
 platform has two trust systems and only one is enforced by this runtime.
 
+### v0.9.4 — Trust Mechanism Migration
+
+**Delivered.** One trust system.
+
+Before this release the platform had four: collector manifest authorization,
+the registry's source-type gate, remote target operation authorization, and the
+operation catalog's membership test. Each was reviewed and fail-closed, and
+nobody could answer "what does this platform trust?" without reading four
+unrelated modules.
+
+- **One decision point** — `tools/trust/gateway.py`. Every migrated call site
+  asks; none decides.
+- **Two sources, never combined** — the Trust Plane runtime when a store is
+  configured, code-owned policy otherwise, and every verdict records which.
+- **No new domain** — operation authorization is host trust expressed through
+  scope, so ADR-0011's fifteen domains needed no schema change.
+- **Behaviour unchanged**, including the exact wording of every refusal. The
+  three collector suites pass unmodified.
+
+**Known limits.** The code-owned rules are **not root-terminated**: until an
+operator instantiates an Operator Root Authority and seeds a store, the
+platform enforces the same rules from the same reviewed code, in one place
+instead of four. Closing that gap would require inventing a deployment
+identity, which ADR-0011 forbids. Identity and capability domains are declared
+but not yet decided at runtime, and deny with a reason naming the gap.
+
 ### v0.9.5 — Distributed Capability Fabric
 
 Reserved. Lets the platform use capacity that is not on this host, without any

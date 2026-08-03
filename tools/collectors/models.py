@@ -128,64 +128,19 @@ class CollectorManifest:
 
     def validation_errors(self) -> list[str]:
         """Return human-readable problems. Never includes a field value that
-        looked secret-bearing."""
-        problems: list[str] = []
+        looked secret-bearing.
 
-        if not COLLECTOR_ID.match(self.id or ""):
-            problems.append(f"collector id '{self.id}' must be lowercase kebab-case")
-        if self.source_type not in APPROVED_SOURCE_TYPES:
-            problems.append(f"source_type '{self.source_type}' is not approved")
+        The rules themselves live in the trust gateway from v0.9.4: a manifest
+        declaring what it may do is a trust decision, and the platform now has
+        exactly one place those are made. This method is the caller, not the
+        authority.
+        """
+        from ..trust import gateway as trust_gateway
 
-        for permission in self.permissions:
-            if permission in FORBIDDEN_PERMISSIONS:
-                problems.append(f"permission '{permission}' is forbidden for collectors")
-            elif permission not in APPROVED_PERMISSIONS:
-                problems.append(f"permission '{permission}' is not approved")
-
-        # Network access was refused unconditionally through v0.8.6. From
-        # v0.9.0 it is narrowed rather than relaxed, exactly as v0.6.0 narrowed
-        # the subprocess prohibition: the capability exists in one reviewable
-        # form, gated by one permission, and is refused in every other case.
-        #
-        # The pairing is enforced in both directions on purpose. Network access
-        # without the permission is an undeclared capability; the permission
-        # without network access is a manifest claiming a boundary it does not
-        # actually sit behind. Either mismatch means the manifest no longer
-        # describes the collector.
-        if self.network_access and REMOTE_PERMISSION not in self.permissions:
-            problems.append(
-                f"network_access requires the '{REMOTE_PERMISSION}' permission; "
-                "collectors are read-only and reach nothing they have not declared"
-            )
-        if REMOTE_PERMISSION in self.permissions and not self.network_access:
-            problems.append(
-                f"the '{REMOTE_PERMISSION}' permission requires network_access to be true"
-            )
-
-        # Subprocess and filesystem access are declarable from v0.6.0, but only
-        # in the narrowed forms the framework can enforce: subprocess runs
-        # exclusively through command_runner.py, and filesystem access is
-        # read-only. Write access remains outside the trust boundary.
-        if self.subprocess_access not in (True, False):
-            problems.append("subprocess_access must be a boolean")
-        if self.filesystem_access not in (True, False, "read-only"):
-            problems.append(
-                "filesystem_access must be false or 'read-only'; write access is not permitted"
-            )
-        if self.filesystem_access is True:
-            problems.append(
-                "filesystem_access must be declared 'read-only' rather than true"
-            )
-
-        for requirement in self.secret_requirements:
-            lowered = str(requirement).lower()
-            if lowered in SECRET_BEARING_KEYS:
-                problems.append(
-                    f"secret_requirements entry '{requirement}' names a secret directly; "
-                    "describe the requirement instead"
-                )
-
-        return problems
+        verdict = trust_gateway.query(
+            domain="collector-plugin", subject_id=self.id or "",
+            action="declare-manifest", context={"manifest": self})
+        return list(verdict.reasons)
 
 
 @dataclass(frozen=True)

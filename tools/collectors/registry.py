@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from .base import CollectorPlugin
 from .exceptions import CollectorRegistrationError
-from .models import APPROVED_SOURCE_TYPES, CollectorManifest
+from ..trust import gateway as trust_gateway
+from .models import CollectorManifest
 
 
 class CollectorRegistry:
@@ -54,7 +55,10 @@ class CollectorRegistry:
                 f"manifest for '{manifest.id}' is invalid: {'; '.join(problems)}"
             )
 
-        if manifest.source_type not in APPROVED_SOURCE_TYPES:
+        source_verdict = trust_gateway.query(
+            domain="collector-plugin", subject_id=manifest.id or "",
+            action="register", context={"manifest": manifest})
+        if any("source_type" in reason for reason in source_verdict.reasons):
             raise CollectorRegistrationError(
                 f"source_type '{manifest.source_type}' is not approved"
             )

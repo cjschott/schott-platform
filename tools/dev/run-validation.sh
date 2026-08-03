@@ -90,10 +90,10 @@ skipped_note() {
 # four of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=19
+  TOTAL_STEPS=20
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=28
+  TOTAL_STEPS=29
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -167,6 +167,11 @@ fi
 # release, so there is no engine to exercise. Builds no store, spawns no
 # subprocess, contacts nothing — it runs in quick mode as well.
 run "Trust plane" bash tests/test-trust-plane.sh
+
+# Static and behavioural, but it builds no store of its own and spawns no
+# subprocess: the migration suite drives the gateway directly, so it runs in
+# quick mode alongside the architecture suite it depends on.
+run "Trust migration" bash tests/test-trust-migration.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 

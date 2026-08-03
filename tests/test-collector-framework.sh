@@ -478,12 +478,18 @@ assert_contains "tools/collectors/models.py" 'read-remote-host' \
   "the framework defines a read-remote-host permission"
 assert_contains "tools/collectors/models.py" 'network_access' \
   "the framework still governs network access explicitly"
-assert_contains "tools/collectors/models.py" \
-  'self\.network_access and REMOTE_PERMISSION not in self\.permissions' \
+# From v0.9.4 the rule lives in the trust gateway's policy, not in the manifest
+# model: a manifest declaring what it may do is a trust decision, and the
+# platform now makes those in exactly one place. The assertion follows the rule
+# to its new home rather than relaxing it.
+assert_contains "tools/trust/policy.py" \
+  'manifest\.network_access and REMOTE_PERMISSION not in manifest\.permissions' \
   "network access without the permission is refused"
-assert_contains "tools/collectors/models.py" \
-  'REMOTE_PERMISSION in self\.permissions and not self\.network_access' \
+assert_contains "tools/trust/policy.py" \
+  'REMOTE_PERMISSION in manifest\.permissions and not manifest\.network_access' \
   "the permission without network access is refused"
+assert_contains "tools/collectors/models.py" 'trust_gateway\.query' \
+  "the manifest model asks the gateway rather than deciding for itself"
 
 # Local collectors must not quietly acquire network access.
 for plugin in git_repository configuration_render manual_attestation example; do

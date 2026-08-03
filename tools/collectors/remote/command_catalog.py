@@ -144,8 +144,17 @@ def operation_for(identifier: str, argument: str | None = None) -> RemoteOperati
     an operation that takes none, and for an argument that fails validation.
     Fails closed: there is no path that appends an unvalidated string.
     """
+    # Whether an identifier is one the platform may run is a trust decision.
+    # The catalog still owns the argv -- that is containment, not a decision,
+    # and moving reviewed argv into a policy function would put executable text
+    # one indirection further from review.
+    from ...trust import gateway as trust_gateway
+
+    verdict = trust_gateway.query(
+        domain="remote-transport", subject_id=identifier, action=identifier)
+    verdict.require(CatalogError)
     operation = CATALOG.get(identifier)
-    if operation is None:
+    if operation is None:  # pragma: no cover - the gateway already refused
         raise CatalogError(f"unknown remote operation identifier '{identifier}'")
 
     if argument is None:
