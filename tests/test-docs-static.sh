@@ -1069,6 +1069,162 @@ for premature in tools/health tools/fabric tools/capability tools/monitor; do
   fi
 done
 
+# --- Operator Root Authority deployment gate ---------------------------------
+DEPLOY_PLAN="docs/superpowers/plans/2026-08-03-operator-root-authority-deployment.md"
+DEPLOY_GUIDE="docs/trust/operator-root-authority-deployment.md"
+DEPLOY_CHECK="docs/trust/operator-root-authority-validation-checklist.md"
+for deploy_doc in "${DEPLOY_PLAN}" "${DEPLOY_GUIDE}" "${DEPLOY_CHECK}"; do
+  assert_file "${deploy_doc}"
+  assert_contains "${deploy_doc}" '^# ' "$(basename "${deploy_doc}" .md) has a title"
+  assert_markdown_links "${deploy_doc}"
+done
+
+# The root stays external. Everything else in this gate follows from that.
+for boundary in "external to Kyri" "declaration only|persists a declaration" \
+                "cannot establish the external identity" \
+                "cannot approve its own root|no self-approval" \
+                "out-of-band"; do
+  assert_contains "${DEPLOY_GUIDE}" "${boundary}" \
+    "deployment guide records the boundary: ${boundary}"
+done
+
+# No identity may be inferred. Each source is named because each is the one
+# somebody would reach for when the operator is unavailable.
+for inference in "current user" "environment variable" "hostname" \
+                 "SSH key owner" "Git author" "email" "shell account"; do
+  assert_contains "${DEPLOY_GUIDE}" "${inference}" \
+    "deployment guide forbids inferring identity from ${inference}"
+done
+assert_contains "${DEPLOY_GUIDE}" '[Nn]o identity is inferred|never inferred' \
+  "deployment guide states no identity is inferred"
+
+# References only, never material.
+for prohibition in "no credentials" "[Ee]xternal reference" "immutable" \
+                   "[Nn]o TOFU|trust on first use" "no automatic approval" \
+                   "no interactive identity guessing"; do
+  assert_contains "${DEPLOY_GUIDE}" "${prohibition}" \
+    "deployment guide forbids: ${prohibition}"
+done
+
+# Proposed paths, and the rules that keep them out of the repository.
+assert_contains "${DEPLOY_GUIDE}" '/var/lib/kyri/trust' "guide proposes a store root"
+assert_contains "${DEPLOY_GUIDE}" '/etc/kyri/trust' "guide proposes an input directory"
+for rule in "0700" "0600" "never inside the Git repository|outside the repository" \
+            "world-readable" "group-readable" "symlink" \
+            "network filesystem" "single-host"; do
+  assert_contains "${DEPLOY_GUIDE}" "${rule}" \
+    "guide documents the path rule: ${rule}"
+done
+assert_contains "${DEPLOY_GUIDE}" '[Nn]ot created|do not create|without operator approval' \
+  "guide states the paths are proposed rather than created"
+
+# The input template carries references, and the test proves no real one leaked.
+for field in authority_type display_name external_identity_reference \
+             verification_method subject_property observed_value_reference \
+             comparison_source performed_by performed_at evidence_references \
+             approval_source history_reference created_at provenance lineage_id; do
+  assert_contains "${DEPLOY_GUIDE}" "${field}" "input template defines ${field}"
+done
+for leak in "cschott" "Chris Schott" "@gmail" "ssh-ed25519" "BEGIN OPENSSH"; do
+  for deploy_doc in "${DEPLOY_PLAN}" "${DEPLOY_GUIDE}" "${DEPLOY_CHECK}"; do
+    if grep -qF -- "${leak}" "${ROOT}/${deploy_doc}" 2>/dev/null; then
+      fail "no real identity may appear: '${leak}' in $(basename "${deploy_doc}")"
+    else
+      pass "no '${leak}' in $(basename "${deploy_doc}" .md)"
+    fi
+  done
+done
+
+# Out-of-band verification, and the shortcuts that are not verification.
+for accepted in "physical console" "management session" "printed" \
+                "hardware-backed" "offline signed"; do
+  assert_contains "${DEPLOY_GUIDE}" "${accepted}" \
+    "guide accepts the verification source: ${accepted}"
+done
+assert_contains "${DEPLOY_GUIDE}" 'same channel being enrolled|same channel' \
+  "guide rejects verifying identity through the channel being enrolled"
+for rejected in "ssh-keyscan" "DNS alone" "hostname alone" "login identity alone" \
+                "Git metadata alone" "[Ss]elf-signed"; do
+  assert_contains "${DEPLOY_GUIDE}" "${rejected}" \
+    "guide rejects the non-proof: ${rejected}"
+done
+
+# The dry run changes nothing, and the checklist says so.
+assert_contains "${DEPLOY_CHECK}" '[Nn]on-mutating|changes nothing|writes nothing' \
+  "checklist states the dry run is non-mutating"
+for dry in "repository clean" "released main" "outside the repository" \
+           "containment" "timezone-aware" "already exist" \
+           "code-owned policy"; do
+  assert_contains "${DEPLOY_CHECK}" "${dry}" "dry run checks ${dry}"
+done
+
+# init-root is documented, not executed. No test may run it.
+assert_contains "${DEPLOY_GUIDE}" 'init-root' "guide documents the init-root command"
+assert_contains "${DEPLOY_GUIDE}" '[Nn]ot executed|do not execute|Do not run' \
+  "guide states init-root is not executed in this task"
+# Scoped to the documentation suites. test-trust-runtime.sh legitimately runs
+# init-root against a synthetic store in a temp directory -- that is released
+# coverage, not a deployment.
+# The `grep -v grep` filters exclude these assertions' own pattern lines, which
+# necessarily contain the literals they search for.
+if grep -n "init-root" "${ROOT}/tests/test-docs-static.sh" "${ROOT}/tests/test-static.sh" 2>/dev/null \
+     | grep -v 'grep' | grep -qE 'cli\(|subprocess'; then
+  fail "no documentation test may execute init-root"
+else
+  pass "no documentation test executes init-root"
+fi
+# And nothing anywhere may run it against a production path.
+if grep -rn "init-root" "${ROOT}/tests/" | grep -v 'grep' | grep -qE '/var/lib|/etc/kyri'; then
+  fail "no test may run init-root against a production path"
+else
+  pass "no test runs init-root against a production path"
+fi
+
+# The first subjects to be seeded, by domain.
+for subject in "collector plugin" "source type" "remote target" \
+               "remote operation" "host identity" "code-owned policy" \
+               "TrustGateway configuration"; do
+  assert_contains "${DEPLOY_GUIDE}" "${subject}" \
+    "guide lists the initial seeded subject: ${subject}"
+done
+
+# Cutover acceptance, including the one that matters most.
+assert_contains "${DEPLOY_CHECK}" 'code-owned-policy' "checklist names the current verdict source"
+assert_contains "${DEPLOY_CHECK}" 'trust-plane-runtime' "checklist names the target verdict source"
+for cutover in "no silent fallback" "unseeded store denies|configured but unseeded" \
+               "unknown subjects deny" "quarantined" "revoked" "expired" \
+               "names source|names its source" "duplicate authority"; do
+  assert_contains "${DEPLOY_CHECK}" "${cutover}" \
+    "checklist defines the cutover acceptance: ${cutover}"
+done
+
+# Rollback is configuration rollback, never history rollback.
+for rollback in "configuration rollback" "never delete|not.*delete" \
+                "preserve" "maintenance window" "operator decision"; do
+  assert_contains "${DEPLOY_GUIDE}" "${rollback}" \
+    "guide documents the rollback rule: ${rollback}"
+done
+assert_contains "${DEPLOY_GUIDE}" '[Nn]ot trust-history rollback|not a trust-history' \
+  "guide distinguishes configuration rollback from trust-history rollback"
+
+# The v0.9.5 gate now requires deployment acceptance, not just the runtime.
+for gate in "Operator Root Authority instantiated" "production trust store validated" \
+            "initial migrated subjects seeded" "trust-plane-runtime" \
+            "code-owned fallback" "rollback procedure validated" \
+            "deployment evidence retained"; do
+  assert_contains "docs/platform-roadmap.md" "${gate}" \
+    "roadmap v0.9.5 gate requires: ${gate}"
+done
+
+# A deployment plan creates no deployment.
+for premature in /var/lib/kyri /etc/kyri; do
+  if [[ -e "${premature}" ]]; then
+    fail "the deployment plan must not create ${premature}"
+  else
+    pass "no production path created: ${premature}"
+  fi
+done
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1
