@@ -1,0 +1,136 @@
+---
+# Declarative schema for capability health recommendations.
+#
+# The single thing this layer produces that touches operations, and it is a
+# record rather than an act. It may recommend that a human investigate, or that
+# a human drain a node. Nothing else, and never automatically.
+#
+# It may not propose quarantine, revocation, rerouting, restart, or
+# remediation. Those are trust decisions or fabric changes, and neither belongs
+# to an observer. A quarantine recommendation reads as harmless because a human
+# still approves it; in practice a stream of automated quarantine
+# recommendations trains the approver to click through them, which is an
+# automatic path with a human-shaped delay in it.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0013-capability-health-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-health-recommendation
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0013-capability-health-plane.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CHREC-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+is_action: false
+advisory_only: true
+requires_human_action: true
+auto_execution: forbidden
+
+# Closed, not merely enumerated. An open vocabulary is one pull request away
+# from containing "restart", and the argument for adding it will be made during
+# an incident.
+vocabulary: closed
+
+may_modify_trust_state: false
+may_execute: false
+
+required_fields:
+  - recommendation_id
+  - subject_type
+  - subject_id
+  - recommendation
+  # Written, not a code. A recommendation an operator cannot evaluate is one
+  # they will either ignore or approve without reading.
+  - reason
+  # The health evaluation it followed from, so the recommendation can be traced
+  # to the evidence rather than taken on faith.
+  - derived_from_state_id
+  - created_at
+  # Carried on every record rather than assumed from the record type, so that a
+  # consumer reading one recommendation in isolation still knows it is advice.
+  - review_required
+  - advisory_only
+  - provenance
+
+optional_fields:
+  - derived_from_event_id
+  - acknowledged_at
+  - acknowledged_by
+  - notes
+
+enums:
+  subject_type:
+    - capability-instance
+    - capability-host
+    - capability-package
+  recommendation:
+    # Ask a human to look. The safe default and the usual answer.
+    - investigate
+    # The finding may be the threshold rather than the subject. A capability
+    # repeatedly outside a limit nobody has revisited is as likely to be a
+    # wrong limit as a broken capability.
+    - review-envelope
+    # The finding may be the measurement rather than the subject. A collector
+    # that has started failing produces the same shape of evidence as a
+    # capability that has started failing, and they are not the same problem.
+    - verify-observation-source
+    # Ask a human to consider a Fabric-local drain. Consider, not do: the drain
+    # is a Fabric decision by an operator, and health neither performs nor
+    # triggers it. Draining is reversible and changes no trust state, which is
+    # why it is the only operational recommendation permitted at all.
+    - consider-manual-drain
+
+# Named as forbidden fields rather than merely omitted from the enum, so that
+# no future field can reintroduce them under another spelling.
+# Named as forbidden fields rather than merely omitted, so a future runtime
+# cannot quietly add an execution surface and still pass its tests. Each is a
+# different way the advisory boundary breaks.
+forbidden_fields:
+  # Kinds that would make this an instruction rather than advice.
+  - quarantine
+  - revoke
+  - trust
+  - approve
+  - broaden_scope
+  - reroute
+  - restart
+  - stop
+  - kill
+  - repair
+  - remediate
+  - remediation
+  # Anything that could carry or trigger execution.
+  - execution_target
+  - action_payload
+  - command
+  - argv
+  - script
+  - shell
+  - auto_execute
+  - auto_apply
+  - auto_drain
+  - auto_quarantine
+  - execute_at
+  # Identifiers whose presence would imply something is meant to be changed.
+  - route_id
+  - selection_id
+  - trust_state
+  - trust_decision_id
+  - mutates_route
+  - mutates_trust_state
+  - health_score

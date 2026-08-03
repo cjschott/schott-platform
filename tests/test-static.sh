@@ -1399,6 +1399,27 @@ for fabric_pkg in tools/fabric tools/capability tools/scheduler tools/placement 
   fi
 done
 
+# --- v0.9.6 Capability Health Plane: no aggregate score, no execution --------
+# Scanned across the whole repository rather than one schema, because the point
+# of forbidding an aggregate score is that it must not appear anywhere: one
+# sortable number becomes the operational boundary, and nobody chose it.
+for score_field in health_score aggregate_score composite_score \
+                   weighted_health overall_numeric_health; do
+  matches="$(grep -rIn --include='*.yaml' --include='*.py' \
+    -E "^[[:space:]]*(- )?${score_field}:" "${ROOT}/platform-model" "${ROOT}/tools" 2>/dev/null \
+    | grep -v 'forbidden' || true)"
+  if [[ -z "${matches}" ]]; then
+    pass "no aggregate health score field is declared: ${score_field}"
+  else
+    fail "an aggregate health score field is declared: ${score_field}"
+  fi
+done
+
+# The health suite must be wired into CI, or the assertions exist and nothing
+# runs them.
+assert_contains "${CI_WF}" 'bash tests/test-capability-health\.sh' \
+  "ci runs the capability health suite"
+
 # The fabric suite and the ontology duplicate-key validator must both be wired
 # into CI, or they exist and nothing runs them.
 assert_contains "${CI_WF}" 'bash tests/test-capability-fabric\.sh' \

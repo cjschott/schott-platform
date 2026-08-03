@@ -780,8 +780,13 @@ done
 SCHEDULER_SCAN="$(mktemp)"
 trap 'rm -f "${SCHEDULER_SCAN}"' EXIT
 sed '/^## Rejected Alternatives/,$d' "${ROOT}/${ADR}" > "${SCHEDULER_SCAN}"
-cat "${ROOT}"/docs/fabric/*.md \
-    "${ROOT}"/platform-model/schemas/capability-*.schema.yaml >> "${SCHEDULER_SCAN}"
+# Fabric schemas only. The health schemas share the capability- prefix but
+# legitimately measure queue depth and latency: observing a number is not the
+# same as scheduling on it, and ADR-0013 governs what health may do with it.
+for fabric_schema in "${FABRIC_SCHEMAS[@]}"; do
+  cat "${ROOT}/platform-model/schemas/${fabric_schema}.schema.yaml" >> "${SCHEDULER_SCAN}"
+done
+cat "${ROOT}"/docs/fabric/*.md >> "${SCHEDULER_SCAN}"
 
 for schedulerism in 'workload lease' 'placement engine' 'bin.pack' \
                     'autoscal' 'queue depth' 'work.steal'; do

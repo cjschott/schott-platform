@@ -646,11 +646,39 @@ an execution that cannot occur would be vocabulary without a referent.
 
 ### v0.9.6 — Capability Health Monitor
 
-Reserved. **Roadmap reservation only — nothing here is implemented.**
+**Architecture defined; no runtime exists.**
+
+[ADR-0013](decisions/ADR-0013-capability-health-plane.md) specifies the
+Capability Health Plane: six schemas, six ontology entity types, four
+relationships, and the observation, envelope, degradation, audit, and
+governance rules. **No health engine, no collectors, no probes, no heartbeat
+receiver, no evaluation loop, no remediation.**
 
 Observe the availability, performance, trust state, and operational condition
 of nodes, endpoints, leases, and capabilities participating in the Distributed
 Capability Fabric.
+
+Three results are worth recording.
+
+**No new trust domain**, and no health record is ever a trust subject. A health
+record is evidence about something that was already trusted.
+
+**`unknown` is inert.** Health may remove a candidate only on a fresh, positive
+observation. Had `unknown` removed candidates, losing the collector would empty
+every route and a monitoring failure would become a platform outage; had it
+counted as healthy, not reporting would be the cheapest way to look good.
+Health is fail-closed on claims and inert on eligibility.
+
+**Three reserved entities were reconciled rather than shipped.**
+`lease-health` and `placement-health` have no referent, because v0.9.5
+deliberately defined no lease and no placement record; `endpoint-health` became
+an observation dimension of the instance an endpoint is reached through. Two
+entities the reservation did not anticipate were added: the **envelope**,
+because "within its declared operational envelope" is unusable without a record
+of the envelope, and the **recommendation**, because the reservation granted
+the power to recommend without saying what a recommendation is.
+
+See the [Health Plane overview](health/capability-health.md).
 
 #### The architectural principle
 

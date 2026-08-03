@@ -340,3 +340,48 @@ entity_types:
     description: One recorded act of choosing, with every candidate considered and why each was excluded.
     id_prefix: CSEL
     lifecycle_supported: [declared, archived]
+
+  # --- Capability Health Plane (ADR-0013) ------------------------------------
+  # Observation only. None of these records grants trust, confers eligibility,
+  # or executes anything. Health may remove a candidate from consideration on
+  # positive evidence and may do nothing else.
+  #
+  # The v0.9.6 reservation also named lease-health and placement-health. v0.9.5
+  # deliberately defined no lease and no placement record, so both would have
+  # had nothing to refer to and are deliberately absent.
+
+  capability-health-envelope:
+    name: Capability Health Envelope
+    description: Declared per-dimension limits for one subject. Authored by a human; thresholds are never learned.
+    id_prefix: CHENV
+    lifecycle_supported: [declared, archived]
+
+  capability-heartbeat:
+    name: Capability Heartbeat
+    description: A subject's liveness claim about itself. Confers no trust and no eligibility.
+    id_prefix: CHBEAT
+    lifecycle_supported: [declared, archived]
+
+  capability-health-observation:
+    name: Capability Health Observation
+    description: One measurement of one dimension at one moment. Evidence, carrying no verdict.
+    id_prefix: CHOBS
+    lifecycle_supported: [declared, archived]
+
+  capability-health-state:
+    name: Capability Health State
+    description: Deterministic derived standing of one subject, citing the observations behind it.
+    id_prefix: CHSTATE
+    lifecycle_supported: [declared, archived]
+
+  capability-degradation-event:
+    name: Capability Degradation Event
+    description: A recorded transition between health states. Describes observed history, never the future.
+    id_prefix: CHDEG
+    lifecycle_supported: [declared, archived]
+
+  capability-health-recommendation:
+    name: Capability Health Recommendation
+    description: A record asking a human to investigate or drain. Never an action, never executed automatically.
+    id_prefix: CHREC
+    lifecycle_supported: [declared, archived]

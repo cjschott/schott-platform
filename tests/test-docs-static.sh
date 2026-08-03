@@ -1063,23 +1063,56 @@ for axis in "May this subject participate" "Where can this workload execute" \
     "roadmap separates trust from health: ${axis}"
 done
 
-# Future entities are named, not built.
+# The reservation named seven entities before the Fabric existed. ADR-0013
+# reconciles them rather than shipping schemas with nothing to refer to, and
+# the roadmap must keep naming all seven so the reconciliation stays legible.
 for entity in capability-health-observation capability-health-state \
               node-heartbeat endpoint-health lease-health placement-health \
               degradation-event; do
   assert_contains "${HEALTH_ROADMAP}" "${entity}" \
-    "roadmap names the future entity ${entity}"
-  if [[ -f "${ROOT}/platform-model/schemas/${entity}.schema.yaml" ]]; then
-    fail "v0.9.6 is a reservation; no ${entity} schema belongs here"
+    "roadmap names the reserved entity ${entity}"
+done
+
+# Three of them have no referent. v0.9.5 deliberately defined no lease and no
+# placement record, and an endpoint is reached through an instance rather than
+# existing on its own, so a schema for any of these would be a dangling
+# reference in specification form.
+for absent in endpoint-health lease-health placement-health; do
+  if [[ -f "${ROOT}/platform-model/schemas/${absent}.schema.yaml" ]]; then
+    fail "${absent} has no referent; no schema belongs here"
   else
-    pass "no premature schema for ${entity}"
+    pass "no schema for the reconciled entity ${absent}"
   fi
 done
 
-# A reservation implements nothing.
-for premature in tools/health tools/fabric tools/capability tools/monitor; do
+# The ones that survived are namespaced with the rest of the health plane.
+for defined in capability-health-envelope capability-heartbeat \
+               capability-health-observation capability-health-state \
+               capability-degradation-event capability-health-recommendation; do
+  assert_file "platform-model/schemas/${defined}.schema.yaml"
+done
+
+# The seven worked examples. Each is a combination an operator will actually
+# meet, and each is a case where reading one layer as another gives the wrong
+# answer.
+HEALTH_EXAMPLES="docs/health/worked-examples.md"
+assert_file "${HEALTH_EXAMPLES}"
+for example in "Fabric-eligible.*[Hh]ealth unknown" \
+               "manually drained.*[Hh]ealth healthy" \
+               "[Qq]uarantined.*[Hh]ealth healthy" \
+               "withheld for maintenance" \
+               "[Ss]tale degraded" \
+               "[Mm]issing threshold" \
+               "two envelope versions"; do
+  assert_contains "${HEALTH_EXAMPLES}" "${example}" \
+    "worked examples cover: ${example}"
+done
+
+# Architecture defines nothing that runs.
+for premature in tools/health tools/fabric tools/capability tools/monitor \
+                 tools/heartbeat tools/probe tools/telemetry; do
   if [[ -e "${ROOT}/${premature}" ]]; then
-    fail "v0.9.6 is a roadmap reservation; ${premature} must not exist"
+    fail "v0.9.6 is architecture only; ${premature} must not exist"
   else
     pass "no premature implementation: ${premature}"
   fi

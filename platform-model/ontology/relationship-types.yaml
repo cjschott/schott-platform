@@ -421,9 +421,25 @@ relationship_types:
     allowed_sources: [verification, knowledge-event, observation,
                       trust-record, trust-decision]
     allowed_targets: [evidence, observation, verification,
-                      configuration-snapshot, capability]
+                      configuration-snapshot, capability,
+                      capability-health-observation, capability-health-state]
     transitive: false
     inverse: null
+    # allowed_sources and allowed_targets are flat lists and cannot express a
+    # per-pair rule, so the one pairing that must never exist is declared here.
+    # A trust record deriving from a health record would make availability data
+    # -- the easiest signal in the platform to manipulate from outside -- into
+    # an input to trust, which ADR-0011's directionality rule exists to
+    # prevent. Health may be derived from; it may never be derived to trust.
+    forbidden_source_target_pairs:
+      - source: trust-record
+        target: capability-health-observation
+      - source: trust-record
+        target: capability-health-state
+      - source: trust-decision
+        target: capability-health-observation
+      - source: trust-decision
+        target: capability-health-state
     operational_impact: A derived fact is only as trustworthy as what it was derived from.
 
   REFRESHES:
@@ -767,3 +783,58 @@ relationship_types:
     transitive: false
     inverse: null
     operational_impact: Answers "why did this run there?" from records rather than logs.
+
+  # --- Capability Health Plane (ADR-0013) ------------------------------------
+  # Observation only. None of these edges grants trust, confers eligibility, or
+  # authorises anything. Health narrows what trust already allowed, and only on
+  # positive evidence.
+
+  OBSERVES_HEALTH_OF:
+    name: Observes Health Of
+    description: >-
+      The source observation or heartbeat measures the target subject. A
+      measurement, never a conclusion: the observation carries no verdict about
+      what it measured.
+    allowed_sources: [capability-health-observation, capability-heartbeat]
+    # A route is policy rather than a running thing, so it has no health. What
+    # is observable is the instance a route may select and the host it runs on.
+    allowed_targets: [capability-instance, capability-host, capability-package]
+    transitive: false
+    inverse: null
+    operational_impact: Identifies what a measurement is about, so a collector failure stays attributable.
+
+  HEALTH_STATE_OF:
+    name: Health State Of
+    description: >-
+      The source health state is the current derived standing of the target
+      subject. Superseded rather than edited, so what was believed at the
+      moment of a past decision stays answerable.
+    allowed_sources: [capability-health-state]
+    allowed_targets: [capability-instance, capability-host, capability-package]
+    transitive: false
+    inverse: null
+    operational_impact: Answers whether a selected capability was working, separately from whether it was allowed to run.
+
+  EVALUATED_AGAINST:
+    name: Evaluated Against
+    description: >-
+      The source health state or degradation event was assessed against the
+      target declared envelope. A subject with no envelope is unmonitored
+      rather than healthy, so the absence of this edge is itself a finding.
+    allowed_sources: [capability-health-state, capability-degradation-event]
+    allowed_targets: [capability-health-envelope]
+    transitive: false
+    inverse: null
+    operational_impact: Makes "degraded" mean outside a limit a human wrote down.
+
+  RECOMMENDS_ACTION:
+    name: Recommends Action
+    description: >-
+      The source recommendation asks a human to investigate or drain the target
+      subject. It is a record and never an act: nothing executes it, and it may
+      not propose quarantine, revocation, rerouting, restart, or remediation.
+    allowed_sources: [capability-health-recommendation]
+    allowed_targets: [capability-instance, capability-host, capability-package]
+    transitive: false
+    inverse: null
+    operational_impact: Keeps the observability layer advisory, so a monitor cannot become a controller.

@@ -1,0 +1,104 @@
+---
+# Declarative schema for capability degradation events.
+#
+# A recorded transition between health states, not a status flag. It names the
+# dimension that moved, the direction, the declared condition that was met, and
+# the observations it was derived from.
+#
+# It describes observed history and never the future. A degradation event is
+# not a warning that something will fail: the Occurrence and Experience layers
+# already refuse to predict, and health refuses for the same reason. A platform
+# that forecasts failure will eventually act on the forecast.
+#
+# Machine-generated, so identifiers are six digits.
+#
+# ARCHITECTURE ONLY. No runtime writes these records in this release.
+#
+# Governed by: docs/decisions/ADR-0013-capability-health-plane.md
+
+api_version: schott-platform/v1
+kind: Schema
+schema_for: capability-degradation-event
+
+provenance:
+  class: declared
+  source: docs/decisions/ADR-0013-capability-health-plane.md
+  recorded_at: 2026-08-03
+  last_reviewed: 2026-08-03
+
+id_pattern: '^CHDEG-[0-9]{6}$'
+
+mutability: immutable
+update_methods: none
+delete_methods: none
+supersession: new-record-only
+append_only_history: true
+
+describes: observed-history-only
+
+# Entry and exit conditions are declared separately on the envelope, and a
+# transition requires the declared hysteresis to have been satisfied. A single
+# threshold used for both directions is what produces flapping, and a flapping
+# subject generates alert volume that trains an operator to ignore it.
+hysteresis: declared-required
+
+may_modify_trust_state: false
+may_execute: false
+
+required_fields:
+  - event_id
+  - subject_type
+  - subject_id
+  - from_state
+  - to_state
+  # Which dimension moved. A transition with no dimension cannot be
+  # investigated.
+  - dimension
+  # The declared condition that was satisfied, quoted from the envelope, so the
+  # event stays readable after the envelope is superseded.
+  - entry_condition
+  - observed_at
+  - derived_from_observation_ids
+  - provenance
+
+optional_fields:
+  - exit_condition
+  - envelope_id
+  - hysteresis_satisfied_over_seconds
+  - notes
+
+enums:
+  subject_type:
+    - capability-instance
+    - capability-host
+    - capability-package
+  from_state:
+    - unknown
+    - unmonitored
+    - insufficient-policy
+    - healthy
+    - degraded
+    - unavailable
+    - withheld
+  to_state:
+    - unknown
+    - unmonitored
+    - insufficient-policy
+    - healthy
+    - degraded
+    - unavailable
+    - withheld
+
+forbidden_fields:
+  - predicted_failure
+  - forecast
+  - time_to_failure
+  - probability
+  - anomaly_score
+  - health_score
+  - trust_state
+  - auto_drain
+  - auto_quarantine
+  - auto_reroute
+  - auto_remediate
+  - command
