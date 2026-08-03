@@ -14,11 +14,14 @@
 > behaviour. Where something is undecided, this ADR says so explicitly rather
 > than leaving a gap for whoever implements it first.
 
-> **Writing this specification does not open the deployment gate.** The
-> Operator Root Authority deployment gate still blocks *implementation* of the
-> Fabric, exactly as the roadmap states. This ADR is the same move ADR-0011
-> made: the architecture is written first, deliberately, so that the thing
-> being governed does not get to shape its own governance.
+> **Specification may proceed before Operator Root deployment acceptance.**
+> **Runtime implementation, node admission, capability registration, routing,
+> selection, and execution remain blocked until the Trust Plane deployment gate
+> passes.** This ADR is the same move ADR-0011 made: the architecture is
+> written first, deliberately, so that the thing being governed does not get to
+> shape its own governance. Architecture is allowed now; runtime remains
+> forbidden. See [Governance boundaries](../fabric/governance-boundaries.md)
+> for the seven gate requirements.
 
 ## Context
 
@@ -168,6 +171,40 @@ contract with health is one sentence and it is one-directional: **health may
 remove a candidate from consideration and may never add one.** A healthy
 instance that is not trusted is not eligible; an unhealthy instance that is
 trusted is trusted and unavailable, which is a different sentence.
+
+### Governed discovery
+
+**Capability discovery means one thing: governed lookup of trusted capability
+advertisements already admitted into the Fabric registry.** It is a read
+against the governing core, and it is not a way of finding out what exists.
+
+The required sequence, in order:
+
+1. A **subject is identified** — declared by an operator, never found.
+2. A **trust decision exists** for it (ADR-0011).
+3. The **subject is admitted** to the fabric.
+4. An **advertisement is registered** — only an admitted subject may register
+   one.
+5. The advertisement **becomes queryable**.
+6. A **route may reference** the resulting instance.
+7. A **selection may choose** it.
+
+Nothing skips a step, and nothing enters at step 4.
+
+> **Reachability never implies admission.** A machine that answers on the
+> network has demonstrated that it is on the network, and nothing else.
+
+Explicitly forbidden:
+
+- **No network scanning** and **no subnet scanning.**
+- **No multicast discovery** and **no broadcast discovery.**
+- **No unsolicited advertisements** — one from an unadmitted subject is not a
+  pending application; it is not a record at all.
+- **No automatic registration** and **no automatic node admission.**
+- **No trusting an advertisement based on reachability.**
+- **No advertisement modifying trust state**, in either direction.
+- **No DNS discovery as trust** — a name that resolves is a name that resolves.
+- **No service discovery that bypasses the registry.**
 
 ### How nodes discover capabilities
 
@@ -435,21 +472,70 @@ node is a fourth record with `accelerator_class: remote-service`,
 
 ### Effect classes, and the door held open for robotics
 
-Every contract declares an **effect class**:
+Every contract declares an **effect class** — what the capability changes,
+which is the axis governance cares about. It is separate from determinism: a
+deterministic capability can still change the world, and a nondeterministic one
+need not.
 
-- **`read-only`** — observes; changes nothing.
-- **`compute-only`** — computes; changes nothing outside the request.
-- **`side-effecting`** — changes state outside the request.
+| Class | Meaning | Routable? |
+|---|---|---|
+| **`read-only`** | Observes; changes nothing. | Yes, subject to trust and contract |
+| **`computational`** | Computes; changes nothing outside the request. | Yes, subject to trust and contract |
+| **`content-generating`** | Produces new content; changes nothing outside the request. | Yes, subject to trust and contract |
+| **`side-effecting`** | Changes state outside the request. | **No — unroutable in v0.9.5** |
 
-**No route may select a `side-effecting` contract in this architecture.** The
-class exists so that a future actuating capability — robotics, physical
+**`side-effecting` is representable but unroutable.** No route may select it,
+no selection may choose it, and **no route may override the prohibition** — a
+restriction that can be lifted per-route is one that gets lifted during an
+incident.
+
+The class exists so that a future actuating capability — robotics, physical
 control, anything that moves — is *representable* without being *permitted*.
 Admitting actuation under governance written for text generation is how a
 capability fabric becomes an autonomous controller, and it would happen in a
 single pull request that looked like adding a model.
 
-Opening that door requires a future ADR that governs actuation on its own
-terms.
+**Future enablement requires all six of:**
+
+1. a **new ADR** governing actuation on its own terms
+2. an explicit **approval model**
+3. **effect authorization** — per-effect, not per-capability
+4. **remediation boundaries** — what may be undone, and by whom
+5. **audit requirements** for effects that reached the world
+6. **human approval semantics** — what a human is approving, and when
+
+Naming the price here is what stops it being paid by accident.
+
+### Trust, Fabric, and Health
+
+Three layers, three questions, and the separation between them is load-bearing.
+
+| Layer | Question |
+|---|---|
+| **Trust** | May this subject participate? |
+| **Fabric** | Where may this workload execute? |
+| **Health** (v0.9.6) | Is the trusted capability currently available and operating within its declared limits? |
+
+The rules, stated individually because each is a different way the separation
+gets eroded:
+
+- **Trust precedes admission.** Nothing is admitted that is not first trusted.
+- **Health cannot grant trust.**
+- **Health cannot override quarantine.** A quarantined subject with a perfect
+  health record stays quarantined.
+- **Health cannot broaden scope.**
+- **Health cannot admit a node.**
+- **Fabric cannot create trust decisions.**
+- **Fabric cannot mutate trust state.**
+- **The Trust Plane does not use routing outcomes as evidence of
+  trustworthiness.** A capability that has been selected and has returned
+  correct answers for six months has earned nothing; a compromised capability's
+  most likely behaviour is to return correct answers.
+
+The Capability Health Monitor remains v0.9.6, and **no health implementation
+appears in this sprint**. Until it exists, health is *declared or unknown*, and
+unknown stays unknown — treating missing data as healthy is how an unmonitored
+node becomes the preferred one.
 
 ### The core carries no capability semantics
 

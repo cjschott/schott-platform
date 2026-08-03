@@ -1232,6 +1232,31 @@ for gate in "Operator Root Authority instantiated" "production trust store valid
     "roadmap v0.9.5 gate requires: ${gate}"
 done
 
+# --- v0.9.5 Distributed Capability Fabric ------------------------------------
+ADR12="docs/decisions/ADR-0012-distributed-capability-fabric.md"
+assert_file "${ADR12}"
+assert_contains "${ADR12}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' "ADR-0012 is accepted"
+for fabric_doc in capability-fabric capability-lifecycle capability-identity \
+                  capability-routing node-model failure-behaviour \
+                  governance-boundaries; do
+  assert_file "docs/fabric/${fabric_doc}.md"
+done
+
+# The distinction the whole sprint turns on: architecture now, runtime later.
+assert_contains "${ADR12}" '[Ss]pecification may proceed' \
+  "ADR-0012 states specification may proceed before deployment acceptance"
+assert_contains "${ADR12}" '[Nn]o runtime implementation' \
+  "ADR-0012 declares no runtime implementation"
+assert_contains "docs/fabric/governance-boundaries.md" 'Architecture is allowed now' \
+  "governance document states architecture is allowed now"
+assert_contains "docs/fabric/governance-boundaries.md" '[Rr]untime remains forbidden' \
+  "governance document states runtime remains forbidden"
+
+# The roadmap must not quietly promote v0.9.5 past the gate.
+assert_contains "${ROADMAP}" 'ADR-0012' "roadmap cites ADR-0012"
+assert_contains "${ROADMAP}" '[Ii]mplementation still blocked|implementation remains blocked' \
+  "roadmap keeps v0.9.5 implementation blocked"
+
 # --- A deployment plan creates no deployment --------------------------------
 #
 # The previous form of this check asserted that /var/lib/kyri and /etc/kyri did

@@ -96,11 +96,50 @@ anything from logs:
 A distributed system that cannot answer the second one has no governance; it
 has a deployment.
 
+## Discovery is a governed lookup
+
+Capability discovery means **governed lookup of trusted capability
+advertisements already admitted into the Fabric registry**. An advertisement
+becomes **queryable** only after its subject has been admitted; before that it
+is not a pending record, it is not a record at all.
+
+**Reachability never implies admission.**
+
 ## The deployment gate
 
-Writing this specification does not open the Operator Root Authority deployment
-gate. **Implementation remains blocked** until it passes, because a fabric node
-trusted through a chain terminating inside the platform is not trusted at all.
+**Specification may proceed before Operator Root deployment acceptance.**
+Writing this architecture does not open the gate.
+
+**Blocked until the Trust Plane deployment gate passes:**
+
+- **Runtime implementation** — no fabric engine of any kind
+- **Node admission** — no host enters the fabric
+- **Capability registration** — no advertisement is registered
+- **Routing** — no route is resolved
+- **Selection** — no candidate is chosen
+- **Execution** — nothing runs anywhere
+
+A fabric node trusted through a chain terminating inside the platform is not
+trusted at all, which is why none of the above may begin first.
+
+**The gate requires all seven:**
+
+1. **Operator Root Authority instantiated** from an external identity, out of
+   band, by a human.
+2. **production trust store validated** — structurally clean, correct ownership
+   and permissions, outside the repository.
+3. **initial migrated subjects seeded** — collector plugins, source types,
+   remote targets, remote operations, host identity, policy version, and
+   gateway configuration.
+4. **TrustGateway source confirmed as `trust-plane-runtime`** for every
+   migrated request.
+5. **no migrated request using code-owned fallback.**
+6. **rollback procedure validated** as configuration rollback, never
+   trust-history rollback.
+7. **deployment evidence retained** — exit codes, identifiers, fingerprints,
+   audit events, permissions, and before/after repository state.
+
+Architecture is allowed now. Runtime remains forbidden.
 
 See the [deployment guide](../trust/operator-root-authority-deployment.md) and
 [validation checklist](../trust/operator-root-authority-validation-checklist.md).
