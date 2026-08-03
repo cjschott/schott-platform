@@ -973,6 +973,102 @@ done
 assert_contains "docs/platform-roadmap.md" '^### v0\.9\.4 — Trust Mechanism Migration' \
   "roadmap records v0.9.4"
 
+# --- v0.9.6 Capability Health Monitor reservation ----------------------------
+HEALTH_ROADMAP="docs/platform-roadmap.md"
+assert_contains "${HEALTH_ROADMAP}" '^### v0\.9\.6 — Capability Health Monitor' \
+  "roadmap reserves v0.9.6 Capability Health Monitor"
+
+# Ordering across five entries. Five milestones can all exist and still be in
+# the wrong sequence, so this is checked by line number rather than presence.
+health_order="$(grep -nE '^### (v0\.9\.4|v0\.9\.5|v0\.9\.6|v1\.0\.0) — ' "${ROOT}/${HEALTH_ROADMAP}" \
+  | cut -d: -f1 | tr '\n' ' ')"
+read -r line_094 line_095 line_096 line_100 <<<"${health_order}"
+if [[ -n "${line_094}" && -n "${line_095}" && -n "${line_096}" && -n "${line_100}" ]] \
+   && (( line_094 < line_095 && line_095 < line_096 && line_096 < line_100 )); then
+  pass "roadmap orders v0.9.4 before v0.9.5 before v0.9.6 before v1.0.0"
+else
+  fail "roadmap must order v0.9.4, v0.9.5, v0.9.6, v1.0.0 (found lines: ${health_order})"
+fi
+
+# Nothing already released may be renumbered by adding a reservation.
+for preserved in 'v0\.9\.0 — Remote Read-Only Collectors' 'v0\.9\.2 — Trust Plane' \
+                 'v0\.9\.3 — Trust Plane Runtime Foundation' \
+                 'v0\.9\.4 — Trust Mechanism Migration' \
+                 'v0\.9\.5 — Distributed Capability Fabric' \
+                 'v1\.0\.0 — Kyri Core Foundation'; do
+  assert_contains "${HEALTH_ROADMAP}" "${preserved}" \
+    "roadmap preserves ${preserved}"
+done
+
+# Declared scope. Each is a thing the monitor observes; none is a thing it does.
+for scope_item in "node availability" "endpoint availability" \
+                  "capability availability" "capability latency" "queue depth" \
+                  "execution success" "lease health" "placement history" \
+                  "resource pressure" "GPU utilization" "VRAM utilization" \
+                  "CPU utilization" "memory utilization" "transport health" \
+                  "Trust Plane state" "quarantine state" "maintenance" "drain" \
+                  "stale heartbeat" "collector freshness" "capability degradation" \
+                  "health history" "deterministic health evaluation" \
+                  "immutable health observations" "explainable status"; do
+  assert_contains "${HEALTH_ROADMAP}" "${scope_item}" \
+    "v0.9.6 scope covers ${scope_item}"
+done
+
+# The prohibitions. Each is a thing a health monitor is most tempted to do.
+for prohibition in "no autonomous remediation" "no automatic node admission" \
+                   "no automatic trust changes" "no automatic workload rerouting" \
+                   "no automatic drain" "no automatic quarantine" \
+                   "no prediction" "no forecasting" "no ML anomaly"; do
+  assert_contains "${HEALTH_ROADMAP}" "${prohibition}" \
+    "v0.9.6 forbids: ${prohibition}"
+done
+
+# The architectural principle, in the approved wording.
+assert_contains "${HEALTH_ROADMAP}" '[Hh]ealth never grants trust' \
+  "roadmap states that health never grants trust"
+assert_contains "${HEALTH_ROADMAP}" '[Tt]rust never implies health' \
+  "roadmap states that trust never implies health"
+assert_contains "${HEALTH_ROADMAP}" 'declared operational envelope' \
+  "roadmap defines capability health against a declared operational envelope"
+
+# The dependency rule.
+for dependency in "depends on v0\.9\.5" "consumes Trust Plane state" \
+                  "cannot change Trust Plane state" \
+                  "recommend investigation" "cannot execute remediation"; do
+  assert_contains "${HEALTH_ROADMAP}" "${dependency}" \
+    "roadmap records the dependency rule: ${dependency}"
+done
+
+# The three questions, and the combinations that follow from them.
+for axis in "May this subject participate" "Where can this workload execute" \
+            "trusted and degraded" "trusted and unavailable" \
+            "restricted and healthy" "[Hh]ealth must never override trust"; do
+  assert_contains "${HEALTH_ROADMAP}" "${axis}" \
+    "roadmap separates trust from health: ${axis}"
+done
+
+# Future entities are named, not built.
+for entity in capability-health-observation capability-health-state \
+              node-heartbeat endpoint-health lease-health placement-health \
+              degradation-event; do
+  assert_contains "${HEALTH_ROADMAP}" "${entity}" \
+    "roadmap names the future entity ${entity}"
+  if [[ -f "${ROOT}/platform-model/schemas/${entity}.schema.yaml" ]]; then
+    fail "v0.9.6 is a reservation; no ${entity} schema belongs here"
+  else
+    pass "no premature schema for ${entity}"
+  fi
+done
+
+# A reservation implements nothing.
+for premature in tools/health tools/fabric tools/capability tools/monitor; do
+  if [[ -e "${ROOT}/${premature}" ]]; then
+    fail "v0.9.6 is a roadmap reservation; ${premature} must not exist"
+  else
+    pass "no premature implementation: ${premature}"
+  fi
+done
+
 if [[ "${FAILURES}" -gt 0 ]]; then
   printf '\nStatic documentation validation failed with %d error(s).\n' "${FAILURES}" >&2
   exit 1
