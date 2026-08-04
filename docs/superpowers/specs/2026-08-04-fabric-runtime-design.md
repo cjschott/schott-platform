@@ -397,10 +397,14 @@ derives `request_id`.
 Two consequences follow, and the first corrects an error in an earlier draft of
 this specification:
 
-- **Two identical declarations produce two distinct records.** Submitting
-  byte-identical content twice allocates two different record identities and
-  creates two records. Content equality is **not** duplicate detection, and
-  store allocation cannot make a repeated submission collide.
+- **Two identical declarations submitted with different `request_id` values
+  produce independently allocated records.** Different request identities permit
+  independently accepted records carrying identical authoritative content.
+  **Content equality alone does not establish replay**, and store allocation
+  cannot make a repeated submission collide.
+- **An exact replay — the same accepted `request_id` with a matching
+  `request_digest` — returns the original accepted outcome and the original
+  record identity, without creating another record.**
 - **A collision on an already-allocated record path is a store conflict, not
   proof of replay.** It means the name was occupied; it says nothing about
   whether the same request was submitted twice.
@@ -1145,9 +1149,13 @@ result is claimed here; nothing has been implemented or executed.**
     non-selection operation, when the store is inspected, then a deterministic
     refusal result was returned, **no Fabric record was created**, and **no
     generic Fabric audit record or ninth record type exists**.
-38. **Causal linkage.** Given a selection or refusal, when audit is inspected,
-    then route, route version, candidates, exclusions, and outcome are
-    reconstructable **from records alone**.
+38. **Causal linkage on accepted `CSEL`.** Given an accepted selection or
+    selection-refusal `CSEL` record — covering selection outcomes, selection
+    loss, selection refusal, and no-candidate outcomes — when it is inspected,
+    then route, route version, every candidate, each exclusion, and the outcome
+    are reconstructable **from records alone**. Rejected admission,
+    declaration, advertisement, authorization, and lifecycle operations create
+    **no persistent refusal record** and are outside this criterion.
 39. **Permissions and ownership.** Given a store with a mode or ownership
     mismatch, when any operation runs, then it is reported and **never silently
     corrected**.
