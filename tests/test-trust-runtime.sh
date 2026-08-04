@@ -462,6 +462,115 @@ if ROOT_LINEAGE_MODEL:
         except TrustError:
             ok(f"ENG-0001: a stored root lineage carrying {bogus} is refused")
 
+    # Stored values are validated, not just stored field names. A record whose
+    # keys are all correct and whose values are all nonsense must not satisfy
+    # the authority-to-lineage rule: TrustStore.validate() relies on this
+    # function, so a name-only check lets malformed data prove a root was
+    # established.
+    def stored_root_lineage(**overrides):
+        payload = root_lineage().to_dict()
+        payload.update(overrides)
+        return payload
+
+    reviewer_record = {
+        "id": "whatever",
+        "lineage_type": LINEAGE_TYPE_ROOT_ESTABLISHMENT,
+        "lineage_id": "NOT-A-TLIN",
+        "version": 0,
+        "authority_id": "NOT-A-TAUTH",
+        "subject_type": "anything",
+        "establishment_origin": "invented",
+        "evidence_reference_ids": ["garbage"],
+        "establishment_audit_id": "garbage",
+        "current_state": "revoked",
+        "established_at": "not-a-time",
+        "recorded_at": "not-a-time",
+        "terminated": "not-a-bool",
+    }
+
+    for label, payload in (
+        ("every value malformed", reviewer_record),
+        ("a malformed lineage_id", stored_root_lineage(lineage_id="NOT-A-TLIN")),
+        ("an id inconsistent with its version",
+         stored_root_lineage(id="TLIN-000001-v0009")),
+        ("a malformed versioned id", stored_root_lineage(id="garbage")),
+        ("version 0", stored_root_lineage(version=0, id="TLIN-000001-v0000")),
+        ("version above 1", stored_root_lineage(version=2, id="TLIN-000001-v0002")),
+        ("a non-integer version", stored_root_lineage(version="1")),
+        ("a boolean version", stored_root_lineage(version=True)),
+        ("a malformed authority_id", stored_root_lineage(authority_id="NOT-A-TAUTH")),
+        ("a subject_type other than operator-root",
+         stored_root_lineage(subject_type="host")),
+        ("an unknown establishment_origin",
+         stored_root_lineage(establishment_origin="invented")),
+        ("empty evidence_reference_ids", stored_root_lineage(evidence_reference_ids=[])),
+        ("malformed evidence_reference_ids",
+         stored_root_lineage(evidence_reference_ids=["garbage"])),
+        ("evidence_reference_ids that is not a list",
+         stored_root_lineage(evidence_reference_ids="TEVID-000001")),
+        ("a malformed establishment_audit_id",
+         stored_root_lineage(establishment_audit_id="garbage")),
+        ("a state other than trusted", stored_root_lineage(current_state="revoked")),
+        ("a state of unknown", stored_root_lineage(current_state="unknown")),
+        ("an unparseable established_at", stored_root_lineage(established_at="not-a-time")),
+        ("a timezone-naive established_at",
+         stored_root_lineage(established_at="2026-08-03T22:00:06")),
+        ("a timezone-naive recorded_at",
+         stored_root_lineage(recorded_at="2026-08-03T22:00:06")),
+        ("a non-string established_at", stored_root_lineage(established_at=12345)),
+        ("a null recorded_at", stored_root_lineage(recorded_at=None)),
+        ("a non-boolean terminated", stored_root_lineage(terminated="not-a-bool")),
+        ("terminated true, because advancement is undefined",
+         stored_root_lineage(terminated=True)),
+    ):
+        try:
+            validate_root_lineage_record(payload, "stored root lineage")
+            bad(f"ENG-0001: a stored root lineage with {label} is refused")
+        except TrustError:
+            ok(f"ENG-0001: a stored root lineage with {label} is refused")
+        except Exception as error:  # noqa: BLE001
+            bad(f"ENG-0001: a stored root lineage with {label} is refused as a "
+                f"TrustError, not {type(error).__name__}: {error}")
+
+    # A record that is not a mapping at all must refuse rather than raise.
+    for label, payload in (("a list", []), ("a string", "root"), ("null", None)):
+        try:
+            validate_root_lineage_record(payload, "stored root lineage")
+            bad(f"ENG-0001: a stored root lineage that is {label} is refused")
+        except TrustError:
+            ok(f"ENG-0001: a stored root lineage that is {label} is refused")
+        except Exception as error:  # noqa: BLE001
+            bad(f"ENG-0001: a stored root lineage that is {label} is refused as a "
+                f"TrustError, not {type(error).__name__}: {error}")
+
+    # The valid record still passes, and validation returns the reconstructed
+    # record so callers compare parsed values rather than raw strings.
+    try:
+        parsed = validate_root_lineage_record(root_lineage().to_dict(), "stored")
+        ok("ENG-0001: a specification-compliant stored record still validates")
+        check(getattr(parsed, "authority_id", None) == "TAUTH-000001",
+              "ENG-0001: validation returns the reconstructed root lineage")
+    except Exception as error:  # noqa: BLE001
+        bad(f"ENG-0001: a specification-compliant stored record still validates "
+            f"({type(error).__name__}: {error})")
+
+    # 2b. The model itself enforces the contract, so no caller can build one.
+    for label, overrides in (
+        ("version 0", {"version": 0}),
+        ("version above 1, because advancement is undefined", {"version": 2}),
+        ("a subject_type other than operator-root", {"subject_type": "host"}),
+        ("terminated true", {"terminated": True}),
+        ("a non-boolean terminated", {"terminated": "yes"}),
+    ):
+        try:
+            root_lineage(**overrides)
+            bad(f"ENG-0001: RootAuthorityLineage refuses {label}")
+        except TrustError:
+            ok(f"ENG-0001: RootAuthorityLineage refuses {label}")
+        except Exception as error:  # noqa: BLE001
+            bad(f"ENG-0001: RootAuthorityLineage refuses {label} as a TrustError, "
+                f"not {type(error).__name__}: {error}")
+
     # 3. Missing or unknown discriminator values fail closed.
     for label, payload in (
         ("missing", {k: v for k, v in root_lineage().to_dict().items()
@@ -651,6 +760,49 @@ with tempfile.TemporaryDirectory() as tmp:
         problems = store.validate()
         check(any("lineage" in problem for problem in problems),
               f"ENG-0001: validate-store refuses a root lineage naming another authority ({problems})")
+
+with tempfile.TemporaryDirectory() as tmp:
+    # A stored record whose field names are right and whose values are all
+    # nonsense must produce a finding, not satisfy the rule and not crash the
+    # validator. This is the path a name-only check left open.
+    store = make_store(tmp)
+    authority = orphan_authority(store)
+    store.write("authority", authority)
+    malformed = {
+        "id": "whatever",
+        "lineage_type": "root-establishment",
+        "lineage_id": "NOT-A-TLIN",
+        "version": 0,
+        "authority_id": "NOT-A-TAUTH",
+        "subject_type": "anything",
+        "establishment_origin": "invented",
+        "evidence_reference_ids": ["garbage"],
+        "establishment_audit_id": "garbage",
+        "current_state": "revoked",
+        "established_at": "not-a-time",
+        "recorded_at": "not-a-time",
+        "terminated": "not-a-bool",
+    }
+    store.write_atomic(
+        store.path_for("lineage", f"{authority.lineage_id}-v0001"), malformed)
+    before = sorted((p, hashlib.sha256(p.read_bytes()).hexdigest())
+                    for p in store.root.rglob("*") if p.is_file())
+    try:
+        problems = store.validate()
+        ok("ENG-0001: validate-store reports a malformed root lineage rather than crashing")
+        check(any("lineage" in problem for problem in problems),
+              f"ENG-0001: a malformed stored root lineage produces a finding ({problems})")
+    except Exception as error:  # noqa: BLE001
+        bad(f"ENG-0001: validate-store reports a malformed root lineage rather than "
+            f"crashing ({type(error).__name__}: {error})")
+    after = sorted((p, hashlib.sha256(p.read_bytes()).hexdigest())
+                   for p in store.root.rglob("*") if p.is_file())
+    check(before == after,
+          "ENG-0001: reporting a malformed root lineage mutates and repairs nothing")
+
+    # Deterministic: the same malformed record reports the same finding.
+    check(store.validate() == store.validate(),
+          "ENG-0001: malformed-record findings are deterministic")
 
 # A store inside the repository is refused by default.
 try:

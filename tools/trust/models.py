@@ -726,15 +726,30 @@ class RootAuthorityLineage:
         _match(LINEAGE_ID, self.lineage_id, "lineage_id")
         _match(AUTHORITY_ID, self.authority_id, "authority_id")
         _match(AUDIT_ID, self.establishment_audit_id, "establishment_audit_id")
-        if self.version < 1:
-            raise TrustError("lineage version starts at 1")
-        if not str(self.subject_type or "").strip():
-            raise TrustError("subject_type is required")
+        # Exactly one version exists. Advancing a root establishment lineage is
+        # not defined in this release, so a second version is a record whose
+        # meaning nothing specifies. `bool` is excluded explicitly because it is
+        # an `int` in Python, and `version=True` would otherwise pass as 1.
+        if isinstance(self.version, bool) or not isinstance(self.version, int):
+            raise TrustError("lineage version must be an integer")
+        if self.version != 1:
+            raise TrustError(
+                "a root establishment lineage has exactly one version; advancing "
+                "one is not defined in this release"
+            )
+        if self.subject_type != AuthorityType.OPERATOR_ROOT.value:
+            raise TrustError(
+                f"subject_type '{self.subject_type}' is not "
+                f"'{AuthorityType.OPERATOR_ROOT.value}'; this record describes the "
+                "establishment of an operator root and nothing else"
+            )
         if self.establishment_origin not in ESTABLISHMENT_ORIGINS:
             raise TrustError(
                 f"establishment origin '{self.establishment_origin}' is not "
                 "recognised; a root is established outside this platform"
             )
+        if not isinstance(self.evidence_reference_ids, (list, tuple)):
+            raise TrustError("evidence_reference_ids must be a list of identifiers")
         if not self.evidence_reference_ids:
             raise TrustError(
                 "a root establishment lineage requires at least one evidence reference")
@@ -747,6 +762,14 @@ class RootAuthorityLineage:
             )
         require_aware(self.established_at, "established_at")
         require_aware(self.recorded_at, "recorded_at")
+        # Termination is advancement by another name, and equally undefined.
+        if not isinstance(self.terminated, bool):
+            raise TrustError("terminated must be a boolean")
+        if self.terminated:
+            raise TrustError(
+                "a root establishment lineage is never terminated; withdrawing a "
+                "root is not implemented in this release"
+            )
 
     @property
     def lineage_type(self) -> str:
@@ -793,8 +816,39 @@ ROOT_LINEAGE_FORBIDDEN_KEYS = frozenset({
 })
 
 
-def validate_root_lineage_record(record: Mapping[str, Any], where: str) -> None:
-    """Refuse a stored root establishment lineage that is not one."""
+def _stored_time(value: Any, field_name: str) -> datetime:
+    """Parse a stored timestamp, or refuse it as a finding rather than a crash.
+
+    Raised bare: the caller adds the record it came from, so the message names
+    the record once.
+    """
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        raise TrustError(f"{field_name} must be an ISO 8601 timestamp")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise TrustError(f"{field_name} is not an ISO 8601 timestamp") from None
+
+
+def validate_root_lineage_record(record: Mapping[str, Any],
+                                 where: str) -> RootAuthorityLineage:
+    """Refuse a stored root establishment lineage that is not one.
+
+    Checks field names *and* their values. A name-only check would let a record
+    whose every value is nonsense satisfy the authority-to-lineage rule in
+    `TrustStore.validate`, which is the same as letting malformed data prove a
+    root was established.
+
+    Every failure is a `TrustError`, including parse, type, and datetime
+    failures, so validation reports a malformed record rather than crashing on
+    it. Returns the reconstructed record so callers compare parsed values
+    instead of raw strings.
+    """
+    if not isinstance(record, Mapping):
+        raise TrustError(f"{where} is not a record")
+
     kind = lineage_type_of(record, where)
     if kind != LINEAGE_TYPE_ROOT_ESTABLISHMENT:
         raise TrustError(
@@ -802,7 +856,7 @@ def validate_root_lineage_record(record: Mapping[str, Any], where: str) -> None:
 
     reject_forbidden_keys(record, where)
 
-    present = set(record or {})
+    present = set(record)
     for key in sorted(present & ROOT_LINEAGE_FORBIDDEN_KEYS):
         raise TrustError(
             f"{where} carries '{key}'; a root establishment records no decision "
@@ -810,8 +864,44 @@ def validate_root_lineage_record(record: Mapping[str, Any], where: str) -> None:
         )
     for key in sorted(present - ROOT_LINEAGE_KEYS):
         raise TrustError(f"{where} carries an unrecognised field '{key}'")
-    for key in sorted(ROOT_LINEAGE_KEYS - present - {"id", "terminated"}):
+    for key in sorted(ROOT_LINEAGE_KEYS - present - {"terminated"}):
         raise TrustError(f"{where} is missing required field '{key}'")
+
+    evidence_ids = record["evidence_reference_ids"]
+    if not isinstance(evidence_ids, (list, tuple)):
+        raise TrustError(f"{where}: evidence_reference_ids must be a list")
+
+    # Reconstruction is the value check: every invariant the model enforces on
+    # construction applies to a stored record too, so there is one definition of
+    # a valid root establishment rather than two that can drift apart.
+    try:
+        lineage = RootAuthorityLineage(
+            lineage_id=record["lineage_id"],
+            version=record["version"],
+            authority_id=record["authority_id"],
+            subject_type=record["subject_type"],
+            establishment_origin=record["establishment_origin"],
+            evidence_reference_ids=tuple(evidence_ids),
+            establishment_audit_id=record["establishment_audit_id"],
+            current_state=record["current_state"],
+            established_at=_stored_time(record["established_at"], "established_at"),
+            recorded_at=_stored_time(record["recorded_at"], "recorded_at"),
+            terminated=record.get("terminated", False),
+        )
+    except TrustError as error:
+        raise TrustError(f"{where}: {error}") from None
+    except (TypeError, ValueError, AttributeError) as error:
+        raise TrustError(
+            f"{where} is malformed ({type(error).__name__}: {error})") from None
+
+    # The stored name must agree with the content it holds; a file called
+    # v0009 holding version 1 is two claims about the same record.
+    if str(record["id"]) != lineage.id:
+        raise TrustError(
+            f"{where}: stored id '{record['id']}' does not match "
+            f"'{lineage.id}' derived from lineage_id and version"
+        )
+    return lineage
 
 
 @dataclass(frozen=True)

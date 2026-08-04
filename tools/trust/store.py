@@ -117,14 +117,14 @@ class TrustStore(ImmutableStore):
             for version in sorted(versions, key=lambda v: str(v.get("id"))):
                 label = str(version.get("id") or lineage_id)
                 try:
-                    validate_root_lineage_record(version, label)
+                    lineage = validate_root_lineage_record(version, label)
                 except TrustError as error:
                     problems.append(f"{authority_id}: lineage {label}: {error}")
                     continue
-                if str(version.get("authority_id")) != authority_id:
+                if lineage.authority_id != authority_id:
                     problems.append(
                         f"{authority_id}: lineage {label} names authority "
-                        f"'{version.get('authority_id')}'")
+                        f"'{lineage.authority_id}'")
 
         for identifier, decision in sorted(decisions.items(), key=lambda i: str(i[0])):
             if decision.get("actor_authority_id") not in known_authorities:

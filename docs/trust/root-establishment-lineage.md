@@ -49,20 +49,27 @@ Storage is unchanged; only interpretation is discriminated.
 
 ## `RootAuthorityLineage` fields
 
-| Field | Type | Required | Value for the ceremony |
+| Field | Constraint | Required | Value for the ceremony |
 |---|---|---|---|
+| `id` | exactly `<lineage_id>-v<version:04d>` | yes | `TLIN-000001-v0001` |
 | `lineage_id` | `^TLIN-[0-9]{6}$` | yes | `TLIN-000001` |
-| `version` | integer ≥ 1 | yes | `1` |
+| `version` | integer, **exactly `1`** | yes | `1` |
 | `lineage_type` | constant | yes | `root-establishment` |
 | `authority_id` | `^TAUTH-[0-9]{6}$` | yes | `TAUTH-000001` |
-| `subject_type` | string | yes | `operator-root` |
-| `establishment_origin` | non-empty string | yes | `external-operator-ceremony` |
-| `evidence_reference_ids` | tuple of `^TEVID-[0-9]{6}$` | yes, ≥ 1 | `TEVID-000001`…`TEVID-000005` |
+| `subject_type` | **exactly `operator-root`** | yes | `operator-root` |
+| `establishment_origin` | one of the named origins | yes | `external-operator-ceremony` |
+| `evidence_reference_ids` | list of `^TEVID-[0-9]{6}$`, ≥ 1 | yes | `TEVID-000001`…`TEVID-000005` |
 | `establishment_audit_id` | `^TAUDIT-[0-9]{6}$` | yes | `TAUDIT-000001` |
-| `current_state` | `TrustState` | yes | `trusted` |
-| `established_at` | timezone-aware datetime | yes | the authority's `created_at` |
-| `recorded_at` | timezone-aware datetime | yes | when the record was written |
-| `terminated` | boolean | no, default `false` | `false` |
+| `current_state` | **exactly `trusted`** | yes | `trusted` |
+| `established_at` | ISO 8601, timezone-aware | yes | the authority's `created_at` |
+| `recorded_at` | ISO 8601, timezone-aware | yes | when the record was written |
+| `terminated` | boolean, **exactly `false`** | no, default `false` | `false` |
+
+`version` is exactly 1 and `terminated` exactly false because **advancing or
+terminating a root establishment lineage is not defined in this release**. A
+version 2, or a terminated root establishment, is a record whose meaning nothing
+specifies. `bool` is excluded from `version` explicitly — it is an `int` in
+Python, so `version: true` would otherwise pass as 1.
 
 Stored as `lineages/TLIN-000001-v0001.yaml`, matching the released
 `LINEAGE_VERSION_ID` pattern. The identifier is the one **already allocated** by
@@ -185,6 +192,23 @@ It reports a problem when the lineage record is absent, when the referenced
 lineage is a `subject-decision` lineage rather than a root establishment, when
 the stored record carries a forbidden or unrecognised field, and when the
 lineage names a different authority than the one referring to it.
+
+### Stored values are validated, not just stored field names
+
+Checking field names alone would let a record whose keys are all correct and
+whose values are all nonsense satisfy this rule — malformed data proving a root
+was established. So validation **reconstructs `RootAuthorityLineage` from the
+stored record** after the field-name checks. Every invariant the model enforces
+on construction therefore applies to stored data too, and there is one
+definition of a valid root establishment rather than two that can drift apart.
+
+It additionally checks that the stored `id` equals
+`<lineage_id>-v<version:04d>`. A file named `v0009` holding version 1 is two
+claims about the same record.
+
+**Every failure is a `TrustError`** — including parse, type, and datetime
+failures, and a record that is not a mapping at all. `validate-store` reports a
+malformed record as a deterministic finding rather than crashing on it.
 
 Against the existing production store it reports exactly one finding:
 
