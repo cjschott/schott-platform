@@ -140,16 +140,38 @@ root establishment and **does not retroactively create `TLIN-000001`** in the
 production store.
 
 Backfilling the existing store is a **separate, explicitly operator-approved
-append-only action**, specified but not performed by ENG-0001. It must:
+append-only action**, specified but not performed by ENG-0001.
 
-- write `TLIN-000001-v0001` and nothing else,
-- leave `TAUTH-000001` and `TAUDIT-000001` **byte-identical**,
-- emit its own new audit event rather than amending the ceremony's, and
-- be refused if a lineage record for `TLIN-000001` already exists.
+**The backfill creates exactly two new immutable records: `TLIN-000001-v0001`
+and a new backfill audit event. It modifies no pre-existing record.
+`TAUTH-000001`, `TAUDIT-000001`, and all ceremony evidence records must remain
+byte-identical, verified by digest before and after.**
+
+It is refused if a lineage record for `TLIN-000001` already exists.
 
 Amending `TAUDIT-000001` to reference the new record is **forbidden**. The
 ceremony's audit event records what happened at the ceremony. A later repair is
-a later event.
+a later event, and it gets its own.
+
+### This ADR constrains the backfill; it does not authorise it
+
+The requirement above is the **mandatory constraint set**, not an approval to
+run anything. **No backfill is authorised or executed by this ADR, by ENG-0001,
+or by the pull request that introduced them.**
+
+Before any execution, a separate operator-approved backfill plan must specify:
+
+- the **audit event type** and its required fields,
+- **audit identifier allocation**,
+- the **operator identity** and the recorded reason,
+- **preconditions and refusal conditions**,
+- **write ordering and partial-failure handling**, and
+- **before/after digest verification**.
+
+Each of those is a decision with a wrong answer that would be permanent. A
+backfill that allocated the wrong identifier, or wrote the lineage and then died
+before its audit event, would leave the store in a state no later record can
+correct — because nothing here deletes or rewrites.
 
 ### Store validation
 

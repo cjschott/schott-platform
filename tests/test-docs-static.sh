@@ -1371,6 +1371,40 @@ assert_contains "${ROOT_LINEAGE_DOC}" 'byte-identical' \
 assert_contains "${ROOT_LINEAGE_DOC}" '[Aa]mending the ceremony.s audit event is .{0,4}forbidden' \
   "root lineage contract forbids amending the ceremony audit event"
 
+# --- The backfill constraint set is stated identically in all three docs -----
+# An earlier revision said "write TLIN-000001-v0001 and nothing else" alongside
+# "emit its own new audit event", which cannot both be satisfied. The corrected
+# form names two records explicitly, so the count is unambiguous.
+ENG1_PLAN="${SEQUENCE_PLAN}"
+for backfill_doc in "${ADR14}" "${ROOT_LINEAGE_DOC}" "${ENG1_PLAN}"; do
+  assert_contains "${backfill_doc}" 'creates exactly two new immutable records' \
+    "$(basename "${backfill_doc}" .md) states the backfill creates exactly two records"
+  assert_contains "${backfill_doc}" 'byte-identical, verified by digest' \
+    "$(basename "${backfill_doc}" .md) requires digest verification before and after"
+  assert_not_contains "${backfill_doc}" 'TLIN-000001-v0001. and nothing else' \
+    "$(basename "${backfill_doc}" .md) drops the contradictory 'nothing else' wording"
+done
+for modifies_doc in "${ADR14}" "${ROOT_LINEAGE_DOC}"; do
+  assert_contains "${modifies_doc}" 'modifies no pre-existing record' \
+    "$(basename "${modifies_doc}" .md) states the backfill modifies no pre-existing record"
+  assert_contains "${modifies_doc}" 'authorised or executed by' \
+    "$(basename "${modifies_doc}" .md) states no backfill is authorised or executed here"
+done
+
+# Execution needs its own operator-approved plan. Naming what that plan must
+# settle is what keeps "specified" from being mistaken for "approved".
+for backfill_requirement in 'audit event type' \
+                            'audit identifier allocation' \
+                            'operator identity' \
+                            'preconditions and refusal conditions' \
+                            'write ordering and partial-failure handling' \
+                            'before/after digest verification'; do
+  assert_contains "${ROOT_LINEAGE_DOC}" "${backfill_requirement}" \
+    "backfill plan prerequisite recorded: ${backfill_requirement}"
+  assert_contains "${ADR14}" "${backfill_requirement}" \
+    "ADR-0014 records the backfill plan prerequisite: ${backfill_requirement}"
+done
+
 # --- v0.9.5 Distributed Capability Fabric ------------------------------------
 ADR12="docs/decisions/ADR-0012-distributed-capability-fabric.md"
 assert_file "${ADR12}"

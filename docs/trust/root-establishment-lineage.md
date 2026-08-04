@@ -108,17 +108,39 @@ refused, correctly. **Fixing the write path does not retroactively create
 `TLIN-000001`.**
 
 Backfill is a **separate, explicitly operator-approved, append-only action**.
-ENG-0001 specifies it and does not perform it. It must:
+ENG-0001 specifies it and does not perform it.
 
-- write `TLIN-000001-v0001` and nothing else;
-- leave `TAUTH-000001` and `TAUDIT-000001` **byte-identical**, verified by
-  digest before and after;
-- emit its **own new** audit event, never amending `TAUDIT-000001`;
-- be refused if a lineage record for `TLIN-000001` already exists;
-- record the operator decision and reason.
+**The backfill creates exactly two new immutable records: `TLIN-000001-v0001`
+and a new backfill audit event. It modifies no pre-existing record.
+`TAUTH-000001`, `TAUDIT-000001`, and all ceremony evidence records must remain
+byte-identical, verified by digest before and after.**
+
+It is refused if a lineage record for `TLIN-000001` already exists, and it
+records the operator decision and reason.
 
 Amending the ceremony's audit event is **forbidden**. That event records what
-happened at the ceremony. A later repair is a later event.
+happened at the ceremony. A later repair is a later event, and it gets its own.
+
+### These are constraints, not authorisation
+
+The requirement above is the **mandatory constraint set**. **No backfill is
+authorised or executed by this contract, by ENG-0001, or by the pull request
+that introduced them.**
+
+Before any execution, a separate operator-approved backfill plan must specify:
+
+| Must specify | Why it cannot be improvised |
+|---|---|
+| **audit event type** and required fields | the event kind is part of the permanent record |
+| **audit identifier allocation** | a wrong identifier cannot be withdrawn |
+| **operator identity** and recorded reason | who repaired the root, and why |
+| **preconditions and refusal conditions** | when the backfill must decline to run |
+| **write ordering and partial-failure handling** | a half-written backfill is permanent |
+| **before/after digest verification** | proof that no ceremony record moved |
+
+Write ordering and partial-failure handling deserve the most care. Nothing in
+this store deletes or rewrites, so a backfill that writes the lineage and then
+fails before its audit event leaves a state no later record can correct.
 
 ## Store validation
 

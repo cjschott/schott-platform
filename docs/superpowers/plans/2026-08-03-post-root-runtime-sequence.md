@@ -119,12 +119,19 @@ reports a finding for any authority whose lineage record is absent.
 - [ ] **Do not persist `TLIN-000001` into the production store.** `TAUTH-000001`
       already exists and cannot be re-declared, so the code fix repairs future
       root establishment only.
-- [ ] Specify the production backfill as an append-only, separately
-      operator-approved action: write `TLIN-000001-v0001` and nothing else;
-      leave `TAUTH-000001` and `TAUDIT-000001` byte-identical, verified by
-      digest before and after; emit a new audit event rather than amending the
-      ceremony's; refuse if the lineage record already exists. **Do not execute
-      it.**
+- [ ] Record the production backfill's mandatory constraint set, unchanged:
+      **the backfill creates exactly two new immutable records,
+      `TLIN-000001-v0001` and a new backfill audit event. It modifies no
+      pre-existing record. `TAUTH-000001`, `TAUDIT-000001`, and all ceremony
+      evidence records must remain byte-identical, verified by digest before and
+      after.** It is refused if a lineage record for `TLIN-000001` already
+      exists. **Do not execute it.**
+- [ ] **Do not write a backfill plan or a backfill tool in ENG-0001.** ENG-0001
+      records constraints only. Execution requires a separate operator-approved
+      backfill plan specifying the audit event type and required fields, audit
+      identifier allocation, operator identity and recorded reason,
+      preconditions and refusal conditions, write ordering and partial-failure
+      handling, and before/after digest verification.
 - [ ] Do not touch `validate-store` directory-creation behaviour — that is
       ENG-0002.
 
