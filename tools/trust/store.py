@@ -119,11 +119,13 @@ class TrustStore(ImmutableStore):
                 try:
                     lineage = validate_root_lineage_record(version, label)
                 except TrustError as error:
-                    problems.append(f"{authority_id}: lineage {label}: {error}")
+                    # The helper has already named the record; adding the label
+                    # again would print the same identifier twice in one line.
+                    problems.append(f"{authority_id}: {error}")
                     continue
                 if lineage.authority_id != authority_id:
                     problems.append(
-                        f"{authority_id}: lineage {label} names authority "
+                        f"{authority_id}: {label} names authority "
                         f"'{lineage.authority_id}'")
 
         for identifier, decision in sorted(decisions.items(), key=lambda i: str(i[0])):

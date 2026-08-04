@@ -508,6 +508,13 @@ if ROOT_LINEAGE_MODEL:
          stored_root_lineage(evidence_reference_ids=["garbage"])),
         ("evidence_reference_ids that is not a list",
          stored_root_lineage(evidence_reference_ids="TEVID-000001")),
+        # A stored record comes from YAML, where a sequence loads as a list. A
+        # tuple is a non-list, so accepting one would mean the stored-record
+        # boundary was not actually checking the stored shape.
+        ("evidence_reference_ids stored as a tuple",
+         stored_root_lineage(evidence_reference_ids=("TEVID-000001",))),
+        ("evidence_reference_ids stored as a mapping",
+         stored_root_lineage(evidence_reference_ids={"0": "TEVID-000001"})),
         ("a malformed establishment_audit_id",
          stored_root_lineage(establishment_audit_id="garbage")),
         ("a state other than trusted", stored_root_lineage(current_state="revoked")),
@@ -758,7 +765,7 @@ with tempfile.TemporaryDirectory() as tmp:
             authority_id="TAUTH-999999",
         ))
         problems = store.validate()
-        check(any("lineage" in problem for problem in problems),
+        check(any("TAUTH-999999" in problem for problem in problems),
               f"ENG-0001: validate-store refuses a root lineage naming another authority ({problems})")
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -803,6 +810,53 @@ with tempfile.TemporaryDirectory() as tmp:
     # Deterministic: the same malformed record reports the same finding.
     check(store.validate() == store.validate(),
           "ENG-0001: malformed-record findings are deterministic")
+
+if ROOT_LINEAGE_MODEL:
+    with tempfile.TemporaryDirectory() as tmp:
+        # Assert the complete TrustStore.validate() finding, not just that the
+        # helper raised. The helper already prefixes its message with the record
+        # identifier, so a store that prefixes it again names the same record
+        # twice in one line.
+        store = make_store(tmp)
+        authority = orphan_authority(store)
+        store.write("authority", authority)
+        record_id = f"{authority.lineage_id}-v0001"
+        malformed = root_lineage(
+            lineage_id=authority.lineage_id,
+            authority_id=authority.authority_id,
+        ).to_dict()
+        malformed["established_at"] = "not-a-time"
+        store.write_atomic(store.path_for("lineage", record_id), malformed)
+
+        problems = store.validate()
+        check(len(problems) == 1,
+              f"ENG-0001: a malformed root lineage produces exactly one finding ({problems})")
+        finding = problems[0] if problems else ""
+        check(finding.count(record_id) == 1,
+              f"ENG-0001: the finding names the lineage record exactly once ({finding})")
+        check(finding.count(authority.authority_id) == 1,
+              f"ENG-0001: the finding names the authority exactly once ({finding})")
+        check("established_at" in finding,
+              f"ENG-0001: the finding names the malformed field ({finding})")
+        check(finding.startswith(f"{authority.authority_id}: {record_id}: "),
+              f"ENG-0001: the finding reads authority, record, reason ({finding})")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The same single-occurrence rule for the mismatched-authority finding.
+        store = make_store(tmp)
+        authority = orphan_authority(store)
+        store.write("authority", authority)
+        record_id = f"{authority.lineage_id}-v0001"
+        store.write("lineage", root_lineage(
+            lineage_id=authority.lineage_id, authority_id="TAUTH-999999"))
+        problems = store.validate()
+        finding = problems[0] if problems else ""
+        check(len(problems) == 1,
+              f"ENG-0001: a mismatched authority produces exactly one finding ({problems})")
+        check(finding.count(record_id) == 1,
+              f"ENG-0001: the mismatch finding names the lineage record exactly once ({finding})")
+        check("TAUTH-999999" in finding,
+              f"ENG-0001: the mismatch finding names the authority it points at ({finding})")
 
 # A store inside the repository is refused by default.
 try:

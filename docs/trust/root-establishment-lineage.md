@@ -58,7 +58,7 @@ Storage is unchanged; only interpretation is discriminated.
 | `authority_id` | `^TAUTH-[0-9]{6}$` | yes | `TAUTH-000001` |
 | `subject_type` | **exactly `operator-root`** | yes | `operator-root` |
 | `establishment_origin` | one of the named origins | yes | `external-operator-ceremony` |
-| `evidence_reference_ids` | list of `^TEVID-[0-9]{6}$`, ≥ 1 | yes | `TEVID-000001`…`TEVID-000005` |
+| `evidence_reference_ids` | **list** of `^TEVID-[0-9]{6}$`, ≥ 1 | yes | `TEVID-000001`…`TEVID-000005` |
 | `establishment_audit_id` | `^TAUDIT-[0-9]{6}$` | yes | `TAUDIT-000001` |
 | `current_state` | **exactly `trusted`** | yes | `trusted` |
 | `established_at` | ISO 8601, timezone-aware | yes | the authority's `created_at` |
@@ -206,9 +206,23 @@ It additionally checks that the stored `id` equals
 `<lineage_id>-v<version:04d>`. A file named `v0009` holding version 1 is two
 claims about the same record.
 
+`evidence_reference_ids` must be a **list** at this boundary. A stored record
+comes from YAML, where a sequence loads as a list; a tuple is a non-list, so
+accepting one would mean the boundary was checking an in-memory shape rather
+than the stored one. The model keeps a tuple after parsing, which is a separate
+question.
+
 **Every failure is a `TrustError`** — including parse, type, and datetime
 failures, and a record that is not a mapping at all. `validate-store` reports a
 malformed record as a deterministic finding rather than crashing on it.
+
+Findings read *authority, record, reason*, naming each identifier exactly once:
+
+```
+TAUTH-000001: TLIN-000001-v0001: established_at is not an ISO 8601 timestamp
+TAUTH-000001: TLIN-000001-v0001 names authority 'TAUTH-999999'
+TAUTH-000001: lineage 'TLIN-000001' has no lineage record
+```
 
 Against the existing production store it reports exactly one finding:
 

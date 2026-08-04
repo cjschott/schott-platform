@@ -867,8 +867,12 @@ def validate_root_lineage_record(record: Mapping[str, Any],
     for key in sorted(ROOT_LINEAGE_KEYS - present - {"terminated"}):
         raise TrustError(f"{where} is missing required field '{key}'")
 
+    # A stored record comes from YAML, where a sequence loads as a list. A tuple
+    # is a non-list: accepting one here would mean this boundary was checking an
+    # in-memory shape rather than the stored one. The model keeps a tuple after
+    # parsing, which is a different question.
     evidence_ids = record["evidence_reference_ids"]
-    if not isinstance(evidence_ids, (list, tuple)):
+    if not isinstance(evidence_ids, list):
         raise TrustError(f"{where}: evidence_reference_ids must be a list")
 
     # Reconstruction is the value check: every invariant the model enforces on
