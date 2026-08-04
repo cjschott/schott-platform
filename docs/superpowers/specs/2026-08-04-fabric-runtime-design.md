@@ -345,13 +345,16 @@ audited. Retrying is an operator decision; nothing retries automatically.
 
 ### 6.1 Declare capability, contract, or package
 
-- **Request:** the declaration content; for a package, the contract versions it
-  claims to satisfy.
+- **Request:** the declaration content. A **contract** additionally declares its
+  **effect class**, its **determinism class**, and the **explicit set of prior
+  versions it is compatible with**. A **package** declares the **explicit set of
+  contract versions it satisfies**.
 - **Authority:** human operator. Declaration confers nothing.
 - **Trust evidence:** none required — a declaration is a description.
 - **Preconditions:** referenced capability and contract identities must exist
   and resolve.
-- **Rejection:** unresolved reference; malformed content; duplicate identity.
+- **Rejection:** unresolved reference; malformed content; duplicate identity;
+  absent or unrecognised effect class.
 - **Supersession:** a new package version is a **new subject requiring its own
   trust decision**. Supersession is *declared, never inferred from a version
   number or an installation event.* Superseded records remain readable.
@@ -518,6 +521,81 @@ ENG-0002 contract, applied to the Fabric store.
 **Operation 10 returns a Fabric identity or a selection/refusal record and never
 invokes a capability.** Invocation is ENG-0005.
 
+### Selection constraints
+
+Three constraints bind eligibility and selection. All three are settled by
+ADR-0012; none is a new decision, and none may be relaxed per-route or by
+configuration.
+
+#### Effect class — `side-effecting` is representable but unroutable
+
+Every contract declares an **effect class**, which is the axis governance cares
+about and is **separate from determinism**.
+
+| Class | Changes | Routable |
+|---|---|---|
+| `read-only` | nothing | Yes, subject to trust and contract |
+| `computational` | nothing outside the request | Yes, subject to trust and contract |
+| `content-generating` | nothing outside the request | Yes, subject to trust and contract |
+| `side-effecting` | state outside the request | **No — unroutable** |
+
+ENG-0004 must enforce, at selection time: **no route may select a
+`side-effecting` contract, no selection may choose one, and no route may
+override the prohibition.** *"A restriction that can be lifted per-route is one
+that gets lifted during an incident."* A route naming a `side-effecting`
+candidate is refused, and the refusal is recorded like any other.
+
+The class is **representable** so a future actuating capability can be described
+without being permitted. Enabling it is out of scope for ENG-0004 and requires
+all six conditions in §15.
+
+#### Version negotiation — set intersection, no cleverness
+
+Negotiation happens **against contracts, never packages**.
+
+- A request declares a contract and an **explicit set of accepted versions**.
+- A package declares the **explicit set of contract versions it satisfies**.
+- The eligible set is the **intersection**. **Empty → refuse.**
+
+**Compatibility is declared, never inferred.** A contract names its compatible
+prior versions in a reviewed field. The platform **never reads meaning into a
+version number** — semantic-versioning arithmetic is a convention followed
+imperfectly, and treating it as a guarantee lets a string comparison make an
+upgrade decision.
+
+**No automatic upgrade, no automatic downgrade, no nearest match, no
+best-effort.** A request that cannot be satisfied **exactly** is refused.
+
+#### The Health input boundary
+
+The fabric's contract with Health is one sentence and one direction:
+
+> **Health may remove a candidate from consideration and may never add one.**
+
+ENG-0004 implements the **boundary**, not the **evaluation**. It accepts an
+optional candidate-removal input, applies it **after** eligibility and **before**
+ordered selection, records what was removed, and computes no health state,
+defines no health semantics, and reads no health record.
+
+The boundary is **optional**: every ENG-0004 behaviour is specifiable,
+implementable, and testable with **no Health Runtime present**.
+
+**Unknown stays unknown.** Until Health Runtime exists, health is *declared or
+unknown*, and **missing health data is never treated as healthy** — *"treating
+missing data as healthy is how an unmonitored node becomes the preferred one."*
+Absent health input removes no candidate; it never adds, promotes, or reorders
+one either.
+
+Health **cannot** grant trust, override quarantine, broaden scope, or admit a
+node. A healthy instance that is not trusted is not eligible; an unhealthy
+instance that is trusted is trusted and unavailable — a different sentence, and
+not ENG-0004's to evaluate.
+
+Symmetrically, **selection outcomes are never trust evidence.** The Trust Plane
+does not use routing outcomes as evidence of trustworthiness: *"a capability
+that has been selected and has returned correct answers for six months has
+earned nothing."*
+
 ## 9. Failure and recovery matrix
 
 `Reject` = refuse the request. `Report` = surface as a finding or exclusion.
@@ -548,6 +626,9 @@ operator action required to progress.
 | 19 | No eligible candidate | ✔ | ✔ | ✖ | — | ✔ | Refuse naming **every** candidate and its exclusion; refusal record written |
 | 20 | `local-only` unsatisfiable | ✔ | ✔ | ✖ | — | ✔ | **Refuse rather than degrade** to a remote instance |
 | 21 | Explicit recovery after failure | — | ✔ | ✖ | ✔ | ✔ | **A decision, not an event.** New records by new decisions |
+| 22 | `side-effecting` contract routed or selected | ✔ | ✔ | ✖ | — | ✔ | **Unroutable.** Refused; **no route may override**; refusal recorded |
+| 23 | Empty contract version intersection | ✔ | ✔ | ✖ | — | ✔ | Refuse. **No upgrade, downgrade, nearest match, or best-effort** |
+| 24 | Health input absent or unknown | — | ✔ | ✖ | ✔ | — | **Unknown stays unknown**; removes nothing, adds nothing, never read as healthy |
 
 **Recovery performs no implicit repair, no trust backfill, no synthetic evidence
 generation, and no silent authoritative-state change.** Every one of the
@@ -865,6 +946,34 @@ result is claimed here; nothing has been implemented or executed.**
 50. **Store root inside a repository refused.** Given a store root inside a git
     repository, when any operation runs, then it is refused and nothing is
     created.
+51. **`side-effecting` is unroutable.** Given a contract declaring
+    `side-effecting`, when a route names it or selection considers it, then it
+    is refused and no selection chooses it.
+52. **No per-route override of unroutability.** Given a route configured to
+    permit a `side-effecting` candidate, when selection runs, then the
+    prohibition still holds and the route cannot lift it.
+53. **Effect class required.** Given a contract with an absent or unrecognised
+    effect class, when it is declared, then the declaration is refused.
+54. **Version negotiation is exact intersection.** Given a request's accepted
+    version set and a package's satisfied version set, when eligibility is
+    computed, then only the intersection is eligible and an empty intersection
+    refuses.
+55. **No version cleverness.** Given a request that cannot be satisfied exactly,
+    when selection runs, then it refuses — with no automatic upgrade,
+    downgrade, nearest match, or best-effort substitution, and no meaning read
+    from any version number.
+56. **Declared compatibility only.** Given a contract compatible with prior
+    versions, when negotiation runs, then only the reviewed declared
+    compatibility field is consulted.
+57. **Unknown health is never healthy.** Given absent or unknown health input,
+    when selection runs, then no candidate is removed **and** none is added,
+    promoted, or reordered, and missing data is never treated as healthy.
+58. **Health cannot grant, override, broaden, or admit.** Given health input,
+    when it is applied, then it cannot grant trust, override quarantine, broaden
+    scope, or admit a node.
+59. **Selection outcomes are never trust evidence.** Given a history of
+    successful selections, when trust is evaluated, then nothing about that
+    history alters trust standing.
 
 ## 14. Implementation planning outline
 
@@ -896,6 +1005,12 @@ proposed.
   accepted records — the decision is carried by the record it creates, because a
   ninth schema would be an invention. If a distinct admission-decision record is
   intended, that is a new architectural decision.
+- **`side-effecting` enablement is out of scope and stays out.** Making an
+  actuating capability routable requires **all six** of ADR-0012's conditions: a
+  new ADR governing actuation on its own terms, an explicit approval model,
+  per-effect effect authorisation, remediation boundaries, audit requirements
+  for effects that reached the world, and human approval semantics. ENG-0004
+  represents the class and refuses to route it; it enables nothing.
 - **Scheduler, placement, clustering, and leases remain unassigned** to ENG-0007
   and ENG-0008, each requiring its own accepted specification. No scheduler
   vocabulary belongs in ENG-0004.
