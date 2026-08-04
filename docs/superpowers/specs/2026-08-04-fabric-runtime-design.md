@@ -181,17 +181,22 @@ expiry.
 
 Admission **fails closed**. Required trust evidence that is **absent,
 malformed, revoked, unsupported, or unverifiable** yields refusal, never a
-pending, partial, provisional, or retried admission. A refusal writes an audit
-event naming the failed precondition and creates no governed record. *"The
+pending, partial, provisional, or retried admission. **A rejected admission
+creates no persistent Fabric record** — not an admission record and not an audit
+record. It is returned as a deterministic refusal result naming the failed
+precondition. *"The
 default is ineligible; absence of a record is never permission."*
 
 ### Audit linkage
 
-Every admission and every refusal produces Fabric audit evidence referencing the
-trust record identities relied upon, the advertisement relied upon, the
-approving operator, and the outcome. **Fabric audit records are never
-authoritative for Trust Plane decisions**; they reference trust evidence and
-never restate, supersede, or substitute for it.
+**Accepted subject admission evidence is carried by `CHOST`; accepted instance
+admission evidence is carried by `CINST`** — each referencing the trust record
+identities relied upon, the advertisement relied upon, the approving operator,
+and the outcome. **A rejected admission creates no persistent Fabric record**
+and returns a deterministic refusal result. **Trust evidence remains in Trust
+Plane records and is referenced, never duplicated.** **No generic Fabric audit
+record and no ninth record type exists**, and no Fabric record is authoritative
+for a Trust Plane decision.
 
 ## 5. Component contracts
 
@@ -398,19 +403,60 @@ Because allocation cannot detect a repeated submission, **write-once storage
 does not by itself provide idempotency**, and this specification makes no such
 claim.
 
-> **Unresolved — blocks the replay contract.** Accepted architecture defines
-> **no request identity**: no request identifier, idempotency key, replay
-> correlator, or canonical-input rule appears in ADR-0011, ADR-0012, any fabric
-> or trust document, or the released Trust Plane runtime. Replay detection
-> therefore **cannot be specified without inventing its format**, and this
-> specification deliberately does not. See §15.
->
-> Once request identity is decided, the intended contract is: replaying an
-> accepted request identity with byte-equivalent canonical input **returns the
-> original outcome and creates no second authoritative record**; reusing an
-> accepted request identity with different canonical input is **refused as a
-> conflict**; and request identity is carried on the accepted record wherever
-> replay detection is required.
+#### Approved decision — request identity and replay
+
+**Normative for ENG-0004.** Recorded here rather than by amending ADR-0012;
+no accepted decision is modified.
+
+Each replay-protected operation carries an **opaque, caller-supplied
+`request_id`**. The Fabric computes a deterministic **`request_digest`** from
+the **operation type** and the **canonicalised authoritative inputs**.
+
+`request_id` and `request_digest` are **evidence fields embedded in the accepted
+Fabric record created by a successful operation**. They are not a record type.
+**No request ledger, replay ledger, generic audit record, or additional
+persistent record class is introduced.**
+
+`request_id` carries **no defined internal meaning** — no timestamp structure,
+no UUID requirement, no sequence, no human-readable format. It is opaque, and
+validated only as far as safety requires: **bounded length, safe comparison, and
+safe storage**.
+
+**Replay outcomes.**
+
+| # | Case | Outcome |
+|---|---|---|
+| 1 | **New request identity** — previously unseen `request_id` | Processed normally. A new record may be created **even if its authoritative content is identical** to an earlier request bearing a different `request_id` |
+| 2 | **Exact replay** — same `request_id`, byte-equivalent canonical authoritative inputs, therefore same `request_digest` | Return the **original accepted outcome and original record identity**. Create **no additional authoritative record**. **Allocate no new record identity** |
+| 3 | **Conflicting reuse** — same accepted `request_id`, different `request_digest` | **Fails closed** as `request_identity_conflict`. **No Fabric record created.** The original accepted record is **neither modified nor superseded** |
+| 4 | **Record-path collision** — a store-allocated path is occupied | A **storage conflict**. **Never interpreted as replay evidence** |
+| 5 | **Rejected non-selection operation** | Produces **no persistent Fabric record**. Repeating it causes **fresh validation against current authoritative state**. **No durable replay guarantee is claimed**, because no accepted record exists to carry the request identity. The refusal is a deterministic returned result **for that evaluation** |
+| 6 | **Selection refusal / no-candidate** | Carried by an accepted `CSEL`, so its `request_id` and `request_digest` **do** support durable replay behaviour |
+
+**Canonicalisation boundary.**
+
+- Canonicalisation includes **only authoritative inputs that affect the governed
+  operation**.
+- **Excluded:** transport metadata, arrival time, log correlation identifiers,
+  and store-allocated record identity.
+- Input **order must not change the digest** where the accepted schema defines
+  that input as unordered.
+- **Semantically distinct authoritative input must change the digest.**
+- Canonicalisation and digest rules are **versioned as part of the
+  operation/schema contract**. An **unknown canonicalisation or digest version
+  fails closed**.
+- **No compatibility, normalisation, or semantic equivalence is guessed.**
+- Repeated validation of the same supported canonical input **produces the same
+  digest**.
+
+**Digest convention — reused, not invented.** ENG-0004 uses the platform's
+already-released convention: a deterministic SHA-256 over a canonical JSON
+encoding with sorted keys and stable separators, rendered as a `sha256:`-
+prefixed hex string, exactly as `tools/observation/evidence_builder.py` and
+`tools/integrity/snapshot_manager.py` already do and as
+`tools/integrity/integrity_analyzer.py` already asserts. Participating fields
+are named explicitly in the payload so that semantically distinct inputs cannot
+collide. **No new cryptographic algorithm is introduced.**
 
 Retrying is an operator decision; **nothing retries automatically**.
 
@@ -536,33 +582,47 @@ Host `availability_intent` (`in-service`, `draining`, `withheld`) is
 
 ### Normative transition table
 
-Common to every row: **idempotency and replay** — a replayed transition that
-would recreate an existing record identity is refused as a duplicate and
-audited; the original stands. **Invalid transition** — refused, recorded with
-the reason, and no state changes. Nothing is coerced into a legal state.
+Common to every row, per the approved identity contract (§6) — replay is
+resolved by **`request_id` + `request_digest`**, never by record identity or
+path collision:
+
+- **New request identity** → processed normally; a record may be created even
+  if content matches an earlier differently-identified request.
+- **Exact accepted replay** → returns the original outcome and original record
+  identity; **no new record, no new identity allocated**.
+- **Conflicting request-identity reuse** → fails closed as
+  `request_identity_conflict`; no record; the original is untouched.
+- **Store allocation / path collision** → a **storage conflict**, never replay
+  evidence.
+- **Re-evaluation of a previously rejected non-selection operation** → **fresh
+  validation against current authoritative state**; no durable replay
+  guarantee, because no accepted record carries its request identity.
+
+**Invalid transition** — refused, returned with the reason, and no state
+changes. Nothing is coerced into a legal state.
 
 | # | Source | Trigger | Actor / authority | Preconditions | Result | Durable records | Supersession / expiry | Audit |
 |---|---|---|---|---|---|---|---|---|
-| 1 | *(none)* | Declaration written | Human operator | References resolve | **Declared** | `CAPDEF`/`CCON`/`CPKG` | Superseded by declaration only | Creation event |
+| 1 | *(none)* | Declaration written | Human operator | References resolve | **Declared** | `CAPDEF`/`CCON`/`CPKG` | Superseded by declaration only | Evidence on the created record |
 | 2 | Declared | Package trust decision | **Trust Plane**, `capability-package` | Own evidence | **Trusted** (package) | Trust record *(Trust Plane)* | Trust expiry clock | Trust Plane audit; Fabric references it |
 | 3 | Declared | Host trust decision | **Trust Plane**, `fabric-node` | Own evidence, decided separately | **Trusted** (host) | Trust record *(Trust Plane)* | Trust expiry clock | Trust Plane audit; Fabric references it |
-| 4 | Trusted (host) | Subject admission | **Human operator**, Fabric | Host trust standing; identity verified out of band | **Admitted subject** | `CHOST` | Withdrawn by decision | Admission event |
+| 4 | Trusted (host) | Subject admission | **Human operator**, Fabric | Host trust standing; identity verified out of band | **Admitted subject** | `CHOST` | Withdrawn by decision | Evidence on `CHOST` |
 | 5 | Admitted subject | Advertisement registered | **The admitted subject itself** — no per-advertisement human approval | Publisher is the advertised subject; within admitted scope; window well-formed | **Advertised** | `CADV` | **Advertisement validity clock** | Evidence on `CADV` |
-| 6 | Advertised + both Trusted | Instance admission | **Human operator**, Fabric | All eight conditions hold | **Admitted instance** | `CINST` | **Admission expiry clock** | Admission event with evidence references |
-| 7 | Admitted instance | Route created / versioned | Human operator | Candidates resolve | Route version active | `CROUTE` | New route version supersedes | Route event |
-| 8 | Admitted instance | Declared supersession | Human operator | Overlap window declared | **Superseded** | New `CINST` + new `CROUTE` version | Old remains readable | Supersession event |
-| 9 | Admitted instance | Withdrawal / retirement | Human operator | — | **Retired** | Withdrawal record | Records remain; nothing deleted | Retirement event |
+| 6 | Advertised + both Trusted | Instance admission | **Human operator**, Fabric | All eight conditions hold | **Admitted instance** | `CINST` | **Admission expiry clock** | Evidence on `CINST`, incl. trust references |
+| 7 | Admitted instance | Route created / versioned | Human operator | Candidates resolve | Route version active | `CROUTE` | New route version supersedes | Evidence on `CROUTE` |
+| 8 | Admitted instance | Declared supersession | Human operator | Overlap window declared | **Superseded** | New `CINST` + new `CROUTE` version | Old remains readable | Evidence on the superseding records |
+| 9 | Admitted instance | Withdrawal / retirement | Human operator | — | **Retired** | Withdrawal record | Records remain; nothing deleted | Evidence on the withdrawal record |
 | 10 | Any trusted state | Trust revoked or quarantined | Trust Plane | — | Trust standing changes | Trust record *(Trust Plane)* | Instance becomes **ineligible** (derived) | Trust Plane audit |
 | 11 | Advertised | Advertisement validity lapses | **Automatic (expiry only)** | Window elapsed | Claim stale → **ineligible** (derived) | none — no record is written | Never auto-renews | Observable on evaluation |
 | 12 | Admitted instance | Admission expiry lapses | **Automatic (expiry only)** | Expiry elapsed | Binding lapsed → **ineligible** (derived) | none | A fresh advertisement **never** revives it | Observable on evaluation |
-| 13 | Admitted instance | Host set `draining`/`withheld` | Human operator | — | **Ineligible** (derived); authoritative admission unchanged | `CHOST` supersession | By decision, not failure | Intent-change event |
+| 13 | Admitted instance | Host set `draining`/`withheld` | Human operator | — | **Ineligible** (derived); authoritative admission unchanged | `CHOST` supersession | By decision, not failure | Evidence on the superseding `CHOST` |
 | 14 | Admitted instance | Host disappears | *(no actor)* | — | **Ineligible** (derived) **only**; **no authoritative state changes** | **none** | Absence means absent, not continuity | Recorded at selection as an exclusion |
 | 15 | Admitted instance | Health reports outside envelope | Health (ENG-0006), optional | — | **Candidate removed** for this selection only | none | Removal only; never adds, never reorders | Recorded as an exclusion reason |
 | 16a | Admitted instance, admission expired | Host returns, or a fresh advertisement arrives | *(no actor)* | — | Binding stays lapsed → **ineligible** (derived). **Package and host trust remain whatever the Trust Plane reports** — the Fabric asserts nothing about trust | **none** | A fresh advertisement never revives it | Observable on evaluation |
 | 16b | Retired instance | Host returns | *(no actor)* | — | **Stays retired.** Returning availability cannot reactivate it | **none** | Retirement is a decision, not a condition | Observable on evaluation |
 | 16c | Any instance | Trust expired, revoked, or quarantined | **Trust Plane, exclusively** | — | Trust standing is **whatever the Trust Plane reports**; the instance is **ineligible** (derived) | Trust record *(Trust Plane)* | Governed entirely by the Trust Plane | Trust Plane audit; Fabric references it |
 | 16d | Any of the above | New admission wanted | **Human operator**, Fabric | **Then-current** trust evidence; all eight conditions re-checked | New **admitted instance** | New `CINST` | *"Recovery is a decision, not an event"* | Evidence on the new `CINST` |
-| 17 | Unknown identity | Any request referencing it | — | — | **Refused** — `Unknown` fails closed | none | — | Refusal event |
+| 17 | Unknown identity | Any request referencing it | — | — | **Refused** — `Unknown` fails closed | none | — | **No record.** Deterministic returned refusal |
 
 Rows 11–15 are the ones that must never be mistaken for authoritative change:
 **eligibility, availability, disappearance, and health observations never
@@ -580,11 +640,17 @@ Fabric admission decision evaluated against **then-current** trust evidence.
 ## 8. Behavioural interfaces
 
 Operations are specified by behaviour, not by language, CLI spelling,
-transport, or code structure. Common to all: **authorisation is an explicit
-approving operator identity for every write**; **no default store root**; output
-is deterministic; and error categories are `refused` (governed refusal),
-`invalid` (malformed input), `not-found` (unresolved reference), `conflict`
-(duplicate identity), and `unavailable` (dependency unreachable — fails closed).
+transport, or code structure. Common to all: **every write requires a verified
+authority appropriate to that operation** — human approving authority for
+governed operator-authorised mutations, and **the admitted subject itself** for
+publishing its own advertisement, which requires **no new human approval per
+advertisement**; a subject may advertise **only itself and only within its
+admitted identity and scope**, and the Fabric validates and records the claim
+while **granting neither trust nor admission**. Also common: **no default store
+root**; deterministic output; and error categories `refused` (governed
+refusal), `invalid` (malformed input), `not-found` (unresolved reference),
+`conflict` (storage or `request_identity_conflict`), and `unavailable`
+(dependency unreachable — fails closed).
 
 | # | Operation | Purpose | Inputs | Required output fields | Auth | Preconditions | Success | Errors | R/W | Idempotency / replay | Audit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -699,26 +765,29 @@ operator action required to progress.
 | 3 | Malformed record | — | ✔ | ✖ | ✔ | ✔ | Deterministic finding; never a crash; **never repaired** |
 | 4 | Unknown/unsupported schema or record version | ✔ | ✔ | ✖ | ✔ | ✔ | **Fails closed.** Never guessed, never migrated implicitly |
 | 5 | Missing reference | ✔ | ✔ | ✖ | ✔ | ✔ | `not-found`; **nothing created** — returned refusal result, no record |
-| 6 | Record-path allocation collision | ✔ | ✔ | ✖ | — | ✔ | Store `conflict`; original stands; never overwritten. **Not evidence of replay** |
-| 7 | Repeated submission of identical content | — | — | ✖ | — | — | Creates a **second distinct record**. Content equality is not duplicate detection |
-| 8 | Replay detection | — | — | ✖ | — | ✔ | **Unspecified — blocked on request identity (§15).** Not implementable until decided |
-| 9 | Interrupted write | — | ✔ | ✖ | ✔ | ✔ | Temp residue is **observable debris**, reported as a finding. **Not cleaned automatically** |
-| 10 | Concurrent writers | ✔ | ✔ | ✖ | — | ✔ | Identifier allocation is lock-serialised; the loser sees `conflict` |
-| 11 | Trust Plane unavailable | ✔ | ✔ | ✖ | ✔ | ✔ | **Fails closed.** No cached or assumed verdict |
-| 12 | Invalid / expired / revoked authority | ✔ | ✔ | ✖ | ✔ | ✔ | Refused; instance becomes ineligible (derived only) |
-| 13 | Stale / missing / corrupt derived state | — | ✔ | ✖ | ✔ | — | Derived state is **recomputed, never trusted and never repaired**; it is authoritative for nothing |
-| 14 | Advertisement expired | — | ✔ | ✖ | ✔ | ✔ | Ineligible (derived). **A fresh advertisement never revives admission or trust** |
-| 15 | Host disappearance | — | ✔ | ✖ | ✔ | ✔ | Ineligible (derived) **only**. No authoritative change; recovery is a decision |
-| 16 | Permission / ownership mismatch | ✔ | ✔ | ✖ | ✔ | ✔ | Refused and reported. **Never silently corrected** |
-| 17 | Symlink or path-boundary violation | ✔ | ✔ | ✖ | ✔ | ✔ | Refused after full resolution; never followed outside the root |
-| 18 | Store root inside a git repository | ✔ | ✔ | ✖ | ✔ | ✔ | Refused, per the released store contract |
-| 19 | No route for a request class | ✔ | ✔ | ✖ | — | ✔ | Refuse; **`CSEL` written** recording the no-candidate outcome |
-| 20 | No eligible candidate | ✔ | ✔ | ✖ | — | ✔ | Refuse naming **every** candidate and its exclusion; **`CSEL` written** |
-| 21 | `local-only` unsatisfiable | ✔ | ✔ | ✖ | — | ✔ | **Refuse rather than degrade** to a remote instance |
-| 22 | Explicit recovery after failure | — | ✔ | ✖ | ✔ | ✔ | **A decision, not an event.** New records by new decisions |
-| 23 | `side-effecting` contract routed or selected | ✔ | ✔ | ✖ | — | ✔ | **Unroutable.** Refused; **no route may override**; refusal recorded in `CSEL` |
-| 24 | Empty contract version intersection | ✔ | ✔ | ✖ | — | ✔ | Refuse. **No upgrade, downgrade, nearest match, or best-effort** |
-| 25 | Health input absent or unknown | — | ✔ | ✖ | ✔ | — | **Unknown stays unknown**; removes nothing, adds nothing, never read as healthy |
+| 6 | Record-path allocation collision | ✔ | ✔ | ✖ | — | ✔ | Store `conflict`; original stands; never overwritten. **Never replay evidence** |
+| 7 | Repeated submission, different `request_id` | — | — | ✖ | — | — | Creates a **second distinct record**. Content equality is not duplicate detection |
+| 8 | Exact replay — same `request_id`, same `request_digest` | — | ✔ | ✖ | ✔ | — | Returns the **original outcome and record identity**; **no new record, no new identity** |
+| 9 | Conflicting reuse — same `request_id`, different `request_digest` | ✔ | ✔ | ✖ | ✔ | ✔ | **Fails closed** as `request_identity_conflict`; no record; original untouched |
+| 10 | Unknown canonicalisation or digest version | ✔ | ✔ | ✖ | ✔ | ✔ | **Fails closed.** Never guessed, never normalised |
+| 11 | Repeat of a rejected non-selection operation | — | ✔ | ✖ | — | ✔ | **Fresh validation** against current state. No durable replay guarantee — no accepted record carries its identity |
+| 12 | Interrupted write | — | ✔ | ✖ | ✔ | ✔ | Temp residue is **observable debris**, reported as a finding. **Not cleaned automatically** |
+| 13 | Concurrent writers | ✔ | ✔ | ✖ | — | ✔ | Identifier allocation is lock-serialised; the loser sees `conflict` |
+| 14 | Trust Plane unavailable | ✔ | ✔ | ✖ | ✔ | ✔ | **Fails closed.** No cached or assumed verdict |
+| 15 | Invalid / expired / revoked authority | ✔ | ✔ | ✖ | ✔ | ✔ | Refused; instance becomes ineligible (derived only) |
+| 16 | Stale / missing / corrupt derived state | — | ✔ | ✖ | ✔ | — | Derived state is **recomputed, never trusted and never repaired**; it is authoritative for nothing |
+| 17 | Advertisement expired | — | ✔ | ✖ | ✔ | ✔ | Ineligible (derived). **A fresh advertisement never revives admission or trust** |
+| 18 | Host disappearance | — | ✔ | ✖ | ✔ | ✔ | Ineligible (derived) **only**. No authoritative change; recovery is a decision |
+| 19 | Permission / ownership mismatch | ✔ | ✔ | ✖ | ✔ | ✔ | Refused and reported. **Never silently corrected** |
+| 20 | Symlink or path-boundary violation | ✔ | ✔ | ✖ | ✔ | ✔ | Refused after full resolution; never followed outside the root |
+| 21 | Store root inside a git repository | ✔ | ✔ | ✖ | ✔ | ✔ | Refused, per the released store contract |
+| 22 | No route for a request class | ✔ | ✔ | ✖ | — | ✔ | Refuse; **`CSEL` written** recording the no-candidate outcome |
+| 23 | No eligible candidate | ✔ | ✔ | ✖ | — | ✔ | Refuse naming **every** candidate and its exclusion; **`CSEL` written** |
+| 24 | `local-only` unsatisfiable | ✔ | ✔ | ✖ | — | ✔ | **Refuse rather than degrade** to a remote instance |
+| 25 | Explicit recovery after failure | — | ✔ | ✖ | ✔ | ✔ | **A decision, not an event.** New records by new decisions |
+| 26 | `side-effecting` contract routed or selected | ✔ | ✔ | ✖ | — | ✔ | **Unroutable.** Refused; **no route may override**; refusal recorded in `CSEL` |
+| 27 | Empty contract version intersection | ✔ | ✔ | ✖ | — | ✔ | Refuse. **No upgrade, downgrade, nearest match, or best-effort** |
+| 28 | Health input absent or unknown | — | ✔ | ✖ | ✔ | — | **Unknown stays unknown**; removes nothing, adds nothing, never read as healthy |
 
 **Recovery performs no implicit repair, no trust backfill, no synthetic evidence
 generation, and no silent authoritative-state change.** Every one of the
@@ -775,8 +844,8 @@ repaired in place, and never treated as evidence.
 **Identifier allocation and deterministic identity.** Identifiers are allocated
 by the store under an exclusive lock, are monotonic, skip any name already
 occupied, and are **never supplied by the requester**. Record identity is the
-allocated identifier; a request that would recreate an existing identity is
-refused as a duplicate.
+allocated identifier and is **separate from request identity** (§6): a path
+collision is a storage conflict, never replay evidence.
 
 **Record and schema version handling.** Every record carries its schema
 identity. An unknown or unsupported version **fails closed** — never guessed,
@@ -1172,6 +1241,53 @@ result is claimed here; nothing has been implemented or executed.**
     new instance exists, **no route names it**, nothing selects it, the cutover
     is **not** committed, the old route still serves, and completion requires an
     explicit operator decision.
+73. **Distinct request identities create independent records.** Given two
+    byte-identical declarations submitted with **different** `request_id`
+    values, when both are accepted, then two independently allocated records
+    exist and neither is treated as a replay.
+74. **Exact replay returns the original.** Given an accepted operation replayed
+    with the same `request_id` and byte-equivalent canonical inputs, when it is
+    submitted, then the **original record identity and outcome** are returned,
+    **no additional record is created**, and **no new identity is allocated**.
+75. **Conflicting reuse fails closed.** Given an accepted `request_id` reused
+    with a different `request_digest`, when it is submitted, then it fails
+    closed as `request_identity_conflict`, **no Fabric record is created**, and
+    the original record is neither modified nor superseded.
+76. **Allocation collision is a storage conflict.** Given an occupied record
+    path, when a write targets it, then it is reported as a **storage
+    conflict** and **never as replay evidence**.
+77. **Rejected non-selection repeats are re-evaluated.** Given a rejected
+    admission repeated after authoritative state changed, when it is
+    resubmitted, then it is **validated afresh against current state** and no
+    durable replay guarantee is claimed.
+78. **Replayed `CSEL` refusal returns its original outcome.** Given an accepted
+    `CSEL` refusal or no-candidate result, when its request identity is
+    replayed exactly, then the **original accepted outcome and `CSEL` identity**
+    are returned.
+79. **Unsupported canonicalisation or digest version fails closed.** Given an
+    unknown canonicalisation or digest version, when an operation is submitted,
+    then it fails closed with no record created and nothing guessed.
+80. **Canonicalisation is deterministic.** Given the same supported canonical
+    input, when the digest is computed repeatedly, then the identical
+    `request_digest` results every time.
+81. **Authoritative input changes the digest.** Given semantically distinct
+    authoritative input, when digests are compared, then they differ.
+82. **Excluded metadata does not change the digest.** Given identical
+    authoritative inputs differing only in transport metadata, arrival time,
+    log correlation identifiers, or store-allocated record identity, when
+    digests are compared, then they are identical.
+83. **Rejected admission persists nothing.** Given a rejected subject or
+    instance admission, when the store is inspected, then **no admission record
+    and no audit record** exists, and the refusal was a returned result.
+84. **Advertisement authority.** Given an admitted subject publishing its own
+    advertisement within its admitted scope, then it succeeds **without new
+    human approval**; and given impersonation of another subject or a claim
+    widening admitted scope, then it is refused with no advertisement state
+    created.
+85. **Only accepted record types carry persistent evidence.** Given a fully
+    exercised store, when its persistent records are enumerated, then every one
+    is among ADR-0012's eight accepted types and **no request ledger, replay
+    ledger, or audit-record class exists**.
 
 ## 14. Implementation planning outline
 
@@ -1184,7 +1300,7 @@ proposed.
 |---|---|---|---|---|---|---|
 | 1 | Contract and schema tests | Behavioural assertions for record shape, identity patterns, version handling | — | Independent | Assertions fail with no models present | All pass; no other suite changes |
 | 2 | Isolated storage primitives | Fabric store over the released append-only store | 1 | Independent | Write/immutability/no-default-root assertions fail | All pass; ENG-0002 read-only contract holds |
-| 3 | Registration and admission validation | Governed subject, advertisement, instance admission; fail-closed trust | 2 | Independent | Admission-without-trust and self-admission assertions fail | All pass; refusals audited |
+| 3 | Registration and admission validation | Governed subject, advertisement, instance admission; fail-closed trust | 2 | Independent | Admission-without-trust and self-admission assertions fail | All pass; accepted records carry their evidence; **rejected operations create no record** and return deterministic refusals, re-evaluated fresh on repeat |
 | 4 | Lifecycle transition enforcement | Legal transitions; illegal refused; expiry derived-only | 3 | Independent | Illegal-transition and expiry assertions fail | All pass; no authoritative change on expiry |
 | 5 | Eligibility and selection | Eight-condition eligibility; deterministic ordered selection; refusal records | 4 | Independent | Per-condition and determinism assertions fail | All pass; refusal records written |
 | 6 | Read-only inspection and validation | Inspection and validation surfaces | 2 | Independent | Absent/empty/malformed non-mutation assertions fail | All pass; digests unchanged |
@@ -1203,17 +1319,6 @@ proposed.
   accepted records — the decision is carried by the record it creates, because a
   ninth schema would be an invention. If a distinct admission-decision record is
   intended, that is a new architectural decision.
-- **Request identity is undecided, and it blocks the replay contract.**
-  Accepted architecture defines none: no request identifier, idempotency key,
-  replay correlator, or canonical-input rule appears in ADR-0011, ADR-0012, any
-  fabric or trust document, or the released Trust Plane runtime. Record identity
-  is store-allocated and **cannot** substitute — two identical submissions
-  allocate two identities, so allocation cannot distinguish a replay from a
-  genuinely new request. **This specification does not invent a format.** Until
-  it is decided, replay detection is unspecified and unimplementable; §6 records
-  the intended contract so the decision has a target to satisfy. Everything else
-  in this specification is unaffected: records remain immutable, path collisions
-  remain conflicts, and nothing retries automatically.
 - **`side-effecting` enablement is out of scope and stays out.** Making an
   actuating capability routable requires **all six** of ADR-0012's conditions: a
   new ADR governing actuation on its own terms, an explicit approval model,
