@@ -910,6 +910,24 @@ The rules this table obeys:
   unreferenced instance is unselectable while a dangling route reference would
   be a candidate that cannot be resolved.
 
+**Request identity across a two-record workflow.** Declared supersession and
+host migration are an **ordered workflow composed of two separately
+replay-protected governed operations**, not one compound operation.
+
+- The `CINST` creation and the `CROUTE` creation each carry **their own opaque,
+  caller-supplied `request_id`**, and each derives **its own `request_digest`**.
+- They are **not one compound replay identity**, and the Fabric **must never
+  derive one request identity from the other**.
+- **Reusing one request identity for both operations is conflicting reuse** and
+  fails closed as `request_identity_conflict`.
+- Interruption after the `CINST` commits leaves **that operation accepted and
+  exactly replayable** under its own request identity. Completing the cutover
+  requires the **separately authorised route operation**, with its own request
+  identity.
+- Recovery after interruption remains an **explicit operator decision** and
+  creates no ledger, no synthetic record, no rollback, and no implicit
+  cleanup.
+
 **Permissions, ownership, symlinks.** Directories and records are created with
 restrictive modes and preserved ownership; a mismatch is **reported, never
 silently corrected**. Paths are resolved fully and checked for containment
@@ -1051,15 +1069,17 @@ result is claimed here; nothing has been implemented or executed.**
    under restrictive modes, inside that root and nowhere else.
 2. **No default root.** Given no store root supplied, when any operation runs,
    then it refuses as an invocation error.
-3. **Deterministic registration identity.** Given a valid declaration, when it
-   is recorded twice with identical content, then two distinct allocated
-   identifiers result and neither overwrites the other.
+3. **Store-allocated registration identity.** Given a valid declaration
+   submitted twice with byte-identical authoritative content and **different
+   `request_id` values**, when both submissions are accepted, then two distinct
+   allocated identifiers result and neither overwrites the other.
 4. **Allocation collision is a store conflict.** Given a record path already
    occupied, when a write targets it, then it is refused as a conflict, the
    original is byte-unchanged, and the refusal is **not** reported as a replay.
-5. **Identical declarations create distinct records.** Given byte-identical
-   declaration content submitted twice, when both are accepted, then **two
-   distinct records** exist with two allocated identities, and neither
+5. **Different request identities permit identical declarations.** Given
+   byte-identical declaration content submitted with **different `request_id`
+   values**, when both are accepted, then **two distinct records** exist with
+   two allocated identities, **neither is treated as replay**, and neither
    overwrites the other.
 6. **Authorisation required.** Given a governed mutation with no approving
    operator identity, when it is attempted, then it is refused.
@@ -1263,13 +1283,16 @@ result is claimed here; nothing has been implemented or executed.**
 72. **Re-admission requires a new decision.** Given a lapsed or retired binding,
     when a new admission is approved, then it is a new explicitly authorised
     decision evaluated against **then-current** trust evidence.
-73. **Supersession ordering.** Given a declared supersession, when it is
-    performed, then the new `CINST` commits **before** the new `CROUTE` version.
+73. **Supersession ordering.** Given a declared supersession whose `CINST` and
+    `CROUTE` operations carry **their own separate `request_id` values**, when
+    it is performed, then the new `CINST` commits **before** the new `CROUTE`
+    version, and neither request identity is derived from the other.
 74. **Interrupted supersession is bounded.** Given an interruption after the new
     `CINST` and before the new `CROUTE`, when the store is inspected, then the
     new instance exists, **no route names it**, nothing selects it, the cutover
-    is **not** committed, the old route still serves, and completion requires an
-    explicit operator decision.
+    is **not** committed, the old route still serves, the accepted `CINST`
+    operation remains **accepted and exactly replayable under its own
+    `request_id`**, and completion requires an explicit operator decision.
 75. **Distinct request identities create independent records.** Given two
     byte-identical declarations submitted with **different** `request_id`
     values, when both are accepted, then two independently allocated records
