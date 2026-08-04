@@ -1345,6 +1345,92 @@ with tempfile.TemporaryDirectory() as tmp:
         "--approved-directory", str(approved), expect=2)
     ok("cli refuses an input file escaping the approved directory")
 
+# --- ENG-0002: validate-store performs no filesystem mutation ---------------
+# The command's entire job is to report what is on disk. A validator that
+# creates the store root, its record directories, or a sequence file has
+# changed the thing it was asked to describe, and its "valid" verdict is then
+# partly a description of its own side effects.
+
+
+def snapshot(path):
+    """Every path beneath `path`, with the metadata a mutation would disturb."""
+    entries = []
+    if not path.exists():
+        return entries
+    for item in sorted(path.rglob("*")):
+        info = item.lstat()
+        digest = ""
+        if item.is_file() and not item.is_symlink():
+            digest = hashlib.sha256(item.read_bytes()).hexdigest()
+        entries.append((str(item.relative_to(path)), info.st_mode, info.st_size,
+                        info.st_mtime_ns, digest))
+    return entries
+
+
+# An absent store root must stay absent. Validation reports; it does not
+# provision.
+with tempfile.TemporaryDirectory() as tmp:
+    parent = Path(tmp) / "parent"
+    parent.mkdir()
+    absent = parent / "no-store-here"
+
+    before = snapshot(parent)
+    cli("validate-store", "--store-root", str(absent))
+    after = snapshot(parent)
+
+    check(not absent.exists(),
+          "ENG-0002: validate-store does not create an absent store root")
+    check(before == after,
+          "ENG-0002: validate-store leaves an absent root's parent untouched")
+
+
+def unchanged_by_validation(label, store_root, expect):
+    """Validate twice; require identical filesystem state and identical output."""
+    before = snapshot(store_root)
+    first = cli("validate-store", "--store-root", str(store_root), expect=expect)
+    between = snapshot(store_root)
+    second = cli("validate-store", "--store-root", str(store_root), expect=expect)
+    after = snapshot(store_root)
+
+    check(before == between,
+          f"ENG-0002: validate-store mutates nothing in a {label} store")
+    check(between == after,
+          f"ENG-0002: revalidating a {label} store mutates nothing")
+    check(first.stdout == second.stdout,
+          f"ENG-0002: repeated validation of a {label} store is identical")
+
+
+# An empty directory is a store with nothing in it, not an invitation to build
+# one. No record directories, no sequences, no indexes.
+with tempfile.TemporaryDirectory() as tmp:
+    empty = Path(tmp) / "empty"
+    empty.mkdir()
+    unchanged_by_validation("empty", empty, 0)
+    check(snapshot(empty) == [],
+          "ENG-0002: validate-store creates no directory inside an empty store")
+
+# A populated, valid store: exit 0 preserved, every byte and mode preserved.
+with tempfile.TemporaryDirectory() as tmp:
+    store_root = Path(tmp) / "trust"
+    approved = Path(tmp) / "approved"
+    approved.mkdir()
+    (approved / "root.yaml").write_text(_yaml.safe_dump(root_input()), encoding="utf-8")
+    cli("init-root", "--store-root", str(store_root), "--input-file", "root.yaml",
+        "--approved-directory", str(approved), expect=0)
+    unchanged_by_validation("valid", store_root, 0)
+
+# A malformed store still reports exit 1, and is not tidied up on the way past.
+with tempfile.TemporaryDirectory() as tmp:
+    malformed = Path(tmp) / "malformed"
+    (malformed / "authorities").mkdir(parents=True)
+    (malformed / "authorities" / "TAUTH-000009.yaml").write_text(
+        "this file is not a record mapping\n", encoding="utf-8")
+    unchanged_by_validation("malformed", malformed, 1)
+    check(not (malformed / "sequences").exists(),
+          "ENG-0002: validate-store creates no sequence directory in a malformed store")
+    check(sorted(p.name for p in malformed.iterdir()) == ["authorities"],
+          "ENG-0002: validate-store adds no record directory to a malformed store")
+
 # Nothing was written inside the repository by any of the above.
 check(not list((root / "tools" / "trust").glob("TAUTH-*")),
       "no runtime record was written into the source tree")
