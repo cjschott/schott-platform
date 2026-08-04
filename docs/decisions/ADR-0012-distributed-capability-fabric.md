@@ -15,20 +15,32 @@
 > than leaving a gap for whoever implements it first.
 
 > **Specification may proceed before Operator Root deployment acceptance.**
-> **Runtime implementation, node admission, capability registration, routing,
-> selection, and execution remain blocked until the Trust Plane deployment gate
-> passes.** This ADR is the same move ADR-0011 made: the architecture is
-> written first, deliberately, so that the thing being governed does not get to
-> shape its own governance. Architecture is allowed now; runtime remains
-> forbidden. See [Governance boundaries](../fabric/governance-boundaries.md)
-> for the gate requirements.
+> This ADR is the same move ADR-0011 made: the architecture is written first,
+> deliberately, so that the thing being governed does not get to shape its own
+> governance. See [Governance boundaries](../fabric/governance-boundaries.md)
+> for the current gate requirements.
 
-> **Post-acceptance sequencing note (2026-08-03).** The Operator Root Authority
-> ceremony completed this architectural gate. ENG-0001 and ENG-0002 must now be
-> released and merged before Fabric Runtime begins. TrustGateway cutover is not
-> the Fabric Runtime gate; it is the final production transition after Fabric,
-> Health, and required subject seeding. See the
-> [superseding sequencing record](../history/0002-runtime-sequencing-correction.md).
+> **Superseded as of 2026-08-04 — original entry condition.** As accepted, this
+> ADR stated that runtime implementation, node admission, capability
+> registration, routing, selection, and execution remained blocked until the
+> Trust Plane deployment gate passed, and that runtime remained forbidden. That
+> entry condition **no longer holds and must not be cited**. It bundled the
+> architecture gate together with the production cutover gate; they are now
+> distinct. The original text is preserved in Git history and in the
+> [runtime sequencing correction](../history/0002-runtime-sequencing-correction.md).
+
+> **Current entry condition (2026-08-04).** **The Operator Root Authority
+> ceremony completed the Fabric Runtime architecture gate.** The external root
+> exists as `TAUTH-000001`, established out of band by a human. Fabric Runtime
+> implementation is gated on ENG-0001 and ENG-0002 being released and merged —
+> **not** on TrustGateway cutover.
+>
+> **TrustGateway production cutover is a separate, later gate** and every one of
+> its requirements is preserved unchanged: production trust store validated,
+> initial migrated subjects seeded, `trust-plane-runtime` or an approved
+> code-owned fallback available as the verdict source, rollback procedure
+> validated, and deployment evidence retained. Runtime may be **built** now; it
+> may not carry **production trust traffic** until that gate passes.
 
 ## Context
 
@@ -678,10 +690,17 @@ about that is fast, and there is no fast path by design. Declared-order routing
 will underuse hardware compared with any load-aware scheduler. Every new
 capability requires a contract before it requires code.
 
-**The deployment gate was not opened by this specification.** It was later
-completed by the Operator Root Authority ceremony. Fabric implementation now
-waits only for the independently released ENG-0001 and ENG-0002 defect fixes;
-TrustGateway cutover remains the final production transition.
+**The architecture gate was not opened by this specification.** It was opened
+later, by the Operator Root Authority ceremony, which established the external
+root out of band. Fabric Runtime implementation now waits only on the
+independently released ENG-0001 and ENG-0002 defect fixes.
+
+**The production cutover gate is untouched by that.** A fabric node may be
+built against this specification; it may not carry production trust traffic
+until the TrustGateway cutover gate passes with its subjects seeded, its verdict
+source confirmed, its rollback validated, and its evidence retained. Building
+the runtime and trusting it in production are two different permissions, and
+this ADR grants only the first.
 
 **Accepted risks.**
 

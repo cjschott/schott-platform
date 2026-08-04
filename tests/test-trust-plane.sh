@@ -281,8 +281,19 @@ assert_contains "${ROADMAP}" 'v1\.0\.0 — Kyri Core Foundation' "roadmap preser
 # gate forward to TrustGateway cutover.
 assert_contains "${ROADMAP}" '[Oo]perator Root ceremony was the Fabric Runtime gate' \
   "roadmap terminates the Fabric Runtime gate at the Operator Root ceremony"
-assert_contains "${ROADMAP}" '[Tt]rustGateway cutover.*not.*gate' \
-  "roadmap does not gate Fabric Runtime on TrustGateway cutover"
+
+# The exact sentence, not a loose pattern. '[Tt]rustGateway cutover.*not.*gate'
+# is satisfied by "cutover is not the only gate" — prose asserting the opposite
+# of what this contract is here to hold.
+assert_contains "${ROADMAP}" \
+  'TrustGateway cutover is intentionally not the Fabric Runtime gate' \
+  "roadmap states cutover is intentionally not the Fabric Runtime gate"
+
+# Both gates must be named separately, so neither can absorb the other.
+assert_contains "${ROADMAP}" 'Fabric Runtime entry gate' \
+  "roadmap names the Fabric Runtime entry gate"
+assert_contains "${ROADMAP}" 'TrustGateway production cutover gate' \
+  "roadmap names the production cutover gate separately"
 
 # The Fabric cannot trust a node until a root exists to terminate the chain.
 assert_contains "${ROADMAP}" '[Oo]perator Root Authority' \

@@ -105,33 +105,75 @@ is not a pending record, it is not a record at all.
 
 **Reachability never implies admission.**
 
-## The runtime and production-transition gates
+## Two gates, deliberately kept apart
 
-The Operator Root Authority ceremony completed the architectural gate for
-Fabric Runtime. Fabric implementation is not gated by TrustGateway cutover.
+There are **two** gates, and collapsing them is the mistake this section exists
+to prevent. One governs whether the Fabric Runtime may be **built**. The other
+governs whether it may **carry production trust traffic**.
 
-The corrected dependency sequence is:
+**TrustGateway cutover is intentionally not the Fabric Runtime gate.** The
+Operator Root ceremony was.
 
-1. **Operator Root Authority ceremony completed.**
-2. **ENG-0001** persists allocated TLIN lineage records and is independently
-   reviewed, released, and merged.
-3. **ENG-0002** makes `validate-store` genuinely read-only and is independently
-   reviewed, released, and merged.
-4. **Fabric Runtime** is implemented and validated incrementally.
-5. **Health Runtime** is implemented and validated against the Fabric.
-6. **subject seeding** establishes the production subjects required for
-   cutover.
-7. **TrustGateway cutover** is the final production transition.
+### Gate 1 — Fabric Runtime entry gate
 
-Both defect fixes must merge before Fabric Runtime implementation begins. Node
-admission, capability registration, routing, selection, and execution remain
-subject to the trust and governance rules in this architecture, but their
-implementation no longer waits for production gateway traffic to move away
-from code-owned policy.
+1. **Operator Root Authority ceremony complete.** Satisfied: the external root
+   exists as `TAUTH-000001`, established out of band by a human.
+2. **ENG-0001 released** — the root establishment lineage contract implemented
+   test-first, independently reviewed and merged.
+3. **ENG-0002 released** — `validate-store` made genuinely read-only,
+   independently reviewed and merged.
 
-Cutover still requires the acceptance evidence, rollback procedure, seeded
-subjects, `trust-plane-runtime` verdict source, and absence of silent fallback
-defined by the deployment guide and validation checklist.
+Both defect fixes must merge before Fabric Runtime implementation begins.
+
+### Gate 2 — TrustGateway production cutover gate
+
+1. **Fabric Runtime validated.**
+2. **Health Runtime validated.**
+3. **initial subjects seeded.**
+4. **verdict source ready.**
+5. **rollback validated.**
+6. **deployment evidence retained.**
+7. **TrustGateway cutover** performed as the final production transition.
+
+Its requirements are preserved in full and unchanged:
+
+- **Operator Root Authority instantiated** from an external identity, out of
+  band, by a human.
+- **production trust store validated** — structurally clean, correct ownership
+  and permissions, outside the repository.
+- **initial migrated subjects seeded** — collector plugins, source types,
+  remote targets, remote operations, host identity, policy version, and gateway
+  configuration.
+- **trust-plane-runtime or approved code-owned fallback available** as the named
+  verdict source for every migrated request, with no silent fallback.
+- **rollback procedure validated** as configuration rollback, never
+  trust-history rollback.
+- **deployment evidence retained** — exit codes, identifiers, fingerprints,
+  audit events, permissions, and before/after repository state.
+
+## What Gate 1 permits, and what it does not
+
+Gate 1 permits **construction**. It does not permit production operation, and
+the distinction is not cosmetic: a node admitted while the gateway still answers
+from code-owned policy is a node trusted through a chain that does not terminate
+at the root.
+
+**Permitted after Gate 1:**
+
+- **Runtime implementation** — the fabric engine may be built.
+
+**Still prohibited until Gate 2 passes — in production:**
+
+- **Node admission in production** — no production host enters the fabric.
+- **Capability registration in production** — no production advertisement is
+  registered.
+- **Routing in production** — no production route is resolved.
+- **Selection in production** — no production candidate is chosen.
+- **Execution in production** — nothing runs against production trust.
+
+Development and test fixtures are not production. A fixture that admits a
+synthetic node inside a temporary store is construction; the same call against
+the production trust store is not.
 
 See the [runtime sequencing correction](../history/0002-runtime-sequencing-correction.md),
 [deployment guide](../trust/operator-root-authority-deployment.md), and

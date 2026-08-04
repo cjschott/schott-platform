@@ -139,9 +139,11 @@ only one that matters after an incident.
   observe until something has been admitted.
 - **v1.0.0 requires both** the Fabric and the Health Plane.
 - **No health runtime exists in this release.** Health Runtime begins only
-  after Fabric Runtime exists and has been validated. The Operator Root
-  ceremony gate is complete; TrustGateway cutover remains the final production
-  transition after required subject seeding.
+  after Fabric Runtime and Capability Runtime exist and have been validated.
+- The Operator Root ceremony completed the **Fabric Runtime architecture gate**.
+  **TrustGateway cutover is intentionally not the Fabric Runtime gate.** It is
+  a separate, later production transition requiring seeded subjects, a ready
+  verdict source, a validated rollback, and retained deployment evidence.
 
 ## Related
 
