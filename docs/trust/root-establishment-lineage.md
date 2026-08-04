@@ -4,7 +4,7 @@ The record of how an Operator Root Authority came to exist. Governed by
 [ADR-0014](../decisions/ADR-0014-root-establishment-lineage.md), which refines
 [ADR-0011](../decisions/ADR-0011-trust-plane.md).
 
-> **Implementation status (ENG-0001, merged — not released).** The
+> **Implementation status (ENG-0001, released as `v0.9.7`).** The
 > `RootAuthorityLineage` model, the discriminated read path, the
 > `declare_root_authority` write, and the `validate-store` rule are implemented
 > and covered by `tests/test-trust-runtime.sh`.

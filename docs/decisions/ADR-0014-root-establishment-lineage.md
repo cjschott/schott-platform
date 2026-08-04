@@ -13,7 +13,8 @@
 > this ADR says so explicitly rather than leaving a gap for whoever implements
 > it first.
 
-> **Implementation status (2026-08-04): ENG-0001 is merged, not released.**
+> **Implementation status (2026-08-04): ENG-0001 is merged and released as
+> `v0.9.7`.**
 > The `RootAuthorityLineage` model, the discriminated read path, the
 > `declare_root_authority` write, and the `validate-store` rule are implemented
 > against this specification. **No lineage record is persisted for the existing
