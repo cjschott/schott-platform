@@ -528,8 +528,9 @@ but not yet decided at runtime, and deny with a reason naming the gap.
 
 ### v0.9.5 — Distributed Capability Fabric
 
-**Architecture defined; implementation still blocked.** Lets the platform use
-capacity that is not on this host, without any node becoming the platform.
+**Architecture defined; implementation gated on the released-defect sprint.**
+Lets the platform use capacity that is not on this host, without any node
+becoming the platform.
 
 [ADR-0012](decisions/ADR-0012-distributed-capability-fabric.md) specifies the
 Fabric: nine concepts, eight schemas, eight ontology entity types, and the
@@ -537,9 +538,10 @@ routing, expiry, supersession, failure, and audit rules. **No runtime exists** �
 no fabric engine, no registry service, no scheduler, no placement, no
 networking, no execution, no remediation.
 
-Writing that specification **does not open the deployment gate below**. It is
-the same sequence the Trust Plane followed: architecture first, deliberately,
-so the thing being governed does not shape its own governance.
+Writing that specification **did not open either gate below**. It is the same
+sequence the Trust Plane followed: architecture first, deliberately, so the
+thing being governed does not shape its own governance. The Operator Root
+ceremony opened the first gate; the second remains closed.
 
 Two results are worth recording. The Fabric needed **no new trust domain** —
 ADR-0011's `capability-package` and `fabric-node` absorbed it unchanged, which
@@ -549,35 +551,54 @@ because nothing executes yet.
 
 See the [Fabric overview](fabric/capability-fabric.md).
 
-> **Blocked until the Trust Plane is deployed, not merely implemented.** The
-> Distributed Capability Fabric cannot begin until v0.9.2, v0.9.3, and v0.9.4
-> have shipped **and** the deployment gate below has passed.
+> **The Operator Root ceremony was the Fabric Runtime gate.** The external
+> Operator Root Authority has been established as `TAUTH-000001`.
+> **TrustGateway cutover is intentionally not the Fabric Runtime gate**; it is
+> the final production transition, and it is a separate gate.
 >
-> **Deployment gate — all seven required:**
+> **Fabric Runtime entry gate:**
 >
-> 1. **Operator Root Authority instantiated** from an external identity, out of
->    band, by a human.
-> 2. **production trust store validated** — structurally clean, correct
->    ownership and permissions, outside the repository.
-> 3. **initial migrated subjects seeded** — collector plugins, source types,
->    remote targets, remote operations, host identity, policy version, and
->    gateway configuration.
-> 4. **TrustGateway source confirmed as `trust-plane-runtime`** for every
->    migrated request.
-> 5. **no migrated request using code-owned fallback.**
-> 6. **rollback procedure validated** as configuration rollback, never
->    trust-history rollback.
-> 7. **deployment evidence retained** — exit codes, identifiers, fingerprints,
->    audit events, permissions, and before/after repository state.
+> 1. **Operator Root ceremony complete** — satisfied.
+> 2. **ENG-0001 released** — implement the root establishment lineage contract
+>    test-first, per [ADR-0014](decisions/ADR-0014-root-establishment-lineage.md).
+> 3. **ENG-0002 released** — make `validate-store` genuinely read-only, as a
+>    separate test-first change.
 >
-> This is a **deployment gate, not a release milestone**: no version number is
-> assigned to it, because the work is performed by an operator rather than by a
-> sprint. Until it passes, the platform has one decision point whose rules are
-> still code-owned rather than root-terminated, and a fabric node would be
-> trusted through a chain that terminates inside the platform it governs.
+> **TrustGateway production cutover gate**, unchanged and still required in
+> full:
+>
+> 1. **Fabric Runtime validated.**
+> 2. **Health Runtime validated.**
+> 3. **initial subjects seeded.**
+> 4. **verdict source ready.**
+> 5. **rollback validated.**
+> 6. **deployment evidence retained.**
+> 7. **TrustGateway cutover** performed as the final production transition.
+>
+> Its six substantive requirements are preserved verbatim:
+>
+> - **Operator Root Authority instantiated** — external identity, out of band.
+> - **production trust store validated** — clean, correctly owned, outside the
+>   repository.
+> - **initial migrated subjects seeded** — every migrated subject class.
+> - **trust-plane-runtime or approved code-owned fallback available** — the
+>   verdict source is named, never silent.
+> - **rollback procedure validated** — configuration rollback, never
+>   trust-history rollback.
+> - **deployment evidence retained** — exit codes, identifiers, fingerprints,
+>   audit events, permissions, before/after state.
+>
+> Gate 1 permits the runtime to be **built**. It does not permit production node
+> admission, capability registration, routing, selection, or execution — those
+> wait for Gate 2, because a node admitted while the gateway still answers from
+> code-owned policy is trusted through a chain that does not terminate at the
+> root.
 >
 > See [the deployment guide](trust/operator-root-authority-deployment.md) and
-> [validation checklist](trust/operator-root-authority-validation-checklist.md).
+> [validation checklist](trust/operator-root-authority-validation-checklist.md)
+> for the final production transition, and the
+> [post-root runtime sequence](superpowers/plans/2026-08-03-post-root-runtime-sequence.md)
+> for current engineering order.
 > v0.9.3 supplies the instantiated root authority, enforced state transitions,
 > scope enforcement, quarantine, revocation lineage, and the trust query
 > service the gate requires. Migration of the existing trust mechanisms is

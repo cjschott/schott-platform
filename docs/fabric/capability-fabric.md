@@ -91,12 +91,24 @@ prevent.
 An **advertisement is not a trust subject at all**. A self-report never becomes
 trusted.
 
-## The deployment gate still holds
+## The two gates and the current entry condition
 
-Writing this specification does not open the Operator Root Authority deployment
-gate. **Implementation of the fabric remains blocked** until it passes, because
-a fabric node trusted through a chain terminating inside the platform is not
-trusted at all.
+Writing this specification opened neither gate.
+
+**Gate 1 — Fabric Runtime entry.** Opened by the Operator Root ceremony, which
+established the external root out of band. **Implementation of the fabric
+remains blocked** only until ENG-0001 and ENG-0002 are independently released
+and merged.
+
+**Gate 2 — TrustGateway production cutover.** Still closed, and still requiring
+its full set: production trust store validated, initial migrated subjects
+seeded, verdict source ready, rollback procedure validated, and deployment
+evidence retained.
+**TrustGateway cutover is intentionally not the Fabric Runtime gate** — it is
+the final production transition.
+
+Gate 1 permits the fabric to be built. Production node admission, capability
+registration, routing, selection, and execution wait for Gate 2.
 
 This is the same sequence the Trust Plane followed: architecture first,
 deliberately, so the thing being governed does not shape its own governance.

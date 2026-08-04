@@ -1256,13 +1256,153 @@ done
 assert_contains "${DEPLOY_GUIDE}" '[Nn]ot trust-history rollback|not a trust-history' \
   "guide distinguishes configuration rollback from trust-history rollback"
 
-# The v0.9.5 gate now requires deployment acceptance, not just the runtime.
-for gate in "Operator Root Authority instantiated" "production trust store validated" \
-            "initial migrated subjects seeded" "trust-plane-runtime" \
-            "code-owned fallback" "rollback procedure validated" \
-            "deployment evidence retained"; do
-  assert_contains "docs/platform-roadmap.md" "${gate}" \
-    "roadmap v0.9.5 gate requires: ${gate}"
+# The post-root sequence keeps cutover last and makes both released defects
+# independent gates before Fabric Runtime begins.
+SEQUENCE_PLAN="docs/superpowers/plans/2026-08-03-post-root-runtime-sequence.md"
+SEQUENCE_RECORD="docs/history/0002-runtime-sequencing-correction.md"
+LEDGER="docs/history/v1.0-engineering-ledger.md"
+for sequence_doc in "${SEQUENCE_PLAN}" "${SEQUENCE_RECORD}" "${LEDGER}"; do
+  assert_file "${sequence_doc}"
+  assert_contains "${sequence_doc}" '^# ' "$(basename "${sequence_doc}" .md) has a title"
+  assert_markdown_links "${sequence_doc}"
+done
+for item in "Operator Root Authority" "ENG-0001" "ENG-0002" \
+            "Fabric Runtime" "Health Runtime" "subject seeding|subjects seeded" \
+            "TrustGateway cutover"; do
+  assert_contains "docs/platform-roadmap.md" "${item}" \
+    "roadmap records corrected sequence item: ${item}"
+done
+
+# --- The two gates are distinct, and cutover is not the Fabric gate ----------
+# Asserted as one exact canonical sentence rather than a loose pattern. The
+# earlier form '[Tt]rustGateway cutover.*not.*gate' was satisfiable by prose
+# meaning the opposite ("cutover is not the only gate"), which is precisely the
+# claim this contract exists to pin down.
+GATE_SENTENCE='TrustGateway cutover is intentionally not the Fabric Runtime gate'
+for gate_doc in "docs/platform-roadmap.md" "docs/fabric/governance-boundaries.md" \
+                "docs/fabric/capability-fabric.md" "docs/health/governance-boundaries.md" \
+                "${LEDGER}"; do
+  assert_contains "${gate_doc}" "${GATE_SENTENCE}" \
+    "$(basename "${gate_doc}" .md) states cutover is intentionally not the Fabric Runtime gate"
+done
+
+# The inverse must not survive anywhere: no document may still claim Fabric
+# Runtime is blocked until cutover. A contradiction that only one document
+# carries is the failure mode the previous revision shipped.
+for gate_doc in "docs/platform-roadmap.md" "docs/fabric/governance-boundaries.md" \
+                "docs/fabric/capability-fabric.md" "docs/health/governance-boundaries.md" \
+                "${ADR12:-docs/decisions/ADR-0012-distributed-capability-fabric.md}"; do
+  assert_not_contains "${gate_doc}" \
+    '(blocked|forbidden|waits?) until .*TrustGateway cutover' \
+    "$(basename "${gate_doc}" .md) no longer blocks Fabric Runtime on TrustGateway cutover"
+done
+
+# Gate 1 permits construction only; production operation still waits for Gate 2.
+for prohibited in 'Node admission in production' \
+                  'Capability registration in production' \
+                  'Routing in production' \
+                  'Selection in production' \
+                  'Execution in production'; do
+  assert_contains "docs/fabric/governance-boundaries.md" "${prohibited}" \
+    "governance document still prohibits until cutover: ${prohibited}"
+done
+assert_contains "docs/fabric/governance-boundaries.md" \
+  'Runtime implementation\*\* — the fabric engine may be built' \
+  "governance document permits runtime construction after Gate 1"
+
+# --- The six production cutover requirements survive in full ----------------
+# Restored after the previous revision dropped every one of them. The documents
+# still claim these are required; nothing was asserting that the claim stayed.
+for cutover_requirement in "Operator Root Authority instantiated" \
+                           "production trust store validated" \
+                           "initial migrated subjects seeded" \
+                           "trust-plane-runtime or approved code-owned fallback available" \
+                           "rollback procedure validated" \
+                           "deployment evidence retained"; do
+  assert_contains "docs/fabric/governance-boundaries.md" "${cutover_requirement}" \
+    "governance document preserves the cutover requirement: ${cutover_requirement}"
+  assert_contains "docs/platform-roadmap.md" "${cutover_requirement}" \
+    "roadmap preserves the cutover requirement: ${cutover_requirement}"
+done
+
+assert_contains "${LEDGER}" \
+  'ENG-0001 -> ENG-0002 -> ENG-0004 -> ENG-0005 -> ENG-0006 -> ENG-0003' \
+  "engineering ledger orders defects, Fabric, Capability, Health, then cutover"
+# Capability Runtime stays in the canonical sequence rather than drifting into
+# an indefinite Future bucket.
+assert_contains "${LEDGER}" 'ENG-0005 \| Capability Runtime \| Blocked by Fabric Runtime' \
+  "ledger keeps Capability Runtime sequenced, not deferred"
+assert_contains "${LEDGER}" 'ENG-0005 is an increment of the Fabric' \
+  "ledger states the Capability Runtime relationship to Fabric Runtime explicitly"
+
+# --- ADR-0014: the root establishment lineage -------------------------------
+ADR14="docs/decisions/ADR-0014-root-establishment-lineage.md"
+ROOT_LINEAGE_DOC="docs/trust/root-establishment-lineage.md"
+assert_file "${ADR14}"
+assert_file "${ROOT_LINEAGE_DOC}"
+assert_contains "${ADR14}" '^# ADR-0014:' "ADR-0014 has the expected title"
+assert_contains "${ADR14}" '^-[[:space:]]+\*\*Status:\*\*[[:space:]]+Accepted' \
+  "ADR-0014 is accepted"
+assert_contains "${ADR14}" '^## Context' "ADR-0014 contains Context"
+assert_contains "${ADR14}" '^## Decision' "ADR-0014 contains Decision"
+assert_contains "${ADR14}" '^## Consequences' "ADR-0014 contains Consequences"
+assert_contains "${ADR14}" 'Refines' "ADR-0014 declares what it refines"
+assert_markdown_links "${ADR14}"
+assert_markdown_links "${ROOT_LINEAGE_DOC}"
+assert_contains "docs/decisions/ADR-0011-trust-plane.md" 'ADR-0014' \
+  "ADR-0011 points at the refinement"
+
+# The contract that makes ENG-0001 implementable: a dedicated record type that
+# cannot carry decision identifiers, rather than a nullable field on the model
+# that guarantees every subject state was decided.
+for lineage_rule in 'RootAuthorityLineage' 'root-establishment' 'subject-decision' \
+                    'lineage_type' 'establishment_origin' 'establishment_audit_id'; do
+  assert_contains "${ROOT_LINEAGE_DOC}" "${lineage_rule}" \
+    "root lineage contract defines: ${lineage_rule}"
+done
+assert_contains "${ROOT_LINEAGE_DOC}" 'absent from the model' \
+  "root lineage contract makes decision fields absent, not optional"
+assert_contains "${ROOT_LINEAGE_DOC}" 'No .TDEC. is created, read, or implied' \
+  "root lineage contract forbids fabricating a decision"
+assert_contains "${ROOT_LINEAGE_DOC}" 'No second .TLIN. is allocated' \
+  "root lineage contract reuses the allocated identifier"
+assert_contains "${ROOT_LINEAGE_DOC}" 'byte-identical' \
+  "root lineage contract requires ceremony records to stay byte-identical"
+assert_contains "${ROOT_LINEAGE_DOC}" '[Aa]mending the ceremony.s audit event is .{0,4}forbidden' \
+  "root lineage contract forbids amending the ceremony audit event"
+
+# --- The backfill constraint set is stated identically in all three docs -----
+# An earlier revision said "write TLIN-000001-v0001 and nothing else" alongside
+# "emit its own new audit event", which cannot both be satisfied. The corrected
+# form names two records explicitly, so the count is unambiguous.
+ENG1_PLAN="${SEQUENCE_PLAN}"
+for backfill_doc in "${ADR14}" "${ROOT_LINEAGE_DOC}" "${ENG1_PLAN}"; do
+  assert_contains "${backfill_doc}" 'creates exactly two new immutable records' \
+    "$(basename "${backfill_doc}" .md) states the backfill creates exactly two records"
+  assert_contains "${backfill_doc}" 'byte-identical, verified by digest' \
+    "$(basename "${backfill_doc}" .md) requires digest verification before and after"
+  assert_not_contains "${backfill_doc}" 'TLIN-000001-v0001. and nothing else' \
+    "$(basename "${backfill_doc}" .md) drops the contradictory 'nothing else' wording"
+done
+for modifies_doc in "${ADR14}" "${ROOT_LINEAGE_DOC}"; do
+  assert_contains "${modifies_doc}" 'modifies no pre-existing record' \
+    "$(basename "${modifies_doc}" .md) states the backfill modifies no pre-existing record"
+  assert_contains "${modifies_doc}" 'authorised or executed by' \
+    "$(basename "${modifies_doc}" .md) states no backfill is authorised or executed here"
+done
+
+# Execution needs its own operator-approved plan. Naming what that plan must
+# settle is what keeps "specified" from being mistaken for "approved".
+for backfill_requirement in 'audit event type' \
+                            'audit identifier allocation' \
+                            'operator identity' \
+                            'preconditions and refusal conditions' \
+                            'write ordering and partial-failure handling' \
+                            'before/after digest verification'; do
+  assert_contains "${ROOT_LINEAGE_DOC}" "${backfill_requirement}" \
+    "backfill plan prerequisite recorded: ${backfill_requirement}"
+  assert_contains "${ADR14}" "${backfill_requirement}" \
+    "ADR-0014 records the backfill plan prerequisite: ${backfill_requirement}"
 done
 
 # --- v0.9.5 Distributed Capability Fabric ------------------------------------
@@ -1275,20 +1415,31 @@ for fabric_doc in capability-fabric capability-lifecycle capability-identity \
   assert_file "docs/fabric/${fabric_doc}.md"
 done
 
-# The distinction the whole sprint turns on: architecture now, runtime later.
+# ADR-0012 remains the accepted architecture. The live governance document now
+# records the post-ceremony defect gate rather than the superseded cutover gate.
 assert_contains "${ADR12}" '[Ss]pecification may proceed' \
   "ADR-0012 states specification may proceed before deployment acceptance"
 assert_contains "${ADR12}" '[Nn]o runtime implementation' \
   "ADR-0012 declares no runtime implementation"
-assert_contains "docs/fabric/governance-boundaries.md" 'Architecture is allowed now' \
-  "governance document states architecture is allowed now"
-assert_contains "docs/fabric/governance-boundaries.md" '[Rr]untime remains forbidden' \
-  "governance document states runtime remains forbidden"
+assert_contains "docs/fabric/governance-boundaries.md" \
+  '[Bb]oth defect fixes must merge before Fabric Runtime implementation begins' \
+  "governance document gates Fabric Runtime on both defect fixes"
+assert_contains "docs/fabric/governance-boundaries.md" \
+  '[Ff]inal production transition' \
+  "governance document keeps TrustGateway cutover last"
 
-# The roadmap must not quietly promote v0.9.5 past the gate.
+# The roadmap must not quietly promote v0.9.5 past either gate.
 assert_contains "${ROADMAP}" 'ADR-0012' "roadmap cites ADR-0012"
-assert_contains "${ROADMAP}" '[Ii]mplementation still blocked|implementation remains blocked' \
-  "roadmap keeps v0.9.5 implementation blocked"
+assert_contains "${ROADMAP}" 'implementation gated on the released-defect sprint' \
+  "roadmap keeps v0.9.5 implementation gated on ENG-0001 and ENG-0002"
+# ADR-0012's original entry condition is marked superseded rather than deleted,
+# so the accepted text and its correction are both readable.
+assert_contains "${ADR12}" '[Ss]uperseded as of 2026-08-04' \
+  "ADR-0012 marks its original entry condition superseded"
+assert_contains "${ADR12}" 'must not be cited' \
+  "ADR-0012 states the superseded entry condition must not be cited"
+assert_contains "${ADR12}" 'completed the Fabric Runtime architecture gate' \
+  "ADR-0012 records the Operator Root ceremony as the Fabric Runtime gate"
 
 # --- A deployment plan creates no deployment --------------------------------
 #

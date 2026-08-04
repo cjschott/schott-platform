@@ -468,6 +468,9 @@ decides whether that description is believed.
 - [ADR-0003: Provider-Agnostic AI Architecture](ADR-0003-provider-agnostic-ai-architecture.md)
 - [ADR-0004: Immutable Knowledge Timeline](ADR-0004-immutable-knowledge-timeline.md)
 - [ADR-0010: Remote Read-Only Collection](ADR-0010-remote-read-only-collection.md)
+- [ADR-0014: The Root Establishment Lineage](ADR-0014-root-establishment-lineage.md)
+  — refines this ADR: how an externally established root authority is recorded,
+  given that no trust decision produced it
 - [Trust Plane overview](../trust/trust-plane.md)
 - [Trust domains](../trust/trust-domains.md)
 - [Trust states](../trust/trust-states.md)

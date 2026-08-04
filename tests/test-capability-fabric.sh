@@ -130,10 +130,9 @@ assert_contains "${ADR}" '[Nn]o new trust domain' \
 assert_contains "${ADR}" 'capability-package' "ADR-0012 uses the capability-package trust domain"
 assert_contains "${ADR}" 'fabric-node' "ADR-0012 uses the fabric-node trust domain"
 
-# --- The deployment gate is not dissolved by writing a specification ---------
-# v0.9.5 implementation is blocked on the Operator Root Authority deployment
-# gate. An ADR that quietly drops the gate would be the most valuable thing in
-# this sprint to get wrong.
+# --- The runtime gate terminates at Operator Root Authority -------------------
+# Fabric implementation is gated by establishment of the Operator Root
+# Authority and the released-defect sprint, not by TrustGateway cutover.
 assert_contains "${ADR}" '[Dd]eployment gate' "ADR-0012 preserves the deployment gate"
 assert_contains "${ADR}" 'Operator Root Authority' "ADR-0012 terminates at the Operator Root Authority"
 
@@ -634,7 +633,10 @@ done
 assert_contains "${ROADMAP}" 'v0\.9\.5 — Distributed Capability Fabric' \
   "roadmap keeps the v0.9.5 heading"
 assert_contains "${ROADMAP}" 'ADR-0012' "roadmap cites ADR-0012"
-assert_contains "${ROADMAP}" '[Dd]eployment gate' "roadmap keeps the deployment gate"
+assert_contains "${ROADMAP}" 'TrustGateway production cutover gate' \
+  "roadmap keeps the production cutover gate"
+assert_contains "${ROADMAP}" 'Fabric Runtime entry gate' \
+  "roadmap names the Fabric Runtime entry gate separately"
 
 # --- Standards ---------------------------------------------------------------
 # The name collision between the platform capability record and the fabric
@@ -644,29 +646,58 @@ assert_contains "docs/standards/capability-model-standard.md" 'CAPDEF' \
 assert_contains "docs/standards/platform-ontology-standard.md" 'capability-instance' \
   "ontology standard records the fabric entity types as a documented change"
 
-# --- Deployment gate: specification allowed, runtime blocked -----------------
-# The distinction this sprint turns on. Architecture may be written now; none
-# of it may run until the Operator Root Authority gate passes. Stated in both
-# directions, because a document that only says "blocked" invites someone to
-# conclude the specification was premature, and one that only says "allowed"
-# invites someone to start building.
+# --- Two gates: Fabric Runtime entry, then production cutover -----------------
+# The governance document must name both gates and keep them apart. Collapsing
+# them in either direction is the failure this block exists to catch: fold them
+# together and either the fabric never gets built, or it gets admitted into
+# production through a chain that does not terminate at the root.
 assert_contains "${ADR}" '[Ss]pecification may proceed' \
   "ADR-0012 states specification may proceed before deployment acceptance"
-for blocked in '[Rr]untime implementation' '[Nn]ode admission' \
-               '[Cc]apability registration' '[Rr]outing' '[Ss]election' \
-               '[Ee]xecution'; do
-  assert_contains "${GOVERNANCE_DOC}" "${blocked}" \
-    "governance document names ${blocked} as blocked until the gate passes"
+assert_contains "${GOVERNANCE_DOC}" '^### Gate 1 — Fabric Runtime entry gate' \
+  "governance document defines the Fabric Runtime entry gate"
+assert_contains "${GOVERNANCE_DOC}" '^### Gate 2 — TrustGateway production cutover gate' \
+  "governance document defines the production cutover gate separately"
+for requirement in 'Operator Root Authority ceremony complete' \
+                   'ENG-0001' 'ENG-0002' \
+                   'Fabric Runtime' 'Health Runtime' \
+                   'subjects seeded' 'TrustGateway cutover'; do
+  assert_contains "${GOVERNANCE_DOC}" "${requirement}" \
+    "governance document records the corrected sequence item: ${requirement}"
 done
-for gate in 'Operator Root Authority instantiated' \
-            'production trust store validated' \
-            'initial migrated subjects seeded' \
-            'trust-plane-runtime' \
-            'code-owned fallback' \
-            'rollback procedure validated' \
-            'deployment evidence retained'; do
-  assert_contains "${GOVERNANCE_DOC}" "${gate}" \
-    "governance document restates the gate requirement: ${gate}"
+
+# One exact sentence, not a loose pattern. '[Tt]rustGateway cutover.*not.*gate'
+# was satisfiable by prose meaning the opposite, e.g. "cutover is not the only
+# gate", which would pass while asserting exactly what must not be true.
+assert_contains "${GOVERNANCE_DOC}" \
+  'TrustGateway cutover is intentionally not the Fabric Runtime gate' \
+  "governance document states cutover is intentionally not the Fabric Runtime gate"
+assert_absent_in "${GOVERNANCE_DOC}" \
+  '(blocked|forbidden|waits?) until .*TrustGateway cutover' \
+  "governance document does not block Fabric Runtime on TrustGateway cutover"
+
+# Gate 1 permits construction. Production operation still waits for Gate 2, and
+# each prohibition is asserted in its production-scoped form rather than as a
+# bare word that architecture prose would satisfy by accident.
+for prohibited in 'Node admission in production' \
+                  'Capability registration in production' \
+                  'Routing in production' \
+                  'Selection in production' \
+                  'Execution in production'; do
+  assert_contains "${GOVERNANCE_DOC}" "${prohibited}" \
+    "governance document prohibits until cutover: ${prohibited}"
+done
+assert_contains "${GOVERNANCE_DOC}" 'Runtime implementation\*\* — the fabric engine may be built' \
+  "governance document permits building the runtime after Gate 1"
+
+# Every production cutover requirement survives verbatim.
+for cutover_requirement in 'Operator Root Authority instantiated' \
+                           'production trust store validated' \
+                           'initial migrated subjects seeded' \
+                           'trust-plane-runtime or approved code-owned fallback available' \
+                           'rollback procedure validated' \
+                           'deployment evidence retained'; do
+  assert_contains "${GOVERNANCE_DOC}" "${cutover_requirement}" \
+    "governance document preserves the cutover requirement: ${cutover_requirement}"
 done
 
 # --- Governed discovery ------------------------------------------------------
