@@ -72,6 +72,22 @@ APPROVAL_SOURCES = frozenset({
 # value nobody recorded are different facts.
 UNKNOWN = "unknown"
 
+# The two kinds of lineage, discriminated on the record so a reader never has to
+# infer which one it is holding. ADR-0014.
+#
+# A subject-decision lineage records what the platform decided about a subject.
+# A root-establishment lineage records that an authority was established outside
+# the platform, by a ceremony, which no decision produced.
+LINEAGE_TYPE_SUBJECT_DECISION = "subject-decision"
+LINEAGE_TYPE_ROOT_ESTABLISHMENT = "root-establishment"
+LINEAGE_TYPES = frozenset({LINEAGE_TYPE_SUBJECT_DECISION,
+                           LINEAGE_TYPE_ROOT_ESTABLISHMENT})
+
+# How a root came to exist. Named rather than free text: an origin the platform
+# could assert about itself is not an external origin.
+EXTERNAL_OPERATOR_CEREMONY = "external-operator-ceremony"
+ESTABLISHMENT_ORIGINS = frozenset({EXTERNAL_OPERATOR_CEREMONY})
+
 
 class TrustState(str, Enum):
     """Standing of one subject in one lineage.
@@ -628,12 +644,18 @@ class TrustLineage:
             raise TrustError("the current decision must not also appear as a prior decision")
 
     @property
+    def lineage_type(self) -> str:
+        """Constant discriminator. A property, so it cannot be passed a value."""
+        return LINEAGE_TYPE_SUBJECT_DECISION
+
+    @property
     def id(self) -> str:
         return f"{self.lineage_id}-v{self.version:04d}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "lineage_type": self.lineage_type,
             "lineage_id": self.lineage_id,
             "version": self.version,
             "subject_id": self.subject_id,
@@ -649,6 +671,241 @@ class TrustLineage:
             "termination_reason": self.termination_reason,
             "supersedes_lineage_id": self.supersedes_lineage_id,
         }
+
+
+def lineage_type_of(record: Mapping[str, Any], where: str) -> str:
+    """The discriminator on a stored lineage record, or a refusal.
+
+    Missing and unrecognised values both fail closed. A lineage whose kind
+    cannot be established is not a lineage to be guessed at: reading a root
+    establishment as a decision chain, or the reverse, would misreport how a
+    subject came to be trusted.
+    """
+    value = str((record or {}).get("lineage_type") or "").strip()
+    if not value:
+        raise TrustError(
+            f"{where} carries no lineage_type; the kind of a lineage is recorded, "
+            "never inferred"
+        )
+    if value not in LINEAGE_TYPES:
+        raise TrustError(f"{where} carries an unrecognised lineage_type '{value}'")
+    return value
+
+
+@dataclass(frozen=True)
+class RootAuthorityLineage:
+    """How one Operator Root Authority came to exist.
+
+    Not a decision chain. A root is established outside the platform by a human
+    ceremony; nothing inside decided it, and `evaluator` refuses any decision
+    whose subject is its own actor. So the decision identifiers `TrustLineage`
+    requires cannot be supplied here truthfully.
+
+    They are therefore **absent from this model rather than optional on it**. No
+    code path can populate one, and a stored record carrying one is malformed
+    rather than tolerated. There is no `root_authority_id` either: a root naming
+    itself as its own terminating authority reads as self-approval, and this
+    record makes no claim about who approved anything, because nobody did.
+
+    Advancing a root establishment lineage is not defined in this release.
+    """
+
+    lineage_id: str
+    version: int
+    authority_id: str
+    subject_type: str
+    establishment_origin: str
+    evidence_reference_ids: tuple[str, ...]
+    establishment_audit_id: str
+    current_state: str
+    established_at: datetime
+    recorded_at: datetime
+    terminated: bool = False
+
+    def __post_init__(self) -> None:
+        _match(LINEAGE_ID, self.lineage_id, "lineage_id")
+        _match(AUTHORITY_ID, self.authority_id, "authority_id")
+        _match(AUDIT_ID, self.establishment_audit_id, "establishment_audit_id")
+        # Exactly one version exists. Advancing a root establishment lineage is
+        # not defined in this release, so a second version is a record whose
+        # meaning nothing specifies. `bool` is excluded explicitly because it is
+        # an `int` in Python, and `version=True` would otherwise pass as 1.
+        if isinstance(self.version, bool) or not isinstance(self.version, int):
+            raise TrustError("lineage version must be an integer")
+        if self.version != 1:
+            raise TrustError(
+                "a root establishment lineage has exactly one version; advancing "
+                "one is not defined in this release"
+            )
+        if self.subject_type != AuthorityType.OPERATOR_ROOT.value:
+            raise TrustError(
+                f"subject_type '{self.subject_type}' is not "
+                f"'{AuthorityType.OPERATOR_ROOT.value}'; this record describes the "
+                "establishment of an operator root and nothing else"
+            )
+        if self.establishment_origin not in ESTABLISHMENT_ORIGINS:
+            raise TrustError(
+                f"establishment origin '{self.establishment_origin}' is not "
+                "recognised; a root is established outside this platform"
+            )
+        if not isinstance(self.evidence_reference_ids, (list, tuple)):
+            raise TrustError("evidence_reference_ids must be a list of identifiers")
+        if not self.evidence_reference_ids:
+            raise TrustError(
+                "a root establishment lineage requires at least one evidence reference")
+        for evidence_id in self.evidence_reference_ids:
+            _match(EVIDENCE_ID, evidence_id, "evidence_reference_ids")
+        if self.current_state != TrustState.TRUSTED.value:
+            raise TrustError(
+                "a root establishment lineage records a trusted root or it is not "
+                "a root establishment"
+            )
+        require_aware(self.established_at, "established_at")
+        require_aware(self.recorded_at, "recorded_at")
+        # Termination is advancement by another name, and equally undefined.
+        if not isinstance(self.terminated, bool):
+            raise TrustError("terminated must be a boolean")
+        if self.terminated:
+            raise TrustError(
+                "a root establishment lineage is never terminated; withdrawing a "
+                "root is not implemented in this release"
+            )
+
+    @property
+    def lineage_type(self) -> str:
+        """Constant discriminator. A property, so it cannot be passed a value."""
+        return LINEAGE_TYPE_ROOT_ESTABLISHMENT
+
+    @property
+    def id(self) -> str:
+        return f"{self.lineage_id}-v{self.version:04d}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "lineage_type": self.lineage_type,
+            "lineage_id": self.lineage_id,
+            "version": self.version,
+            "authority_id": self.authority_id,
+            "subject_type": self.subject_type,
+            "establishment_origin": self.establishment_origin,
+            "evidence_reference_ids": list(self.evidence_reference_ids),
+            "establishment_audit_id": self.establishment_audit_id,
+            "current_state": self.current_state,
+            "established_at": self.established_at.isoformat(),
+            "recorded_at": self.recorded_at.isoformat(),
+            "terminated": self.terminated,
+        }
+
+
+# Exactly the keys a stored root establishment lineage may carry. Anything else
+# is refused rather than ignored: a field nobody validates is a field that can
+# claim anything.
+ROOT_LINEAGE_KEYS = frozenset({
+    "id", "lineage_type", "lineage_id", "version", "authority_id",
+    "subject_type", "establishment_origin", "evidence_reference_ids",
+    "establishment_audit_id", "current_state", "established_at", "recorded_at",
+    "terminated",
+})
+
+# Named separately from the general unknown-key refusal so the message says why
+# these in particular can never appear.
+ROOT_LINEAGE_FORBIDDEN_KEYS = frozenset({
+    "first_decision_id", "current_decision_id", "prior_decision_ids",
+    "root_authority_id", "approved_by", "approval_source",
+})
+
+
+def _stored_time(value: Any, field_name: str) -> datetime:
+    """Parse a stored timestamp, or refuse it as a finding rather than a crash.
+
+    Raised bare: the caller adds the record it came from, so the message names
+    the record once.
+    """
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        raise TrustError(f"{field_name} must be an ISO 8601 timestamp")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise TrustError(f"{field_name} is not an ISO 8601 timestamp") from None
+
+
+def validate_root_lineage_record(record: Mapping[str, Any],
+                                 where: str) -> RootAuthorityLineage:
+    """Refuse a stored root establishment lineage that is not one.
+
+    Checks field names *and* their values. A name-only check would let a record
+    whose every value is nonsense satisfy the authority-to-lineage rule in
+    `TrustStore.validate`, which is the same as letting malformed data prove a
+    root was established.
+
+    Every failure is a `TrustError`, including parse, type, and datetime
+    failures, so validation reports a malformed record rather than crashing on
+    it. Returns the reconstructed record so callers compare parsed values
+    instead of raw strings.
+    """
+    if not isinstance(record, Mapping):
+        raise TrustError(f"{where} is not a record")
+
+    kind = lineage_type_of(record, where)
+    if kind != LINEAGE_TYPE_ROOT_ESTABLISHMENT:
+        raise TrustError(
+            f"{where} is a '{kind}' lineage, not a root establishment lineage")
+
+    reject_forbidden_keys(record, where)
+
+    present = set(record)
+    for key in sorted(present & ROOT_LINEAGE_FORBIDDEN_KEYS):
+        raise TrustError(
+            f"{where} carries '{key}'; a root establishment records no decision "
+            "and no approver, because nothing inside this platform made one"
+        )
+    for key in sorted(present - ROOT_LINEAGE_KEYS):
+        raise TrustError(f"{where} carries an unrecognised field '{key}'")
+    for key in sorted(ROOT_LINEAGE_KEYS - present - {"terminated"}):
+        raise TrustError(f"{where} is missing required field '{key}'")
+
+    # A stored record comes from YAML, where a sequence loads as a list. A tuple
+    # is a non-list: accepting one here would mean this boundary was checking an
+    # in-memory shape rather than the stored one. The model keeps a tuple after
+    # parsing, which is a different question.
+    evidence_ids = record["evidence_reference_ids"]
+    if not isinstance(evidence_ids, list):
+        raise TrustError(f"{where}: evidence_reference_ids must be a list")
+
+    # Reconstruction is the value check: every invariant the model enforces on
+    # construction applies to a stored record too, so there is one definition of
+    # a valid root establishment rather than two that can drift apart.
+    try:
+        lineage = RootAuthorityLineage(
+            lineage_id=record["lineage_id"],
+            version=record["version"],
+            authority_id=record["authority_id"],
+            subject_type=record["subject_type"],
+            establishment_origin=record["establishment_origin"],
+            evidence_reference_ids=tuple(evidence_ids),
+            establishment_audit_id=record["establishment_audit_id"],
+            current_state=record["current_state"],
+            established_at=_stored_time(record["established_at"], "established_at"),
+            recorded_at=_stored_time(record["recorded_at"], "recorded_at"),
+            terminated=record.get("terminated", False),
+        )
+    except TrustError as error:
+        raise TrustError(f"{where}: {error}") from None
+    except (TypeError, ValueError, AttributeError) as error:
+        raise TrustError(
+            f"{where} is malformed ({type(error).__name__}: {error})") from None
+
+    # The stored name must agree with the content it holds; a file called
+    # v0009 holding version 1 is two claims about the same record.
+    if str(record["id"]) != lineage.id:
+        raise TrustError(
+            f"{where}: stored id '{record['id']}' does not match "
+            f"'{lineage.id}' derived from lineage_id and version"
+        )
+    return lineage
 
 
 @dataclass(frozen=True)

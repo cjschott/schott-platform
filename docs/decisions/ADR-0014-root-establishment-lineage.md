@@ -7,12 +7,19 @@
 
 > **Numbering note.** ADR-0005 and ADR-0006 remain unassigned and reserved.
 
-> **This ADR defines architecture only. There is no runtime implementation in
-> this release** — no new model class, no new store write, no change to
-> `declare_root_authority`, and no lineage record is persisted for the existing
-> production root. This document is the specification that ENG-0001 implements
-> test-first. Where something is undecided, this ADR says so explicitly rather
-> than leaving a gap for whoever implements it first.
+> **This ADR defined architecture only when accepted** — no new model class, no
+> new store write, no change to `declare_root_authority`. It is the
+> specification ENG-0001 implements test-first. Where something is undecided,
+> this ADR says so explicitly rather than leaving a gap for whoever implements
+> it first.
+
+> **Implementation status (2026-08-04): ENG-0001 is in review, not released.**
+> The `RootAuthorityLineage` model, the discriminated read path, the
+> `declare_root_authority` write, and the `validate-store` rule are implemented
+> against this specification. **No lineage record is persisted for the existing
+> production root**, and the backfill described below remains constrained and
+> **unauthorised**. See the
+> [contract specification](../trust/root-establishment-lineage.md).
 
 ## Context
 

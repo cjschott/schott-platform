@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from ..common.immutable_store import ImmutableStore, StoreError
-from .errors import TrustStoreError
+from .errors import TrustError, TrustStoreError
 from .identifiers import LINEAGE_ID, LINEAGE_VERSION_ID, PATTERNS, PREFIXES
+from .models import validate_root_lineage_record
 
 
 class TrustStore(ImmutableStore):
@@ -93,7 +94,39 @@ class TrustStore(ImmutableStore):
 
         known_authorities = {a.get("authority_id") for a in authorities}
         decisions = {d.get("decision_id"): d for d in self.all_records("decision")}
-        lineage_ids = {l.get("lineage_id") for l in self.all_records("lineage")}
+        all_lineages = self.all_records("lineage")
+        lineage_ids = {l.get("lineage_id") for l in all_lineages}
+
+        # ADR-0014: an authority names the lineage recording how it was
+        # established, and that lineage must be a root establishment naming the
+        # same authority back. A dangling or disagreeing reference is reported
+        # here and repaired nowhere: writing the missing record would be the
+        # platform establishing its own root.
+        versions_by_lineage: dict[str, list[dict[str, Any]]] = {}
+        for lineage in all_lineages:
+            versions_by_lineage.setdefault(str(lineage.get("lineage_id")), []).append(lineage)
+
+        for authority in sorted(authorities, key=lambda a: str(a.get("authority_id"))):
+            authority_id = str(authority.get("authority_id"))
+            lineage_id = str(authority.get("lineage_id") or "")
+            versions = versions_by_lineage.get(lineage_id) or []
+            if not versions:
+                problems.append(
+                    f"{authority_id}: lineage '{lineage_id}' has no lineage record")
+                continue
+            for version in sorted(versions, key=lambda v: str(v.get("id"))):
+                label = str(version.get("id") or lineage_id)
+                try:
+                    lineage = validate_root_lineage_record(version, label)
+                except TrustError as error:
+                    # The helper has already named the record; adding the label
+                    # again would print the same identifier twice in one line.
+                    problems.append(f"{authority_id}: {error}")
+                    continue
+                if lineage.authority_id != authority_id:
+                    problems.append(
+                        f"{authority_id}: {label} names authority "
+                        f"'{lineage.authority_id}'")
 
         for identifier, decision in sorted(decisions.items(), key=lambda i: str(i[0])):
             if decision.get("actor_authority_id") not in known_authorities:

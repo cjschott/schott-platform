@@ -23,8 +23,10 @@ from typing import Any
 from .audit import AuditEventKind
 from .errors import TrustError
 from .models import (
+    EXTERNAL_OPERATOR_CEREMONY,
     AuthorityType,
     OperatorRootAuthority,
+    RootAuthorityLineage,
     TrustAuditEvent,
     TrustEvidenceReference,
     TrustState,
@@ -152,11 +154,35 @@ def declare_root_authority(store, declaration: dict[str, Any]):
         lineage_id=store.allocate_id("lineage"),
     )
 
-    for reference in references:
-        store.write("evidence", reference)
-    store.write("authority", authority)
-    store.write("audit", TrustAuditEvent(
-        audit_id=store.allocate_id("audit"),
+    # Allocated before the lineage is built so the lineage can name the event
+    # that records its establishment. Allocation reserves an identifier; it
+    # writes no record.
+    audit_id = store.allocate_id("audit")
+
+    # The lineage reuses the identifier already allocated for the authority. A
+    # second TLIN would mean the authority and its own establishment record
+    # disagreed about which lineage this is.
+    #
+    # `established_at` and `recorded_at` are both the declaration timestamp
+    # because declaring is the act of recording: this path has no clock, and
+    # nothing in this package reads one. The two diverge only where
+    # establishment and recording are genuinely separate events, which is why
+    # they are separate fields.
+    lineage = RootAuthorityLineage(
+        lineage_id=authority.lineage_id,
+        version=1,
+        authority_id=authority.authority_id,
+        subject_type=AuthorityType.OPERATOR_ROOT.value,
+        establishment_origin=EXTERNAL_OPERATOR_CEREMONY,
+        evidence_reference_ids=tuple(r.evidence_id for r in references),
+        establishment_audit_id=audit_id,
+        current_state=TrustState.TRUSTED.value,
+        established_at=authority.created_at,
+        recorded_at=authority.created_at,
+    )
+
+    audit = TrustAuditEvent(
+        audit_id=audit_id,
         event_kind=AuditEventKind.ROOT_AUTHORITY_DECLARED.value,
         subject_id=authority.authority_id,
         lineage_id=authority.lineage_id,
@@ -165,5 +191,18 @@ def declare_root_authority(store, declaration: dict[str, Any]):
         occurred_at=authority.created_at,
         reason="an external operator root authority was declared out of band",
         provenance=dict(declaration.get("provenance") or {}),
-    ))
+    )
+
+    # Every record is constructed, and therefore validated, before the first
+    # write. A declaration that is going to be refused is refused having
+    # written nothing.
+    #
+    # The lineage is written before the authority that names it, so no
+    # partially written store holds an authority pointing at a lineage record
+    # that was never created — the defect this change exists to remove.
+    for reference in references:
+        store.write("evidence", reference)
+    store.write("lineage", lineage)
+    store.write("authority", authority)
+    store.write("audit", audit)
     return authority

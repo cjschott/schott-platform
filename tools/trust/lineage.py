@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import TrustError
+from .models import LINEAGE_TYPE_SUBJECT_DECISION, lineage_type_of
 from .transitions import TERMINAL
 
 
@@ -38,6 +39,14 @@ def subject_lineages(store, subject_id: str) -> list[dict[str, Any]]:
     """
     heads: dict[str, dict[str, Any]] = {}
     for record in store.all_records("lineage"):
+        # Discriminate on the recorded kind, not on which fields happen to be
+        # present. A root establishment lineage has no subject_id, so filtering
+        # by subject alone would exclude it by accident rather than on purpose,
+        # and a malformed record would pass unnoticed. Missing and unrecognised
+        # kinds raise rather than being skipped: unknown fails closed.
+        if lineage_type_of(record, str(record.get("id") or "lineage record")) \
+                != LINEAGE_TYPE_SUBJECT_DECISION:
+            continue
         if record.get("subject_id") != subject_id:
             continue
         identifier = str(record.get("lineage_id"))
