@@ -4,9 +4,16 @@ The record of how an Operator Root Authority came to exist. Governed by
 [ADR-0014](../decisions/ADR-0014-root-establishment-lineage.md), which refines
 [ADR-0011](../decisions/ADR-0011-trust-plane.md).
 
-> **Nothing here is implemented.** No model class exists, no store write occurs,
-> and no lineage record has been persisted for the production root. This is the
-> contract ENG-0001 implements test-first.
+> **Implementation status (ENG-0001, in review — not released).** The
+> `RootAuthorityLineage` model, the discriminated read path, the
+> `declare_root_authority` write, and the `validate-store` rule are implemented
+> and covered by `tests/test-trust-runtime.sh`.
+>
+> **No lineage record has been persisted for the existing production root.**
+> `TAUTH-000001` cannot be re-declared, so the fix repairs future root
+> establishment only. `validate-store` now reports the production store's
+> missing lineage as an accurate finding. The backfill remains constrained and
+> **unauthorised** — see [the existing production store](#the-existing-production-store).
 
 ## The distinction this record exists to hold
 
@@ -95,11 +102,38 @@ claim about who approved it — because nobody in this platform did.
 identifier it has **already allocated** for the authority, within the same call
 that writes the authority and audit records.
 
-Ordering: evidence, then lineage, then authority, then audit. The lineage exists
-before the authority that names it, so a partially written store never contains
-an authority pointing at a lineage that was never written.
+The audit identifier is allocated before the lineage is constructed, so the
+lineage can name the event recording its establishment. Allocation reserves an
+identifier; it writes no record.
 
-`TrustLineage` construction and `declare_decision` are **not touched**.
+**Ordering: evidence, then lineage, then authority, then audit.** Every record
+is constructed — and therefore validated — before the first write, so a
+declaration that is going to be refused is refused having written nothing. The
+lineage is written before the authority that names it, so no partially written
+store holds an authority pointing at a lineage record that was never created.
+
+`established_at` and `recorded_at` are both the declaration timestamp on this
+path, because declaring is the act of recording. **Nothing in this package reads
+a clock**; every timestamp is supplied by the caller, and this path introduces
+no exception. The two fields diverge only where establishment and recording are
+genuinely separate events — which is why they are separate fields, and what a
+later backfill would use them for.
+
+`TrustLineage` construction and `create_decision` are **not touched**.
+
+### Residual risk: the store has no transaction
+
+Multi-record writes are not atomic and nothing here deletes or rewrites, so an
+I/O failure or crash between writes leaves a permanent partial state. The
+ordering above bounds which one: an orphan lineage with no authority, never an
+authority with no lineage.
+
+An orphan root establishment lineage is **not** detected by the validation rule
+below, which checks authority → lineage. Detecting it would need the reverse
+check, and re-running `init-root` after such a failure would allocate fresh
+identifiers and leave the orphan in place permanently. This is inherent to an
+append-only store without transactions and is recorded here rather than solved
+by ENG-0001.
 
 ## The existing production store
 
@@ -145,11 +179,22 @@ fails before its audit event leaves a state no later record can correct.
 ## Store validation
 
 `validate-store` gains one rule: **every authority's `lineage_id` must resolve
-to a `root-establishment` lineage record.**
+to a `root-establishment` lineage record naming that same authority.**
 
-Until the production backfill is approved and performed, this reports the
-existing store's missing lineage as a finding. That is accurate — the record is
-genuinely absent. Validation reports; it repairs nothing.
+It reports a problem when the lineage record is absent, when the referenced
+lineage is a `subject-decision` lineage rather than a root establishment, when
+the stored record carries a forbidden or unrecognised field, and when the
+lineage names a different authority than the one referring to it.
+
+Against the existing production store it reports exactly one finding:
+
+```
+TAUTH-000001: lineage 'TLIN-000001' has no lineage record
+```
+
+That is accurate — the record is genuinely absent. **Validation reports; it
+repairs nothing.** It writes no record, allocates no identifier, and performs no
+backfill.
 
 ## Related
 
