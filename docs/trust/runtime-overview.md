@@ -97,6 +97,12 @@ It detects multiple active roots, unresolvable authorities, decisions with no
 lineage, dangling and self-referential supersession, duplicate identifiers,
 records citing unknown decisions, and temp residue from a failed write.
 
+It also writes nothing at all. `validate-store` opens the store for reading and
+never creates the store root, a record directory, a sequence file, an index, or
+a temporary file, whether the target is absent, empty, valid, or malformed —
+and it changes no permissions. Validating an absent store therefore reports an
+absent store rather than quietly building an empty one and calling it valid.
+
 ## Non-goals
 
 Explicitly **not** implemented in this release, and not partially implemented

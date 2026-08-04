@@ -87,7 +87,8 @@ def command_init_root(args) -> int:
 
 
 def command_validate_store(args) -> int:
-    store = _open_store(args)
+    # Opened for read: validating a store must not create it. See ENG-0002.
+    store = TrustStore.open_for_read(args.store_root)
     problems = store.validate()
     _emit({"store_root": str(store.root), "valid": not problems,
            "problems": problems, "counts": store.counts()})

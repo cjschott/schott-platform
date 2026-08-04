@@ -39,9 +39,11 @@ class TrustStore(ImmutableStore):
     # `indexes` holds append-only pointers; nothing in it is ever rewritten.
     extra_dirs = ("sequences", "indexes")
 
-    def __init__(self, root: Path | str, *, allow_repository_root: bool = False) -> None:
+    def __init__(self, root: Path | str, *, allow_repository_root: bool = False,
+                 initialize: bool = True) -> None:
         try:
-            super().__init__(root, allow_repository_root=allow_repository_root)
+            super().__init__(root, allow_repository_root=allow_repository_root,
+                             initialize=initialize)
         except StoreError as error:
             raise TrustStoreError(str(error)) from None
 

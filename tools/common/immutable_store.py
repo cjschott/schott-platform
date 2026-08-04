@@ -70,7 +70,8 @@ class ImmutableStore:
     # Extra directories to create beyond the record directories.
     extra_dirs: tuple[str, ...] = ("sequences",)
 
-    def __init__(self, root: Path | str, *, allow_repository_root: bool = False) -> None:
+    def __init__(self, root: Path | str, *, allow_repository_root: bool = False,
+                 initialize: bool = True) -> None:
         if root is None or str(root).strip() == "":
             raise StoreError("a store root must be supplied explicitly")
 
@@ -83,6 +84,10 @@ class ImmutableStore:
             )
 
         self.root = resolved
+        if initialize:
+            self._create_directories()
+
+    def _create_directories(self) -> None:
         for name in (*self.record_dirs.values(), *self.extra_dirs):
             directory = self.root / name
             directory.mkdir(parents=True, exist_ok=True)
@@ -92,6 +97,22 @@ class ImmutableStore:
                 # Best effort: some filesystems cannot express these modes, and
                 # failing the write would be worse than a permissive one.
                 pass
+
+    @classmethod
+    def open_for_read(cls, root: Path | str, *,
+                      allow_repository_root: bool = False) -> "ImmutableStore":
+        """Open a store without creating any part of it.
+
+        Reading must not change what it reports. A reader that provisions the
+        directories it is about to describe makes its own answer partly a
+        description of its side effects — an absent store would be reported as
+        an empty valid one that the reader itself had just built.
+
+        The reading methods glob their directories, and a missing directory
+        globs to nothing, so a partial or absent store reads as empty rather
+        than raising.
+        """
+        return cls(root, allow_repository_root=allow_repository_root, initialize=False)
 
     # --- paths -------------------------------------------------------------
 
