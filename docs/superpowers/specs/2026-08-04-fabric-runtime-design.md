@@ -266,8 +266,13 @@ capability execution, health evaluation, or remediation.
 - **State ownership:** authoritative for Fabric lifecycle state.
 - **Trust dependencies:** C3; refuses when trust is absent, expired, revoked, or
   unverifiable.
-- **Failure behaviour:** fails closed; refusal is a first-class recorded
-  outcome; illegal transitions are refused and recorded, never coerced.
+- **Failure behaviour:** **fails closed.** A rejected non-selection lifecycle
+  operation — including an illegal transition — returns a **deterministic
+  refusal result**, creates **no Fabric record**, causes **no authoritative
+  state change**, and is **not persistently audited** through any generic audit
+  event. Nothing is coerced into a legal state. Selection refusals and
+  no-candidate outcomes are the accepted exception: they are recorded, as
+  `CSEL` (C6).
 - **Status:** authoritative.
 - **Logical record-creation authority:** **yes** — for `CAPDEF`, `CCON`,
   `CPKG`, `CHOST`, `CADV`, `CINST`, and `CROUTE`.
@@ -385,8 +390,9 @@ These are **different things and are never conflated**.
 never supplied by the requester, and skipping any name already occupied.
 
 **Request identity** distinguishes a first submission from a replay and from a
-conflicting reuse. It is **caller-supplied or deterministically derived**, and
-it is **not record identity**.
+conflicting reuse. It is **caller-supplied** and **opaque**, and it is **not
+record identity**. The Fabric derives **only `request_digest`**; it never
+derives `request_id`.
 
 Two consequences follow, and the first corrects an error in an earlier draft of
 this specification:
@@ -870,7 +876,9 @@ committed but its evidence is missing.
 ### Multi-record ordering and partial state
 
 Only **declared supersession and host migration** produce two accepted
-persistent records. Every other operation is single-record.
+persistent records. **Every other accepted record-producing operation is
+single-record.** Rejected non-selection operations are **zero-record
+operations** — they produce no record at all.
 
 | Operation | Record one | Record two | Required order | Why safe | Interrupted after record one | Committed? | Retry / replay | Operator recovery |
 |---|---|---|---|---|---|---|---|---|
@@ -923,7 +931,7 @@ ninth, so evidence lives on the record whose existence it justifies.
 | Every advertisement — what a host claimed, and when | `CADV-000000` | Fabric |
 | Every admission decision — who approved this binding, on what evidence, until when | `CHOST-0000` (subject), `CINST-000000` (instance) | Fabric |
 | Every selection — route, version, all candidates, exclusion reasons, chosen instance | `CSEL-000000` | Fabric |
-| Every loss and refusal — what became ineligible, why, what was refused | `CSEL-000000` | Fabric |
+| Every **selection** loss, **selection** refusal, and no-candidate outcome — what became ineligible, why, what was refused | `CSEL-000000` | Fabric |
 | Every supersession — what replaced what, and when the overlap ended | the superseding record (`CINST`, `CROUTE`, `CHOST`, `CPKG`) | Fabric |
 | Declarations | `CAPDEF-0000`, `CCON-0000`, `CPKG-0000` | Fabric |
 | Trust decisions and their evidence | Trust Plane records | **Trust Plane — referenced, never duplicated** |
@@ -1074,8 +1082,11 @@ result is claimed here; nothing has been implemented or executed.**
 15. **Legal transitions.** Given each legal transition in §7, when performed
     with its required actor and preconditions, then the specified records are
     written and audited.
-16. **Illegal transitions.** Given each illegal transition, when attempted, then
-    it is refused, recorded, and **no state changes**.
+16. **Illegal transitions.** Given each illegal non-selection transition, when
+    attempted, then it is **refused**, a **deterministic refusal result** is
+    returned, **no Fabric record is created**, **no authoritative state
+    changes**, and repeating the request causes **fresh validation against
+    current authoritative state**.
 17. **Expiry removes eligibility only.** Given trust, advertisement, or
     admission expiry, when eligibility is computed, then the instance is
     ineligible and **no authoritative record changed**.
@@ -1123,168 +1134,176 @@ result is claimed here; nothing has been implemented or executed.**
     removed**.
 34. **Concurrent writers.** Given simultaneous allocation, when both proceed,
     then identifiers are unique and monotonic and the loser sees a conflict.
-35. **Audit contents.** Given each governed mutation and each refusal, when
-    audit is inspected, then every required §11 field is present, including
-    approving authority and causal references.
-36. **Causal linkage.** Given a selection or refusal, when audit is inspected,
+35. **Evidence on accepted records.** Given each accepted governed Fabric
+    record, when it is inspected, then every evidence field required by §11 is
+    present, including approving authority and causal references.
+36. **Evidence on accepted `CSEL`.** Given an accepted `CSEL` selection-refusal
+    or no-candidate record, when it is inspected, then it carries its required
+    selection evidence — outcome, route and route version, every candidate, and
+    each exclusion reason.
+37. **Rejected non-selection operations persist nothing.** Given a rejected
+    non-selection operation, when the store is inspected, then a deterministic
+    refusal result was returned, **no Fabric record was created**, and **no
+    generic Fabric audit record or ninth record type exists**.
+38. **Causal linkage.** Given a selection or refusal, when audit is inspected,
     then route, route version, candidates, exclusions, and outcome are
     reconstructable **from records alone**.
-37. **Permissions and ownership.** Given a store with a mode or ownership
+39. **Permissions and ownership.** Given a store with a mode or ownership
     mismatch, when any operation runs, then it is reported and **never silently
     corrected**.
-38. **Path traversal rejected.** Given an identifier or path escaping the root,
+40. **Path traversal rejected.** Given an identifier or path escaping the root,
     when used, then it is refused after full resolution.
-39. **Symlink rejected.** Given a symlink escaping the root, when accessed, then
+41. **Symlink rejected.** Given a symlink escaping the root, when accessed, then
     it is refused.
-40. **Derived staleness.** Given a stale or corrupt derived index, when
+42. **Derived staleness.** Given a stale or corrupt derived index, when
     eligibility or selection runs, then results are recomputed from
     authoritative records and the index is authoritative for nothing.
-41. **Explicit recovery.** Given a failed or partial state, when recovery is
+43. **Explicit recovery.** Given a failed or partial state, when recovery is
     performed, then it proceeds only by a new operator decision producing new
     records.
-42. **No implicit repair.** Given any failure condition in §9, when any
+44. **No implicit repair.** Given any failure condition in §9, when any
     operation runs, then no record is created, altered, cleaned, or backfilled
     implicitly.
-43. **No production mutation.** Given the full suite, when it completes, then
+45. **No production mutation.** Given the full suite, when it completes, then
     the production trust store, its counters, and `ai/.env` are byte-identical,
     and every fixture was an isolated temporary store.
-44. **No Trust Plane regression.** Given the full suite, when it completes, then
+46. **No Trust Plane regression.** Given the full suite, when it completes, then
     all ENG-0001 and ENG-0002 assertions pass unchanged.
-45. **Deterministic repeated validation.** Given any store state, when
+47. **Deterministic repeated validation.** Given any store state, when
     validation runs repeatedly, then output is identical and the filesystem is
     unchanged.
-46. **Separation from Capability and Health Runtime.** Given the delivered
+48. **Separation from Capability and Health Runtime.** Given the delivered
     increment, when it is inspected, then it contains no execution adapter,
     worker, dispatcher, provider connector, health evaluator, or remediation
     path.
-47. **Unresolved reference.** Given a request naming a capability, contract,
+49. **Unresolved reference.** Given a request naming a capability, contract,
     package, host, advertisement, or candidate instance that does not resolve,
     when it is submitted, then it is refused as not-found and no record is
     created.
-48. **No route.** Given a request class with no resolvable route, when selection
+50. **No route.** Given a request class with no resolvable route, when selection
     runs, then it refuses, and the refusal is recorded — distinguishably from
     the no-eligible-candidate outcome.
-49. **Host disappearance changes nothing authoritative.** Given an admitted
+51. **Host disappearance changes nothing authoritative.** Given an admitted
     instance whose host has disappeared, when eligibility and selection run,
     then the instance is excluded as a derived outcome only, **no authoritative
     record changes**, and re-eligibility requires a new decision.
-50. **Store root inside a repository refused.** Given a store root inside a git
+52. **Store root inside a repository refused.** Given a store root inside a git
     repository, when any operation runs, then it is refused and nothing is
     created.
-51. **`side-effecting` is unroutable.** Given a contract declaring
+53. **`side-effecting` is unroutable.** Given a contract declaring
     `side-effecting`, when a route names it or selection considers it, then it
     is refused and no selection chooses it.
-52. **No per-route override of unroutability.** Given a route configured to
+54. **No per-route override of unroutability.** Given a route configured to
     permit a `side-effecting` candidate, when selection runs, then the
     prohibition still holds and the route cannot lift it.
-53. **Effect class required.** Given a contract with an absent or unrecognised
+55. **Effect class required.** Given a contract with an absent or unrecognised
     effect class, when it is declared, then the declaration is refused.
-54. **Version negotiation is exact intersection.** Given a request's accepted
+56. **Version negotiation is exact intersection.** Given a request's accepted
     version set and a package's satisfied version set, when eligibility is
     computed, then only the intersection is eligible and an empty intersection
     refuses.
-55. **No version cleverness.** Given a request that cannot be satisfied exactly,
+57. **No version cleverness.** Given a request that cannot be satisfied exactly,
     when selection runs, then it refuses — with no automatic upgrade,
     downgrade, nearest match, or best-effort substitution, and no meaning read
     from any version number.
-56. **Declared compatibility only.** Given a contract compatible with prior
+58. **Declared compatibility only.** Given a contract compatible with prior
     versions, when negotiation runs, then only the reviewed declared
     compatibility field is consulted.
-57. **Unknown health is never healthy.** Given absent or unknown health input,
+59. **Unknown health is never healthy.** Given absent or unknown health input,
     when selection runs, then no candidate is removed **and** none is added,
     promoted, or reordered, and missing data is never treated as healthy.
-58. **Health cannot grant, override, broaden, or admit.** Given health input,
+60. **Health cannot grant, override, broaden, or admit.** Given health input,
     when it is applied, then it cannot grant trust, override quarantine, broaden
     scope, or admit a node.
-59. **Selection outcomes are never trust evidence.** Given a history of
+61. **Selection outcomes are never trust evidence.** Given a history of
     successful selections, when trust is evaluated, then nothing about that
     history alters trust standing.
-60. **No Fabric audit-record class.** Given a fully exercised store, when its
+62. **No Fabric audit-record class.** Given a fully exercised store, when its
     record types are enumerated, then only ADR-0012's eight accepted types
     exist and no audit-event record or audit namespace is present.
-61. **Evidence rides the accepted record.** Given each governed mutation, when
+63. **Evidence rides the accepted record.** Given each governed mutation, when
     the created record is inspected, then it carries every required §11
     evidence field, including approving authority and causal references.
-62. **Rejected operations persist nothing.** Given a rejected declaration,
+64. **Rejected operations persist nothing.** Given a rejected declaration,
     subject admission, instance admission, route change, or withdrawal, when the
     store is inspected, then **no Fabric record was created** and the refusal was
     returned as a deterministic result.
-63. **Selection refusal is persisted.** Given a refusal or no-candidate
+65. **Selection refusal is persisted.** Given a refusal or no-candidate
     selection outcome, when the store is inspected, then a `CSEL` record exists
     carrying the outcome, route, every candidate, and each exclusion reason.
-64. **Advertisement needs no per-advertisement human approval.** Given an
+66. **Advertisement needs no per-advertisement human approval.** Given an
     admitted subject, when it publishes its own advertisement within its admitted
     scope, then the advertisement is recorded without a new human approval and
     **no trust or admission is granted**.
-65. **A subject may advertise only itself.** Given an admitted subject, when it
+67. **A subject may advertise only itself.** Given an admitted subject, when it
     advertises another subject or claims beyond its admitted scope, then the
     registration is refused and no advertisement state is created.
-66. **Only C1 writes.** Given the delivered increment, when write paths are
+68. **Only C1 writes.** Given the delivered increment, when write paths are
     inspected, then **no component performs filesystem mutation except C1**, and
     C4 and C6 authorise records without persisting them.
-67. **Expired admission asserts nothing about trust.** Given an instance whose
+69. **Expired admission asserts nothing about trust.** Given an instance whose
     admission expired, when it is inspected, then it is ineligible and **package
     and host trust standing remain exactly what the Trust Plane reports**.
-68. **Retired stays retired.** Given a retired instance, when its host returns
+70. **Retired stays retired.** Given a retired instance, when its host returns
     or advertises afresh, then the instance remains retired and is not
     reactivated.
-69. **No Fabric action labels trust.** Given any Fabric operation, when trust
+71. **No Fabric action labels trust.** Given any Fabric operation, when trust
     records are inspected, then none was written, and no Fabric record asserts a
     subject is trusted or untrusted.
-70. **Re-admission requires a new decision.** Given a lapsed or retired binding,
+72. **Re-admission requires a new decision.** Given a lapsed or retired binding,
     when a new admission is approved, then it is a new explicitly authorised
     decision evaluated against **then-current** trust evidence.
-71. **Supersession ordering.** Given a declared supersession, when it is
+73. **Supersession ordering.** Given a declared supersession, when it is
     performed, then the new `CINST` commits **before** the new `CROUTE` version.
-72. **Interrupted supersession is bounded.** Given an interruption after the new
+74. **Interrupted supersession is bounded.** Given an interruption after the new
     `CINST` and before the new `CROUTE`, when the store is inspected, then the
     new instance exists, **no route names it**, nothing selects it, the cutover
     is **not** committed, the old route still serves, and completion requires an
     explicit operator decision.
-73. **Distinct request identities create independent records.** Given two
+75. **Distinct request identities create independent records.** Given two
     byte-identical declarations submitted with **different** `request_id`
     values, when both are accepted, then two independently allocated records
     exist and neither is treated as a replay.
-74. **Exact replay returns the original.** Given an accepted operation replayed
+76. **Exact replay returns the original.** Given an accepted operation replayed
     with the same `request_id` and byte-equivalent canonical inputs, when it is
     submitted, then the **original record identity and outcome** are returned,
     **no additional record is created**, and **no new identity is allocated**.
-75. **Conflicting reuse fails closed.** Given an accepted `request_id` reused
+77. **Conflicting reuse fails closed.** Given an accepted `request_id` reused
     with a different `request_digest`, when it is submitted, then it fails
     closed as `request_identity_conflict`, **no Fabric record is created**, and
     the original record is neither modified nor superseded.
-76. **Allocation collision is a storage conflict.** Given an occupied record
+78. **Allocation collision is a storage conflict.** Given an occupied record
     path, when a write targets it, then it is reported as a **storage
     conflict** and **never as replay evidence**.
-77. **Rejected non-selection repeats are re-evaluated.** Given a rejected
+79. **Rejected non-selection repeats are re-evaluated.** Given a rejected
     admission repeated after authoritative state changed, when it is
     resubmitted, then it is **validated afresh against current state** and no
     durable replay guarantee is claimed.
-78. **Replayed `CSEL` refusal returns its original outcome.** Given an accepted
+80. **Replayed `CSEL` refusal returns its original outcome.** Given an accepted
     `CSEL` refusal or no-candidate result, when its request identity is
     replayed exactly, then the **original accepted outcome and `CSEL` identity**
     are returned.
-79. **Unsupported canonicalisation or digest version fails closed.** Given an
+81. **Unsupported canonicalisation or digest version fails closed.** Given an
     unknown canonicalisation or digest version, when an operation is submitted,
     then it fails closed with no record created and nothing guessed.
-80. **Canonicalisation is deterministic.** Given the same supported canonical
+82. **Canonicalisation is deterministic.** Given the same supported canonical
     input, when the digest is computed repeatedly, then the identical
     `request_digest` results every time.
-81. **Authoritative input changes the digest.** Given semantically distinct
+83. **Authoritative input changes the digest.** Given semantically distinct
     authoritative input, when digests are compared, then they differ.
-82. **Excluded metadata does not change the digest.** Given identical
+84. **Excluded metadata does not change the digest.** Given identical
     authoritative inputs differing only in transport metadata, arrival time,
     log correlation identifiers, or store-allocated record identity, when
     digests are compared, then they are identical.
-83. **Rejected admission persists nothing.** Given a rejected subject or
+85. **Rejected admission persists nothing.** Given a rejected subject or
     instance admission, when the store is inspected, then **no admission record
     and no audit record** exists, and the refusal was a returned result.
-84. **Advertisement authority.** Given an admitted subject publishing its own
+86. **Advertisement authority.** Given an admitted subject publishing its own
     advertisement within its admitted scope, then it succeeds **without new
     human approval**; and given impersonation of another subject or a claim
     widening admitted scope, then it is refused with no advertisement state
     created.
-85. **Only accepted record types carry persistent evidence.** Given a fully
+87. **Only accepted record types carry persistent evidence.** Given a fully
     exercised store, when its persistent records are enumerated, then every one
     is among ADR-0012's eight accepted types and **no request ledger, replay
     ledger, or audit-record class exists**.
@@ -1309,16 +1328,26 @@ proposed.
 | 9 | Failure injection and concurrency | Interrupted writes, concurrent allocation, unavailable Trust Plane, permission/symlink violations | 8 | Independent | Failure-matrix assertions fail | All pass; no implicit repair |
 | 10 | Full regression validation | Whole-repository validation | 9 | Independent | — | All suites pass; `run-validation.sh` full; production byte-identical |
 
-## 15. Deferred and unresolved
+## 15. Resolved decisions, and what remains deferred
+
+### Resolved and normative
+
+- **The ENG-0004 / ENG-0005 boundary** (§3) — accepted and independently
+  reviewed.
+- **The admission-decision record mapping** (§4) — **resolved**. `CHOST-0000`
+  materialises approved subject admission; `CINST-000000` materialises approved
+  instance admission; **no separate admission-decision record type is
+  required**. This is normative, not a reviewer judgement.
+- **Request identity and replay** (§6) — **resolved**. Opaque caller-supplied
+  `request_id`, Fabric-derived `request_digest`, both carried as evidence fields
+  on the accepted record, with the six replay outcomes normative.
+
+### Deferred
 
 - **The non-transactional write risk remains deferred**, exactly as recorded
   under ENG-0001, and is **restated rather than solved** (§9). ENG-0004 inherits
   it by reusing the append-only store, bounds it by declared write ordering,
   makes residue observable, and requires explicit operator recovery.
-- **The admission-decision record location** (§4) is resolved by reading
-  accepted records — the decision is carried by the record it creates, because a
-  ninth schema would be an invention. If a distinct admission-decision record is
-  intended, that is a new architectural decision.
 - **`side-effecting` enablement is out of scope and stays out.** Making an
   actuating capability routable requires **all six** of ADR-0012's conditions: a
   new ADR governing actuation on its own terms, an explicit approval model,
