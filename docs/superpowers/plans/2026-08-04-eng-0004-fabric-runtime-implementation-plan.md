@@ -206,12 +206,22 @@ narrowing, and full CI/validation wiring — as one Red→Green increment.
 - **Inspect first:** `tools/common/immutable_store.py` — `allocate_id()`
   (`:06d`), `write_atomic`, `open_for_read`, `DIR_MODE` `0700`, `FILE_MODE`
   `0600`, `is_inside_git_repository`, `MAX_SEQUENCE`; `tools/trust/store.py`
-- **AC:** 1, 2, 4, 39, 40, 41, 52, 68, 78 · **FC:** 1, 2, 6, 13, 19, 20, 21
-- **Red:** a **repository-wide assertion that no file under `tools/fabric/`
-  except `store.py` calls `open(..., "w")`, `mkdir`, `chmod`, `chown`, `rename`,
-  `replace`, `unlink`, `write_text`, `write_bytes`, `os.link`, or `write_atomic`
-  ** — the observable form of AC 68, which a review checkpoint alone cannot
-  provide. Also assert four-digit allocation for `CAPDEF`/`CCON`/`CPKG`/`CHOST`/
+- **AC:** 1, 2, 4, 34 (allocation and commit race), 39, 40, 41, 52, 68, 78 · **FC:** 1, 2, 6, 13, 19, 20, 21
+- **Red — AC 68, repository-wide.** Assert that **no file under `tools/fabric/`
+  except `store.py`** reaches the filesystem by any mechanism: builtin
+  `open(...)` in any writing mode; `os.open`, `os.write`, `os.mkdir`,
+  `os.makedirs`, `os.chmod`, `os.chown`, `os.rename`, `os.replace`, `os.link`,
+  `os.symlink`, `os.remove`, `os.unlink`, `os.rmdir`, `os.truncate`,
+  `os.ftruncate`, `os.fdopen`; `pathlib` `.write_text`, `.write_bytes`,
+  `.mkdir`, `.touch`, `.chmod`, `.rename`, `.replace`, `.unlink`, `.rmdir`,
+  `.symlink_to`, `.hardlink_to`; `shutil` `.copy*`, `.move`, `.rmtree`;
+  `tempfile` `.NamedTemporaryFile`, `.mkstemp`, `.mkdtemp`, `.TemporaryFile`;
+  and `ImmutableStore.write_atomic`/`write_record`. The assertion must also
+  catch **alias imports** — `from os import replace as _r`, `import os.path as
+  _p`, `import shutil as sh` — by checking imported-name bindings, not only
+  dotted call text. **C1's cleanup of its own `.tmp` file remains allowed** and
+  is the single named exemption. A review checkpoint cannot provide this.
+- **Red:** also assert four-digit allocation for `CAPDEF`/`CCON`/`CPKG`/`CHOST`/
   `CROUTE` and six-digit for `CADV`/`CINST`/`CSEL`; **released Trust Plane
   allocation still six-digit and byte-identical**; per-kind exhaustion refuses
   rather than rolling over; no-default-root refusal; repository-root refusal;
@@ -232,21 +242,33 @@ narrowing, and full CI/validation wiring — as one Red→Green increment.
   |---|---|
   | Per-kind widths | **New class attribute `ImmutableStore.id_widths: Mapping[str, int] = {}`**. Line 153 becomes `f"{prefix}-{candidate:0{self.id_widths.get(kind, 6)}d}"`. An empty map means six, so **every released store, including `TrustStore`, is byte-identical** |
   | Per-kind maximum | Exhaustion checked against `min(10**width - 1, MAX_SEQUENCE)` for that kind, refusing rather than rolling over |
-  | **No silent permission correction** | **`FabricStore` overrides `_create_directories()`**. The inherited body (`tools/common/immutable_store.py:90–99`) calls `mkdir(exist_ok=True)` then `chmod(DIR_MODE)` **on directories that already exist** — that is the silent correction. The override stats each existing directory **first**, compares mode and ownership, and **refuses or reports a mismatch without chmod**. Only directories this call newly created are chmodded |
-  | Restrictive creation modes | New directories `DIR_MODE` `0700`; records `FILE_MODE` `0600`, both from the released constants |
-  | Full-resolution containment | **New `FabricStore._resolve_contained(path)`** — `Path.resolve()` then verify the root is among its parents. Called from the overridden `path_for()` (base at `:124`), `read_record()` (`:217`), and `list_records()` (`:223`), so **both read and write** paths are contained |
-  | Symlinked record directory or record | `_resolve_contained` additionally refuses when the record directory or the record file `is_symlink()` |
-  | Traversal | Refused by the same helper after full resolution |
-  | One physical write path | `FabricStore` calls the released **`write_atomic()` (`:171`)** and **copies none of it** |
-  | No update/delete | Neither method is added; a static assertion proves `tools/fabric/` defines no `update`, `delete`, `unlink`, or `rmtree` |
+  | **Sequence path containment** | `allocate_id()` (`:132`) opens `sequences/<kind>.seq` **directly**. `FabricStore` overrides it to run `_guard_path()` on the `sequences/` directory **and** the `.seq` file before `os.open`, then delegates to `super().allocate_id()` |
+  | **Destination + temp-sibling containment** | `write_atomic()` (`:171`) accepts an arbitrary destination and creates a `.<stem>.tmp` sibling. `FabricStore` overrides it to `_guard_path()` **both the destination and the computed temporary sibling**, then calls `super().write_atomic()` — **the physical write body is delegated, never copied** |
+  | **No containment bypass** | Because the override validates and delegates, a caller invoking `write_atomic()` directly is still guarded. A static assertion additionally proves no `tools/fabric/` module calls `ImmutableStore.write_atomic` unbound or via `super()` outside `store.py` |
+  | **Validation path containment** | `validate()` (`:238`) globs record directories directly; the override guards each record directory before delegating |
+  | **Counting path containment** | `counts()` (`:258`) globs directly; the override guards each record directory before delegating |
+  | **No silent permission correction** | `FabricStore` overrides `_create_directories()`. The inherited body (`:90–99`) calls `mkdir(exist_ok=True)` then `chmod(DIR_MODE)` **on directories that already exist** — that is the silent correction. The override stats each existing path **first** and **refuses or reports without `chmod` or `chown`**. Only paths this call newly created are chmodded |
+  | **Permission checks, every path class** | Mode is verified on the **store root, each record directory, `sequences/`, each sequence file, and each record file** — `0700` for directories, `0600` for files, and never world- or group-readable |
+  | Restrictive creation modes | New directories `DIR_MODE` `0700`; new files `FILE_MODE` `0600`, from the released constants |
+  | **Symlink refusal before following** | `_guard_path()` checks `Path.is_symlink()` on the **unresolved** path and each unresolved parent **first**, refusing before any resolution follows it; only then does it `resolve()` and require the result to be **inside or equal to** the resolved root |
+  | Traversal | Refused by the same `_guard_path()` after full resolution |
+  | One physical write path | `super().write_atomic()` is the only physical writer; nothing is copied |
+  | No update/delete | Neither method is added; a static assertion proves `tools/fabric/` defines no `update`, `delete`, `unlink`, or `rmtree`, **except C1's own cleanup of its own `.tmp` file** |
+
+  A **no-op, overridable synchronisation hook** is also introduced here so the
+  increment-12 race Red has a seam that already exists. It has no production
+  behaviour and writes nothing.
 
   `id_widths` is a **backward-compatible opt-in hook**: increment 2 must include
   regression assertions that `TrustStore` allocation, modes, and every released
   Trust Plane behaviour are unchanged.
 
-  **This requires no new architectural decision** — identifier widths come from
-  ADR-0012, and containment, modes, and symlink refusal come from specification
-  §12. No planning blocker.
+  **Identifier widths, containment, modes, and symlink refusal require no new
+  architectural decision** — they come from ADR-0012 and specification §12.
+  **Ownership does — see planning blocker PB-2 (§14).** Until it is decided,
+  this increment **captures and reports** each path's `st_uid`/`st_gid` as an
+  observable finding and **refuses to change ownership**, but asserts no
+  expected value.
 - **Focused:** `bash tests/test-fabric-runtime.sh`,
   `bash tests/test-trust-runtime.sh`, `bash tests/test-trust-plane.sh`,
   `bash tests/test-trust-migration.sh`
@@ -268,14 +290,15 @@ narrowing, and full CI/validation wiring — as one Red→Green increment.
 - **Created:** `tools/fabric/validator.py`
 - **Inspect first:** `tools/trust/store.py` `validate()`;
   `ImmutableStore.validate()`
-- **AC:** 31, 32 (repeat: unsupported version on a stored record) · **FC:** 3, 5 (validator-visible missing reference), 16 (validator reporting half)
-- **Dependency check:** **AC 42 moves to increments 8 and 9** — derived staleness is observable only when eligibility or selection recomputes.
+- **AC:** 31, 32 (repeat: unsupported version on a stored record) · **FC:** 3, 5 (validator-visible missing reference), 16 (**reporting only**)
+- **Dependency check:** C2 may **report** a stale, missing, malformed, or corrupt derived artifact. It **must not claim to recompute eligibility or selection** — C5 and C6 do not exist yet. **AC 42 moves to increments 8 and 9**: eligibility recomputation to 8, selection recomputation to 9.
 - **Red:** assert malformed YAML and non-mapping content become **deterministic
   ordered findings rather than exceptions**; a **missing reference is reported
   for every referenced record class** — `CAPDEF`, `CCON`, `CPKG`, `CHOST`,
   `CADV`, `CINST`, `CROUTE`; identifier/filename mismatch reported; temp residue
   reported; **nothing is repaired**; findings are byte-identical across repeated
-  runs; **stale or corrupt derived state is recomputed, never trusted**.
+  runs; **a stale, missing, or corrupt derived artifact is reported as a
+  finding** — C2 reports it and recomputes nothing.
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric.validator'`.
 - **Green:** validation by reconstruction, returning ordered findings.
@@ -338,13 +361,14 @@ accepted.
 - **Created:** `tools/fabric/trust_adapter.py`
 - **Inspect first:** `tools/trust/query.py` — `get_current_trust`,
   `evaluate_subject`, `get_trust_record`
-- **AC (adapter results):** 7, 8, 46, 61, 71 · **FC:** 14
-- **Dependency check:** an adapter result alone proves neither that admission creates no record nor that eligibility fails closed. **AC 7 and 8 are re-asserted in increments 6 and 8**, and **FC 15 moves to increment 8**.
-- **Red:** assert absent, expired, revoked, malformed, and unverifiable trust
-  each yield refuse/ineligible; an unavailable Trust Plane **fails closed with
-  no cached or assumed verdict**; the adapter writes nothing; a history of
-  successful selections alters no trust standing; **a repository-wide search
-  proves no Fabric record asserts a subject is trusted or untrusted**.
+- **AC (adapter results only):** 46, 61, 71 · **FC:** none owned outright
+- **Dependency check:** C3 returns **deterministic read-only trust-verification results**. It **does not itself claim admission refusal or eligibility outcomes** — those integrations belong to C4 (increments 6 and 7) and C5 (increment 8). **AC 7 and 8, and FC 14 and 15, are therefore mapped to 6, 7 and 8**, where a refusal or an ineligible verdict is actually observable.
+- **Red:** assert the adapter returns a **deterministic `unverified` result**
+  for absent, expired, revoked, malformed, and unverifiable trust, and for an
+  unavailable Trust Plane, **with no cached or assumed verdict and no retry**;
+  identical inputs return identical results; the adapter **writes nothing**; a
+  history of successful selections alters no trust standing; **a repository-wide
+  search proves no Fabric record asserts a subject is trusted or untrusted**.
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric.trust_adapter'`.
 - **Green:** a read-only adapter, no caching, no write path.
@@ -365,11 +389,22 @@ accepted.
 - **Created:** `tools/fabric/admission.py`
 - **Modified:** `tools/fabric/evidence.py` (wire evidence into acceptance)
 - **Inspect first:** `tools/trust/root_authority.py`; specification §6.1–6.3
-- **AC:** 3, 5, 6, 11, 12, 35 (repeat), 37, 49 (part-1 classes), 63 (repeat), 64, 66, 67, 75, 76 (repeat), 77 (repeat), 79 (part-1), 85 (subject admission), 86 · **FC:** 5, 11
+- **AC:** 3, 5, 6, 7 (integrated), 8 (integrated), 11, 12, 35 (repeat), 37, 49 (part-1 classes), 55 (repeat, declaration boundary), 63 (repeat), 64, 66, 67, 75, 76 (repeat), 77 (repeat), 79 (part-1), 85 (subject admission), 86 · **FC:** 5, 7, 11, 14 (integrated), 15 (integrated)
 - **Dependency check:** **C5 does not exist yet.** The "eligibility names the absent admission" halves of **AC 9 and 10 move to increment 8**; increment 6 asserts only that trust alone creates no instance record.
 - **Red:** assert a governed mutation without an approving operator identity is
   refused; **trust alone creates no instance record** — the eligibility half of
-  this scenario is asserted in increment 8, where C5 exists; an unadmitted subject's advertisement is
+  this scenario is asserted in increment 8, where C5 exists;
+  **end-to-end declaration identity (AC 3, 5, 75, FC 7):** submit byte-identical
+  declaration content under **two different `request_id` values**, then assert
+  **two independently allocated records**, that **neither submission is treated
+  as replay**, and that **neither overwrites the other**;
+  **declaration-boundary effect class (AC 55):** a contract whose effect class is
+  **absent or unrecognised** makes the declaration **refuse with zero records** —
+  model validation in increment 1 does not prove this;
+  **C3 integration at subject admission (AC 7, 8, FC 14, 15):** invalid, expired,
+  revoked, malformed, and unverifiable host trust each **refuse admission with no
+  record**, and Trust Plane unavailability **refuses with no cached verdict and
+  no record**; an unadmitted subject's advertisement is
   refused with **no queued and no authoritative state**; self-admission refused;
   an admitted subject publishes its own advertisement **without new human
   approval**; impersonation and scope widening refused; **a missing reference to
@@ -399,7 +434,7 @@ and supersession**.
 - **Modified:** `tools/fabric/admission.py`
 - **Inspect first:** specification §6.4, §6.5, §6.6, §7 transition table, §10
   two-record request identity
-- **AC:** 15, 16, 19, 35 (repeat), 37 (repeat), 49 (part-2 classes), 51 (authoritative-unchanged half), 63 (repeat), 64 (repeat), 70, 72, 73, 76 (repeat), 77 (repeat), 79 (instance admission), 85 (instance admission) · **FC:** 5 (part-2 classes), 11 (repeat)
+- **AC:** 7 (integrated), 8 (integrated), 9 (authoritative half), 15, 16, 17 (authoritative half), 18 (authoritative half), 19, 35 (repeat), 37 (repeat), 49 (part-2 classes), 51 (authoritative half), 63 (repeat), 64 (repeat), 69 (authoritative half), 70, 72, 73, 76 (repeat), 77 (repeat), 79 (instance admission), 85 (instance admission) · **FC:** 5 (part-2 classes), 11 (repeat), 14 (integrated), 15 (integrated), 17 (authoritative half), 18 (authoritative half)
 - **Dependency check:** **C4 behaviour only — no eligibility, no selection.** The eligibility halves of **AC 14, 17, 18, 51 and 69 move to increment 8**; the selection half of **AC 51 moves to increment 9**; **FC 17 and 18 move to increment 8**.
 - **Red:** assert each legal transition writes its specified record; each
   illegal transition is **refused with a deterministic result, no record, and no
@@ -418,7 +453,16 @@ and supersession**.
   conflicting reuse hold for **each** accepted part-2 operation; a missing
   reference to any part-2 referenced record class refuses; `CINST` commits
   **before** `CROUTE`, each under **its own `request_id`**, and reusing one
-  identity for both is conflicting reuse.
+  identity for both is conflicting reuse;
+  **C3 integration at instance admission (AC 7, 8, FC 14, 15):** invalid package
+  **or** host trust **refuses with no `CINST`**, and Trust Plane unavailability
+  **refuses with no `CINST`**;
+  **authoritative halves** — **AC 9:** without an approved instance admission
+  **no `CINST` exists**; **AC 17:** an expiry lapse **writes no authoritative
+  record**; **AC 18 / FC 17:** a fresh advertisement after expired trust or
+  admission **creates no revival and no admission record**; **AC 51 / FC 18:**
+  host disappearance **changes no authoritative state**; **AC 69:** an expired
+  admission causes **no Trust Plane write and no trust-label change**.
 - **Observable Red reason:** the transition and route assertions fail
   behaviourally — models, store, evidence, and admission all import cleanly, so
   the failures are missing lifecycle enforcement, not fixture errors.
@@ -441,7 +485,7 @@ and supersession**.
 - **Created:** `tools/fabric/eligibility.py`
 - **Inspect first:** `platform-model/schemas/capability-instance.schema.yaml`
   **ELIG-1 … ELIG-14**; ADR-0012 "How capabilities are trusted"
-- **AC:** 7 (repeat, integrated), 8 (repeat, integrated), 9, 10, 13, 14, 17, 18, 42 (eligibility half), 51 (eligibility half), 56, 57, 58, 69 · **FC:** 15, 16 (eligibility recomputation), 17, 18, 27
+- **AC:** 8 (eligibility half), 9, 10, 13, 14, 17, 18, 42 (eligibility half), 51 (eligibility half), 56, 57, 58, 69 · **FC:** 16 (eligibility recomputation), 17, 18, 27
 - **Dependency check:** **C5 accepts no Health Runtime input.** **AC 59, 60 and FC 28 move to increment 9**, where the Health input boundary lives.
 
 **Schema-to-component enforcement map.** No enumerated check may disappear
@@ -472,9 +516,20 @@ working node"*.
 - **Red:** assert **each of ELIG-1 … ELIG-12 failing in isolation** yields
   ineligible naming that check; version negotiation is exact intersection with
   empty → refuse; no upgrade, downgrade, nearest match, or best-effort; only
-  declared compatibility consulted; unknown health never healthy; health cannot
-  grant, override, broaden, or admit; **stale or corrupt derived state is
-  recomputed for eligibility**.
+  declared compatibility consulted; **stale or corrupt derived state is
+  recomputed for eligibility**;
+  **AC 8:** an unavailable Trust Plane makes eligibility **ineligible, fail
+  closed, with no cached verdict**; **AC 9 and 10:** with admission absent the
+  verdict names **the absent admission as the unmet condition**; **AC 14:**
+  **non-overlapping package, host, and admission scopes** yield an empty
+  effective intersection — not merely a generic ELIG-8 failure; **AC 17 and 18 /
+  FC 17:** after trust, advertisement, or admission expiry the instance is
+  ineligible and a **fresh advertisement does not restore eligibility**;
+  **AC 51 / FC 18:** after host disappearance the instance is ineligible as a
+  **derived** outcome only; **AC 69:** an expired admission yields ineligible
+  **while package and host trust remain exactly what C3 reports**.
+  **C5 accepts no Health input at all** — unknown-health and health-cannot-grant
+  behaviour belong exclusively to C6 (increment 9).
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric.eligibility'`.
 - **Green:** a pure, deterministic, total function at a supplied instant.
@@ -497,8 +552,7 @@ only.
 - **Inspect first:** ADR-0012 "How routing occurs";
   `docs/fabric/failure-behaviour.md`; specification §8 selection constraints;
   ELIG-13 and ELIG-14
-- **AC:** 20, 21, 22, 23, 24, 26, 27, 36, 38, 42 (selection half), 50, 51 (selection half), 53, 54, 59, 60, 65, 80 · **FC:** 16 (selection recomputation), 28, 22,
-  23, 24, 26
+- **AC:** 20, 21, 22, 23, 24, 26, 27, 35 (repeat, on `CSEL`), 36, 38, 42 (selection half), 50, 51 (selection half), 53, 54, 57 (repeat, selection boundary), 59, 60, 63 (repeat, on `CSEL`), 65, 76 (repeat, on `CSEL`), 77 (repeat, on `CSEL`), 80 · **FC:** 7, 8, 9, 16 (selection recomputation), 22, 23, 24, 26, 28
 - **Red:** assert identical inputs choose identically across repeated runs; the
   **first** candidate in human-declared order wins with no reordering by any
   measurement; **ELIG-13** — a candidate absent from the route is excluded;
@@ -515,7 +569,17 @@ only.
   original outcome and `CSEL` identity**; **an accepted `CSEL` outcome is
   reconstructable from records alone** — route, route version, every candidate,
   each exclusion, and the outcome; and every accepted `CSEL` carries its
-  complete §11 evidence.
+  complete §11 evidence (AC 35, 63).
+  **`CSEL` replay across all three outcome classes — selection, refusal, and
+  no-candidate (AC 76, 77, FC 7, 8, 9):** a **new** `request_id` with identical
+  authoritative input creates an **independent `CSEL`**; **exact replay returns
+  the original outcome and `CSEL` identity with no allocation**; **conflicting
+  reuse fails as `request_identity_conflict`, creates no record, and leaves the
+  original untouched**.
+  **AC 51 / FC 18:** after host disappearance selection excludes the candidate
+  and records the exclusion. **AC 57:** a request with no exactly compatible
+  version **refuses at the selection boundary**, with no upgrade, downgrade,
+  nearest match, or best-effort substitution.
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric.selection'`.
 - **Green:** the six-step routing algorithm writing `CSEL` for selections **and**
@@ -606,7 +670,11 @@ partial state; then document.
   `docs/fabric/node-model.md`, `docs/history/v1.0-engineering-ledger.md`
 - **Inspect first:** specification §9 failure matrix, §10 ordering and two-record
   request identity
-- **AC:** 34, 74, 87 · **FC:** all 28 exercised together, and **FC 25** integrated
+- **AC (own Red):** 34, 74, 87 · **FC (own Red):** 8, 9, 12, 13, 25
+- **Regression coverage:** every test introduced through increments 1–11 re-runs
+  here via `tools/dev/run-validation.sh`. That is **regression coverage, not new
+  Red** — the remaining failure conditions are **not** claimed as new
+  observables in this increment.
 
 **Replay lookup without a ledger.** Replay resolution searches the
 `request_id`/`request_digest` evidence fields across **exactly the eight
@@ -615,6 +683,12 @@ or ninth record type**. The request-identity check and the accepted write are
 **serialised through C1**; any lock or sequence artifact used for that
 serialisation is **owned physically by C1 and is not a Fabric record**.
 
+- **Red — concurrent writer losing the commit race (AC 34, FC 13):** with a
+  deliberately synchronised competing writer targeting the **same allocated
+  record path**, assert the loser receives a **storage conflict**, identifiers
+  remain **unique and monotonic**, the original record is **byte-unchanged**,
+  the conflict is **never reported as replay**, and **no silent overwrite**
+  occurs.
 - **Red:** assert interruption after the new `CINST` and before the new `CROUTE`
   leaves the new instance present, **no route naming it**, nothing selecting it,
   the cutover **uncommitted**, the old route still serving, the `CINST`
@@ -628,16 +702,38 @@ serialisation is **owned physically by C1 and is not a Fabric record**.
   unique and monotonic; rejected non-selection requests stay zero-record and are
   validated afresh; an unavailable Trust Plane fails closed; permission and
   symlink violations refuse.
-- **Deterministic race seam.** Thread scheduling must not let the pre-fix Red
-  pass by accidentally serialising the calls. The suite uses an **explicit
-  injection point in `tools/fabric/store.py`** — an overridable no-op hook
-  called between the request-identity check and the accepted write, which the
-  test replaces with a barrier holding the first caller until the second has
-  passed the check. Without the serialisation seam both callers therefore reach
-  the write **on every run**, not merely under an unlucky interleaving.
-- **Observable Red reason:** with the barrier engaged, concurrent
-  same-`request_id` submissions produce **two accepted records instead of one**
-  on every run.
+- **Deterministic, non-deadlocking race protocol.** A barrier that releases only
+  when **both** callers are inside the future critical section deadlocks the
+  moment Green takes a lock before the replay lookup: the second caller can
+  never arrive. The protocol therefore uses **latches released from outside**:
+
+  1. The seam is an **overridable no-op hook** on `FabricStore`, introduced in
+     **increment 2** so it exists before this Red runs. It has **no production
+     behaviour** and creates **no persistent record**. The test may instead
+     subclass and override the method purely test-side.
+  2. Caller **A** is started; the test waits on `a_reached_hook`, signalled from
+     inside the hook, then **A blocks on `a_release`**.
+  3. Caller **B** is started. The coordinator waits until **B is observably
+     blocked outside the critical section** — pre-fix it reaches the same hook
+     and signals `b_reached_hook`; post-fix it blocks acquiring the request
+     lock, detected by a bounded `b_blocked_on_lock` probe.
+  4. The coordinator sets `a_release`. **The release never depends on B being
+     inside the critical section**, so neither path can deadlock.
+  5. Every wait is bounded; a timeout is a **test failure**, never a pass.
+
+  **Pre-fix:** both callers observe *not found* on replay lookup, so the
+  duplicate or conflict is exposed **on every run**. **Post-fix:** the request
+  lock is **acquired before replay lookup and held through identity allocation
+  and the accepted write**, so B completes without timeout, observes A's
+  committed result, and returns **replay** or **`request_identity_conflict`** as
+  appropriate. Both the **exact** and the **conflicting** same-`request_id`
+  races are covered.
+- **Observable Red reason:** with the protocol engaged, **both callers observe
+  *not found* on replay lookup on every run**, so one `request_id` yields two
+  accepted records — and, in the conflicting variant, two records for
+  contradictory digests — instead of one record plus a replay or
+  `request_identity_conflict`. The competing-writer variant additionally shows a
+  **silent overwrite instead of a storage conflict**. No run times out.
 - **Green:** the request-identity serialisation seam in
   `tools/fabric/store.py`, using the released `fcntl.flock` discipline already
   used by `allocate_id()`. **No transaction is introduced** (**A21**). Then
@@ -671,59 +767,66 @@ increment**, and after each stated Green every test introduced so far plus
 |---|---|---|---|
 | 1 | — | models, identifiers | asserts model shape only; no store, evidence, or accepted operation is referenced |
 | 2 | models | C1 | allocation, modes, containment are store-local |
-| 3 | models, C1 | C2 | reads stored fixtures; no eligibility or selection |
+| 3 | models, C1 | C2 | **reports** stale, missing, malformed, or corrupt artifacts; recomputes nothing, because C5 and C6 do not exist |
 | 4 | models, C1, C2 | C7 + identity | identity and evidence are **primitives**; end-to-end re-assertion waits for C4/C6 |
-| 5 | models, C1, C2, C7 | C3 | adapter results only; admission and eligibility integration deferred |
+| 5 | models, C1, C2, C7 | C3 | **deterministic read-only verification results only**; it claims no admission refusal and no eligibility outcome — those are observable at C4 (6, 7) and C5 (8) |
 | 6 | C1, C2, C3, C7 | C4 part 1 | declaration, subject admission, advertisement — **no C5 call** |
 | 7 | C1–C3, C7, C4a | C4 part 2 | instance admission, lifecycle, routes — **no eligibility, no selection** |
 | 8 | C1–C4, C7 | C5 | every eligibility scenario; **no Health input, no `CSEL`** |
 | 9 | C1–C5, C7 | C6 | route membership, effect class, health removal, `CSEL` |
 | 10 | C1–C7 | C8 | read-only inspection over C2 |
 | 11 | C1–C8 | interface | the twelve operations, so AC 25 is assertable **here and not earlier** |
-| 12 | everything | — | failure injection, races, final regression and documentation |
+| 12 | everything, incl. the increment-2 no-op sync hook | — | the race protocol needs a seam that **already exists**; its Red claims only its own observables, the rest is regression |
 
 **Criteria moved to remove forward dependencies:** AC 3, 5, 75 → 6 · AC 87 → 12
-· AC 9, 10 (eligibility half) → 8 · AC 14, 17, 18, 69 (eligibility half) → 8 ·
-AC 51 → split across 7, 8, 9 · AC 42 → split across 8 and 9 · AC 25 → 11 ·
-AC 37 → 6 and 7 · AC 59, 60 → 9 · FC 15 → 8 · FC 17, 18 → 8 · FC 25 → 11 and 12
-· FC 28 → 9.
+· AC 7, 8 → 6, 7, 8 (C3 alone proves neither refusal nor ineligibility) ·
+AC 9 → 7 (authoritative) and 8 (eligibility) · AC 14, 17, 18, 69 → 7
+(authoritative) and 8 (eligibility) · AC 51 → 7, 8, 9 · AC 42 → 8, 9 · AC 25 →
+11 · AC 37 → 6, 7 · AC 55 → also 6 · AC 57 → also 9 · AC 59, 60 → 9 · AC 35, 63,
+76, 77 → also 9 · FC 14, 15 → 6, 7 · FC 17, 18 → 7, 8 · FC 25 → 11, 12 · FC 28 →
+9 · FC 7, 8, 9 → also 6, 9, 12.
 
 ## Coverage matrix — 87 acceptance criteria
 
-Every entry points to an observable assertion in that exact increment's Red
-section.
+Every entry points to an observable assertion in that exact increment's Red.
 
 | Increment | Acceptance criteria |
 |---|---|
 | 1 | 32, 48, 55 |
-| 2 | 1, 2, 4, 39, 40, 41, 52, 68, 78 |
+| 2 | 1, 2, 4, 34, 39, 40, 41, 52, 68, 78 |
 | 3 | 31, 32 |
 | 4 | 35, 62, 63, 76, 77, 81, 82, 83, 84 |
-| 5 | 7, 8, 46, 61, 71 |
-| 6 | 3, 5, 6, 11, 12, 35, 37, 49, 63, 64, 66, 67, 75, 76, 77, 79, 85, 86 |
-| 7 | 15, 16, 19, 35, 37, 49, 51, 63, 64, 70, 72, 73, 76, 77, 79, 85 |
-| 8 | 7, 8, 9, 10, 13, 14, 17, 18, 42, 51, 56, 57, 58, 69 |
-| 9 | 20, 21, 22, 23, 24, 26, 27, 36, 38, 42, 50, 51, 53, 54, 59, 60, 65, 80 |
+| 5 | 46, 61, 71 |
+| 6 | 3, 5, 6, 7, 8, 11, 12, 35, 37, 49, 55, 63, 64, 66, 67, 75, 76, 77, 79, 85, 86 |
+| 7 | 7, 8, 9, 15, 16, 17, 18, 19, 35, 37, 49, 51, 63, 64, 69, 70, 72, 73, 76, 77, 79, 85 |
+| 8 | 8, 9, 10, 13, 14, 17, 18, 42, 51, 56, 57, 58, 69 |
+| 9 | 20, 21, 22, 23, 24, 26, 27, 35, 36, 38, 42, 50, 51, 53, 54, 57, 59, 60, 63, 65, 76, 77, 80 |
 | 10 | 28, 29, 30, 33, 44, 47 |
 | 11 | 25, 43, 45 |
 | 12 | 34, 74, 87 |
 
 **Coverage: 87/87.**
 
-### Deliberate repeats, and why each exists
+### Deliberate repeats, individually justified
 
-| AC | Increments | Why repeated |
+| AC | Increments | Why each repetition exists |
 |---|---|---|
-| 7, 8 | 5, 8 | An adapter result is not proof that admission refuses or eligibility fails closed |
+| 7, 8 | 6, 7, 8 | Trust failure must refuse **subject** admission, refuse **instance** admission, and make eligibility fail closed — three different observables. C3 alone returns only a verdict |
+| 9 | 7, 8 | Authoritative half (no `CINST` exists) and eligibility half (absent admission named as the unmet condition) |
+| 17, 18 | 7, 8 | Expiry writes no authoritative record (C4); expiry removes eligibility (C5) |
 | 32 | 1, 3 | Model-level version refusal, then refusal when a stored record is read |
-| 35, 63 | 4, 6, 7 | Evidence construction is a primitive; it must also hold on **every** accepted record |
+| 34 | 2, 12 | Allocation and commit-race conflict at the store; then integrated under the deterministic race protocol |
+| 35, 63 | 4, 6, 7, 9 | Evidence construction is a primitive; it must also hold on every accepted C4 record **and** on `CSEL` |
 | 37 | 6, 7 | Zero-record rejection for part-1 and part-2 operations separately |
 | 42 | 8, 9 | Derived staleness recomputed for eligibility **and** for selection |
 | 49 | 6, 7 | Missing reference across part-1 and part-2 referenced record classes |
-| 51 | 7, 8, 9 | Authoritative-unchanged (C4), then eligibility, then selection |
+| 51 | 7, 8, 9 | Authoritative unchanged (C4), eligibility (C5), selection exclusion (C6) |
+| 55 | 1, 6 | Model rejects a bad effect class; the **declaration operation** must refuse with zero records |
+| 57 | 8, 9 | Version intersection in eligibility; refusal at the **selection boundary** |
 | 64, 79, 85 | 6, 7 | Rejection and fresh re-evaluation for subject **and** instance admission |
-| 76, 77 | 4, 6, 7 | Replay and conflicting reuse as primitives, then integrated into every accepted operation class |
-| 78 | 2 | Collision-is-not-replay proven once, at the only component that allocates |
+| 69 | 7, 8 | No Trust Plane write (C4); ineligible while trust is unchanged (C5) |
+| 76, 77 | 4, 6, 7, 9 | Replay and conflicting reuse as primitives, then integrated into every accepted operation class including all three `CSEL` outcomes |
+| 78 | 2 | Collision-is-not-replay, proven once at the only component that allocates |
 
 ## Coverage matrix — 28 failure conditions
 
@@ -733,19 +836,30 @@ section.
 | 2 | 1, 2, 6, 13, 19, 20, 21 |
 | 3 | 3, 5, 16 |
 | 4 | 7, 8, 9, 10 |
-| 5 | 14 |
-| 6 | 5, 11 |
-| 7 | 5, 11 |
-| 8 | 15, 16, 17, 18, 27 |
-| 9 | 16, 22, 23, 24, 26, 28 |
+| 6 | 5, 7, 11, 14, 15 |
+| 7 | 5, 11, 14, 15, 17, 18 |
+| 8 | 16, 17, 18, 27 |
+| 9 | 7, 8, 9, 16, 22, 23, 24, 26, 28 |
 | 10 | 1, 2, 3, 12 |
 | 11 | 25 |
-| 12 | all 28 exercised together, including 25 |
+| 12 | 8, 9, 12, 13, 25 |
 
-**Coverage: 28/28.** FC 16 appears in 3, 8 and 9 — validator reporting,
-eligibility recomputation, selection recomputation. FC 5 and 11 appear in 6 and
-7 for part-1 and part-2 operations. FC 1, 2 and 3 repeat in 10 because
-inspection must reach them read-only.
+**Coverage: 28/28.** Increment 5 owns no failure condition outright — C3 returns
+a verdict, and the refusal it causes is observable only at C4 or C5.
+
+**Repeats, justified:** FC 5 and 11 (6, 7 — part-1 and part-2 classes) · FC 7, 8,
+9 (4, 6, 9, 12 — identity primitives, then declaration, then all three `CSEL`
+outcomes, then the race protocol) · FC 13 (2, 12 — allocation conflict, then the
+synchronised commit race) · FC 14, 15 (6, 7 — subject and instance admission) ·
+FC 16 (3, 8, 9 — validator **reporting**, eligibility recomputation, selection
+recomputation) · FC 17, 18 (7, 8 — authoritative and eligibility halves) · FC 1,
+2, 3 (2, 3, 10 — store, validator, read-only inspection) · FC 12 (10, 12 —
+reported by inspection, then produced by injection) · FC 25 (11, 12 — explicit
+recovery through the interface, then integrated).
+
+**Increment 12 claims only what its own Red observes.** Everything earlier
+re-runs there as **regression coverage** via `tools/dev/run-validation.sh`, and
+is not restated as new Red.
 
 ## Coverage — the eight accepted record types
 
@@ -762,6 +876,19 @@ inspection must reach them read-only.
 
 **No ninth persistent record type is introduced at any increment**, proven
 observably by AC 87 in increment 12 against a fully exercised store.
+
+## Persistent boundary assertion — AC 48
+
+The repository-wide assertion introduced in **increment 1 runs in every
+subsequent increment through 12**, so later interface or documentation work
+cannot reintroduce what it forbids. It covers:
+
+- **no execution adapter, worker, dispatcher, provider connector, invocation, or
+  activation** anywhere under `tools/fabric/`
+- **no Health evaluator and no Health-state computation** — C6 accepts a removal
+  input and computes nothing
+- **no remediation path** — no restart, redeploy, requeue, re-admission, drain,
+  or quarantine
 
 ## Risk review
 
@@ -788,9 +915,36 @@ observably by AC 87 in increment 12 against a fully exercised store.
 
 ## Planning blockers
 
-**None.** The Gate 1 terminology question is resolved (§3). Every increment is
-derivable from ADR-0012, the accepted specification, and the enumerated schema
-checks without inventing architecture.
+### PB-2 — the expected UID/GID rule is not determined by accepted sources
+
+Increment 2 must refuse or report an **ownership** mismatch. Accepted sources
+determine the **mode** rule but not the **ownership** rule. The
+[Operator Root deployment guide](../../trust/operator-root-authority-deployment.md)
+states:
+
+> | Ownership | dedicated Kyri service account or approved operator |
+
+and, in the same section, *"A service account is **not created** by this task."*
+
+That is a **disjunctive role rule**, not a UID/GID a test can assert. No accepted
+document names the service account, no registry of "approved operator"
+identities exists, and no released code performs an ownership check — there is
+no `chown`, `st_uid`, `st_gid`, `getuid`, or `geteuid` anywhere under `tools/`.
+
+**Not invented here.** Until an operator decides the rule, increment 2:
+
+- **captures and reports** `st_uid`/`st_gid` for the root, record directories,
+  `sequences/`, sequence files, and record files as an observable finding;
+- **never `chown`s, repairs, or corrects** ownership;
+- asserts **no expected owner value**.
+
+Everything mode-related is unaffected and fully testable: `0700` directories,
+`0600` files, never world- or group-readable, and no symlinked store root — all
+determined by the same accepted table.
+
+**Nothing else is blocked.** The Gate 1 terminology question is resolved (§3),
+and every other increment is derivable from ADR-0012, the accepted
+specification, and the enumerated schema checks without inventing architecture.
 
 ## Explicitly out of scope
 
