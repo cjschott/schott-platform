@@ -152,12 +152,17 @@ therefore uses an explicit **context-manager seam**:
 `ImmutableStore.request_critical_section(request_id)` — introduced in
 **increment 2** as a **behavioural no-op that yields immediately**.
 
-**Every call site enters it before replay lookup and stays inside through
-allocation and the accepted write:**
+**Exactly one owner acquires it.** The **accepted C4/C6 operation boundary**
+enters the context **once** before replay lookup and holds it through allocation
+and the accepted write. **The replay helper in `request_identity.py` never
+enters it** — it assumes the boundary already holds it — so **nested acquisition
+and self-deadlock are impossible by construction**.
+
+**Acquisition owners:**
 
 | Increment | Module | Call sites entering the context |
 |---|---|---|
-| 4 | `tools/fabric/request_identity.py` | the replay-lookup helper |
+| 4 | `tools/fabric/request_identity.py` | **none — the helper assumes the context is held.** Its unit tests wrap it in the no-op context explicitly |
 | 6 | `tools/fabric/admission.py` | capability, contract, and package declaration; subject admission; advertisement registration |
 | 7 | `tools/fabric/admission.py` | instance admission; route creation; route supersession; withdrawal/retirement |
 | 9 | `tools/fabric/selection.py` | the `CSEL` write, for selection, refusal, and no-candidate outcomes |
@@ -229,7 +234,7 @@ narrowing, and full CI/validation wiring — as one Red→Green increment.
 containment, explicit ownership, and preservation of pre-existing residue.
 
 - **Created:** `tools/fabric/store.py`
-- **Modified:** `tools/common/immutable_store.py` (three backward-compatible
+- **Modified:** `tools/common/immutable_store.py` (**four** backward-compatible
   opt-in seams, all defaulting to released behaviour)
 - **Inspect first:** `tools/common/immutable_store.py` — `__init__` (`:73–88`,
   which dispatches `_create_directories()` **dynamically**), `_create_directories`
@@ -380,7 +385,7 @@ increment's Green. Its synchronisation mechanism must therefore exist first:
   **never classified as replay**, and there is **no silent overwrite**. Every
   wait is bounded; **a timeout fails the test**.
 
-### Shared-store seams introduced here — five, individually classified
+### Seams introduced here — four shared-module, one Fabric-only, five total
 
 | # | Seam | Kind | Default |
 |---|---|---|---|
@@ -390,8 +395,10 @@ increment's Green. Its synchronisation mechanism must therefore exist first:
 | 4 | `FabricStore._test_sync_point(phase, request_id)` | **method hook** | no-op; writes nothing |
 | 5 | `ImmutableStore.request_critical_section(request_id)` | **context-manager seam** | **no-op — yields immediately**; C1 gains a real lock only in increment 12 |
 
-Seams 1–3 and 5 live on the shared module and **all default to released
-behaviour**; seam 4 is Fabric-only. **No seam creates a persistent record.**
+**Four live on `ImmutableStore`** — `id_widths`, `exclusive_temporary_create`,
+`_pre_link_sync_point`, and `request_critical_section` — and **all default to
+released behaviour**. **One is Fabric-only** — `_test_sync_point`. **Five in
+total. No seam creates a persistent record.**
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric.store'`, then — once the module exists — four-digit allocation
   failing against the hardcoded `:06d` at `:153`, ownership assertions failing
@@ -399,9 +406,9 @@ behaviour**; seam 4 is Fabric-only. **No seam creates a persistent record.**
   `O_TRUNC` at `:185` truncates the pre-existing artifact and `finally` unlinks
   it.
 - **Green:** `FabricStore(ImmutableStore)` with the containment, ownership, and
-  residue seams above, plus the **five classified shared-store seams** — two
-  class attributes, two method hooks, and one context-manager seam — each
-  defaulting to released behaviour. Regression assertions must prove `TrustStore`
+  residue seams above, plus the **five classified seams — four on
+  `ImmutableStore` and one Fabric-only** (two class attributes, two method hooks,
+  one context-manager seam), each defaulting to released behaviour. Regression assertions must prove `TrustStore`
   allocation, modes, and every released Trust Plane behaviour are
   **byte-identical**.
 - **Focused:** `bash tests/test-fabric-runtime.sh`,
@@ -414,7 +421,8 @@ behaviour**; seam 4 is Fabric-only. **No seam creates a persistent record.**
 - **Excluded:** governed acceptance of any record — increments 2 and 3 write only
   test fixtures, never an accepted governed operation.
 - **Commit:** `feat: add the immutable fabric store`
-- **Review checkpoint:** reviewer confirms **all five seams** default to released
+- **Review checkpoint:** reviewer confirms **all five seams — four shared, one
+  Fabric-only —** default to released
   behaviour, `request_critical_section` is a **behavioural no-op at this
   increment**, no second physical write path exists, and no `chown` appears
   anywhere.
@@ -456,10 +464,13 @@ behaviour**; seam 4 is Fabric-only. **No seam creates a persistent record.**
 accepted.
 
 - **Created:** `tools/fabric/request_identity.py`, `tools/fabric/evidence.py`
-- **Critical section:** the replay-lookup helper **enters
-  `ImmutableStore.request_critical_section(request_id)` before replay lookup**
-  and stays inside through allocation and the accepted write. Behavioural
-  **no-op** until increment 12.
+- **Critical section — the helper does NOT acquire.** The replay-lookup helper
+  **assumes its operation boundary already holds
+  `request_critical_section(request_id)`** and **never enters it itself**, so no
+  nested acquisition is possible. **Increment 4's unit tests explicitly wrap the
+  helper in the no-op context** to reproduce the production call shape.
+  `_test_sync_point("after_replay_miss", request_id)` fires **inside that single
+  outer context**.
 - **Modified:** `tools/fabric/models.py` (evidence fields on all eight types),
   `tools/fabric/store.py` (refuse a record whose evidence cannot be assembled)
 - **Inspect first:** `tools/observation/evidence_builder.py` and
@@ -530,10 +541,11 @@ accepted.
 
 - **Created:** `tools/fabric/admission.py`
 - **Modified:** `tools/fabric/evidence.py` (wire evidence into acceptance)
-- **Critical section:** capability, contract, and package declaration, subject
-  admission, and advertisement registration each **enter
-  `request_critical_section()` before replay lookup** and remain inside through
-  allocation and the accepted write.
+- **Critical section — sole acquisition owner.** Capability, contract, and
+  package declaration, subject admission, and advertisement registration each
+  enter `request_critical_section(request_id)` **exactly once**, before replay
+  lookup, and hold it through allocation and the accepted write. The replay
+  helper does not re-enter it.
 - **Inspect first:** `tools/trust/root_authority.py`; specification §6.1–6.3
 - **AC:** 3, 5, 6, 7 (integrated), 8 (integrated), 11, 12, 35 (repeat), 37, 49 (part-1 classes), 55 (repeat, declaration boundary), 63 (repeat), 64, 66, 67, 75, 76 (repeat), 77 (repeat), 79 (part-1), 85 (subject admission), 86 · **FC:** 5, 7, 8, 9, 11, 14 (integrated), 15 (integrated)
 - **Dependency check:** **C5 does not exist yet.** The "eligibility names the absent admission" halves of **AC 9 and 10 move to increment 8**; increment 6 asserts only that trust alone creates no instance record.
@@ -584,9 +596,10 @@ accepted.
 and supersession**.
 
 - **Modified:** `tools/fabric/admission.py`
-- **Critical section:** instance admission, route creation, route supersession,
-  and withdrawal/retirement each **enter `request_critical_section()` before
-  replay lookup** and remain inside through allocation and the accepted write.
+- **Critical section — sole acquisition owner.** Instance admission, route
+  creation, route supersession, and withdrawal/retirement each enter
+  `request_critical_section(request_id)` **exactly once**, before replay lookup,
+  and hold it through allocation and the accepted write.
 - **Inspect first:** specification §6.4, §6.5, §6.6, §7 transition table, §10
   two-record request identity
 - **AC:** 7 (integrated), 8 (integrated), 9 (authoritative half), 15, 16, 17 (authoritative half), 18 (authoritative half), 19, 35 (repeat), 37 (repeat), 49 (part-2 classes), 51 (authoritative half), 63 (repeat), 64 (repeat), 69 (authoritative half), 70, 72, 73, 76 (repeat), 77 (repeat), 79 (instance admission), 85 (instance admission) · **FC:** 5 (part-2 classes), 11 (repeat), 14 (integrated), 15 (integrated), 17 (authoritative half), 18 (authoritative half)
@@ -705,9 +718,10 @@ working node"*.
 only.
 
 - **Created:** `tools/fabric/selection.py`
-- **Critical section:** the `CSEL` write — selection, refusal, and no-candidate
-  alike — **enters `request_critical_section()` before replay lookup** and
-  remains inside through allocation and the accepted write.
+- **Critical section — sole acquisition owner.** The `CSEL` write — selection,
+  refusal, and no-candidate alike — enters `request_critical_section(request_id)`
+  **exactly once**, before replay lookup, and holds it through allocation and the
+  accepted write.
 - **Inspect first:** ADR-0012 "How routing occurs";
   `docs/fabric/failure-behaviour.md`; specification §8 selection constraints;
   ELIG-13 and ELIG-14
@@ -851,7 +865,10 @@ serialisation is **owned physically by C1 and is not a Fabric record**.
   re-runs here as **regression coverage**, not as a new Red. **This increment
   does not observe silent overwrite** — increment 2's `O_EXCL` Green already
   makes that impossible.
-- **Red:** **AC 62 and 87:** against a **fully exercised** store, enumerate every
+- **Red:** **no nested acquisition (bounded):** one **ordinary single-caller request**
+  completes end to end **without a second acquisition of
+  `request_critical_section()` and without self-deadlock**, within a bounded
+  wait — a timeout fails the test; **AC 62 and 87:** against a **fully exercised** store, enumerate every
   persistent record and assert only the **eight accepted types** exist, with **no
   audit-record class and no ninth type**; assert interruption after the new `CINST` and before the new `CROUTE`
   leaves the new instance present, **no route naming it**, nothing selecting it,
@@ -956,8 +973,8 @@ increment**, and after each stated Green every test introduced so far plus
 AC 9 → 7 (authoritative) and 8 (eligibility) · AC 14, 17, 18, 69 → 7
 (authoritative) and 8 (eligibility) · AC 51 → 7, 8, 9 · AC 42 → 8, 9 · AC 25 →
 11 · AC 37 → 6, 7 · AC 55 → also 6 · AC 57 → also 9 · AC 59, 60 → 9 · AC 35, 63,
-76, 77 → also 9 · FC 14, 15 → 6, 7 · FC 17, 18 → 7, 8 · FC 25 → 11, 12 · FC 28 →
-9 · FC 7, 8, 9 → also 6, 9, 12.
+76, 77 → also 9 · **FC 14, 15 → 6, 7 and 8** · **FC 17 → 7 and 8** · **FC 18 → 7, 8 and 9** ·
+FC 25 → 11, 12 · FC 28 → 9 · FC 7, 8, 9 → also 6, 9, 12.
 
 ## Coverage matrix — 87 acceptance criteria
 
