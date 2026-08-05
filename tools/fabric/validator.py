@@ -148,13 +148,20 @@ def _read_entries(store, kind: str, findings: list[str]) -> tuple[list, int]:
         if entry.suffix != ".yaml":
             findings.append(f"{entry.name}: is not a record file")
             continue
-        findings.extend(_mode_findings(entry))
+        # Reported *and* refused. A file whose permissions are wrong is not
+        # trustworthy enough to reconstruct, so it is named and left unread:
+        # otherwise it would still count, still reconstruct, and still satisfy
+        # every reference pointing at it, which is a warning, not a refusal.
+        mode = _mode_findings(entry)
+        if mode:
+            findings.extend(mode)
+            continue
         records.append(entry)
     return records, len(records)
 
 
 def _mode_findings(path) -> list[str]:
-    """A mode other than the released one is reported, never corrected."""
+    """A mode other than the released one refuses the file, and never fixes it."""
     mode = stat.S_IMODE(path.lstat().st_mode)
     if mode == FILE_MODE:
         return []
@@ -268,6 +275,15 @@ def _sequence_findings(store, identifiers: Mapping[str, set[str]]) -> list[str]:
         except FabricError as error:
             findings.append(f"{name}: {error}")
             continue
+        # Before the read, not after: a sequence file that must be refused must
+        # not have its contents interpreted on the way to refusing it.
+        try:
+            mode = _mode_findings(path)
+        except FileNotFoundError:
+            mode = []  # An absent sequence has no mode; absence is reported below.
+        if mode:
+            findings.extend(mode)
+            continue
         try:
             raw = path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
@@ -281,7 +297,6 @@ def _sequence_findings(store, identifiers: Mapping[str, set[str]]) -> list[str]:
         except OSError as error:
             findings.append(f"{name}: could not be read ({error.strerror})")
             continue
-        findings.extend(_mode_findings(path))
         if not raw.isdigit():
             findings.append(f"{name}: does not hold a sequence number")
             continue

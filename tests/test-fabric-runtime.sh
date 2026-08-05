@@ -1789,6 +1789,73 @@ with TemporaryDirectory() as tmp:
     check(forensic(fabric) == before,
           "an undecodable file is not repaired, removed, rewritten, or quarantined")
 
+
+# --- AC 39 / FC 19: a wrong mode refuses, it does not merely warn ------------
+# Defect caught: reporting the mode and then reading the file anyway, so a
+# record with the wrong permissions still reconstructs, still counts, and
+# still satisfies every reference pointing at it -- reported, but not refused.
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    widened = fabric / "capability-definitions" / "CAPDEF-0001.yaml"
+    widened.chmod(0o644)
+    before = forensic(fabric)
+    report = reports(store, "a wrong-mode record is refused")
+    if report is not None:
+        ok("a wrong-mode record is refused")
+        check(named(report, "CAPDEF-0001.yaml"),
+              "a wrong-mode record is reported as a finding")
+        check(report.counts["capability-definition"] == 0,
+              "a wrong-mode record is not counted as a validated record")
+        # Four stored records point at CAPDEF-0001. If the refused file were
+        # read anyway they would all still resolve, which is the whole defect.
+        check(any("CCON-0001.yaml" in str(finding) and "CAPDEF-0001" in str(finding)
+                  for finding in report.findings),
+              "a wrong-mode record is not reconstructed, so a reference to it stops resolving")
+        check(sum(1 for finding in report.findings
+                  if "CAPDEF-0001.yaml" in str(finding)) == 1,
+              "a refused record yields the mode finding and nothing derived from its contents")
+        check(tuple(report.findings) == tuple(sorted(report.findings)),
+              "findings over a wrong-mode record are returned in sorted order")
+        check(tuple(validate_store(store).findings) == tuple(report.findings),
+              "findings over a wrong-mode record are identical across repeated runs")
+    check(stat.S_IMODE(widened.lstat().st_mode) == 0o644,
+          "a refused wrong-mode record keeps the mode it was found with")
+    check(forensic(fabric) == before,
+          "refusing a wrong-mode record changes no byte, mode, owner, inode, or path")
+
+# Content chosen so that parsing it would produce a distinguishable finding.
+# If either appears, the refused file was interpreted after all.
+REFUSED_SEQUENCES = (
+    ("not-a-number\n", "does not hold a sequence number", "malformed numeric content"),
+    ("0\n", "is behind the stored records", "a value behind the stored identifiers"),
+)
+for content, derived, description in REFUSED_SEQUENCES:
+    with TemporaryDirectory() as tmp:
+        store, fabric = built(tmp)
+        sequence = fabric / "sequences" / "capability-definition.seq"
+        sequence.write_text(content, encoding="utf-8")
+        sequence.chmod(0o644)
+        before = forensic(fabric)
+        report = reports(store, f"a wrong-mode sequence file with {description} is refused")
+        if report is not None:
+            ok(f"a wrong-mode sequence file with {description} is refused")
+            check(any("capability-definition.seq" in str(finding) and "mode" in str(finding)
+                      for finding in report.findings),
+                  f"a wrong-mode sequence file with {description} is reported")
+            check(not any(derived in str(finding) for finding in report.findings),
+                  f"a refused sequence file's {description} is never interpreted")
+            check(sum(1 for finding in report.findings
+                      if "capability-definition.seq" in str(finding)) == 1,
+                  f"a refused sequence file with {description} yields exactly one finding")
+            check(tuple(validate_store(store).findings) == tuple(report.findings),
+                  f"findings over a wrong-mode sequence file with {description} repeat identically")
+        check(sequence.read_text(encoding="utf-8") == content,
+              f"a refused sequence file with {description} keeps its exact bytes")
+        check(stat.S_IMODE(sequence.lstat().st_mode) == 0o644,
+              f"a refused sequence file with {description} keeps the mode it was found with")
+        check(forensic(fabric) == before,
+              f"refusing a sequence file with {description} changes nothing on disk")
+
 print(f"__FAILURES__={failures}")
 VALIDATORPY
 )"
