@@ -880,6 +880,112 @@ with TemporaryDirectory() as tmp:
     else:
         bad("the paused writer's record is committed")
 
+# --- Increment 2 synchronisation seams ---------------------------------------
+# The accepted plan lists five seams under "Seams introduced here": four on
+# ImmutableStore and one Fabric-only. Four are already exercised above through
+# allocation, exclusive temporary creation, and the commit race. These two are
+# not, so they are asserted directly rather than assumed.
+#
+#   FabricStore._test_sync_point(phase, request_id)  -- no-op; writes nothing
+#   ImmutableStore.request_critical_section(id)      -- no-op; yields immediately
+#
+# Increment 12 gives the second one a real lock. Increment 2 must not.
+import inspect  # noqa: E402
+
+
+def tree_snapshot(base):
+    """Everything under `base`, with the metadata a write would disturb."""
+    entries = []
+    for item in sorted(Path(base).rglob("*")):
+        info = item.lstat()
+        entries.append((str(item.relative_to(base)), info.st_mode, info.st_size,
+                        info.st_mtime_ns))
+    return entries
+
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    fabric_root = Path(tmp) / "fabric"
+
+    # --- _test_sync_point ---------------------------------------------------
+    has_sync_point = hasattr(store, "_test_sync_point")
+    check(has_sync_point, "the store exposes the _test_sync_point seam")
+    check(not hasattr(store, "test_sync_point"),
+          "the synchronisation seam stays private")
+
+    if has_sync_point:
+        params = list(inspect.signature(store._test_sync_point).parameters)
+        check(params == ["phase", "request_id"],
+              f"_test_sync_point takes (phase, request_id) (got {params})")
+
+        before = tree_snapshot(fabric_root)
+        returned = store._test_sync_point("after_replay_miss", "request-0001")
+        after = tree_snapshot(fabric_root)
+        check(returned is None, "_test_sync_point returns None")
+        check(before == after, "_test_sync_point writes nothing")
+
+        # Callable repeatedly and for any phase: it carries no state.
+        store._test_sync_point("lock_contended", "request-0001")
+        store._test_sync_point("after_replay_miss", "request-0002")
+        check(tree_snapshot(fabric_root) == before,
+              "repeated _test_sync_point calls write nothing")
+    else:
+        bad("_test_sync_point accepts (phase, request_id)")
+        bad("_test_sync_point returns None")
+        bad("_test_sync_point writes nothing")
+
+    # --- request_critical_section -------------------------------------------
+    has_section = hasattr(store, "request_critical_section")
+    check(has_section, "the store exposes the request_critical_section seam")
+
+    if has_section:
+        section_params = list(inspect.signature(store.request_critical_section).parameters)
+        check(section_params == ["request_id"],
+              f"request_critical_section takes (request_id) (got {section_params})")
+
+        before_section = tree_snapshot(fabric_root)
+        with store.request_critical_section("request-0001") as yielded:
+            check(yielded is None, "request_critical_section yields nothing")
+            check(tree_snapshot(fabric_root) == before_section,
+                  "entering the critical section creates nothing")
+        check(tree_snapshot(fabric_root) == before_section,
+              "leaving the critical section creates nothing")
+
+        # Increment 12 introduces the lock artefact. Increment 2 must not.
+        check(not (fabric_root / "sequences" / "request_identity.lock").exists(),
+              "no request lock artefact exists at increment 2")
+
+        # A no-op yields immediately; a real lock would deadlock on re-entry.
+        # Bounded and daemonised so a regression fails rather than hangs.
+        entered = threading.Event()
+
+        def nested_entry():
+            with store.request_critical_section("request-0001"):
+                with store.request_critical_section("request-0001"):
+                    entered.set()
+
+        nested_thread = threading.Thread(target=nested_entry, daemon=True)
+        nested_thread.start()
+        check(entered.wait(timeout=5),
+              "the critical section is a no-op and does not block on re-entry")
+
+        # The seam composes with the ordinary store lifecycle.
+        with store.request_critical_section("request-0002"):
+            written = store.write_atomic(
+                store.path_for("capability-route", "CROUTE-0001"),
+                {"route_id": "CROUTE-0001"})
+        check(written.exists(), "a record still commits inside the critical section")
+    else:
+        bad("request_critical_section takes (request_id)")
+        bad("request_critical_section yields nothing")
+        bad("the critical section is a no-op and does not block on re-entry")
+
+    # Neither seam smuggles in later-increment behaviour.
+    for later in ("acquire", "release", "lock", "replay_lookup", "admit",
+                  "evaluate_eligibility", "select"):
+        check(not hasattr(store, later),
+              f"the store exposes no '{later}' behaviour at increment 2")
+
 print(f"__FAILURES__={failures}")
 STOREPY
 )"

@@ -212,6 +212,19 @@ class FabricStore(ImmutableStore):
         store._require_ownership(store.root, "store root")
         return store
 
+    def _test_sync_point(self, phase: str, request_id: str) -> None:
+        """Named point a coordinating test can observe. Production no-op.
+
+        A deterministic two-caller test needs a positive signal that a caller
+        reached a particular phase. Inferring it from elapsed time, or from an
+        event that failed to arrive, proves nothing -- so the seam is named and
+        does nothing rather than being simulated from outside.
+
+        This writes nothing, holds nothing, and returns nothing. The phases it
+        will carry, and the serialisation an override will add, belong to a
+        later increment; naming the seam here is all this increment does.
+        """
+
     # --- guarded inherited surface ------------------------------------------
 
     def _directory(self, kind: str) -> Path:
