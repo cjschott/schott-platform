@@ -344,10 +344,20 @@ invocation**. The physical write body stays in `ImmutableStore.write_atomic()`.
 - **Red — containment.** Assert refusal for a symlinked or traversing root,
   record directory, record, sequence file, temporary sibling, and lock file, each
   refused **on the unresolved path before it is followed**, exercised through
-  **every** entry point above: `__init__`, `open_for_read`, `_directory`,
-  `path_for`, `allocate_id`, `write_atomic`, `write_record`, `read_record`,
-  `list_records`, `validate`, and `counts`; and that a **direct** `write_atomic()`
-  call does not bypass containment.
+  **all twelve** entry points above: `__init__`, `open_for_read`,
+  `_create_directories`, `_directory`, `path_for`, `allocate_id`,
+  `write_atomic`, `write_record`, `read_record`, `list_records`, `validate`, and
+  `counts`; and that a **direct** `write_atomic()` call does not bypass
+  containment.
+- **Red — `_create_directories()` specifically.** Because
+  `ImmutableStore.__init__` dispatches it **dynamically** (`:88`), the override
+  runs during `super().__init__()` and must be exercised through that path:
+  assert an **existing** record directory, `sequences/`, or store root with the
+  wrong **mode**, wrong **UID**, or wrong **GID** is **refused or reported with
+  no `chmod` and no `chown`**; assert a **symlinked or traversing** directory is
+  refused on the unresolved path; and assert **safe new-directory creation** —
+  process EUID/EGID matching the supplied values, directory created `0700`, and
+  **verified after creation**.
 - **Red — allocation and modes.** Assert four-digit allocation for
   `CAPDEF`/`CCON`/`CPKG`/`CHOST`/`CROUTE` and six-digit for
   `CADV`/`CINST`/`CSEL`; **released Trust Plane allocation still six-digit and
@@ -924,8 +934,13 @@ serialisation is **owned physically by C1 and is not a Fabric record**.
 - **Green:** change **only C1's implementation** of
   `request_critical_section()` in `tools/fabric/store.py` so it acquires the
   guarded `sequences/request_identity.lock` using the released `fcntl.flock`
-  discipline already used by `allocate_id()`. **No call site moves** — increments
-  4, 6, 7 and 9 already enter the context. **No transaction is introduced**
+  discipline already used by `allocate_id()`. **No production call site moves.**
+  **Production acquisition owners exist only at the C4/C6 operation boundaries
+  introduced in increments 6, 7 and 9**; **increment 4's replay helper never
+  enters the context**, and increment 4's unit tests wrap the helper in the
+  no-op context purely to reproduce the production call shape. **This increment
+  changes only C1's context-manager implementation.** **No transaction is
+  introduced**
   (**A21**). Then
   update the Fabric documents from "no runtime exists" to the implemented
   surface, and the ledger's ENG-0004 row.
@@ -966,7 +981,7 @@ increment**, and after each stated Green every test introduced so far plus
 | 9 | C1–C5, C7 | C6 | route membership, effect class, health removal, `CSEL` |
 | 10 | C1–C7 | C8 | read-only inspection over C2 |
 | 11 | C1–C8 | interface | the twelve operations, so AC 25 is assertable **here and not earlier** |
-| 12 | everything, incl. the increment-2 no-op hooks and the **no-op `request_critical_section()`** already entered by increments 4, 6, 7 and 9 | — | Green changes **only C1's implementation** of that context manager; no call site moves. Its Red claims only its own observables — the commit race is increment 2's, and the rest is regression |
+| 12 | everything, incl. the increment-2 no-op hooks and the **no-op `request_critical_section()`** entered by the **C4/C6 operation boundaries in increments 6, 7 and 9** — increment 4's helper never enters it | — | Green changes **only C1's implementation** of that context manager; **no production call site moves**. Its Red claims only its own observables — the commit race is increment 2's, and the rest is regression |
 
 **Criteria moved to remove forward dependencies:** AC 3, 5, 75 → 6 · AC 87 → 12
 · AC 7, 8 → 6, 7, 8 (C3 alone proves neither refusal nor ineligibility) ·
