@@ -57,9 +57,23 @@ REASON_CATEGORIES = (
 SELF_AUTHORED_KINDS = ("capability-advertisement",)
 
 # A selection is a deterministic read plus its own record. No human operator
-# approves it, so one is not required -- though an operator who triggered the
-# selection may still be named, since the actor is recorded separately.
-UNAPPROVED_KINDS = ("capability-selection",)
+# approves it either, so naming one would describe a derived choice as an
+# approved decision.
+DERIVED_KINDS = ("capability-selection",)
+
+# Neither is a human-authorised mutation, so neither names an approving
+# authority. The rule is a refusal, not an omission: evidence that records an
+# approver nobody gave is worse than evidence that records none.
+UNAPPROVED_KINDS = SELF_AUTHORED_KINDS + DERIVED_KINDS
+
+# A selection's outcome is not a stored field -- the accepted schema has none.
+# It is readable from what the selection says, and the reason category the
+# specification already requires names exactly these three.
+OUTCOME_CATEGORIES = {
+    "selected": "selection",
+    "refused": "selection-refusal",
+    "no-candidate": "no-candidate",
+}
 
 # The record field naming the subject that must be the acting identity.
 ACTOR_SUBJECT_FIELDS = {"capability-advertisement": "capability_host_id"}
@@ -123,13 +137,11 @@ def _validate(kind: str, evidence: Any) -> None:
     _require_text(evidence["actor"], "actor")
 
     authority = evidence["approving_authority"]
-    if kind in SELF_AUTHORED_KINDS:
+    if kind in UNAPPROVED_KINDS:
         if authority is not None:
             raise FabricError(
-                f"a '{kind}' is published by its subject and names no approving authority")
-    elif kind in UNAPPROVED_KINDS:
-        if authority is not None:
-            _require_text(authority, "approving_authority")
+                f"a '{kind}' is not a human-authorised mutation "
+                "and names no approving authority")
     else:
         _require_text(authority, "approving_authority")
 
@@ -160,6 +172,71 @@ def _validate(kind: str, evidence: Any) -> None:
     validate_request_digest(evidence["request_digest"])
 
 
+def _named_instances(entry: Any) -> set[str]:
+    """The candidate identities an exclusion entry names.
+
+    An entry may be the identifier itself or a mapping carrying it alongside a
+    reason. Values are matched against the accepted instance pattern rather
+    than against a guessed key name.
+    """
+    pattern = PATTERNS["capability-instance"]
+    if isinstance(entry, str):
+        return {entry} if pattern.match(entry) else set()
+    if isinstance(entry, Mapping):
+        return {value for value in entry.values()
+                if isinstance(value, str) and pattern.match(value)}
+    return set()
+
+
+def _require_selection_outcome(record, evidence: Mapping[str, Any]) -> None:
+    """The three outcomes are mutually exclusive, and the record must say which.
+
+    Nothing is guessed: a chosen instance means selected, no chosen instance
+    with candidates considered means every one was excluded, and no chosen
+    instance with none considered means there was nothing to choose from. The
+    reason category has to agree, so a contradiction cannot be persisted and
+    then faithfully replayed as though it were a decision.
+    """
+    chosen = record.selected_instance_id
+    considered = tuple(record.considered_candidates or ())
+    excluded = tuple(record.excluded_candidates or ())
+    refusal = record.refusal_reason
+    category = evidence["reason_category"]
+
+    if chosen is not None:
+        outcome = "selected"
+        if refusal is not None:
+            raise FabricError("a selected outcome carries no refusal reason")
+        if chosen not in considered:
+            raise FabricError("a selected instance must be among those considered")
+    elif considered:
+        outcome = "refused"
+        if not isinstance(refusal, str) or not refusal.strip():
+            raise FabricError("a refused outcome must carry its refusal reason")
+    else:
+        outcome = "no-candidate"
+        if excluded:
+            raise FabricError(
+                "a no-candidate outcome excludes no candidate, having considered none")
+
+    if category != OUTCOME_CATEGORIES[outcome]:
+        raise FabricError(
+            f"a '{outcome}' selection must be recorded as "
+            f"'{OUTCOME_CATEGORIES[outcome]}'")
+
+    # Every candidate that was considered and not chosen needs its exclusion
+    # reason: a record naming only the winner documents the outcome and hides
+    # the decision.
+    unselected = set(considered) - ({chosen} if chosen is not None else set())
+    named: set[str] = set()
+    for entry in excluded:
+        named |= _named_instances(entry)
+    missing = sorted(unselected - named)
+    if missing:
+        raise FabricError(
+            f"a selection must record an exclusion reason for {', '.join(missing)}")
+
+
 def _validate_applicability(kind: str, record, evidence: Mapping[str, Any]) -> None:
     """Rules that can only be judged against the complete record.
 
@@ -174,14 +251,25 @@ def _validate_applicability(kind: str, record, evidence: Mapping[str, Any]) -> N
             raise FabricError(
                 f"a '{kind}' must be published by the subject it advertises")
 
-    if evidence["reason_category"] == "supersession":
-        prior = getattr(record, "supersedes", None)
+    # Symmetric on purpose. Checking only when the reason category announces
+    # supersession would let a record that supersedes another hide the fact by
+    # declaring some other reason.
+    prior = getattr(record, "supersedes", None)
+    declared = evidence["reason_category"] == "supersession"
+    if declared or prior is not None:
         if not isinstance(prior, str) or not prior:
             raise FabricError(
                 "a superseding record must name the record it supersedes")
+        if not declared:
+            raise FabricError(
+                "a record that supersedes another must declare the supersession "
+                "reason category")
         if prior not in tuple(evidence["causal_references"]):
             raise FabricError(
                 "a superseding record's evidence must reference the record it supersedes")
+
+    if kind == "capability-selection":
+        _require_selection_outcome(record, evidence)
 
     references = tuple(evidence["trust_evidence_references"])
     for field in TRUST_REFERENCE_FIELDS.get(kind, ()):

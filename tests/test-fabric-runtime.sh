@@ -2186,6 +2186,10 @@ def evidence_for(kind, **overrides):
     # approving human operator would turn a self-report into an approval.
     if kind == "capability-advertisement":
         fields["actor"] = "host:CHOST-0001"
+    elif kind == "capability-selection":
+        # A selection is a deterministic read plus its own record. No human
+        # operator approves it, so naming one would misdescribe the act.
+        fields["actor"] = "fabric:selection"
     else:
         fields["approving_authority"] = "operator:cschott"
     fields.update(overrides)
@@ -2548,24 +2552,27 @@ check(len(RECORD_MODELS) == 8,
 # so the caller must re-read the store to learn what was originally decided --
 # which is not "returning the original outcome".
 SELECTION_OUTCOMES = (
-    ("selected", "CSEL-000001", "CINST-000001", None, ("CINST-000001",),
-     "first eligible candidate in declared order"),
+    ("selected", "CSEL-000001", "CINST-000001", None, ("CINST-000001",), (),
+     "selection", "first eligible candidate in declared order"),
     ("refused", "CSEL-000002", None, "none-eligible", ("CINST-000001",),
-     "every candidate was excluded"),
-    ("no-candidate", "CSEL-000003", None, "no-candidate", (),
-     "the route named no candidate"),
+     ({"instance_id": "CINST-000001", "reason": "admission expired"},),
+     "selection-refusal", "every candidate was excluded"),
+    ("no-candidate", "CSEL-000003", None, "no-candidate", (), (),
+     "no-candidate", "the route named no candidate"),
 )
-for outcome_name, selection_id, chosen, refusal, candidates, reason in SELECTION_OUTCOMES:
+for (outcome_name, selection_id, chosen, refusal, candidates, excluded,
+     category, reason) in SELECTION_OUTCOMES:
     with TemporaryDirectory() as tmp:
         store = WitnessStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
         request = f"request-{outcome_name}"
         selection = RECORD_MODELS["capability-selection"](
             selection_id=selection_id, route_id="CROUTE-0001", route_version=1,
             request_class={"data_classification": "internal"},
-            considered_candidates=candidates, excluded_candidates=(),
+            considered_candidates=candidates, excluded_candidates=excluded,
             selected_instance_id=chosen, selection_reason=reason,
             refusal_reason=refusal, selected_at=WHEN, provenance=PROV,
-            evidence=evidence_for("capability-selection", request_id=request))
+            evidence=evidence_for("capability-selection", request_id=request,
+                                  reason_category=category))
         store.write("capability-selection", selection)
         fabric = Path(tmp) / "fabric"
         before = forensic(fabric)
@@ -2867,6 +2874,216 @@ check(supported_digest == f"sha256:{hashlib.sha256(supported_expected).hexdigest
       "supported canonical values keep the released sorted-key, stable-separator convention")
 check(compute_request_digest(OPERATION, SUPPORTED) == supported_digest,
       "supported canonical values digest identically on repetition")
+
+
+# --- 2. A selection is not a human-authorised mutation ----------------------
+# Defect caught: demanding, or merely tolerating, an approving human operator
+# on a record no human approves. Recording one would describe a deterministic
+# read as an approval.
+selection_body = dict(
+    selection_id="CSEL-000009", route_id="CROUTE-0001", route_version=1,
+    request_class={"data_classification": "internal"},
+    considered_candidates=("CINST-000001",), excluded_candidates=(),
+    selected_instance_id="CINST-000001",
+    selection_reason="first eligible candidate in declared order",
+    selected_at=WHEN, provenance=PROV)
+
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    accepted_selection = RECORD_MODELS["capability-selection"](
+        evidence=evidence_for("capability-selection"), **selection_body)
+    check(accepted_selection.evidence["approving_authority"] is None,
+          "an accepted CSEL carries no approving authority")
+    check(accepted_selection.evidence["actor"] == "fabric:selection",
+          "an accepted CSEL records its requesting actor")
+    store.write("capability-selection", accepted_selection)
+    check(store.counts()["capability-selection"] == 1,
+          "a CSEL with a requesting actor and no approving authority is accepted")
+
+refuses_fabric(lambda: assemble_evidence(
+                   "capability-selection", actor="fabric:selection",
+                   approving_authority="operator:cschott",
+                   reason_category="selection", recorded_at=WHEN,
+                   request_id=REQUEST, request_digest=digest,
+                   causal_references=("CROUTE-0001",), trust_evidence_references=()),
+               "naming an approving operator on a CSEL fails closed")
+refuses_fabric(lambda: assemble_evidence(
+                   "capability-selection", actor=None, reason_category="selection",
+                   recorded_at=WHEN, request_id=REQUEST, request_digest=digest,
+                   causal_references=("CROUTE-0001",), trust_evidence_references=()),
+               "a CSEL without a requesting actor fails closed")
+
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    fabric = Path(tmp) / "fabric"
+    before = forensic(fabric)
+    approved = dict(evidence_for("capability-selection"),
+                    approving_authority="operator:cschott")
+    refuses_fabric(lambda: store.write(
+                       "capability-selection",
+                       RECORD_MODELS["capability-selection"](evidence=approved,
+                                                             **selection_body)),
+                   "a CSEL carrying an approving authority is refused at the boundary")
+    check(forensic(fabric) == before,
+          "an approved CSEL is refused before any filesystem mutation")
+
+# --- 3. Supersession is symmetric -------------------------------------------
+# Defect caught: enforcing the prior-record reference only when the reason
+# category announces it, so a record that supersedes another can hide the fact
+# by declaring some other reason.
+SUPERSEDING = (
+    ("capability-definition", "capability_id", "CAPDEF-0002", "CAPDEF-0001"),
+    ("capability-host", "capability_host_id", "CHOST-0002", "CHOST-0001"),
+    ("capability-route", "route_id", "CROUTE-0002", "CROUTE-0001"),
+)
+for kind, field, identifier, prior in SUPERSEDING:
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        fabric = Path(tmp) / "fabric"
+        base = accepted(kind, evidence_for(kind))
+
+        # Declared supersession without the field it must agree with.
+        declared_only = replace(
+            base, evidence=dict(evidence_for(kind), reason_category="supersession",
+                                causal_references=[prior]),
+            **{field: identifier})
+        before = forensic(fabric)
+        refuses_fabric(lambda r=declared_only, k=kind: store.write(k, r),
+                       f"a {kind} declaring supersession without a supersedes field fails closed")
+        check(forensic(fabric) == before,
+              f"a {kind} declaring supersession without the field mutates nothing")
+
+        # The field populated while the reason category hides it.
+        hidden = replace(base, evidence=evidence_for(kind), supersedes=prior,
+                         **{field: identifier})
+        refuses_fabric(lambda r=hidden, k=kind: store.write(k, r),
+                       f"a {kind} that supersedes another without declaring it fails closed")
+        check(forensic(fabric) == before,
+              f"an undeclared superseding {kind} mutates nothing")
+
+        # Declared and populated, but the evidence does not name it.
+        unreferenced = replace(
+            base, evidence=dict(evidence_for(kind), reason_category="supersession",
+                                causal_references=["CAPDEF-0001"] if kind != "capability-definition"
+                                else ["CCON-0001"]),
+            supersedes=prior, **{field: identifier})
+        refuses_fabric(lambda r=unreferenced, k=kind: store.write(k, r),
+                       f"a superseding {kind} whose evidence omits the prior record fails closed")
+        check(forensic(fabric) == before,
+              f"a superseding {kind} with unreferenced prior record mutates nothing")
+
+        # All three agreeing.
+        consistent = replace(
+            base, evidence=dict(evidence_for(kind), reason_category="supersession",
+                                causal_references=[prior]),
+            supersedes=prior, **{field: identifier})
+        store.write(kind, consistent)
+        check(store.counts()[kind] == 1,
+              f"a {kind} whose supersedes field, reason category, and evidence agree is accepted")
+
+# --- 4. A selection's recorded outcome must be internally consistent --------
+# Defect caught: deriving the outcome from a field combination nothing checked,
+# so replay would faithfully report a contradiction as though it were a
+# decision. The three outcomes are the ones the reason vocabulary already names.
+def selection(**overrides):
+    body = dict(selection_body, selection_id="CSEL-000010")
+    category = overrides.pop("reason_category", "selection")
+    evidence = overrides.pop("evidence", None) or evidence_for(
+        "capability-selection", reason_category=category)
+    body.update(overrides)
+    return RECORD_MODELS["capability-selection"](evidence=evidence, **body)
+
+
+CONSISTENT_OUTCOMES = (
+    ("selected", dict(selected_instance_id="CINST-000001", refusal_reason=None,
+                      considered_candidates=("CINST-000001",), excluded_candidates=(),
+                      reason_category="selection")),
+    ("refused", dict(selected_instance_id=None, refusal_reason="none-eligible",
+                     considered_candidates=("CINST-000001",),
+                     excluded_candidates=({"instance_id": "CINST-000001",
+                                           "reason": "admission expired"},),
+                     reason_category="selection-refusal")),
+    ("no-candidate", dict(selected_instance_id=None, refusal_reason="no-candidate",
+                          considered_candidates=(), excluded_candidates=(),
+                          reason_category="no-candidate")),
+)
+for name, fields in CONSISTENT_OUTCOMES:
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        store.write("capability-selection", selection(**fields))
+        check(store.counts()["capability-selection"] == 1,
+              f"a consistent {name} selection is accepted")
+
+CONTRADICTIONS = (
+    (dict(selected_instance_id="CINST-000001", refusal_reason="none-eligible",
+          considered_candidates=("CINST-000001",), reason_category="selection"),
+     "a selected outcome carrying a refusal reason"),
+    (dict(selected_instance_id=None, refusal_reason=None,
+          considered_candidates=("CINST-000001",), reason_category="selection-refusal"),
+     "a refused outcome carrying no refusal reason"),
+    (dict(selected_instance_id=None, refusal_reason="none-eligible",
+          considered_candidates=("CINST-000001",), excluded_candidates=(),
+          reason_category="selection-refusal"),
+     "a refused outcome that excludes none of the candidates it considered"),
+    (dict(selected_instance_id="CINST-000009", refusal_reason=None,
+          considered_candidates=("CINST-000001",), reason_category="selection"),
+     "a selected instance that was never considered"),
+    (dict(selected_instance_id="CINST-000001", refusal_reason=None,
+          considered_candidates=("CINST-000001",), reason_category="selection-refusal"),
+     "a selected outcome declared as a refusal"),
+    (dict(selected_instance_id=None, refusal_reason="none-eligible",
+          considered_candidates=("CINST-000001",),
+          excluded_candidates=({"instance_id": "CINST-000001", "reason": "x"},),
+          reason_category="selection"),
+     "a refused outcome declared as a selection"),
+    (dict(selected_instance_id=None, refusal_reason="no-candidate",
+          considered_candidates=(), excluded_candidates=(),
+          reason_category="selection-refusal"),
+     "a no-candidate outcome declared as a refusal"),
+    (dict(selected_instance_id=None, refusal_reason="no-candidate",
+          considered_candidates=(),
+          excluded_candidates=({"instance_id": "CINST-000001", "reason": "x"},),
+          reason_category="no-candidate"),
+     "a no-candidate outcome that excluded a candidate it never considered"),
+    (dict(selected_instance_id="CINST-000001", refusal_reason=None,
+          considered_candidates=("CINST-000001",), reason_category="no-candidate"),
+     "a selected outcome declared as no-candidate"),
+)
+for fields, description in CONTRADICTIONS:
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        fabric = Path(tmp) / "fabric"
+        before = forensic(fabric)
+        refuses_fabric(lambda f=fields: store.write("capability-selection", selection(**f)),
+                       f"{description} fails closed")
+        check(forensic(fabric) == before,
+              f"{description} is refused before any filesystem mutation")
+        check(store.counts()["capability-selection"] == 0,
+              f"{description} persists nothing")
+
+# Replay reports the validated outcome, and only ever a validated one. The
+# three outcomes are exactly the three the accepted reason vocabulary names.
+OUTCOME_CATEGORIES = {"selected": "selection", "refused": "selection-refusal",
+                      "no-candidate": "no-candidate"}
+for name, fields in CONSISTENT_OUTCOMES:
+    with TemporaryDirectory() as tmp:
+        store = WitnessStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        request = f"request-outcome-{name}"
+        evidence = evidence_for("capability-selection",
+                                reason_category=fields["reason_category"],
+                                request_id=request)
+        store.write("capability-selection",
+                    selection(**dict(fields, evidence=evidence)))
+        fabric = Path(tmp) / "fabric"
+        before = forensic(fabric)
+        with store.request_critical_section(request):
+            replayed = replay_lookup(store, request, digest)
+        check(replayed.outcome["outcome"] == name,
+              f"replay reports the validated {name} outcome")
+        check(OUTCOME_CATEGORIES[replayed.outcome["outcome"]] == fields["reason_category"],
+              f"the {name} outcome agrees with the reason category that was validated")
+        check(forensic(fabric) == before,
+              f"replaying a {name} selection writes nothing")
 
 print(f"__FAILURES__={failures}")
 IDENTITYPY
