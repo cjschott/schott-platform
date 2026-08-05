@@ -1177,6 +1177,481 @@ else
   FAILURES=$((FAILURES + STORE_FAILURES))
 fi
 
+# --- Record validator, C2 (increment 3) --------------------------------------
+VALIDATOR_OUTPUT="$(python3 - "${ROOT}" <<'VALIDATORPY' 2>&1 || true
+import os
+import stat
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import yaml
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+
+failures = 0
+
+
+def ok(message):
+    print(f"PASS: {message}")
+
+
+def bad(message):
+    global failures
+    failures += 1
+    print(f"FAIL: {message}")
+
+
+def check(condition, message):
+    if condition:
+        ok(message)
+    else:
+        bad(message)
+
+
+def reports(store, message):
+    """Validation must answer, never raise. Returns the report or None."""
+    try:
+        return validate_store(store)
+    except Exception as error:  # noqa: BLE001
+        bad(f"{message} (raised {type(error).__name__})")
+        return None
+
+
+from tools.fabric.store import FabricStore  # noqa: E402
+# The import that must fail before increment 3 exists.
+from tools.fabric.validator import validate_store  # noqa: E402
+import tools.fabric.validator as validator_module  # noqa: E402
+
+UID = os.geteuid()
+GID = os.getegid()
+
+VERSION = "schott-platform/v1"
+STAMP = "2026-08-04T12:00:00+00:00"
+LATER = "2026-08-05T12:00:00+00:00"
+PROV = {"declared_by": "operator", "declared_at": STAMP}
+
+DIRS = {
+    "capability-definition": "capability-definitions",
+    "capability-contract": "capability-contracts",
+    "capability-package": "capability-packages",
+    "capability-host": "capability-hosts",
+    "capability-advertisement": "capability-advertisements",
+    "capability-instance": "capability-instances",
+    "capability-route": "capability-routes",
+    "capability-selection": "capability-selections",
+}
+
+# One internally consistent record of every accepted kind. Written literally
+# rather than produced by the models, so the expected state is independent of
+# the code under test.
+DEFINITION = {
+    "capability_id": "CAPDEF-0001",
+    "name": "summarise text",
+    "description": "Reduce a document to its essentials.",
+    "effect_class": "read-only",
+    "contract_ids": ["CCON-0001"],
+    "provenance": PROV,
+}
+CONTRACT = {
+    "contract_id": "CCON-0001",
+    "capability_id": "CAPDEF-0001",
+    "contract_version": "1.0.0",
+    "effect_class": "read-only",
+    "determinism_class": "deterministic",
+    "request_shape": {"text": "string"},
+    "response_shape": {"summary": "string"},
+    "failure_modes": ["unavailable"],
+    "resource_requirements": {"memory_mb": 512},
+    "compatible_with": [],
+    "provenance": PROV,
+}
+PACKAGE = {
+    "capability_package_id": "CPKG-0001",
+    "capability_id": "CAPDEF-0001",
+    "contract_id": "CCON-0001",
+    "satisfied_contract_versions": ["1.0.0"],
+    "package_version": "1.0.0",
+    "artifact_reference": "oci://registry.invalid/summarise",
+    "resource_requirements": {"memory_mb": 512},
+    "trust_domain": "schott-platform",
+    "provenance": PROV,
+}
+HOST = {
+    "capability_host_id": "CHOST-0001",
+    "node_identity_reference": "node/schai",
+    "fabric_node_trust_record_id": "TAUTH-000001",
+    "verified_resource_profile": {"memory_mb": 8192},
+    "location_class": "on-premises",
+    "data_classification_ceiling": "internal",
+    "availability_intent": "available",
+    "provenance": PROV,
+}
+ADVERTISEMENT = {
+    "advertisement_id": "CADV-000001",
+    "capability_host_id": "CHOST-0001",
+    "capability_package_id": "CPKG-0001",
+    "contract_id": "CCON-0001",
+    "satisfied_contract_versions": ["1.0.0"],
+    "advertised_resource_profile": {"memory_mb": 512},
+    "observed_at": STAMP,
+    "valid_until": LATER,
+    "provenance": PROV,
+}
+INSTANCE = {
+    "instance_id": "CINST-000001",
+    "capability_id": "CAPDEF-0001",
+    "capability_package_id": "CPKG-0001",
+    "capability_host_id": "CHOST-0001",
+    "contract_id": "CCON-0001",
+    "satisfied_contract_versions": ["1.0.0"],
+    "verified_resource_profile": {"memory_mb": 512},
+    "admission_decision_id": "TDEC-000001",
+    "package_trust_record_id": "TAUTH-000002",
+    "host_trust_record_id": "TAUTH-000001",
+    "effective_scope": {"data_classification": "internal"},
+    "admitted_at": STAMP,
+    "admitted_until": LATER,
+    "advertisement_id": "CADV-000001",
+    "provenance": PROV,
+}
+ROUTE = {
+    "route_id": "CROUTE-0001",
+    "route_version": 1,
+    "capability_id": "CAPDEF-0001",
+    "contract_id": "CCON-0001",
+    "accepted_contract_versions": ["1.0.0"],
+    "locality": "local-only",
+    "candidate_instances": ["CINST-000001"],
+    "data_classification": "internal",
+    "provenance": PROV,
+}
+SELECTION = {
+    "selection_id": "CSEL-000001",
+    "route_id": "CROUTE-0001",
+    "route_version": 1,
+    "request_class": {"data_classification": "internal"},
+    "considered_candidates": ["CINST-000001"],
+    "excluded_candidates": [],
+    "selected_instance_id": "CINST-000001",
+    "selection_reason": "first eligible candidate in declared order",
+    "selected_at": STAMP,
+    "provenance": PROV,
+}
+
+CONSISTENT = (
+    ("capability-definition", "CAPDEF-0001", DEFINITION),
+    ("capability-contract", "CCON-0001", CONTRACT),
+    ("capability-package", "CPKG-0001", PACKAGE),
+    ("capability-host", "CHOST-0001", HOST),
+    ("capability-advertisement", "CADV-000001", ADVERTISEMENT),
+    ("capability-instance", "CINST-000001", INSTANCE),
+    ("capability-route", "CROUTE-0001", ROUTE),
+    ("capability-selection", "CSEL-000001", SELECTION),
+)
+
+
+def serialise(kind, fields):
+    payload = {"schema_version": VERSION, "kind": kind}
+    payload.update(fields)
+    return yaml.safe_dump(payload, sort_keys=True, default_flow_style=False)
+
+
+def built(tmp, entries=CONSISTENT, sequences=True):
+    """A populated store. Fixtures are placed directly, never through a writer."""
+    fabric = Path(tmp) / "fabric"
+    store = FabricStore(fabric, expected_uid=UID, expected_gid=GID)
+    highest = {}
+    for kind, identifier, fields in entries:
+        path = fabric / DIRS[kind] / f"{identifier}.yaml"
+        path.write_text(serialise(kind, fields), encoding="utf-8")
+        path.chmod(0o600)
+        number = int(identifier.rsplit("-", 1)[1])
+        highest[kind] = max(highest.get(kind, 0), number)
+    if sequences:
+        for kind, number in highest.items():
+            sequence = fabric / "sequences" / f"{kind}.seq"
+            sequence.write_text(f"{number}\n", encoding="utf-8")
+            sequence.chmod(0o600)
+    return store, fabric
+
+
+def snapshot(base):
+    """Every path, its mode, size, mtime and exact bytes. Repair shows up here."""
+    entries = {}
+    for path in sorted(base.rglob("*")):
+        info = path.lstat()
+        content = path.read_bytes() if stat.S_ISREG(info.st_mode) else b""
+        entries[str(path.relative_to(base))] = (
+            stat.S_IMODE(info.st_mode), info.st_size, info.st_mtime_ns, content)
+    return entries
+
+
+def named(report, text):
+    return any(text in str(finding) for finding in report.findings)
+
+
+# --- The accepted boundary: a consistent store has nothing to report ---------
+# Defect caught: a validator that delegates to the inherited structural
+# validate(), which looks for an 'id' key no fabric record carries, and so
+# reports every correct record as broken.
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    before = snapshot(fabric)
+    report = reports(store, "a consistent store validates without raising")
+    if report is not None:
+        ok("a consistent store validates without raising")
+        check(tuple(report.findings) == (),
+              "a consistent store produces no findings")
+        check(dict(report.counts) == {kind: 1 for kind in DIRS},
+              "validation reports a count for every accepted record kind")
+        repeated = validate_store(store)
+        check(tuple(repeated.findings) == tuple(report.findings),
+              "repeated validation of a consistent store returns identical findings")
+        check(dict(repeated.counts) == dict(report.counts),
+              "repeated validation of a consistent store returns identical counts")
+    check(snapshot(fabric) == before,
+          "validating a consistent store writes nothing")
+
+# --- AC 31, FC 3: malformed content becomes a finding, never an exception ----
+# Defect caught: reading a record with yaml.safe_load and letting a parser
+# error escape, which turns one unreadable file into a crashed validation.
+MALFORMED = (
+    ("CAPDEF-0002.yaml", "capability_id: [unclosed\n", "unparseable YAML"),
+    ("CAPDEF-0003.yaml", "- one\n- two\n", "a YAML sequence rather than a mapping"),
+    ("CAPDEF-0004.yaml", "just a bare scalar\n", "a bare scalar rather than a mapping"),
+    ("CAPDEF-0005.yaml", "", "an empty file"),
+)
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    for name, text, description in MALFORMED:
+        (fabric / "capability-definitions" / name).write_text(text, encoding="utf-8")
+        (fabric / "capability-definitions" / name).chmod(0o600)
+    before = snapshot(fabric)
+    report = reports(store, "malformed content becomes a finding rather than an exception")
+    if report is not None:
+        ok("malformed content becomes a finding rather than an exception")
+        for name, _, description in MALFORMED:
+            check(named(report, name), f"{description} is reported as a finding naming {name}")
+        check(tuple(report.findings) == tuple(sorted(report.findings)),
+              "findings over a malformed store are returned in sorted order")
+        check(tuple(validate_store(store).findings) == tuple(report.findings),
+              "findings over a malformed store are identical across repeated runs")
+    check(snapshot(fabric) == before,
+          "a malformed record is not repaired, removed, renamed, or rewritten")
+
+# --- AC 32: an unsupported or absent stored version fails closed ------------
+# Defect caught: a validator that guesses at, or silently migrates, a record
+# written against a schema version this code does not know.
+UNSUPPORTED = dict(DEFINITION, capability_id="CAPDEF-0006")
+ABSENT_VERSION = dict(DEFINITION, capability_id="CAPDEF-0007")
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    unsupported = fabric / "capability-definitions" / "CAPDEF-0006.yaml"
+    unsupported.write_text(
+        yaml.safe_dump(dict(UNSUPPORTED, schema_version="schott-platform/v2",
+                            kind="capability-definition"), sort_keys=True),
+        encoding="utf-8")
+    unsupported.chmod(0o600)
+    versionless = fabric / "capability-definitions" / "CAPDEF-0007.yaml"
+    versionless.write_text(
+        yaml.safe_dump(dict(ABSENT_VERSION, kind="capability-definition"), sort_keys=True),
+        encoding="utf-8")
+    versionless.chmod(0o600)
+    before = snapshot(fabric)
+    report = reports(store, "an unsupported stored version becomes a finding")
+    if report is not None:
+        ok("an unsupported stored version becomes a finding")
+        check(named(report, "CAPDEF-0006.yaml"),
+              "an unsupported schema version is reported as a finding")
+        check(named(report, "CAPDEF-0007.yaml"),
+              "a record declaring no schema version is reported as a finding")
+    check(snapshot(fabric) == before,
+          "a record on an unknown schema version is never migrated in place")
+
+# --- FC 5: a missing reference is reported for every referenced class -------
+# Defect caught: reference checking that covers only the records the validator
+# happens to iterate first, leaving whole classes of dangling reference silent.
+DANGLING = (
+    ("CAPDEF", "capability-contract", "CCON-0002",
+     dict(CONTRACT, contract_id="CCON-0002", capability_id="CAPDEF-0009"), "CAPDEF-0009"),
+    ("CCON", "capability-package", "CPKG-0002",
+     dict(PACKAGE, capability_package_id="CPKG-0002", contract_id="CCON-0009"), "CCON-0009"),
+    ("CPKG", "capability-advertisement", "CADV-000002",
+     dict(ADVERTISEMENT, advertisement_id="CADV-000002",
+          capability_package_id="CPKG-0009"), "CPKG-0009"),
+    ("CHOST", "capability-advertisement", "CADV-000003",
+     dict(ADVERTISEMENT, advertisement_id="CADV-000003",
+          capability_host_id="CHOST-0009"), "CHOST-0009"),
+    ("CADV", "capability-instance", "CINST-000002",
+     dict(INSTANCE, instance_id="CINST-000002",
+          advertisement_id="CADV-000009"), "CADV-000009"),
+    ("CINST", "capability-route", "CROUTE-0002",
+     dict(ROUTE, route_id="CROUTE-0002",
+          candidate_instances=["CINST-000009"]), "CINST-000009"),
+    ("CROUTE", "capability-selection", "CSEL-000002",
+     dict(SELECTION, selection_id="CSEL-000002", route_id="CROUTE-0009"), "CROUTE-0009"),
+)
+for label, kind, identifier, fields, missing in DANGLING:
+    with TemporaryDirectory() as tmp:
+        store, fabric = built(tmp, CONSISTENT + ((kind, identifier, fields),))
+        before = snapshot(fabric)
+        report = reports(store, f"a missing {label} reference becomes a finding")
+        if report is not None:
+            check(named(report, missing),
+                  f"a missing {label} reference is reported as a finding naming {missing}")
+        check(snapshot(fabric) == before,
+              f"a missing {label} reference creates nothing and repairs nothing")
+
+# --- Identifier, filename, and record kind must agree -----------------------
+# Defect caught: trusting the filename, or trusting the stored identifier,
+# instead of requiring the reconstructed record to agree with where it is.
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    misfiled = fabric / "capability-definitions" / "CAPDEF-0008.yaml"
+    misfiled.write_text(serialise("capability-definition", DEFINITION), encoding="utf-8")
+    misfiled.chmod(0o600)
+    wrong_kind = fabric / "capability-contracts" / "CCON-0003.yaml"
+    wrong_kind.write_text(
+        serialise("capability-definition", dict(DEFINITION, capability_id="CAPDEF-0010")),
+        encoding="utf-8")
+    wrong_kind.chmod(0o600)
+    before = snapshot(fabric)
+    report = reports(store, "an identifier/filename disagreement becomes a finding")
+    if report is not None:
+        ok("an identifier/filename disagreement becomes a finding")
+        check(named(report, "CAPDEF-0008.yaml"),
+              "a record whose stored identifier disagrees with its filename is reported")
+        check(named(report, "CCON-0003.yaml"),
+              "a record whose kind disagrees with its directory is reported")
+    check(snapshot(fabric) == before,
+          "a misfiled record is not renamed, moved, or rewritten")
+
+# --- Interrupted-write residue is reported, never cleared -------------------
+# Defect caught: a validator that tidies debris away, destroying the only
+# evidence that a write was interrupted.
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    residue = fabric / "capability-definitions" / ".CAPDEF-0011.tmp"
+    residue.write_text("capability_id: CAPDEF-0011\n", encoding="utf-8")
+    residue.chmod(0o600)
+    before = snapshot(fabric)
+    report = reports(store, "temporary residue becomes a finding")
+    if report is not None:
+        ok("temporary residue becomes a finding")
+        check(named(report, ".CAPDEF-0011.tmp"),
+              "residue from an interrupted write is reported as a finding")
+    check(residue.exists(), "residue is left in place, not cleared")
+    check(snapshot(fabric) == before, "reporting residue changes nothing on disk")
+
+# --- FC 16: derived state is reported, never trusted and never repaired -----
+# Defect caught: a validator that quietly rewrites a sequence file to agree
+# with the records, which repairs derived state and erases the discrepancy.
+DERIVED = (
+    ("stale", "0\n"),
+    ("corrupt", "not-a-number\n"),
+)
+for label, content in DERIVED:
+    with TemporaryDirectory() as tmp:
+        store, fabric = built(tmp)
+        sequence = fabric / "sequences" / "capability-definition.seq"
+        sequence.write_text(content, encoding="utf-8")
+        sequence.chmod(0o600)
+        before = snapshot(fabric)
+        report = reports(store, f"a {label} derived artefact becomes a finding")
+        if report is not None:
+            check(named(report, "capability-definition.seq"),
+                  f"a {label} sequence file is reported as a finding")
+        check(sequence.read_text(encoding="utf-8") == content,
+              f"a {label} sequence file is not recomputed or repaired")
+        check(snapshot(fabric) == before,
+              f"reporting a {label} derived artefact changes nothing on disk")
+
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    sequence = fabric / "sequences" / "capability-definition.seq"
+    sequence.unlink()
+    before = snapshot(fabric)
+    report = reports(store, "a missing derived artefact becomes a finding")
+    if report is not None:
+        check(named(report, "capability-definition.seq"),
+              "a missing sequence file is reported as a finding")
+    check(not sequence.exists(),
+          "a missing sequence file is not recreated by validation")
+    check(snapshot(fabric) == before,
+          "reporting a missing derived artefact changes nothing on disk")
+
+# --- Fail-closed on type and datetime failures ------------------------------
+# Defect caught: letting a TypeError or an unreadable timestamp escape as an
+# exception instead of reporting the record that carries it.
+ILL_TYPED = (
+    ("capability-route", "CROUTE-0003", dict(ROUTE, route_id="CROUTE-0003",
+                                             route_version="one"), "a non-integer route version"),
+    ("capability-advertisement", "CADV-000004",
+     dict(ADVERTISEMENT, advertisement_id="CADV-000004",
+          observed_at="not a timestamp"), "an unreadable timestamp"),
+    ("capability-advertisement", "CADV-000005",
+     dict(ADVERTISEMENT, advertisement_id="CADV-000005",
+          observed_at="2026-08-04T12:00:00"), "a timestamp carrying no offset"),
+    ("capability-definition", "CAPDEF-0012",
+     dict(DEFINITION, capability_id="CAPDEF-0012", trust_score=1), "an unknown field"),
+    ("capability-definition", "CAPDEF-0013",
+     dict(DEFINITION, capability_id="CAPDEF-0013", effect_class="unheard-of"),
+     "an effect class outside the accepted vocabulary"),
+)
+for kind, identifier, fields, description in ILL_TYPED:
+    with TemporaryDirectory() as tmp:
+        store, fabric = built(tmp, CONSISTENT + ((kind, identifier, fields),))
+        before = snapshot(fabric)
+        report = reports(store, f"{description} becomes a finding")
+        if report is not None:
+            check(named(report, f"{identifier}.yaml"),
+                  f"{description} is reported as a finding naming {identifier}.yaml")
+        check(snapshot(fabric) == before,
+              f"{description} is reported without being corrected")
+
+# --- Read-only through a read-only handle -----------------------------------
+# Defect caught: validation that initialises, backfills, or touches the store
+# it was only asked to read.
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    expected = tuple(validate_store(store).findings)
+    reader = FabricStore.open_for_read(fabric, expected_uid=UID, expected_gid=GID)
+    before = snapshot(fabric)
+    report = reports(reader, "validation runs through a read-only handle")
+    if report is not None:
+        ok("validation runs through a read-only handle")
+        check(tuple(report.findings) == expected,
+              "a read-only handle returns the same findings as a writable one")
+    check(snapshot(fabric) == before,
+          "validating through a read-only handle writes nothing")
+
+# --- Increment 3 stops at reporting -----------------------------------------
+# Defect caught: a validator that grows repair, admission, eligibility, or the
+# inspection surface that belongs to a later increment.
+for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
+              "recompute", "evaluate_eligibility", "compute_eligibility", "select",
+              "admit", "inspect", "render", "verify_trust"):
+    check(not hasattr(validator_module, later),
+          f"the validator exposes no '{later}' behaviour at increment 3")
+
+for absent in ("inspection.py", "cli.py", "eligibility.py", "selection.py",
+               "admission.py", "trust.py"):
+    check(not (root / "tools" / "fabric" / absent).exists(),
+          f"increment 3 creates no {absent}")
+
+print(f"__FAILURES__={failures}")
+VALIDATORPY
+)"
+printf '%s\n' "${VALIDATOR_OUTPUT}" | grep -v '^__FAILURES__=' || true
+VALIDATOR_FAILURES="$(printf '%s\n' "${VALIDATOR_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+if [[ -z "${VALIDATOR_FAILURES}" ]]; then
+  fail "fabric record validation did not report a result"
+else
+  FAILURES=$((FAILURES + VALIDATOR_FAILURES))
+fi
+
 # Nothing was written inside the repository by any of the above.
 if [[ -n "$(find "${ROOT}/tools" -name 'C*-[0-9]*' -print -quit 2>/dev/null)" ]]; then
   fail "a fabric record was written into the source tree"
