@@ -499,6 +499,398 @@ else
   FAILURES=$((FAILURES + PY_FAILURES))
 fi
 
+# ===========================================================================
+# Increment 2 — Fabric record store (C1)
+# ===========================================================================
+# A separate block, so increment 1's contract assertions keep reporting their
+# own result while these fail on the missing store module.
+#
+# Governed by the accepted plan's Increment 2 section: per-kind identifier
+# widths, complete containment across all twelve inherited entry points,
+# explicit ownership, preservation of pre-existing residue, and the
+# deterministic commit race.
+
+# --- AC 68: only store.py may reach the filesystem ---------------------------
+# A preventive guard rather than a failing one: no writer exists yet, so it
+# passes today and must keep passing once store.py arrives. Checked by AST so
+# an alias import cannot slip past a text scan.
+AC68_OUTPUT="$(python3 - "${ROOT}" <<'AC68PY' 2>&1 || true
+import ast
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+failures = 0
+
+WRITE_ATTRS = {
+    "open", "write", "mkdir", "makedirs", "chmod", "chown", "rename", "replace",
+    "link", "symlink", "remove", "unlink", "rmdir", "truncate", "ftruncate",
+    "fdopen", "write_text", "write_bytes", "touch", "symlink_to", "hardlink_to",
+    "copy", "copy2", "copyfile", "copytree", "move", "rmtree",
+    "NamedTemporaryFile", "mkstemp", "mkdtemp", "TemporaryFile",
+    "write_atomic", "write_record",
+}
+WRITE_MODULES = {"os", "shutil", "tempfile", "pathlib"}
+
+for path in sorted((root / "tools" / "fabric").glob("*.py")):
+    if path.name == "store.py":
+        continue
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    # Names bound by `from os import replace as _r` and `import shutil as sh`.
+    aliased = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in WRITE_MODULES:
+            for alias in node.names:
+                aliased[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                base = alias.name.split(".")[0]
+                if base in WRITE_MODULES and alias.asname:
+                    aliased[alias.asname] = alias.name
+
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in WRITE_ATTRS:
+            hits.append(f"{path.name}:{node.lineno}:.{func.attr}")
+        elif isinstance(func, ast.Name):
+            if func.id in aliased:
+                hits.append(f"{path.name}:{node.lineno}:{aliased[func.id]}")
+            elif func.id == "open":
+                hits.append(f"{path.name}:{node.lineno}:builtin open")
+    if hits:
+        failures += 1
+        print(f"FAIL: only store.py may mutate the filesystem; {path.name} does ({hits[:3]})")
+    else:
+        print(f"PASS: {path.name} reaches the filesystem by no mechanism")
+
+print(f"__AC68__={failures}")
+AC68PY
+)"
+printf '%s\n' "${AC68_OUTPUT}" | grep -v '^__AC68__=' || true
+AC68_FAILURES="$(printf '%s\n' "${AC68_OUTPUT}" | sed -n 's/^__AC68__=//p' | tail -1)"
+if [[ -z "${AC68_FAILURES}" ]]; then
+  fail "the AC 68 filesystem-mutation scan did not report a result"
+else
+  FAILURES=$((FAILURES + AC68_FAILURES))
+fi
+
+# --- Store behaviour ---------------------------------------------------------
+STORE_OUTPUT="$(python3 - "${ROOT}" <<'STOREPY' 2>&1 || true
+import os
+import stat
+import sys
+import threading
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+
+failures = 0
+
+
+def ok(message):
+    print(f"PASS: {message}")
+
+
+def bad(message):
+    global failures
+    failures += 1
+    print(f"FAIL: {message}")
+
+
+def check(condition, message):
+    if condition:
+        ok(message)
+    else:
+        bad(message)
+
+
+def refuses(callable_, message):
+    try:
+        callable_()
+    except (FabricError, TypeError, ValueError, OSError):
+        ok(message)
+    except Exception as error:  # noqa: BLE001
+        bad(f"{message} (raised {type(error).__name__})")
+    else:
+        bad(f"{message} (was accepted instead of refused)")
+
+
+from tools.fabric.errors import FabricError  # noqa: E402
+# The import that must fail before increment 2 exists.
+from tools.fabric.store import FabricStore  # noqa: E402
+
+UID = os.geteuid()
+GID = os.getegid()
+
+FOUR_DIGIT = ("capability-definition", "capability-contract", "capability-package",
+              "capability-host", "capability-route")
+SIX_DIGIT = ("capability-advertisement", "capability-instance", "capability-selection")
+
+
+def opened(tmp, **overrides):
+    fields = dict(expected_uid=UID, expected_gid=GID)
+    fields.update(overrides)
+    return FabricStore(Path(tmp) / "fabric", **fields)
+
+
+# --- Ownership (AC 39, FC 19) -----------------------------------------------
+# Defect caught: a store that infers its owner from the caller, or silently
+# chowns a path whose owner does not match, instead of refusing.
+with TemporaryDirectory() as tmp:
+    try:
+        opened(tmp)
+        ok("a store opens when the supplied UID/GID match the process")
+    except Exception as error:  # noqa: BLE001
+        bad(f"a store opens when the supplied UID/GID match the process ({type(error).__name__})")
+
+with TemporaryDirectory() as tmp:
+    refuses(lambda: FabricStore(Path(tmp) / "fabric", expected_gid=GID),
+            "a store refuses a missing expected_uid")
+    refuses(lambda: FabricStore(Path(tmp) / "fabric", expected_uid=UID),
+            "a store refuses a missing expected_gid")
+    refuses(lambda: FabricStore(Path(tmp) / "fabric"),
+            "a store refuses absent ownership inputs entirely")
+
+with TemporaryDirectory() as tmp:
+    # Process EUID/EGID must equal the supplied values before creation.
+    refuses(lambda: opened(tmp, expected_uid=UID + 4242),
+            "a store refuses to create a path when the process EUID differs")
+    refuses(lambda: opened(tmp, expected_gid=GID + 4242),
+            "a store refuses to create a path when the process EGID differs")
+
+with TemporaryDirectory() as tmp:
+    opened(tmp)  # create the tree once with matching ownership
+    refuses(lambda: opened(tmp, expected_uid=UID + 4242),
+            "an existing path whose UID does not match the supplied value refuses")
+    refuses(lambda: opened(tmp, expected_gid=GID + 4242),
+            "an existing path whose GID does not match the supplied value refuses")
+    root_dir = Path(tmp) / "fabric"
+    check(root_dir.stat().st_uid == UID and root_dir.stat().st_gid == GID,
+          "a refused ownership check performs no chown")
+
+# --- Absent store stays absent on the read path ------------------------------
+with TemporaryDirectory() as tmp:
+    absent = Path(tmp) / "not-a-store"
+    try:
+        FabricStore.open_for_read(absent, expected_uid=UID, expected_gid=GID)
+        ok("open_for_read accepts ownership inputs and reports an absent store")
+    except FabricError:
+        ok("open_for_read accepts ownership inputs and reports an absent store")
+    except Exception as error:  # noqa: BLE001
+        bad(f"open_for_read propagates ownership ({type(error).__name__})")
+    check(not absent.exists(), "open_for_read does not create an absent store root")
+
+# --- Per-kind identifier widths ---------------------------------------------
+# Defect caught: allocate_id hardcodes :06d, so a four-digit kind gets six.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    for kind in FOUR_DIGIT:
+        identifier = store.allocate_id(kind)
+        digits = identifier.split("-")[-1]
+        check(len(digits) == 4, f"{kind} allocates a four-digit identifier (got {identifier})")
+    for kind in SIX_DIGIT:
+        identifier = store.allocate_id(kind)
+        digits = identifier.split("-")[-1]
+        check(len(digits) == 6, f"{kind} allocates a six-digit identifier (got {identifier})")
+
+# The released Trust Plane keeps its six digits, byte for byte.
+with TemporaryDirectory() as tmp:
+    from tools.trust.store import TrustStore
+
+    trust = TrustStore(Path(tmp) / "trust")
+    trust_id = trust.allocate_id("authority")
+    check(trust_id == "TAUTH-000001",
+          f"released Trust Plane allocation is unchanged (got {trust_id})")
+
+# --- Modes -------------------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    for directory in sorted(Path(tmp).joinpath("fabric").iterdir()):
+        mode = stat.S_IMODE(directory.stat().st_mode)
+        check(mode == 0o700, f"{directory.name} is created 0700 (got {oct(mode)})")
+
+# --- No update, no delete ----------------------------------------------------
+for forbidden in ("update", "delete", "remove", "rmtree"):
+    check(not hasattr(FabricStore, forbidden),
+          f"the store exposes no '{forbidden}' method")
+
+# --- No default root, repository root refused --------------------------------
+refuses(lambda: FabricStore("", expected_uid=UID, expected_gid=GID),
+        "a store refuses an empty root")
+refuses(lambda: FabricStore(root / "tools", expected_uid=UID, expected_gid=GID),
+        "a store refuses a root inside the repository")
+
+# --- Containment: symlink and traversal, unresolved-first --------------------
+# Defect caught: resolving before inspecting, so a broken symlink disappears
+# and Path.exists() reports False for the case that must refuse.
+with TemporaryDirectory() as tmp:
+    outside = Path(tmp) / "outside"
+    outside.mkdir()
+    linked_root = Path(tmp) / "linked-root"
+    linked_root.symlink_to(outside)
+    refuses(lambda: FabricStore(linked_root, expected_uid=UID, expected_gid=GID),
+            "__init__ refuses a symlinked store root")
+
+    broken = Path(tmp) / "broken-root"
+    broken.symlink_to(Path(tmp) / "does-not-exist")
+    refuses(lambda: FabricStore(broken, expected_uid=UID, expected_gid=GID),
+            "__init__ refuses a broken symlinked root")
+    refuses(lambda: FabricStore.open_for_read(broken, expected_uid=UID, expected_gid=GID),
+            "open_for_read refuses a broken symlinked root")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    fabric_root = Path(tmp) / "fabric"
+    escape = Path(tmp) / "escape.yaml"
+    escape.write_text("escaped: true\n", encoding="utf-8")
+
+    definitions = fabric_root / "capability-definitions"
+    if definitions.is_dir():
+        linked_record = definitions / "CAPDEF-0001.yaml"
+        linked_record.symlink_to(escape)
+        refuses(lambda: store.read_record("capability-definition", "CAPDEF-0001"),
+                "read_record refuses a symlinked record")
+        refuses(lambda: store.list_records("capability-definition"),
+                "list_records refuses a symlinked record")
+        refuses(lambda: store.validate(),
+                "validate refuses a symlinked record")
+        refuses(lambda: store.counts(),
+                "counts refuses a symlinked record")
+    else:
+        bad("the store creates a record directory per accepted kind")
+
+    refuses(lambda: store.path_for("capability-definition", "../../escape"),
+            "path_for refuses a traversing identifier")
+    refuses(lambda: store._directory("capability-definition/../.."),
+            "_directory refuses a traversing kind")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    sequences = Path(tmp) / "fabric" / "sequences"
+    if sequences.is_dir():
+        seq = sequences / "capability-definition.seq"
+        if seq.exists():
+            seq.unlink()
+        seq.symlink_to(Path(tmp) / "elsewhere.seq")
+        refuses(lambda: store.allocate_id("capability-definition"),
+                "allocate_id refuses a symlinked sequence file")
+    else:
+        bad("the store creates a sequences directory")
+
+# --- Residue: a pre-existing temporary is evidence, not debris to clear ------
+# Defect caught: write_atomic opens the temp with O_TRUNC and unlinks it in
+# `finally`, destroying an interrupted-write artifact.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    destination = store.path_for("capability-definition", "CAPDEF-0001")
+    temporary = destination.with_name(f".{destination.stem}.tmp")
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_text("interrupted write evidence\n", encoding="utf-8")
+    before_bytes = temporary.read_bytes()
+    before_stat = temporary.stat()
+
+    refuses(lambda: store.write_atomic(destination, {"capability_id": "CAPDEF-0001"}),
+            "write_atomic refuses when a temporary sibling already exists")
+    check(temporary.exists(), "the pre-existing temporary artifact is not removed")
+    check(temporary.read_bytes() == before_bytes,
+          "the pre-existing temporary artifact keeps its bytes")
+    check(temporary.stat().st_mtime_ns == before_stat.st_mtime_ns,
+          "the pre-existing temporary artifact keeps its metadata")
+    findings = store.validate()
+    check(any("tmp" in str(finding) for finding in findings),
+          f"residue is reported as observable debris ({findings})")
+    store.counts()
+    check(temporary.exists(), "another operation does not clean the residue")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    destination = store.path_for("capability-contract", "CCON-0001")
+    temporary = destination.with_name(f".{destination.stem}.tmp")
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    temporary.symlink_to(Path(tmp) / "no-such-target")
+    refuses(lambda: store.write_atomic(destination, {"contract_id": "CCON-0001"}),
+            "write_atomic refuses a broken-symlink temporary sibling")
+    check(temporary.is_symlink(), "the broken-symlink residue is left in place")
+
+# --- Deterministic commit race (AC 34, FC 13) --------------------------------
+# Defect caught: without O_EXCL, writer B truncates writer A's synced temporary
+# content, and either writer's `finally` can unlink the other's inode.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    destination = store.path_for("capability-host", "CHOST-0001")
+    a_paused = threading.Event()
+    a_release = threading.Event()
+    outcomes = {}
+
+    class PausingStore(type(store)):
+        def _pre_link_sync_point(self, destination, temporary):  # noqa: A002
+            a_paused.set()
+            if not a_release.wait(timeout=10):
+                raise AssertionError("commit-race coordinator timed out")
+
+    paused_store = PausingStore(
+        Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+
+    def writer_a():
+        try:
+            paused_store.write_atomic(destination, {"capability_host_id": "CHOST-0001",
+                                                    "writer": "A"})
+            outcomes["a"] = "committed"
+        except Exception as error:  # noqa: BLE001
+            outcomes["a"] = f"{type(error).__name__}"
+
+    def writer_b():
+        if not a_paused.wait(timeout=10):
+            outcomes["b"] = "timeout waiting for A"
+            return
+        try:
+            store.write_atomic(destination, {"capability_host_id": "CHOST-0001",
+                                             "writer": "B"})
+            outcomes["b"] = "committed"
+        except Exception as error:  # noqa: BLE001
+            outcomes["b"] = f"{type(error).__name__}"
+        finally:
+            a_release.set()
+
+    thread_a = threading.Thread(target=writer_a)
+    thread_b = threading.Thread(target=writer_b)
+    thread_a.start()
+    thread_b.start()
+    thread_a.join(timeout=20)
+    thread_b.join(timeout=20)
+    check(not thread_a.is_alive() and not thread_b.is_alive(),
+          "the commit race completes within its bounded wait")
+
+    check(outcomes.get("b") not in (None, "committed"),
+          f"the losing writer receives a storage conflict (got {outcomes.get('b')})")
+    check("replay" not in str(outcomes.get("b", "")).lower(),
+          "the storage conflict is never classified as replay")
+    check(outcomes.get("a") == "committed",
+          f"the paused writer still commits after release (got {outcomes.get('a')})")
+    if destination.exists():
+        committed = destination.read_text(encoding="utf-8")
+        check("A" in committed and "B" not in committed,
+              "the committed record is writer A's payload, with no silent overwrite")
+    else:
+        bad("the paused writer's record is committed")
+
+print(f"__FAILURES__={failures}")
+STOREPY
+)"
+printf '%s\n' "${STORE_OUTPUT}" | grep -v '^__FAILURES__=' || true
+STORE_FAILURES="$(printf '%s\n' "${STORE_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+if [[ -z "${STORE_FAILURES}" ]]; then
+  fail "fabric store validation did not report a result"
+else
+  FAILURES=$((FAILURES + STORE_FAILURES))
+fi
+
 # Nothing was written inside the repository by any of the above.
 if [[ -n "$(find "${ROOT}/tools" -name 'C*-[0-9]*' -print -quit 2>/dev/null)" ]]; then
   fail "a fabric record was written into the source tree"

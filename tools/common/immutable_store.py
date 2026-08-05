@@ -33,8 +33,9 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import yaml
 
@@ -69,6 +70,14 @@ class ImmutableStore:
     id_prefixes: Mapping[str, str] = {}
     # Extra directories to create beyond the record directories.
     extra_dirs: tuple[str, ...] = ("sequences",)
+    # kind -> identifier digit width. An empty map means six for every kind,
+    # which is what every released store already does, so adding this changes
+    # no existing output.
+    id_widths: Mapping[str, int] = {}
+    # Opt in to O_EXCL when creating the temporary sibling. Off by default so
+    # released behaviour is unchanged; a store that must preserve a
+    # pre-existing artefact turns it on.
+    exclusive_temporary_create: bool = False
 
     def __init__(self, root: Path | str, *, allow_repository_root: bool = False,
                  initialize: bool = True) -> None:
@@ -134,6 +143,9 @@ class ImmutableStore:
         if kind not in self.id_prefixes:
             raise StoreError(f"unknown record kind '{kind}'")
         prefix = self.id_prefixes[kind]
+        width = self.id_widths.get(kind, 6)
+        # A kind cannot outgrow its own width. Rolling over would reuse a name.
+        kind_maximum = min(10 ** width - 1, MAX_SEQUENCE)
         sequence_file = self.root / "sequences" / f"{kind}.seq"
 
         handle = os.open(sequence_file, os.O_RDWR | os.O_CREAT, FILE_MODE)
@@ -145,12 +157,12 @@ class ImmutableStore:
             candidate = current
             while True:
                 candidate += 1
-                if candidate > MAX_SEQUENCE:
+                if candidate > kind_maximum:
                     raise StoreError(
                         f"{kind} sequence is exhausted; widening the identifier is a "
                         "deliberate decision, not an automatic rollover"
                     )
-                identifier = f"{prefix}-{candidate:06d}"
+                identifier = f"{prefix}-{candidate:0{width}d}"
                 if kind in self.record_dirs and self.path_for(kind, identifier).exists():
                     # Something occupies this name. Skip it rather than reuse or
                     # overwrite a record this store did not create.
@@ -181,12 +193,25 @@ class ImmutableStore:
         # one filesystem, and carries .tmp so a leftover is obvious debris
         # rather than being mistaken for a record.
         temporary = destination.with_name(f".{destination.stem}.tmp")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE)
+        # O_EXCL makes creating the temp and refusing an existing one the same
+        # atomic operation, so a pre-existing artefact is never truncated by
+        # the check/open gap. Off by default: released stores keep O_TRUNC.
+        flags = os.O_WRONLY | os.O_CREAT
+        flags |= os.O_EXCL if self.exclusive_temporary_create else os.O_TRUNC
+        try:
+            descriptor = os.open(temporary, flags, FILE_MODE)
+        except FileExistsError as error:
+            # Not ours to remove. Someone else's interrupted write is evidence.
+            raise StoreError(
+                f"temporary artefact for '{destination.name}' already exists"
+            ) from error
         try:
             os.write(descriptor, text.encode("utf-8"))
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+        self._pre_link_sync_point(destination, temporary)
 
         try:
             os.link(temporary, destination)
@@ -207,6 +232,24 @@ class ImmutableStore:
         except OSError:
             pass
         return destination
+
+    def _pre_link_sync_point(self, destination: Path, temporary: Path) -> None:
+        """Byte-neutral seam between fsync and link.
+
+        A test cannot reach between those two operations from outside, and a
+        commit race is only deterministic if it can. This does nothing and
+        changes no bytes.
+        """
+
+    @contextmanager
+    def request_critical_section(self, request_id: str) -> Iterator[None]:
+        """Seam an operation enters before replay lookup.
+
+        A behavioural no-op here. A store that must serialise replay lookup,
+        identifier allocation, and the accepted write acquires its lock in an
+        override, so no call site moves when that arrives.
+        """
+        yield
 
     def write_record(self, kind: str, record) -> Path:
         """Persist a record that exposes `id` and `to_dict()`."""
