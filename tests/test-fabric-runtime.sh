@@ -986,6 +986,186 @@ with TemporaryDirectory() as tmp:
         check(not hasattr(store, later),
               f"the store exposes no '{later}' behaviour at increment 2")
 
+
+# --- The model-oriented write path (increment 2 correction) ------------------
+# Defect caught: write() and the inherited write_record() both read `record.id`,
+# copied from the Trust Plane, whose records carry one. No accepted fabric
+# record does -- each kind names its own identity field -- so the public write
+# path raises AttributeError for all eight kinds and can persist none of them.
+import yaml  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+
+from tools.fabric.models import (  # noqa: E402
+    RECORD_MODELS,
+    SUPPORTED_SCHEMA_VERSION,
+    CapabilityAdvertisement,
+    CapabilityContract,
+    CapabilityDefinition,
+    CapabilityHost,
+    CapabilityInstance,
+    CapabilityPackage,
+    CapabilityRoute,
+    CapabilitySelection,
+)
+
+WHEN = datetime(2026, 8, 5, 9, 0, 0, tzinfo=timezone.utc)
+UNTIL = datetime(2026, 8, 6, 9, 0, 0, tzinfo=timezone.utc)
+ORIGIN = {"class": "declared", "source": "operator"}
+
+
+def accepted_records():
+    """One of every accepted kind. Identifiers and destinations are literal."""
+    return (
+        ("capability-definition", "capability-definitions", "CAPDEF-0001",
+         "capability_id", CapabilityDefinition(
+             capability_id="CAPDEF-0001", name="summarise text",
+             description="Reduce a document to its essentials.",
+             effect_class="read-only", contract_ids=("CCON-0001",),
+             provenance=ORIGIN)),
+        ("capability-contract", "capability-contracts", "CCON-0001",
+         "contract_id", CapabilityContract(
+             contract_id="CCON-0001", capability_id="CAPDEF-0001",
+             contract_version="1.0.0", effect_class="read-only",
+             determinism_class="deterministic", request_shape={"text": "string"},
+             response_shape={"summary": "string"}, failure_modes=("unavailable",),
+             resource_requirements={"memory_mb": 512}, compatible_with=(),
+             provenance=ORIGIN)),
+        ("capability-package", "capability-packages", "CPKG-0001",
+         "capability_package_id", CapabilityPackage(
+             capability_package_id="CPKG-0001", capability_id="CAPDEF-0001",
+             contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
+             package_version="1.0.0",
+             artifact_reference="oci://registry.invalid/summarise",
+             resource_requirements={"memory_mb": 512},
+             trust_domain="schott-platform", provenance=ORIGIN)),
+        ("capability-host", "capability-hosts", "CHOST-0001",
+         "capability_host_id", CapabilityHost(
+             capability_host_id="CHOST-0001", node_identity_reference="node/schai",
+             fabric_node_trust_record_id="TAUTH-000001",
+             verified_resource_profile={"memory_mb": 8192},
+             location_class="on-premises", data_classification_ceiling="internal",
+             availability_intent="available", provenance=ORIGIN)),
+        ("capability-advertisement", "capability-advertisements", "CADV-000001",
+         "advertisement_id", CapabilityAdvertisement(
+             advertisement_id="CADV-000001", capability_host_id="CHOST-0001",
+             capability_package_id="CPKG-0001", contract_id="CCON-0001",
+             satisfied_contract_versions=("1.0.0",),
+             advertised_resource_profile={"memory_mb": 512},
+             observed_at=WHEN, valid_until=UNTIL, provenance=ORIGIN)),
+        ("capability-instance", "capability-instances", "CINST-000001",
+         "instance_id", CapabilityInstance(
+             instance_id="CINST-000001", capability_id="CAPDEF-0001",
+             capability_package_id="CPKG-0001", capability_host_id="CHOST-0001",
+             contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
+             verified_resource_profile={"memory_mb": 512},
+             admission_decision_id="TDEC-000001",
+             package_trust_record_id="TAUTH-000002",
+             host_trust_record_id="TAUTH-000001",
+             effective_scope={"data_classification": "internal"},
+             admitted_at=WHEN, admitted_until=UNTIL,
+             advertisement_id="CADV-000001", provenance=ORIGIN)),
+        ("capability-route", "capability-routes", "CROUTE-0001",
+         "route_id", CapabilityRoute(
+             route_id="CROUTE-0001", route_version=1, capability_id="CAPDEF-0001",
+             contract_id="CCON-0001", accepted_contract_versions=("1.0.0",),
+             locality="local-only", candidate_instances=("CINST-000001",),
+             data_classification="internal", provenance=ORIGIN)),
+        ("capability-selection", "capability-selections", "CSEL-000001",
+         "selection_id", CapabilitySelection(
+             selection_id="CSEL-000001", route_id="CROUTE-0001", route_version=1,
+             request_class={"data_classification": "internal"},
+             considered_candidates=("CINST-000001",), excluded_candidates=(),
+             selected_instance_id="CINST-000001",
+             selection_reason="first eligible candidate in declared order",
+             selected_at=WHEN, provenance=ORIGIN)),
+    )
+
+
+def refuses_fabric(callable_, message):
+    """Refused, and refused as a fabric refusal -- not as an attribute slip."""
+    try:
+        callable_()
+    except FabricError:
+        ok(message)
+    except Exception as error:  # noqa: BLE001
+        bad(f"{message} (raised {type(error).__name__} instead of FabricError)")
+    else:
+        bad(f"{message} (was accepted instead of refused)")
+
+
+ACCEPTED = accepted_records()
+check(len(ACCEPTED) == 8 and {entry[0] for entry in ACCEPTED} == set(RECORD_MODELS),
+      "the write path is exercised for every accepted record kind and no other")
+
+# No accepted record carries a universal identifier, so the store cannot read one.
+for kind, _, _, _, record in ACCEPTED:
+    check(not hasattr(record, "id"),
+          f"a {kind} record carries no synthetic 'id' attribute")
+
+# Both public model-oriented names must reach the same guarded destination.
+for entry_point in ("write", "write_record"):
+    for kind, directory, identifier, field, record in ACCEPTED:
+        with TemporaryDirectory() as tmp:
+            store = opened(tmp)
+            expected = Path(tmp) / "fabric" / directory / f"{identifier}.yaml"
+            try:
+                written = getattr(store, entry_point)(kind, record)
+            except Exception as error:  # noqa: BLE001
+                bad(f"{entry_point}() persists a {kind} record "
+                    f"(raised {type(error).__name__})")
+                continue
+            check(Path(written) == expected,
+                  f"{entry_point}() writes a {kind} record to {directory}/{identifier}.yaml")
+            check(expected.is_file(), f"{entry_point}() leaves a {kind} record on disk")
+            stored = yaml.safe_load(expected.read_text(encoding="utf-8"))
+            check(isinstance(stored, dict) and stored.get(field) == identifier,
+                  f"the stored {kind} record carries {field} == {identifier}")
+            check(isinstance(stored, dict) and stored.get("kind") == kind,
+                  f"the stored {kind} record declares its kind")
+            check(isinstance(stored, dict)
+                  and stored.get("schema_version") == SUPPORTED_SCHEMA_VERSION,
+                  f"the stored {kind} record declares the supported schema version")
+            check(stat.S_IMODE(expected.lstat().st_mode) == 0o600,
+                  f"a {kind} record written through {entry_point}() is mode 0600")
+            residue = expected.with_name(f".{expected.stem}.tmp")
+            check(not residue.exists(),
+                  f"{entry_point}() leaves no temporary behind for a {kind} record")
+            # Written once means written once, by either name.
+            refuses_fabric(lambda: getattr(store, entry_point)(kind, record),
+                           f"{entry_point}() refuses to overwrite an existing {kind} record")
+
+# An object that is not the record it claims to be is refused, not guessed at.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    definition = ACCEPTED[0][4]
+    for entry_point in ("write", "write_record"):
+        refuses_fabric(lambda: getattr(store, entry_point)("capability-definition", object()),
+                       f"{entry_point}() refuses an object that is not a record")
+        refuses_fabric(lambda: getattr(store, entry_point)("capability-definition", None),
+                       f"{entry_point}() refuses None")
+        refuses_fabric(lambda: getattr(store, entry_point)(
+                    "capability-definition", {"capability_id": "CAPDEF-0001"}),
+                       f"{entry_point}() refuses a bare mapping")
+        refuses_fabric(lambda: getattr(store, entry_point)("capability-contract", definition),
+                       f"{entry_point}() refuses a record supplied under the wrong kind")
+        refuses_fabric(lambda: getattr(store, entry_point)("ninth-record-kind", definition),
+                       f"{entry_point}() refuses an unknown record kind")
+    check(store.counts() == {kind: 0 for kind in store.record_dirs},
+          "a refused write persists nothing")
+
+# The correction does not bypass containment: write() still reaches path_for().
+with TemporaryDirectory() as tmp:
+    outside = Path(tmp) / "outside"
+    outside.mkdir()
+    fabric = Path(tmp) / "fabric"
+    fabric.mkdir(mode=0o700)
+    for name in (*FabricStore.record_dirs.values(), *FabricStore.extra_dirs):
+        if name != "capability-definitions":
+            (fabric / name).mkdir(mode=0o700)
+    (fabric / "capability-definitions").symlink_to(outside)
+    refuses_fabric(lambda: FabricStore(fabric, expected_uid=UID, expected_gid=GID),
+                   "a symlinked record directory is still refused after the correction")
+
 print(f"__FAILURES__={failures}")
 STOREPY
 )"

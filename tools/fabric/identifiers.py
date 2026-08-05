@@ -35,6 +35,20 @@ PATTERNS = {
     "capability-selection": CAPABILITY_SELECTION_ID,
 }
 
+# Which field carries a record's identity. Each kind names its own -- there is
+# no universal `id` -- so the store has to be told rather than left to guess
+# from attribute order or from the destination filename.
+ID_FIELDS = {
+    "capability-definition": "capability_id",
+    "capability-contract": "contract_id",
+    "capability-package": "capability_package_id",
+    "capability-host": "capability_host_id",
+    "capability-advertisement": "advertisement_id",
+    "capability-instance": "instance_id",
+    "capability-route": "route_id",
+    "capability-selection": "selection_id",
+}
+
 PREFIXES = {
     "capability-definition": "CAPDEF",
     "capability-contract": "CCON",

@@ -35,7 +35,7 @@ from typing import Any, Mapping
 
 from ..common.immutable_store import DIR_MODE, ImmutableStore, StoreError
 from .errors import FabricError
-from .identifiers import PATTERNS, PREFIXES
+from .identifiers import ID_FIELDS, PATTERNS, PREFIXES
 
 # Four digits for the records an operator writes deliberately, six for the ones
 # a running fabric produces. Taken from the accepted schemas.
@@ -272,10 +272,27 @@ class FabricStore(ImmutableStore):
             raise FabricError(str(error)) from None
 
     def write(self, kind: str, record) -> Path:
+        """Persist an accepted record, identified by the field its kind names.
+
+        The inherited body reads `record.id`, which is right for the Trust
+        Plane and wrong here: no accepted fabric record carries one. The
+        identity field is looked up in `identifiers.py` rather than inferred
+        from the object, so a record that is not what it claims to be is
+        refused instead of persisted under a guessed name.
+        """
+        if kind not in ID_FIELDS:
+            raise FabricError(f"unknown record kind '{kind}'")
+        if getattr(record, "kind", None) != kind:
+            raise FabricError(f"a '{kind}' record was not supplied")
+        identifier = getattr(record, ID_FIELDS[kind])
         try:
-            return self.write_atomic(self.path_for(kind, record.id), record.to_dict())
+            return self.write_atomic(self.path_for(kind, identifier), record.to_dict())
         except StoreError as error:
             raise FabricError(str(error)) from None
+
+    def write_record(self, kind: str, record) -> Path:
+        """The inherited name, reaching the same guarded path."""
+        return self.write(kind, record)
 
     def read_record(self, kind: str, identifier: str) -> dict[str, Any]:
         # path_for guards the exact record before anything reads it.
