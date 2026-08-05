@@ -978,6 +978,13 @@ ninth, so evidence lives on the record whose existence it justifies.
 `no-candidate`), route and route version, **every** candidate considered, and
 the exclusion reason for each.
 
+For a capability advertisement, the evidence actor is the exact
+store-allocated `capability_host_id` of the already-admitted subject
+publishing the advertisement (§6.3). `node_identity_reference` establishes the
+underlying node identity during trust and admission verification but is not
+the Fabric evidence actor representation. Namespaced or transformed actor
+forms are not accepted.
+
 ### Rejected operations create no record
 
 A rejected registration, admission, declaration, route change, or withdrawal

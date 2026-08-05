@@ -75,7 +75,14 @@ OUTCOME_CATEGORIES = {
     "no-candidate": "no-candidate",
 }
 
-# The record field naming the subject that must be the acting identity.
+# The record field whose value the evidence actor must equal exactly.
+#
+# For an advertisement that is the store-allocated `capability_host_id` of the
+# already-admitted subject publishing it -- `CHOST-0001`, not a namespaced or
+# transformed form of it. `node_identity_reference` establishes the underlying
+# node identity during trust and admission verification; it is not the fabric
+# evidence actor. The comparison is equality, case-sensitive: a containment
+# test would let any actor that merely mentions the subject pass as it.
 ACTOR_SUBJECT_FIELDS = {"capability-advertisement": "capability_host_id"}
 
 # The record fields carrying the Trust Plane records a kind relies on. Evidence
@@ -247,9 +254,10 @@ def _validate_applicability(kind: str, record, evidence: Mapping[str, Any]) -> N
     subject_field = ACTOR_SUBJECT_FIELDS.get(kind)
     if subject_field is not None:
         subject = getattr(record, subject_field, None)
-        if not isinstance(subject, str) or subject not in evidence["actor"]:
+        if not isinstance(subject, str) or evidence["actor"] != subject:
+            # The rejected actor is never echoed; the field that must match is.
             raise FabricError(
-                f"a '{kind}' must be published by the subject it advertises")
+                f"a '{kind}' evidence actor must be exactly its {subject_field}")
 
     # Symmetric on purpose. Checking only when the reason category announces
     # supersession would let a record that supersedes another hide the fact by

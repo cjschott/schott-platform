@@ -1033,7 +1033,7 @@ def fixture_evidence(kind):
     }
     if kind == "capability-advertisement":
         # Published by the subject as itself; no human operator approves it.
-        evidence["actor"] = "host:CHOST-0001"
+        evidence["actor"] = "CHOST-0001"
         evidence["approving_authority"] = None
         evidence["reason_category"] = "advertisement-registration"
     elif kind == "capability-selection":
@@ -2185,7 +2185,7 @@ def evidence_for(kind, **overrides):
     # An advertisement is published by the subject as itself; naming an
     # approving human operator would turn a self-report into an approval.
     if kind == "capability-advertisement":
-        fields["actor"] = "host:CHOST-0001"
+        fields["actor"] = "CHOST-0001"
     elif kind == "capability-selection":
         # A selection is a deterministic read plus its own record. No human
         # operator approves it, so naming one would misdescribe the act.
@@ -3084,6 +3084,88 @@ for name, fields in CONSISTENT_OUTCOMES:
               f"the {name} outcome agrees with the reason category that was validated")
         check(forensic(fabric) == before,
               f"replaying a {name} selection writes nothing")
+
+
+# --- The advertisement actor is the admitted host identity, exactly ---------
+# Defect caught: a substring test against an invented namespaced actor form.
+# It accepted anything containing the host identity, so a forged actor that
+# merely mentioned the subject passed as the subject.
+ADVERTISEMENT_BODY = dict(
+    advertisement_id="CADV-000009", capability_host_id="CHOST-0001",
+    capability_package_id="CPKG-0001", contract_id="CCON-0001",
+    satisfied_contract_versions=("1.0.0",),
+    advertised_resource_profile={"memory_mb": 512},
+    observed_at=WHEN, valid_until=UNTIL, provenance=PROV)
+
+
+def advertisement(actor):
+    return RECORD_MODELS["capability-advertisement"](
+        evidence=dict(evidence_for("capability-advertisement"), actor=actor),
+        **ADVERTISEMENT_BODY)
+
+
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    fabric = Path(tmp) / "fabric"
+    written = store.write("capability-advertisement", advertisement("CHOST-0001"))
+    check(Path(written).name == "CADV-000009.yaml",
+          "an advertisement whose actor is exactly its capability_host_id is accepted")
+    stored = yaml.safe_load(Path(written).read_text(encoding="utf-8"))
+    check(stored["evidence"]["actor"] == "CHOST-0001",
+          "the accepted actor is persisted unchanged as CHOST-0001")
+    check(stored["capability_host_id"] == stored["evidence"]["actor"],
+          "the persisted actor is identical to the advertised host identity")
+
+# Every one of these mentions, contains, or resembles the subject. None is it.
+FORGED_ACTORS = (
+    ("host:CHOST-0001", "a namespaced form"),
+    ("prefix-CHOST-0001", "a prefixed form"),
+    ("CHOST-0001-suffix", "a suffixed form"),
+    ("attacker:CHOST-0001:forged", "an embedded form"),
+    (" CHOST-0001", "a leading space"),
+    ("CHOST-0001 ", "a trailing space"),
+    ("chost-0001", "a lowercase lookalike"),
+    ("CHOST-0002", "a different admitted subject"),
+    ("CHOST-00010", "a longer identifier sharing the prefix"),
+    ("", "an empty actor"),
+)
+for actor, description in FORGED_ACTORS:
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        fabric = Path(tmp) / "fabric"
+        before = forensic(fabric)
+        refuses_fabric(lambda a=actor: store.write("capability-advertisement",
+                                                   advertisement(a)),
+                       f"an advertisement actor carrying {description} fails closed")
+        after = forensic(fabric)
+        check(after == before,
+              f"{description} is refused before any filesystem mutation")
+        check(store.counts()["capability-advertisement"] == 0,
+              f"{description} allocates no record identity")
+        check(not (fabric / "capability-advertisements" / "CADV-000009.yaml").exists(),
+              f"{description} creates no final record")
+        residue = list((fabric / "capability-advertisements").glob("*.tmp"))
+        check(residue == [], f"{description} leaves no temporary artefact")
+        sequence = fabric / "sequences" / "capability-advertisement.seq"
+        check(not sequence.exists(),
+              f"{description} advances no sequence state")
+
+# The comparison is equality, not containment: neither direction matches.
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    refuses_fabric(lambda: store.write("capability-advertisement",
+                                       advertisement("CHOST-000")),
+                   "an actor that is a substring of the host identity fails closed")
+    refuses_fabric(lambda: store.write("capability-advertisement",
+                                       advertisement("CHOST-0001CHOST-0001")),
+                   "an actor that repeats the host identity fails closed")
+
+# node_identity_reference is the underlying node identity, not the actor.
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    refuses_fabric(lambda: store.write("capability-advertisement",
+                                       advertisement("node/schai")),
+                   "a node identity reference is not the fabric evidence actor")
 
 print(f"__FAILURES__={failures}")
 IDENTITYPY
