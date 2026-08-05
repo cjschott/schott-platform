@@ -199,88 +199,157 @@ narrowing, and full CI/validation wiring — as one Red→Green increment.
 
 ## Increment 2 — Fabric record store (C1)
 
-**Objective.** The only physical writer, with per-kind identifier widths.
+**Objective.** The only physical writer: per-kind identifier widths, complete
+containment, explicit ownership, and preservation of pre-existing residue.
 
 - **Created:** `tools/fabric/store.py`
-- **Modified:** `tools/common/immutable_store.py` (per-kind width mechanism)
-- **Inspect first:** `tools/common/immutable_store.py` — `allocate_id()`
-  (`:06d`), `write_atomic`, `open_for_read`, `DIR_MODE` `0700`, `FILE_MODE`
-  `0600`, `is_inside_git_repository`, `MAX_SEQUENCE`; `tools/trust/store.py`
-- **AC:** 1, 2, 4, 34 (allocation and commit race), 39, 40, 41, 52, 68, 78 · **FC:** 1, 2, 6, 13, 19, 20, 21
+- **Modified:** `tools/common/immutable_store.py` (three backward-compatible
+  opt-in seams, all defaulting to released behaviour)
+- **Inspect first:** `tools/common/immutable_store.py` — `__init__` (`:73–88`,
+  which dispatches `_create_directories()` **dynamically**), `_create_directories`
+  (`:90–99`), `open_for_read` (`:101`), `_directory` (`:119`), `path_for`
+  (`:124`), `allocate_id` (`:132`, hardcoded `:06d` at `:153`), `write_atomic`
+  (`:171`, `O_TRUNC` at `:185` and `unlink` in `finally`), `write_record`
+  (`:211`), `read_record` (`:217`), `list_records` (`:223`), `validate` (`:238`),
+  `counts` (`:258`); `tools/trust/store.py`
+- **AC:** 1, 2, 4, 33, 34, 39, 40, 41, 44, 52, 68, 78 · **FC:** 1, 2, 6, 12, 13,
+  19, 20, 21
+
+### Ownership — the approved rule
+
+`FabricStore` takes **keyword-only `expected_uid` and `expected_gid`** from its
+composition root. **No defaults, no inferred owner, no name-to-ID lookup, and no
+service account is created.** Both are propagated by `FabricStore.__init__()`
+**and** `FabricStore.open_for_read()`.
+
+Because `ImmutableStore.__init__()` dispatches `_create_directories()`
+**dynamically** (`:88`), the override runs *during* `super().__init__()`.
+**The ownership fields must therefore be assigned before calling
+`super().__init__()`**, or the override will read unset attributes.
+
+Every existing Fabric root, record directory, `sequences/`, sequence file, lock
+file, temporary artifact, and record file must match the supplied values.
+**Before creating** a new path the process **EUID and EGID must equal** the
+supplied values; the created path is then **verified after creation**. Any
+mismatch **refuses and reports**. Fabric **never calls `chown`**, never repairs
+ownership, and **never treats the current caller as authoritative** unless that
+UID/GID was explicitly supplied. Production values come from the separately
+provisioned Kyri service account or an explicitly approved operator; **tests
+inject their fixture UID/GID explicitly.**
+
+### Named seams — every inherited entry point
+
+| Entry point | Seam |
+|---|---|
+| `FabricStore.__init__()` | capture the **unresolved** supplied root and `lstat` it **before** `super().__init__()` resolves it, so a root symlink — **including a broken one** — cannot vanish through resolution; assign `expected_uid`/`expected_gid` **before** `super()`; retain repository-root refusal |
+| `FabricStore.open_for_read()` | same ownership propagation; **preserves absent-store read-only behaviour** — an absent root is reported, never created |
+| `_create_directories()` | stat each existing path **first**, compare mode **and** explicit UID/GID, **refuse or report without `chmod`/`chown`**; require process EUID/EGID to equal the supplied values before creating; verify each newly created path after creation; new directories `0700` |
+| `_directory()` | guard the record directory before returning it |
+| `path_for()` | call the **inherited identifier validation first**, then guard the record directory **and** the resulting destination |
+| `allocate_id()` | guard `sequences/`, the per-kind `.seq` file, **and every collision candidate reached through `path_for()`**; per-kind width via `id_widths`; per-kind exhaustion at `min(10**width − 1, MAX_SEQUENCE)` |
+| `write_atomic()` | guard the destination **and** the temporary sibling, refuse a pre-existing temporary (see below), then **delegate to `super()`** — the physical body is never copied, so a direct call cannot bypass containment |
+| `write_record()` | inherited; reaches the guarded `path_for()` and `write_atomic()` |
+| `read_record()` | guard the **exact record** before reading |
+| `list_records()` | guard the record directory **and every matched record** before reading |
+| `validate()` | guard every record directory and **every matched `.yaml` and `.tmp` entry** |
+| `counts()` | guard every record directory and every matched `.yaml` entry |
+
+`_guard_path()` refuses a symlink — directory, record, sequence, temporary, or
+lock file — by inspecting the **unresolved** path with `lstat` **before**
+anything follows it, then resolves and requires the result **inside or equal to**
+the resolved root. **`Path.exists()` is never used for a security check**: it
+follows symlinks and returns `False` for a broken one, which is precisely the
+case that must refuse.
+
+### Preserving pre-existing temporary residue
+
+`ImmutableStore.write_atomic()` opens its deterministic temporary sibling with
+**`O_TRUNC`** (`:185`) and unlinks it in `finally` (`:203`). A pre-existing
+interrupted-write artifact is therefore **silently truncated and then deleted** —
+destroying the very evidence AC 33 and FC 12 require.
+
+`FabricStore.write_atomic()` computes and guards both paths, and **refuses
+before delegating** if the temporary sibling already exists **including as a
+broken symlink**, leaving its bytes and metadata unchanged. To close the
+check/open race, a **backward-compatible opt-in seam** is added to the shared
+module:
+
+- `ImmutableStore.exclusive_temporary_create: bool = False`
+- `FabricStore.exclusive_temporary_create = True`
+- the shared physical write body adds **`O_EXCL`** only when opted in
+- `FileExistsError` from exclusive creation becomes a **storage conflict** and
+  **never removes the pre-existing entry**
+- the default is the released behaviour, so **Trust Plane output stays
+  byte-identical**
+
+Cleanup remains permitted **only for a temporary inode created by that same
+invocation**. The physical write body stays in `ImmutableStore.write_atomic()`.
+
 - **Red — AC 68, repository-wide.** Assert that **no file under `tools/fabric/`
-  except `store.py`** reaches the filesystem by any mechanism: builtin
-  `open(...)` in any writing mode; `os.open`, `os.write`, `os.mkdir`,
-  `os.makedirs`, `os.chmod`, `os.chown`, `os.rename`, `os.replace`, `os.link`,
-  `os.symlink`, `os.remove`, `os.unlink`, `os.rmdir`, `os.truncate`,
-  `os.ftruncate`, `os.fdopen`; `pathlib` `.write_text`, `.write_bytes`,
-  `.mkdir`, `.touch`, `.chmod`, `.rename`, `.replace`, `.unlink`, `.rmdir`,
-  `.symlink_to`, `.hardlink_to`; `shutil` `.copy*`, `.move`, `.rmtree`;
-  `tempfile` `.NamedTemporaryFile`, `.mkstemp`, `.mkdtemp`, `.TemporaryFile`;
-  and `ImmutableStore.write_atomic`/`write_record`. The assertion must also
-  catch **alias imports** — `from os import replace as _r`, `import os.path as
-  _p`, `import shutil as sh` — by checking imported-name bindings, not only
-  dotted call text. **C1's cleanup of its own `.tmp` file remains allowed** and
-  is the single named exemption. A review checkpoint cannot provide this.
-- **Red:** also assert four-digit allocation for `CAPDEF`/`CCON`/`CPKG`/`CHOST`/
-  `CROUTE` and six-digit for `CADV`/`CINST`/`CSEL`; **released Trust Plane
-  allocation still six-digit and byte-identical**; per-kind exhaustion refuses
-  rather than rolling over; no-default-root refusal; repository-root refusal;
-  overwrite refusal; **no update and no delete method exists**; new directories
-  `0700` and records `0600`; an existing directory with wrong mode or ownership
-  is **refused or reported, never silently changed**; full-resolution root
-  containment on **both read and write**; directory **and** record symlink
-  escape refused; path traversal refused; an allocation collision is a
-  **storage conflict and never replay evidence**; concurrent allocation stays
-  unique and monotonic.
-- **Observable Red reason:** `AttributeError: module 'tools.fabric' has no
-  attribute 'store'` on import, then four-digit allocation assertions failing
-  against the hardcoded `:06d` at `tools/common/immutable_store.py:153`.
-- **Green — named seams.** Each assertion above becomes Green through a specific
-  seam, not through inheritance:
-
-  | Requirement | Seam |
-  |---|---|
-  | Per-kind widths | **New class attribute `ImmutableStore.id_widths: Mapping[str, int] = {}`**. Line 153 becomes `f"{prefix}-{candidate:0{self.id_widths.get(kind, 6)}d}"`. An empty map means six, so **every released store, including `TrustStore`, is byte-identical** |
-  | Per-kind maximum | Exhaustion checked against `min(10**width - 1, MAX_SEQUENCE)` for that kind, refusing rather than rolling over |
-  | **Sequence path containment** | `allocate_id()` (`:132`) opens `sequences/<kind>.seq` **directly**. `FabricStore` overrides it to run `_guard_path()` on the `sequences/` directory **and** the `.seq` file before `os.open`, then delegates to `super().allocate_id()` |
-  | **Destination + temp-sibling containment** | `write_atomic()` (`:171`) accepts an arbitrary destination and creates a `.<stem>.tmp` sibling. `FabricStore` overrides it to `_guard_path()` **both the destination and the computed temporary sibling**, then calls `super().write_atomic()` — **the physical write body is delegated, never copied** |
-  | **No containment bypass** | Because the override validates and delegates, a caller invoking `write_atomic()` directly is still guarded. A static assertion additionally proves no `tools/fabric/` module calls `ImmutableStore.write_atomic` unbound or via `super()` outside `store.py` |
-  | **Validation path containment** | `validate()` (`:238`) globs record directories directly; the override guards each record directory before delegating |
-  | **Counting path containment** | `counts()` (`:258`) globs directly; the override guards each record directory before delegating |
-  | **No silent permission correction** | `FabricStore` overrides `_create_directories()`. The inherited body (`:90–99`) calls `mkdir(exist_ok=True)` then `chmod(DIR_MODE)` **on directories that already exist** — that is the silent correction. The override stats each existing path **first** and **refuses or reports without `chmod` or `chown`**. Only paths this call newly created are chmodded |
-  | **Permission checks, every path class** | Mode is verified on the **store root, each record directory, `sequences/`, each sequence file, and each record file** — `0700` for directories, `0600` for files, and never world- or group-readable |
-  | Restrictive creation modes | New directories `DIR_MODE` `0700`; new files `FILE_MODE` `0600`, from the released constants |
-  | **Symlink refusal before following** | `_guard_path()` checks `Path.is_symlink()` on the **unresolved** path and each unresolved parent **first**, refusing before any resolution follows it; only then does it `resolve()` and require the result to be **inside or equal to** the resolved root |
-  | Traversal | Refused by the same `_guard_path()` after full resolution |
-  | One physical write path | `super().write_atomic()` is the only physical writer; nothing is copied |
-  | No update/delete | Neither method is added; a static assertion proves `tools/fabric/` defines no `update`, `delete`, `unlink`, or `rmtree`, **except C1's own cleanup of its own `.tmp` file** |
-
-  A **no-op, overridable synchronisation hook** is also introduced here so the
-  increment-12 race Red has a seam that already exists. It has no production
-  behaviour and writes nothing.
-
-  `id_widths` is a **backward-compatible opt-in hook**: increment 2 must include
-  regression assertions that `TrustStore` allocation, modes, and every released
-  Trust Plane behaviour are unchanged.
-
-  **Identifier widths, containment, modes, and symlink refusal require no new
-  architectural decision** — they come from ADR-0012 and specification §12.
-  **Ownership does — see planning blocker PB-2 (§14).** Until it is decided,
-  this increment **captures and reports** each path's `st_uid`/`st_gid` as an
-  observable finding and **refuses to change ownership**, but asserts no
-  expected value.
+  except `store.py`** reaches the filesystem by any mechanism: builtin `open(...)`
+  in any writing mode; `os.open`, `os.write`, `os.mkdir`, `os.makedirs`,
+  `os.chmod`, `os.chown`, `os.rename`, `os.replace`, `os.link`, `os.symlink`,
+  `os.remove`, `os.unlink`, `os.rmdir`, `os.truncate`, `os.ftruncate`,
+  `os.fdopen`; `pathlib` `.write_text`, `.write_bytes`, `.mkdir`, `.touch`,
+  `.chmod`, `.rename`, `.replace`, `.unlink`, `.rmdir`, `.symlink_to`,
+  `.hardlink_to`; `shutil` `.copy*`, `.move`, `.rmtree`; `tempfile`
+  `.NamedTemporaryFile`, `.mkstemp`, `.mkdtemp`, `.TemporaryFile`; and
+  `ImmutableStore.write_atomic`/`write_record`. It must also catch **alias
+  imports** — `from os import replace as _r`, `import shutil as sh` — by checking
+  imported-name bindings, not only dotted call text. **C1's cleanup of a
+  temporary inode it created in that same invocation is the single named
+  exemption.**
+- **Red — ownership (AC 39, FC 19).** Assert refusal and report, with **no
+  `chown` and no repair**, for: an existing path whose **UID** differs; one whose
+  **GID** differs; **missing `expected_uid`/`expected_gid`** inputs; a **process
+  EUID/EGID mismatch before creation**; and success when the fixture's **correct
+  explicit UID/GID** are supplied.
+- **Red — residue (AC 33, AC 44, FC 12).** Given a pre-existing `.tmp` sibling,
+  assert a write **refuses**, the artifact's **bytes and metadata are unchanged**,
+  it is **reported as observable debris**, and **no other operation cleans,
+  alters, or backfills it**; the same holds when the residue is a **broken
+  symlink**.
+- **Red — containment.** Assert refusal for a symlinked or traversing root,
+  record directory, record, sequence file, temporary sibling, and lock file, each
+  refused **on the unresolved path before it is followed**, exercised through
+  **every** entry point above: `__init__`, `open_for_read`, `_directory`,
+  `path_for`, `allocate_id`, `write_atomic`, `write_record`, `read_record`,
+  `list_records`, `validate`, and `counts`; and that a **direct** `write_atomic()`
+  call does not bypass containment.
+- **Red — allocation and modes.** Assert four-digit allocation for
+  `CAPDEF`/`CCON`/`CPKG`/`CHOST`/`CROUTE` and six-digit for
+  `CADV`/`CINST`/`CSEL`; **released Trust Plane allocation still six-digit and
+  byte-identical**; per-kind exhaustion refuses rather than rolling over;
+  no-default-root refusal; repository-root refusal; overwrite refusal; **no update
+  and no delete method exists**; new directories `0700`, records `0600`; and an
+  allocation collision is a **storage conflict, never replay evidence**.
+- **Red — commit race (AC 34, FC 13).** See the deterministic protocol in
+  increment 12; the **no-op pre-link hook** it depends on is introduced here.
+- **Observable Red reason:** `ModuleNotFoundError: No module named
+  'tools.fabric.store'`, then — once the module exists — four-digit allocation
+  failing against the hardcoded `:06d` at `:153`, ownership assertions failing
+  because no ownership inputs exist, and the residue assertions failing because
+  `O_TRUNC` at `:185` truncates the pre-existing artifact and `finally` unlinks
+  it.
+- **Green:** `FabricStore(ImmutableStore)` with the seams above; three
+  backward-compatible opt-in attributes on the shared module — `id_widths`,
+  `exclusive_temporary_create`, and the **no-op pre-link and sync hooks** — each
+  defaulting to released behaviour. Regression assertions must prove
+  `TrustStore` allocation, modes, and every released Trust Plane behaviour are
+  **byte-identical**.
 - **Focused:** `bash tests/test-fabric-runtime.sh`,
   `bash tests/test-trust-runtime.sh`, `bash tests/test-trust-plane.sh`,
   `bash tests/test-trust-migration.sh`
 - **Full regression:** `tools/dev/run-validation.sh`
-- **Security / fail-closed:** **A6**; released Trust Plane behaviour preserved
-  exactly.
+- **Security / fail-closed:** **A6, A7**; ownership and mode mismatches refuse
+  without correction; residue is preserved, never cleaned.
 - **Docs:** none.
-- **Excluded:** governed acceptance of any record — increments 2 and 3 write
-  only test fixtures, never an accepted governed operation.
+- **Excluded:** governed acceptance of any record — increments 2 and 3 write only
+  test fixtures, never an accepted governed operation.
 - **Commit:** `feat: add the immutable fabric store`
-- **Review checkpoint:** reviewer confirms the shared-module change is
-  backward-compatible and no second write path exists.
+- **Review checkpoint:** reviewer confirms the three shared-module seams default
+  to released behaviour, no second physical write path exists, and no `chown`
+  appears anywhere.
 - **Rollback:** revert both files; increment 1 stands.
 
 ## Increment 3 — Record validator (C2)
@@ -324,7 +393,8 @@ accepted.
 - **Inspect first:** `tools/observation/evidence_builder.py` and
   `tools/integrity/snapshot_manager.py` — the **released** `sha256:` canonical-
   JSON convention; specification §6 identity contract and §11 evidence table
-- **AC (primitives):** 35, 62, 63, 76, 77, 81, 82, 83, 84 · **FC:** 7, 8, 9, 10
+- **AC (primitives):** 35, 63, 76, 77, 81, 82, 83, 84 · **FC:** 7, 8, 9, 10
+- **Dependency check:** **AC 62 moves to increment 12** — "no Fabric audit-record class" is only observable against a **fully exercised** store, alongside AC 87.
 - **Dependency check:** identity, digest, evidence construction and replay lookup are **primitives**. **AC 5 and 75 move to increment 6** and **AC 78 stays in increment 2**; AC 35, 63, 76 and 77 are re-asserted **end to end** at every accepted-operation increment (6, 7, 9).
 - **Red:** assert `request_id` is opaque, caller-supplied, and **never derived**;
   bounded-length and safe-comparison validation; identical content under
@@ -338,7 +408,7 @@ accepted.
   evidence references where applicable, reason category, timezone-aware
   caller-supplied timestamp, `request_id`, `request_digest`, schema
   identity/version, and record identity; **a record missing any required
-  evidence field is not written**; enumeration yields **no audit-record class**.
+  evidence field is not written**; enumeration of the records written *so far* shows no audit-record class — the **fully exercised** assertion (AC 62) belongs to increment 12.
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric.request_identity'`.
 - **Green:** SHA-256 over canonical JSON, sorted keys, stable separators,
@@ -389,7 +459,7 @@ accepted.
 - **Created:** `tools/fabric/admission.py`
 - **Modified:** `tools/fabric/evidence.py` (wire evidence into acceptance)
 - **Inspect first:** `tools/trust/root_authority.py`; specification §6.1–6.3
-- **AC:** 3, 5, 6, 7 (integrated), 8 (integrated), 11, 12, 35 (repeat), 37, 49 (part-1 classes), 55 (repeat, declaration boundary), 63 (repeat), 64, 66, 67, 75, 76 (repeat), 77 (repeat), 79 (part-1), 85 (subject admission), 86 · **FC:** 5, 7, 11, 14 (integrated), 15 (integrated)
+- **AC:** 3, 5, 6, 7 (integrated), 8 (integrated), 11, 12, 35 (repeat), 37, 49 (part-1 classes), 55 (repeat, declaration boundary), 63 (repeat), 64, 66, 67, 75, 76 (repeat), 77 (repeat), 79 (part-1), 85 (subject admission), 86 · **FC:** 5, 7, 8, 9, 11, 14 (integrated), 15 (integrated)
 - **Dependency check:** **C5 does not exist yet.** The "eligibility names the absent admission" halves of **AC 9 and 10 move to increment 8**; increment 6 asserts only that trust alone creates no instance record.
 - **Red:** assert a governed mutation without an approving operator identity is
   refused; **trust alone creates no instance record** — the eligibility half of
@@ -404,7 +474,13 @@ accepted.
   **C3 integration at subject admission (AC 7, 8, FC 14, 15):** invalid, expired,
   revoked, malformed, and unverifiable host trust each **refuse admission with no
   record**, and Trust Plane unavailability **refuses with no cached verdict and
-  no record**; an unadmitted subject's advertisement is
+  no record**;
+  **replay and conflicting reuse, named per accepted part-1 operation class
+  (AC 76, 77, FC 8, 9):** for **each** of capability declaration, contract
+  declaration, package declaration, subject admission, and advertisement
+  registration — exact replay returns the original record identity and allocates
+  nothing (FC 8), and conflicting reuse fails as `request_identity_conflict`
+  with no record and the original untouched (FC 9); an unadmitted subject's advertisement is
   refused with **no queued and no authoritative state**; self-admission refused;
   an admitted subject publishes its own advertisement **without new human
   approval**; impersonation and scope widening refused; **a missing reference to
@@ -485,7 +561,7 @@ and supersession**.
 - **Created:** `tools/fabric/eligibility.py`
 - **Inspect first:** `platform-model/schemas/capability-instance.schema.yaml`
   **ELIG-1 … ELIG-14**; ADR-0012 "How capabilities are trusted"
-- **AC:** 8 (eligibility half), 9, 10, 13, 14, 17, 18, 42 (eligibility half), 51 (eligibility half), 56, 57, 58, 69 · **FC:** 16 (eligibility recomputation), 17, 18, 27
+- **AC:** 8 (eligibility half), 9, 10, 13, 14, 17, 18, 42 (eligibility half), 51 (eligibility half), 56, 57, 58, 69 · **FC:** 14 (unavailable trust → ineligible), 15 (invalid/expired/revoked trust → ineligible), 16 (eligibility recomputation), 17, 18, 27
 - **Dependency check:** **C5 accepts no Health Runtime input.** **AC 59, 60 and FC 28 move to increment 9**, where the Health input boundary lives.
 
 **Schema-to-component enforcement map.** No enumerated check may disappear
@@ -518,8 +594,9 @@ working node"*.
   empty → refuse; no upgrade, downgrade, nearest match, or best-effort; only
   declared compatibility consulted; **stale or corrupt derived state is
   recomputed for eligibility**;
-  **AC 8:** an unavailable Trust Plane makes eligibility **ineligible, fail
-  closed, with no cached verdict**; **AC 9 and 10:** with admission absent the
+  **AC 8 / FC 14:** an unavailable Trust Plane makes eligibility **ineligible,
+  fail closed, with no cached verdict**; **FC 15:** invalid, expired, or revoked
+  trust makes eligibility **ineligible**, naming that condition; **AC 9 and 10:** with admission absent the
   verdict names **the absent admission as the unmet condition**; **AC 14:**
   **non-overlapping package, host, and admission scopes** yield an empty
   effective intersection — not merely a generic ELIG-8 failure; **AC 17 and 18 /
@@ -552,7 +629,7 @@ only.
 - **Inspect first:** ADR-0012 "How routing occurs";
   `docs/fabric/failure-behaviour.md`; specification §8 selection constraints;
   ELIG-13 and ELIG-14
-- **AC:** 20, 21, 22, 23, 24, 26, 27, 35 (repeat, on `CSEL`), 36, 38, 42 (selection half), 50, 51 (selection half), 53, 54, 57 (repeat, selection boundary), 59, 60, 63 (repeat, on `CSEL`), 65, 76 (repeat, on `CSEL`), 77 (repeat, on `CSEL`), 80 · **FC:** 7, 8, 9, 16 (selection recomputation), 22, 23, 24, 26, 28
+- **AC:** 20, 21, 22, 23, 24, 26, 27, 35 (repeat, on `CSEL`), 36, 38, 42 (selection half), 50, 51 (selection half), 53, 54, 57 (repeat, selection boundary), 59, 60, 63 (repeat, on `CSEL`), 65, 76 (repeat, on `CSEL`), 77 (repeat, on `CSEL`), 80 · **FC:** 7, 8, 9, 16 (selection recomputation), 18 (selection after host disappearance), 22, 23, 24, 26, 28
 - **Red:** assert identical inputs choose identically across repeated runs; the
   **first** candidate in human-declared order wins with no reordering by any
   measurement; **ELIG-13** — a candidate absent from the route is excluded;
@@ -670,7 +747,7 @@ partial state; then document.
   `docs/fabric/node-model.md`, `docs/history/v1.0-engineering-ledger.md`
 - **Inspect first:** specification §9 failure matrix, §10 ordering and two-record
   request identity
-- **AC (own Red):** 34, 74, 87 · **FC (own Red):** 8, 9, 12, 13, 25
+- **AC (own Red):** 34, 62, 74, 87 · **FC (own Red):** 8, 9, 12, 13, 25
 - **Regression coverage:** every test introduced through increments 1–11 re-runs
   here via `tools/dev/run-validation.sh`. That is **regression coverage, not new
   Red** — the remaining failure conditions are **not** claimed as new
@@ -683,13 +760,21 @@ or ninth record type**. The request-identity check and the accepted write are
 **serialised through C1**; any lock or sequence artifact used for that
 serialisation is **owned physically by C1 and is not a Fabric record**.
 
-- **Red — concurrent writer losing the commit race (AC 34, FC 13):** with a
-  deliberately synchronised competing writer targeting the **same allocated
-  record path**, assert the loser receives a **storage conflict**, identifiers
-  remain **unique and monotonic**, the original record is **byte-unchanged**,
-  the conflict is **never reported as replay**, and **no silent overwrite**
-  occurs.
-- **Red:** assert interruption after the new `CINST` and before the new `CROUTE`
+- **Deterministic commit-race protocol (AC 34, FC 13).** The seam is a
+  **backward-compatible no-op hook in the shared physical write path**, called
+  after the current invocation has **exclusively created, written, and synced**
+  its temporary file but **before `os.link()`**. It defaults to no-op and
+  preserves released Trust Plane behaviour. The Red proves:
+  writer **A** owns the exclusively created temporary file and **pauses before
+  commit**; writer **B** targets the same record path; **B receives a storage
+  conflict without truncating or unlinking A's temporary file**; **A commits
+  successfully after release**; allocated identifiers remain **unique and
+  monotonic**; the committed record is **byte-identical to A's payload**; there
+  is **no silent overwrite**; the conflict is **never classified as replay**; and
+  **every synchronisation wait is bounded, with a timeout failing the test**.
+- **Red:** **AC 62 and 87:** against a **fully exercised** store, enumerate every
+  persistent record and assert only the **eight accepted types** exist, with **no
+  audit-record class and no ninth type**; assert interruption after the new `CINST` and before the new `CROUTE`
   leaves the new instance present, **no route naming it**, nothing selecting it,
   the cutover **uncommitted**, the old route still serving, the `CINST`
   operation **still exactly replayable under its own `request_id`**, and
@@ -702,32 +787,38 @@ serialisation is **owned physically by C1 and is not a Fabric record**.
   unique and monotonic; rejected non-selection requests stay zero-record and are
   validated afresh; an unavailable Trust Plane fails closed; permission and
   symlink violations refuse.
-- **Deterministic, non-deadlocking race protocol.** A barrier that releases only
-  when **both** callers are inside the future critical section deadlocks the
-  moment Green takes a lock before the replay lookup: the second caller can
-  never arrive. The protocol therefore uses **latches released from outside**:
+- **Deterministic request-race protocol.** Blocking is never inferred from
+  elapsed time or from an event that failed to occur.
 
-  1. The seam is an **overridable no-op hook** on `FabricStore`, introduced in
-     **increment 2** so it exists before this Red runs. It has **no production
-     behaviour** and creates **no persistent record**. The test may instead
-     subclass and override the method purely test-side.
-  2. Caller **A** is started; the test waits on `a_reached_hook`, signalled from
-     inside the hook, then **A blocks on `a_release`**.
-  3. Caller **B** is started. The coordinator waits until **B is observably
-     blocked outside the critical section** — pre-fix it reaches the same hook
-     and signals `b_reached_hook`; post-fix it blocks acquiring the request
-     lock, detected by a bounded `b_blocked_on_lock` probe.
-  4. The coordinator sets `a_release`. **The release never depends on B being
-     inside the critical section**, so neither path can deadlock.
-  5. Every wait is bounded; a timeout is a **test failure**, never a pass.
+  1. **Increment 2** introduces a production **no-op hook**
+     `_test_sync_point(phase, request_id)` on `FabricStore`. It writes nothing
+     and has no production behaviour.
+  2. Once request identity exists (**increment 4**), it is called with phase
+     `after_replay_miss` immediately after replay lookup returns *not found*.
+  3. Green here acquires a **C1-owned request lock before replay lookup** and
+     holds it through identity allocation **and** the accepted write.
+  4. The lock artifact is a guarded **`sequences/request_identity.lock`**. It
+     contains **no replay or evidence state**, is **not a Fabric record**, and is
+     guarded and ownership-checked exactly like every other C1 path.
+  5. Acquisition is `LOCK_EX | LOCK_NB` **first**. On `EWOULDBLOCK` the hook is
+     invoked with phase `lock_contended`, **then** the blocking `LOCK_EX` is
+     taken — so contention produces a **positive, deterministic event** rather
+     than an inference.
+  6. Protocol:
+     - **A** reaches `after_replay_miss` and waits.
+     - **B** starts.
+     - The coordinator waits for **either `b_after_replay_miss` or
+       `b_lock_contended`** — whichever the implementation actually produces.
+     - **Pre-fix:** B reaches the replay-miss hook. Release both; both have
+       observably seen *not found*, and the behavioural assertion fails.
+     - **Post-fix:** B emits `lock_contended`. Release A; B then acquires the
+       lock and observes A's committed result.
+     - **Any timeout is a test failure** — never evidence of blocking and never
+       a pass.
 
-  **Pre-fix:** both callers observe *not found* on replay lookup, so the
-  duplicate or conflict is exposed **on every run**. **Post-fix:** the request
-  lock is **acquired before replay lookup and held through identity allocation
-  and the accepted write**, so B completes without timeout, observes A's
-  committed result, and returns **replay** or **`request_identity_conflict`** as
-  appropriate. Both the **exact** and the **conflicting** same-`request_id`
-  races are covered.
+  Both the **exact** and the **conflicting** same-`request_id` races are
+  exercised. Post-fix outcomes are **one accepted record plus a replay**, or
+  **one accepted record plus `request_identity_conflict`**, respectively.
 - **Observable Red reason:** with the protocol engaged, **both callers observe
   *not found* on replay lookup on every run**, so one `request_id` yields two
   accepted records — and, in the conflicting variant, two records for
@@ -793,9 +884,9 @@ Every entry points to an observable assertion in that exact increment's Red.
 | Increment | Acceptance criteria |
 |---|---|
 | 1 | 32, 48, 55 |
-| 2 | 1, 2, 4, 34, 39, 40, 41, 52, 68, 78 |
+| 2 | 1, 2, 4, 33, 34, 39, 40, 41, 44, 52, 68, 78 |
 | 3 | 31, 32 |
-| 4 | 35, 62, 63, 76, 77, 81, 82, 83, 84 |
+| 4 | 35, 63, 76, 77, 81, 82, 83, 84 |
 | 5 | 46, 61, 71 |
 | 6 | 3, 5, 6, 7, 8, 11, 12, 35, 37, 49, 55, 63, 64, 66, 67, 75, 76, 77, 79, 85, 86 |
 | 7 | 7, 8, 9, 15, 16, 17, 18, 19, 35, 37, 49, 51, 63, 64, 69, 70, 72, 73, 76, 77, 79, 85 |
@@ -803,7 +894,7 @@ Every entry points to an observable assertion in that exact increment's Red.
 | 9 | 20, 21, 22, 23, 24, 26, 27, 35, 36, 38, 42, 50, 51, 53, 54, 57, 59, 60, 63, 65, 76, 77, 80 |
 | 10 | 28, 29, 30, 33, 44, 47 |
 | 11 | 25, 43, 45 |
-| 12 | 34, 74, 87 |
+| 12 | 34, 62, 74, 87 |
 
 **Coverage: 87/87.**
 
@@ -827,19 +918,22 @@ Every entry points to an observable assertion in that exact increment's Red.
 | 69 | 7, 8 | No Trust Plane write (C4); ineligible while trust is unchanged (C5) |
 | 76, 77 | 4, 6, 7, 9 | Replay and conflicting reuse as primitives, then integrated into every accepted operation class including all three `CSEL` outcomes |
 | 78 | 2 | Collision-is-not-replay, proven once at the only component that allocates |
+| 33, 44 | 2, 10, 12 | Residue preserved at the write path (C1), reported by inspection (C8), and produced by injection (12) |
+| 39 | 2 | Explicit UID/GID checks, at the only component that touches the filesystem |
+| 62, 87 | 12 | Both need a **fully exercised** store; asserted together |
 
 ## Coverage matrix — 28 failure conditions
 
 | Increment | Failure conditions |
 |---|---|
 | 1 | 4 |
-| 2 | 1, 2, 6, 13, 19, 20, 21 |
+| 2 | 1, 2, 6, 12, 13, 19, 20, 21 |
 | 3 | 3, 5, 16 |
 | 4 | 7, 8, 9, 10 |
-| 6 | 5, 7, 11, 14, 15 |
+| 6 | 5, 7, 8, 9, 11, 14, 15 |
 | 7 | 5, 11, 14, 15, 17, 18 |
-| 8 | 16, 17, 18, 27 |
-| 9 | 7, 8, 9, 16, 22, 23, 24, 26, 28 |
+| 8 | 14, 15, 16, 17, 18, 27 |
+| 9 | 7, 8, 9, 16, 18, 22, 23, 24, 26, 28 |
 | 10 | 1, 2, 3, 12 |
 | 11 | 25 |
 | 12 | 8, 9, 12, 13, 25 |
@@ -848,14 +942,17 @@ Every entry points to an observable assertion in that exact increment's Red.
 a verdict, and the refusal it causes is observable only at C4 or C5.
 
 **Repeats, justified:** FC 5 and 11 (6, 7 — part-1 and part-2 classes) · FC 7, 8,
-9 (4, 6, 9, 12 — identity primitives, then declaration, then all three `CSEL`
-outcomes, then the race protocol) · FC 13 (2, 12 — allocation conflict, then the
-synchronised commit race) · FC 14, 15 (6, 7 — subject and instance admission) ·
-FC 16 (3, 8, 9 — validator **reporting**, eligibility recomputation, selection
-recomputation) · FC 17, 18 (7, 8 — authoritative and eligibility halves) · FC 1,
-2, 3 (2, 3, 10 — store, validator, read-only inspection) · FC 12 (10, 12 —
-reported by inspection, then produced by injection) · FC 25 (11, 12 — explicit
-recovery through the interface, then integrated).
+9 (4, 6, 9, 12 — identity primitives, then **each accepted part-1 operation
+class**, then all three `CSEL` outcomes, then the race protocol) · FC 13 (2, 12 —
+allocation conflict, then the deterministic commit race) · FC 14, 15 (6, 7, 8 —
+subject admission, instance admission, and **eligibility**) · FC 16 (3, 8, 9 —
+validator **reporting**, eligibility recomputation, selection recomputation) ·
+FC 17 (7, 8 — authoritative and eligibility halves) · FC 18 (7, 8, 9 —
+authoritative, eligibility, and **selection** after host disappearance) · FC 1,
+2, 3 (2, 3, 10 — store, validator, read-only inspection) · FC 12 (**2**, 10, 12 —
+residue **preserved** at the write path, reported by inspection, then produced by
+injection) · FC 19 (2 — explicit UID/GID) · FC 25 (11, 12 — explicit recovery
+through the interface, then integrated).
 
 **Increment 12 claims only what its own Red observes.** Everything earlier
 re-runs there as **regression coverage** via `tools/dev/run-validation.sh`, and
@@ -895,56 +992,53 @@ cannot reintroduce what it forbids. It covers:
 | Risk | Preventing test or validation step |
 |---|---|
 | Accidental Trust Plane mutation | Increment 5 Red; `test-trust-runtime.sh`, `test-trust-plane.sh`, `test-trust-migration.sh` pass unchanged at every increment |
-| Physical writes outside C1 | Increment 2 review checkpoint; repository-wide assertion that only `tools/fabric/store.py` performs filesystem writes |
+| Physical writes outside C1 | **Increment 2 Red — the repository-wide assertion** over builtin/`os`/`pathlib`/`shutil`/`tempfile`/link/rename/truncate/removal forms **and alias imports**, with C1's own same-invocation temp cleanup the single exemption. Not a review checkpoint |
 | Replay misclassification | Increment 4 Red — new identity, exact replay, conflicting reuse asserted separately |
 | Path collision treated as replay | Increments 2 and 4 Red — collision asserted a **storage conflict** |
 | Partial multi-record state | Increment 12 Red — interruption between `CINST` and `CROUTE`, with the `CINST` still replayable |
 | Symlink and path traversal | Increment 2 Red — directory **and** record escape refused, full resolution |
 | Malformed or unsupported record version | Increments 1, 3, 10 Red — fails closed; malformed becomes a finding |
-| Permission failures | Increment 2 Red — mode/ownership mismatch refused or reported, never silently changed |
+| Permission failures | Increment 2 Red — mode **and explicit UID/GID** mismatch refused or reported, **never `chown`ed, repaired, or silently changed** |
 | Concurrent identity allocation | Increments 2 and 12 Red |
 | Concurrent same-`request_id` races | **Increment 12 Red** — exact and conflicting concurrent reuse |
 | Missing or unavailable Trust Plane evidence | Increment 5 Red — fails closed, no cached verdict |
-| Unknown health state | Increment 8 Red — unknown stays unknown |
+| Unknown health state | **Increment 9 Red** — unknown stays unknown, removes nothing, adds nothing; C5 accepts no health input at all |
 | Deterministic-selection drift | Increment 9 Red — identical inputs choose identically |
 | Side-effecting capability selection | Increment 9 Red — ELIG-14, no route override |
 | Accidental ENG-0005 execution behaviour | Increment 9 static assertion — dynamic loading, `importlib`, `exec`, `eval`, `subprocess`, `os.system`, package-content reads, and any invocation/worker/connector forbidden |
 | Persistent evidence escaping the eight-record boundary | Increment 4 Red and review checkpoint — enumeration yields exactly eight |
+| Pre-existing temporary residue destroyed | Increment 2 Red — `O_TRUNC` at `:185` and the `finally` unlink are neutralised by refusing before delegation plus the `exclusive_temporary_create` `O_EXCL` seam; bytes and metadata unchanged |
+| Ownership silently corrected | Increment 2 Red — no `chown` anywhere; mismatch refuses and reports |
 | Identifier-width regression in released stores | Increment 2 Red — Trust Plane allocation still six-digit and byte-identical |
 | Unwired suite breaking developer-experience | Increment 1 — wiring lands with the suite |
 
 ## Planning blockers
 
-### PB-2 — the expected UID/GID rule is not determined by accepted sources
+### PB-2 — resolved by operator decision, 2026-08-05
 
-Increment 2 must refuse or report an **ownership** mismatch. Accepted sources
-determine the **mode** rule but not the **ownership** rule. The
-[Operator Root deployment guide](../../trust/operator-root-authority-deployment.md)
-states:
+The expected UID/GID rule was not determined by accepted sources. **The operator
+has now decided it**, and increment 2 implements that decision:
 
-> | Ownership | dedicated Kyri service account or approved operator |
+> `FabricStore` requires explicit keyword-only `expected_uid` and `expected_gid`
+> inputs from its composition root. There are **no defaults and no inferred
+> owner**. Every existing Fabric root, directory, sequence file, lock file,
+> temporary artifact, and record file must match those values. Before creating a
+> new path, the process **EUID and EGID must match** the supplied values; the
+> created path is then **verified**. Any mismatch **refuses and reports**. Fabric
+> **never calls `chown`**, never repairs ownership, and **never treats the
+> current caller as authoritative** unless that UID/GID was explicitly supplied.
+> Production values come from the separately provisioned Kyri service account or
+> an explicitly approved operator; **tests explicitly inject their fixture
+> UID/GID.**
 
-and, in the same section, *"A service account is **not created** by this task."*
+This resolves **implementation configuration only**. It changes no normative
+specification text, creates no service account, and performs no name-to-ID
+inference. Increment 2 carries the observable Reds (AC 39, FC 19).
 
-That is a **disjunctive role rule**, not a UID/GID a test can assert. No accepted
-document names the service account, no registry of "approved operator"
-identities exists, and no released code performs an ownership check — there is
-no `chown`, `st_uid`, `st_gid`, `getuid`, or `geteuid` anywhere under `tools/`.
-
-**Not invented here.** Until an operator decides the rule, increment 2:
-
-- **captures and reports** `st_uid`/`st_gid` for the root, record directories,
-  `sequences/`, sequence files, and record files as an observable finding;
-- **never `chown`s, repairs, or corrects** ownership;
-- asserts **no expected owner value**.
-
-Everything mode-related is unaffected and fully testable: `0700` directories,
-`0600` files, never world- or group-readable, and no symlinked store root — all
-determined by the same accepted table.
-
-**Nothing else is blocked.** The Gate 1 terminology question is resolved (§3),
-and every other increment is derivable from ADR-0012, the accepted
-specification, and the enumerated schema checks without inventing architecture.
+**No planning blocker remains.** The Gate 1 terminology question is resolved
+(§3), PB-2 is resolved by the operator decision above, and every increment is
+derivable from ADR-0012, the accepted specification, the enumerated schema
+checks, and that decision without inventing architecture.
 
 ## Explicitly out of scope
 
