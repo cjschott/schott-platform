@@ -51,8 +51,25 @@ REASON_CATEGORIES = (
     "no-candidate",
 )
 
-# The subject publishes its own advertisement, acting as itself.
+# The subject publishes its own advertisement, acting as itself. Naming an
+# approving operator would turn a self-report into an approval, so one is
+# refused rather than accepted and ignored.
 SELF_AUTHORED_KINDS = ("capability-advertisement",)
+
+# A selection is a deterministic read plus its own record. No human operator
+# approves it, so one is not required -- though an operator who triggered the
+# selection may still be named, since the actor is recorded separately.
+UNAPPROVED_KINDS = ("capability-selection",)
+
+# The record field naming the subject that must be the acting identity.
+ACTOR_SUBJECT_FIELDS = {"capability-advertisement": "capability_host_id"}
+
+# The record fields carrying the Trust Plane records a kind relies on. Evidence
+# must reference them; it never restates what they say.
+TRUST_REFERENCE_FIELDS = {
+    "capability-host": ("fabric_node_trust_record_id",),
+    "capability-instance": ("package_trust_record_id", "host_trust_record_id"),
+}
 
 EVIDENCE_FIELDS = (
     "actor",
@@ -84,7 +101,11 @@ def _require_references(value: Any, name: str) -> tuple[str, ...]:
 
 
 def _validate(kind: str, evidence: Any) -> None:
-    """Refuse anything that is not complete, well-formed evidence for `kind`."""
+    """Refuse anything that is not complete, well-formed evidence for `kind`.
+
+    Shape only. Applicability that depends on the record's own fields is
+    checked by `_validate_applicability`, which can see them.
+    """
     if kind not in ID_FIELDS:
         raise FabricError(f"unknown record kind '{kind}'")
     if not isinstance(evidence, Mapping):
@@ -106,6 +127,9 @@ def _validate(kind: str, evidence: Any) -> None:
         if authority is not None:
             raise FabricError(
                 f"a '{kind}' is published by its subject and names no approving authority")
+    elif kind in UNAPPROVED_KINDS:
+        if authority is not None:
+            _require_text(authority, "approving_authority")
     else:
         _require_text(authority, "approving_authority")
 
@@ -134,6 +158,39 @@ def _validate(kind: str, evidence: Any) -> None:
 
     validate_request_id(evidence["request_id"])
     validate_request_digest(evidence["request_digest"])
+
+
+def _validate_applicability(kind: str, record, evidence: Mapping[str, Any]) -> None:
+    """Rules that can only be judged against the complete record.
+
+    Nothing here is duplicated into the evidence: supersession and trust
+    references are read from the fields the record already carries, and the
+    evidence is required to agree with them.
+    """
+    subject_field = ACTOR_SUBJECT_FIELDS.get(kind)
+    if subject_field is not None:
+        subject = getattr(record, subject_field, None)
+        if not isinstance(subject, str) or subject not in evidence["actor"]:
+            raise FabricError(
+                f"a '{kind}' must be published by the subject it advertises")
+
+    if evidence["reason_category"] == "supersession":
+        prior = getattr(record, "supersedes", None)
+        if not isinstance(prior, str) or not prior:
+            raise FabricError(
+                "a superseding record must name the record it supersedes")
+        if prior not in tuple(evidence["causal_references"]):
+            raise FabricError(
+                "a superseding record's evidence must reference the record it supersedes")
+
+    references = tuple(evidence["trust_evidence_references"])
+    for field in TRUST_REFERENCE_FIELDS.get(kind, ()):
+        relied_on = getattr(record, field, None)
+        if not isinstance(relied_on, str) or not relied_on:
+            raise FabricError(f"a '{kind}' must carry {field}")
+        if relied_on not in references:
+            raise FabricError(
+                f"a '{kind}' must reference the trust record named by {field}")
 
 
 def assemble_evidence(kind: str, *, actor: Any, reason_category: Any,
@@ -170,8 +227,17 @@ def assemble_evidence(kind: str, *, actor: Any, reason_category: Any,
     return evidence
 
 
-def validate_record_evidence(kind: str, evidence: Any) -> None:
-    """Refuse a record whose evidence is absent, incomplete, or malformed."""
+def validate_record_evidence(kind: str, record) -> None:
+    """Refuse a record whose evidence is absent, incomplete, or inapplicable.
+
+    Takes the complete record, not an isolated mapping: whether a prior-record
+    reference or a trust reference is required is a property of the record, and
+    a validator that cannot see the record would have to guess.
+    """
+    if kind not in ID_FIELDS:
+        raise FabricError(f"unknown record kind '{kind}'")
+    evidence = getattr(record, "evidence", None)
     if evidence is None:
         raise FabricError(f"a '{kind}' record carries no evidence")
     _validate(kind, evidence)
+    _validate_applicability(kind, record, evidence)

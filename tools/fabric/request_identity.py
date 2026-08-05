@@ -41,6 +41,7 @@ from typing import Any, NamedTuple
 
 from .errors import FabricError
 from .identifiers import ID_FIELDS
+from .models import deep_freeze
 
 # Versioned as part of the operation contract. An unknown version fails closed.
 SUPPORTED_CANONICALISATION = "fabric-canonical/v1"
@@ -78,11 +79,50 @@ REPLAY_CONFLICT = "request_identity_conflict"
 
 
 class ReplayOutcome(NamedTuple):
-    """What a request identity means against the records that already exist."""
+    """What a request identity means against the records that already exist.
+
+    `outcome` carries the original accepted result, deeply frozen. Returning a
+    status and an identity alone would make the caller re-read the store to
+    learn what was decided, which is not returning the original outcome.
+    A conflict carries none: there is no original outcome to report.
+    """
 
     status: str
     record_kind: str | None = None
     record_id: str | None = None
+    outcome: Mapping[str, Any] | None = None
+
+
+def _accepted_outcome(kind: str, record: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The original result, reconstructed from the record's own fields.
+
+    A selection's outcome is not stored as a separate field -- it is readable
+    from what the selection says. A chosen instance means selected; no chosen
+    instance and no candidate considered means there was nothing to choose
+    from; no chosen instance with candidates means every one was excluded.
+    """
+    identifier = record.get(ID_FIELDS[kind])
+    if kind != "capability-selection":
+        return deep_freeze({"outcome": "recorded", "record_id": identifier})
+
+    chosen = record.get("selected_instance_id")
+    considered = record.get("considered_candidates") or ()
+    if chosen:
+        name = "selected"
+    elif not considered:
+        name = "no-candidate"
+    else:
+        name = "refused"
+    return deep_freeze({
+        "outcome": name,
+        "record_id": identifier,
+        "selected_instance_id": chosen,
+        "refusal_reason": record.get("refusal_reason"),
+        "selection_reason": record.get("selection_reason"),
+        "route_id": record.get("route_id"),
+        "route_version": record.get("route_version"),
+        "considered_candidates": tuple(considered),
+    })
 
 
 def validate_request_id(request_id: Any) -> str:
@@ -129,6 +169,34 @@ def _canonical_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
     return canonical
 
 
+_INFINITY = float("inf")
+
+
+def _require_canonical(value: Any) -> None:
+    """Only values the released convention can represent deterministically."""
+    if value is None or isinstance(value, (str, bool)):
+        return
+    if isinstance(value, int):
+        return
+    if isinstance(value, float):
+        if value != value or value == _INFINITY or value == -_INFINITY:
+            raise FabricError("authoritative inputs carry a non-finite number")
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise FabricError("authoritative inputs carry a non-string mapping key")
+            _require_canonical(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _require_canonical(item)
+        return
+    # Named by type, never echoed: the value itself may be anything.
+    raise FabricError(
+        f"authoritative inputs carry an unsupported value of type '{type(value).__name__}'")
+
+
 def compute_request_digest(operation: Any, authoritative_inputs: Any, *,
                            canonicalisation: str = SUPPORTED_CANONICALISATION,
                            digest: str = SUPPORTED_DIGEST) -> str:
@@ -142,14 +210,29 @@ def compute_request_digest(operation: Any, authoritative_inputs: Any, *,
     if not isinstance(authoritative_inputs, Mapping):
         raise FabricError("authoritative inputs must be a mapping")
 
+    for key in authoritative_inputs:
+        if not isinstance(key, str):
+            raise FabricError("authoritative inputs carry a non-string mapping key")
+
+    canonical = _canonical_inputs(authoritative_inputs)
+    _require_canonical(canonical)
+
     payload = {
         "canonicalisation": canonicalisation,
         "digest": digest,
         "operation": operation,
-        "inputs": _canonical_inputs(authoritative_inputs),
+        "inputs": canonical,
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                         default=str).encode("utf-8")
+    try:
+        # No `default=`: a value this encoder cannot represent must be refused,
+        # not rendered. `str()` on an arbitrary object embeds its memory
+        # address, so the same input would digest differently in one process
+        # and across two, and a datetime would collide with its own text form.
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                             allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError):
+        raise FabricError(
+            "authoritative inputs carry a value that cannot be canonicalised") from None
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
@@ -184,9 +267,11 @@ def replay_lookup(store, request_id: Any, request_digest: Any) -> ReplayOutcome:
                 continue
             original = record.get(ID_FIELDS[kind])
             if _same(evidence.get("request_digest"), digest):
-                return ReplayOutcome(REPLAY_EXACT, kind, original)
+                return ReplayOutcome(REPLAY_EXACT, kind, original,
+                                     _accepted_outcome(kind, record))
             # Same accepted request identity, different authoritative inputs.
-            # Nothing is written and the original is left exactly as it is.
+            # Nothing is written, the original is left exactly as it is, and no
+            # outcome is reported -- this request never had one.
             return ReplayOutcome(REPLAY_CONFLICT, kind, original)
 
     # Named for a coordinating test, and a no-op in production.

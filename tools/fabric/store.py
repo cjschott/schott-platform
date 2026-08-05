@@ -273,18 +273,27 @@ class FabricStore(ImmutableStore):
             raise FabricError(str(error)) from None
 
     def write(self, kind: str, record) -> Path:
-        """Persist an accepted record, identified by the field its kind names.
+        """Persist a record, identified by the field its kind names.
 
         The inherited body reads `record.id`, which is right for the Trust
         Plane and wrong here: no accepted fabric record carries one. The
         identity field is looked up in `identifiers.py` rather than inferred
         from the object, so a record that is not what it claims to be is
         refused instead of persisted under a guessed name.
+
+        **C1 owns the final persistence boundary.** C4 and C6 decide whether a
+        governed action is authorised; this decides nothing. But nothing may
+        reach the filesystem without complete, applicable evidence, so the
+        invariant is checked here -- before allocation, before any temporary
+        artefact, before any sequence moves -- rather than trusted to whoever
+        called. A second entry point that skipped it would make the invariant
+        advisory.
         """
         if kind not in ID_FIELDS:
             raise FabricError(f"unknown record kind '{kind}'")
         if getattr(record, "kind", None) != kind:
             raise FabricError(f"a '{kind}' record was not supplied")
+        validate_record_evidence(kind, record)
         identifier = getattr(record, ID_FIELDS[kind])
         try:
             return self.write_atomic(self.path_for(kind, identifier), record.to_dict())
@@ -293,19 +302,6 @@ class FabricStore(ImmutableStore):
 
     def write_record(self, kind: str, record) -> Path:
         """The inherited name, reaching the same guarded path."""
-        return self.write(kind, record)
-
-    def write_accepted(self, kind: str, record) -> Path:
-        """The governed write: a record is accepted only with its evidence.
-
-        The evidence is validated before anything touches the filesystem, so a
-        record whose evidence cannot stand is refused rather than committed and
-        annotated afterwards. Nothing is allocated, no temporary artefact is
-        created, and no sequence advances on the refusal path.
-        """
-        if kind not in ID_FIELDS:
-            raise FabricError(f"unknown record kind '{kind}'")
-        validate_record_evidence(kind, getattr(record, "evidence", None))
         return self.write(kind, record)
 
     def read_record(self, kind: str, identifier: str) -> dict[str, Any]:

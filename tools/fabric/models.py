@@ -96,6 +96,21 @@ def _parse_time(value: Any, name: str) -> datetime:
         raise FabricError(f"{name} is not a readable timestamp") from None
 
 
+def deep_freeze(value: Any) -> Any:
+    """Recursively immutable: mappings become proxies, sequences become tuples.
+
+    Shallow freezing is not freezing. Anything reachable from a frozen record
+    has to be unchangeable, or the record only looks immutable.
+    """
+    if isinstance(value, (dict, MappingProxyType)):
+        return MappingProxyType({str(key): deep_freeze(item)
+                                 for key, item in sorted(value.items(),
+                                                         key=lambda pair: str(pair[0]))})
+    if isinstance(value, (list, tuple)):
+        return tuple(deep_freeze(item) for item in value)
+    return value
+
+
 class FabricRecord:
     """Shared serialisation and refusal behaviour.
 
@@ -116,6 +131,11 @@ class FabricRecord:
     def _freeze_evidence(self) -> None:
         """Evidence is a mapping or it is absent. Nothing else is accepted.
 
+        Frozen all the way down. A proxy around a mutable list would leave a
+        frozen record editable through its own evidence, and a caller who kept
+        a reference to the collection it supplied could still change what the
+        record says after it was constructed.
+
         Absent stays absent rather than becoming an empty mapping, so a record
         written before evidence existed serialises exactly as it always did.
         """
@@ -123,7 +143,7 @@ class FabricRecord:
             return
         if not isinstance(self.evidence, Mapping):
             raise FabricError("evidence must be a mapping")
-        object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
+        object.__setattr__(self, "evidence", deep_freeze(self.evidence))
 
     def _seal(self) -> None:
         for name in self._SEQUENCES:

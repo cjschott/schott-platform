@@ -1013,6 +1013,44 @@ UNTIL = datetime(2026, 8, 6, 9, 0, 0, tzinfo=timezone.utc)
 ORIGIN = {"class": "declared", "source": "operator"}
 
 
+def fixture_evidence(kind):
+    """The evidence every persisted record must carry, written literally.
+
+    Increment 2 proved the physical writer before evidence existed. Increment 4
+    requires C1 to refuse a record without it, so these fixtures now carry the
+    evidence a real record would -- literal, so they stay independent of the
+    assembler under test.
+    """
+    evidence = {
+        "actor": "operator:cschott",
+        "approving_authority": "operator:cschott",
+        "causal_references": [],
+        "trust_evidence_references": [],
+        "reason_category": "declaration",
+        "recorded_at": "2026-08-05T09:00:00+00:00",
+        "request_id": "request-fixture-0001",
+        "request_digest": "sha256:" + "0" * 64,
+    }
+    if kind == "capability-advertisement":
+        # Published by the subject as itself; no human operator approves it.
+        evidence["actor"] = "host:CHOST-0001"
+        evidence["approving_authority"] = None
+        evidence["reason_category"] = "advertisement-registration"
+    elif kind == "capability-selection":
+        evidence["actor"] = "fabric:selection"
+        evidence["approving_authority"] = None
+        evidence["reason_category"] = "selection"
+    elif kind == "capability-host":
+        evidence["reason_category"] = "subject-admission"
+        evidence["trust_evidence_references"] = ["TAUTH-000001"]
+    elif kind == "capability-instance":
+        evidence["reason_category"] = "instance-admission"
+        evidence["trust_evidence_references"] = ["TAUTH-000002", "TAUTH-000001"]
+    elif kind == "capability-route":
+        evidence["reason_category"] = "route-change"
+    return evidence
+
+
 def accepted_records():
     """One of every accepted kind. Identifiers and destinations are literal."""
     return (
@@ -1021,7 +1059,8 @@ def accepted_records():
              capability_id="CAPDEF-0001", name="summarise text",
              description="Reduce a document to its essentials.",
              effect_class="read-only", contract_ids=("CCON-0001",),
-             provenance=ORIGIN)),
+             provenance=ORIGIN,
+             evidence=fixture_evidence("capability-definition"))),
         ("capability-contract", "capability-contracts", "CCON-0001",
          "contract_id", CapabilityContract(
              contract_id="CCON-0001", capability_id="CAPDEF-0001",
@@ -1029,7 +1068,8 @@ def accepted_records():
              determinism_class="deterministic", request_shape={"text": "string"},
              response_shape={"summary": "string"}, failure_modes=("unavailable",),
              resource_requirements={"memory_mb": 512}, compatible_with=(),
-             provenance=ORIGIN)),
+             provenance=ORIGIN,
+             evidence=fixture_evidence("capability-contract"))),
         ("capability-package", "capability-packages", "CPKG-0001",
          "capability_package_id", CapabilityPackage(
              capability_package_id="CPKG-0001", capability_id="CAPDEF-0001",
@@ -1037,21 +1077,24 @@ def accepted_records():
              package_version="1.0.0",
              artifact_reference="oci://registry.invalid/summarise",
              resource_requirements={"memory_mb": 512},
-             trust_domain="schott-platform", provenance=ORIGIN)),
+             trust_domain="schott-platform", provenance=ORIGIN,
+             evidence=fixture_evidence("capability-package"))),
         ("capability-host", "capability-hosts", "CHOST-0001",
          "capability_host_id", CapabilityHost(
              capability_host_id="CHOST-0001", node_identity_reference="node/schai",
              fabric_node_trust_record_id="TAUTH-000001",
              verified_resource_profile={"memory_mb": 8192},
              location_class="on-premises", data_classification_ceiling="internal",
-             availability_intent="available", provenance=ORIGIN)),
+             availability_intent="available", provenance=ORIGIN,
+             evidence=fixture_evidence("capability-host"))),
         ("capability-advertisement", "capability-advertisements", "CADV-000001",
          "advertisement_id", CapabilityAdvertisement(
              advertisement_id="CADV-000001", capability_host_id="CHOST-0001",
              capability_package_id="CPKG-0001", contract_id="CCON-0001",
              satisfied_contract_versions=("1.0.0",),
              advertised_resource_profile={"memory_mb": 512},
-             observed_at=WHEN, valid_until=UNTIL, provenance=ORIGIN)),
+             observed_at=WHEN, valid_until=UNTIL, provenance=ORIGIN,
+             evidence=fixture_evidence("capability-advertisement"))),
         ("capability-instance", "capability-instances", "CINST-000001",
          "instance_id", CapabilityInstance(
              instance_id="CINST-000001", capability_id="CAPDEF-0001",
@@ -1063,13 +1106,15 @@ def accepted_records():
              host_trust_record_id="TAUTH-000001",
              effective_scope={"data_classification": "internal"},
              admitted_at=WHEN, admitted_until=UNTIL,
-             advertisement_id="CADV-000001", provenance=ORIGIN)),
+             advertisement_id="CADV-000001", provenance=ORIGIN,
+             evidence=fixture_evidence("capability-instance"))),
         ("capability-route", "capability-routes", "CROUTE-0001",
          "route_id", CapabilityRoute(
              route_id="CROUTE-0001", route_version=1, capability_id="CAPDEF-0001",
              contract_id="CCON-0001", accepted_contract_versions=("1.0.0",),
              locality="local-only", candidate_instances=("CINST-000001",),
-             data_classification="internal", provenance=ORIGIN)),
+             data_classification="internal", provenance=ORIGIN,
+             evidence=fixture_evidence("capability-route"))),
         ("capability-selection", "capability-selections", "CSEL-000001",
          "selection_id", CapabilitySelection(
              selection_id="CSEL-000001", route_id="CROUTE-0001", route_version=1,
@@ -1077,7 +1122,8 @@ def accepted_records():
              considered_candidates=("CINST-000001",), excluded_candidates=(),
              selected_instance_id="CINST-000001",
              selection_reason="first eligible candidate in declared order",
-             selected_at=WHEN, provenance=ORIGIN)),
+             selected_at=WHEN, provenance=ORIGIN,
+             evidence=fixture_evidence("capability-selection"))),
     )
 
 
@@ -1870,11 +1916,13 @@ fi
 # --- Request identity, digest, and evidence, C7 (increment 4) ----------------
 IDENTITY_OUTPUT="$(python3 - "${ROOT}" <<'IDENTITYPY' 2>&1 || true
 import hashlib
+import inspect
 import json
 import os
 import stat
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -2130,11 +2178,15 @@ def evidence_for(kind, **overrides):
         request_id=REQUEST,
         request_digest=digest,
         causal_references=("CAPDEF-0001",),
-        trust_evidence_references=("TAUTH-000001",),
+        trust_evidence_references=(("TAUTH-000002", "TAUTH-000001")
+                                   if kind == "capability-instance"
+                                   else ("TAUTH-000001",)),
     )
     # An advertisement is published by the subject as itself; naming an
     # approving human operator would turn a self-report into an approval.
-    if kind != "capability-advertisement":
+    if kind == "capability-advertisement":
+        fields["actor"] = "host:CHOST-0001"
+    else:
         fields["approving_authority"] = "operator:cschott"
     fields.update(overrides)
     return assemble_evidence(kind, **fields)
@@ -2197,7 +2249,9 @@ for overrides, description in INVALID_EVIDENCE:
                    f"evidence carrying {description} fails closed")
 
 for kind in RECORD_MODELS:
-    if kind == "capability-advertisement":
+    # An advertisement is self-published and a selection is fabric-derived;
+    # neither is approved by a human operator.
+    if kind in ("capability-advertisement", "capability-selection"):
         continue
     refuses_fabric(lambda k=kind: assemble_evidence(
                        k, actor="operator:cschott", reason_category=KIND_REASONS[k],
@@ -2294,7 +2348,7 @@ DIRECTORIES = {
 with TemporaryDirectory() as tmp:
     store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
     for kind in RECORD_MODELS:
-        written = store.write_accepted(kind, accepted(kind, evidence_for(kind)))
+        written = store.write(kind, accepted(kind, evidence_for(kind)))
         expected_path = Path(tmp) / "fabric" / DIRECTORIES[kind] / f"{IDENTIFIERS[kind]}.yaml"
         check(Path(written) == expected_path,
               f"an accepted {kind} is written to {DIRECTORIES[kind]}/{IDENTIFIERS[kind]}.yaml")
@@ -2332,7 +2386,7 @@ for broken, description in BROKEN_EVIDENCE:
     with TemporaryDirectory() as tmp:
         store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
         before = forensic(Path(tmp) / "fabric")
-        refuses_fabric(lambda b=broken: store.write_accepted(
+        refuses_fabric(lambda b=broken: store.write(
                            "capability-definition",
                            accepted("capability-definition", b)),
                        f"a record carrying {description} is not written")
@@ -2349,7 +2403,7 @@ for field in REQUIRED_EVIDENCE:
         partial = dict(evidence_for("capability-definition"))
         partial.pop(field)
         before = forensic(Path(tmp) / "fabric")
-        refuses_fabric(lambda p=partial: store.write_accepted(
+        refuses_fabric(lambda p=partial: store.write(
                            "capability-definition",
                            accepted("capability-definition", p)),
                        f"a record whose evidence omits '{field}' is not written")
@@ -2364,7 +2418,7 @@ def populated(tmp, request_id=REQUEST, request_digest=None):
     evidence = evidence_for("capability-definition",
                             request_id=request_id,
                             request_digest=request_digest or digest)
-    store.write_accepted("capability-definition",
+    store.write("capability-definition",
                          accepted("capability-definition", evidence))
     return store
 
@@ -2436,7 +2490,7 @@ with TemporaryDirectory() as tmp:
 with TemporaryDirectory() as tmp:
     store = WitnessStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
     first = evidence_for("capability-definition", request_id="request-A")
-    store.write_accepted("capability-definition", accepted("capability-definition", first))
+    store.write("capability-definition", accepted("capability-definition", first))
     with store.request_critical_section("request-B"):
         outcome = replay_lookup(store, "request-B", digest)
     check(outcome.status == REPLAY_NEW,
@@ -2446,7 +2500,7 @@ with TemporaryDirectory() as tmp:
         capability_id="CAPDEF-0002", name="summarise text",
         description="Reduce a document to its essentials.", effect_class="read-only",
         contract_ids=("CCON-0001",), provenance=PROV, evidence=second)
-    store.write_accepted("capability-definition", duplicate)
+    store.write("capability-definition", duplicate)
     check(store.counts()["capability-definition"] == 2,
           "different request identities produce independently allocated records")
 
@@ -2455,7 +2509,7 @@ with TemporaryDirectory() as tmp:
     store = populated(tmp)
     fabric = Path(tmp) / "fabric"
     before = forensic(fabric)
-    refuses_fabric(lambda: store.write_accepted(
+    refuses_fabric(lambda: store.write(
                        "capability-definition",
                        accepted("capability-definition", evidence_for(
                            "capability-definition", request_id="request-Z"))),
@@ -2487,6 +2541,332 @@ for absent in ("admission.py", "eligibility.py", "selection.py", "inspection.py"
           f"increment 4 creates no {absent}")
 check(len(RECORD_MODELS) == 8,
       "increment 4 introduces no ninth persistent record type")
+
+
+# --- 1. Exact replay returns the original accepted outcome (spec §6) --------
+# Defect caught: a replay result carrying only a status and a record identity,
+# so the caller must re-read the store to learn what was originally decided --
+# which is not "returning the original outcome".
+SELECTION_OUTCOMES = (
+    ("selected", "CSEL-000001", "CINST-000001", None, ("CINST-000001",),
+     "first eligible candidate in declared order"),
+    ("refused", "CSEL-000002", None, "none-eligible", ("CINST-000001",),
+     "every candidate was excluded"),
+    ("no-candidate", "CSEL-000003", None, "no-candidate", (),
+     "the route named no candidate"),
+)
+for outcome_name, selection_id, chosen, refusal, candidates, reason in SELECTION_OUTCOMES:
+    with TemporaryDirectory() as tmp:
+        store = WitnessStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        request = f"request-{outcome_name}"
+        selection = RECORD_MODELS["capability-selection"](
+            selection_id=selection_id, route_id="CROUTE-0001", route_version=1,
+            request_class={"data_classification": "internal"},
+            considered_candidates=candidates, excluded_candidates=(),
+            selected_instance_id=chosen, selection_reason=reason,
+            refusal_reason=refusal, selected_at=WHEN, provenance=PROV,
+            evidence=evidence_for("capability-selection", request_id=request))
+        store.write("capability-selection", selection)
+        fabric = Path(tmp) / "fabric"
+        before = forensic(fabric)
+        with store.request_critical_section(request):
+            replayed = replay_lookup(store, request, digest)
+        check(replayed.status == REPLAY_EXACT,
+              f"a {outcome_name} CSEL replays exactly")
+        check(replayed.record_id == selection_id,
+              f"a {outcome_name} CSEL replay returns the original identity {selection_id}")
+        original = replayed.outcome
+        check(original is not None and original.get("outcome") == outcome_name,
+              f"a {outcome_name} CSEL replay returns the original '{outcome_name}' outcome")
+        check(original is not None and original.get("selected_instance_id") == chosen,
+              f"a {outcome_name} CSEL replay returns the original selected instance")
+        check(original is not None and original.get("refusal_reason") == refusal,
+              f"a {outcome_name} CSEL replay returns the original refusal reason")
+        check(original is not None and original.get("route_id") == "CROUTE-0001"
+              and original.get("route_version") == 1,
+              f"a {outcome_name} CSEL replay returns the original route and version")
+        refuses_immutably = True
+        try:
+            original["outcome"] = "tampered"
+            refuses_immutably = False
+        except TypeError:
+            pass
+        check(refuses_immutably,
+              f"a {outcome_name} CSEL replay outcome cannot be mutated by its caller")
+        check(forensic(fabric) == before,
+              f"replaying a {outcome_name} CSEL allocates nothing and writes nothing")
+        check(store.entries == 1 and store.deepest == 1,
+              f"replaying a {outcome_name} CSEL enters no critical section of its own")
+
+# A non-selection record replays with its identity and a recorded outcome.
+with TemporaryDirectory() as tmp:
+    store = populated(tmp)
+    with store.request_critical_section(REQUEST):
+        replayed = replay_lookup(store, REQUEST, digest)
+    check(replayed.outcome is not None and replayed.outcome.get("outcome") == "recorded",
+          "a non-selection record replays as a recorded outcome")
+    check(replayed.outcome.get("record_id") == "CAPDEF-0001",
+          "a non-selection replay outcome names the original record identity")
+
+# Conflicting reuse fabricates no original outcome.
+with TemporaryDirectory() as tmp:
+    store = populated(tmp)
+    other = compute_request_digest("declare-capability", {"capability_id": "CAPDEF-0002"})
+    with store.request_critical_section(REQUEST):
+        conflicted = replay_lookup(store, REQUEST, other)
+    check(conflicted.status == REPLAY_CONFLICT,
+          "conflicting reuse still fails closed as request_identity_conflict")
+    check(conflicted.outcome is None,
+          "conflicting reuse exposes no fabricated original outcome")
+
+# --- 2. C1 enforces evidence on its own persistence boundary ----------------
+# Defect caught: two public meanings of an accepted write, one of which
+# persists a record with no evidence at all.
+check(not hasattr(FabricStore, "write_accepted"),
+      "no separate write_accepted() persistence path exists")
+BYPASS = [name for name in dir(FabricStore)
+          if name not in ("write", "write_record", "write_atomic")
+          and "write" in name and not name.startswith("__")]
+check(BYPASS == [], f"no alternate persistence entry point exists (found {BYPASS})")
+
+evidenceless = accepted("capability-definition", None)
+for entry_point in ("write", "write_record"):
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        fabric = Path(tmp) / "fabric"
+        before = forensic(fabric)
+        refuses_fabric(lambda e=entry_point: getattr(store, e)(
+                           "capability-definition", evidenceless),
+                       f"{entry_point}() refuses a record carrying no evidence")
+        check(forensic(fabric) == before,
+              f"{entry_point}() creates no record, temporary, or sequence state on refusal")
+        check(store.counts()["capability-definition"] == 0,
+              f"{entry_point}() persists nothing when evidence is missing")
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        broken = dict(evidence_for("capability-definition"))
+        broken["reason_category"] = "whatever-happened"
+        before = forensic(Path(tmp) / "fabric")
+        refuses_fabric(lambda e=entry_point, b=broken: getattr(store, e)(
+                           "capability-definition",
+                           accepted("capability-definition", b)),
+                       f"{entry_point}() refuses a record carrying invalid evidence")
+        check(forensic(Path(tmp) / "fabric") == before,
+              f"{entry_point}() leaves nothing behind when evidence is invalid")
+
+# --- 3. Applicability is assessed against the complete record ---------------
+# Defect caught: validating an isolated evidence mapping, which cannot see the
+# supersession or trust-reference fields the record itself already carries.
+check(list(inspect.signature(validate_record_evidence).parameters) == ["kind", "record"],
+      "record evidence is validated against the complete record")
+
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    selection = RECORD_MODELS["capability-selection"](
+        selection_id="CSEL-000004", route_id="CROUTE-0001", route_version=1,
+        request_class={}, considered_candidates=("CINST-000001",),
+        excluded_candidates=(), selected_instance_id="CINST-000001",
+        selection_reason="first eligible", selected_at=WHEN, provenance=PROV,
+        evidence=assemble_evidence(
+            "capability-selection", actor="fabric:selection",
+            reason_category="selection", recorded_at=WHEN, request_id=REQUEST,
+            request_digest=digest, causal_references=("CROUTE-0001",),
+            trust_evidence_references=()))
+    store.write("capability-selection", selection)
+    check(store.counts()["capability-selection"] == 1,
+          "a CSEL is accepted with a requesting actor and no human approving authority")
+refuses_fabric(lambda: assemble_evidence(
+                   "capability-selection", actor="", reason_category="selection",
+                   recorded_at=WHEN, request_id=REQUEST, request_digest=digest),
+               "a CSEL without a requesting actor fails closed")
+refuses_fabric(lambda: assemble_evidence(
+                   "capability-advertisement", actor="", reason_category="advertisement-registration",
+                   recorded_at=WHEN, request_id=REQUEST, request_digest=digest),
+               "a CADV without a publishing subject as actor fails closed")
+
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    fabric = Path(tmp) / "fabric"
+    before = forensic(fabric)
+    advertisement = accepted("capability-advertisement",
+                             dict(evidence_for("capability-advertisement"),
+                                  actor="host:CHOST-9999"))
+    refuses_fabric(lambda: store.write("capability-advertisement", advertisement),
+                   "a CADV whose actor is not its advertising subject fails closed")
+    check(forensic(fabric) == before,
+          "an inapplicable CADV actor is refused before any filesystem mutation")
+
+SUPERSESSION = (
+    ("capability-definition", "CAPDEF-0002", "CAPDEF-0001"),
+    ("capability-package", "CPKG-0002", "CPKG-0001"),
+)
+for kind, identifier, prior in SUPERSESSION:
+    field = {"capability-definition": "capability_id",
+             "capability-package": "capability_package_id"}[kind]
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        fabric = Path(tmp) / "fabric"
+        base = accepted(kind, evidence_for(kind))
+        naming = dict(evidence_for(kind), reason_category="supersession")
+        without_prior = replace(base, evidence=naming, **{field: identifier})
+        before = forensic(fabric)
+        refuses_fabric(lambda r=without_prior, k=kind: store.write(k, r),
+                       f"a superseding {kind} without its prior record reference fails closed")
+        check(forensic(fabric) == before,
+              f"a superseding {kind} missing its prior reference mutates nothing")
+        inconsistent = replace(
+            base, evidence=dict(naming, causal_references=["CAPDEF-0003"]),
+            supersedes=prior, **{field: identifier})
+        refuses_fabric(lambda r=inconsistent, k=kind: store.write(k, r),
+                       f"a superseding {kind} whose evidence disagrees with its "
+                       "supersedes field fails closed")
+        consistent = replace(
+            base, evidence=dict(naming, causal_references=[prior]),
+            supersedes=prior, **{field: identifier})
+        store.write(kind, consistent)
+        check(store.counts()[kind] == 1,
+              f"a superseding {kind} naming its prior record is accepted")
+
+TRUST_REQUIRED = (
+    ("capability-host", ("TAUTH-000001",), "its host trust record"),
+    ("capability-instance", ("TAUTH-000002", "TAUTH-000001"),
+     "its package and host trust records"),
+)
+for kind, references, description in TRUST_REQUIRED:
+    with TemporaryDirectory() as tmp:
+        store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        fabric = Path(tmp) / "fabric"
+        before = forensic(fabric)
+        stripped = accepted(kind, dict(evidence_for(kind),
+                                       trust_evidence_references=[]))
+        refuses_fabric(lambda r=stripped, k=kind: store.write(k, r),
+                       f"a {kind} that does not reference {description} fails closed")
+        check(forensic(fabric) == before,
+              f"a {kind} missing {description} is refused before any mutation")
+        for omitted in references:
+            partial = [r for r in references if r != omitted]
+            record = accepted(kind, dict(evidence_for(kind),
+                                         trust_evidence_references=partial))
+            refuses_fabric(lambda r=record, k=kind: store.write(k, r),
+                           f"a {kind} omitting the trust reference {omitted} fails closed")
+        store.write(kind, accepted(kind, dict(evidence_for(kind),
+                                              trust_evidence_references=list(references))))
+        check(store.counts()[kind] == 1,
+              f"a {kind} referencing {description} is accepted")
+
+with TemporaryDirectory() as tmp:
+    store = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    declaration = accepted("capability-definition",
+                           dict(evidence_for("capability-definition"),
+                                trust_evidence_references=[]))
+    store.write("capability-definition", declaration)
+    check(store.counts()["capability-definition"] == 1,
+          "a declaration requiring no trust evidence accepts an empty trust reference collection")
+    stored = yaml.safe_load(
+        (Path(tmp) / "fabric" / "capability-definitions" / "CAPDEF-0001.yaml")
+        .read_text(encoding="utf-8"))
+    body = json.dumps(stored, default=str).lower()
+    check(not any(word in body for word in
+                  ("trusted", "restricted", "revoked", "quarantined", "signature", "standing")),
+          "trust content is referenced by identifier and never copied into the record")
+
+# --- 4. Evidence on a frozen record is deeply immutable ---------------------
+# Defect caught: a shallow MappingProxyType whose nested lists stay mutable, so
+# a frozen record can be edited after construction through its own evidence.
+with TemporaryDirectory() as tmp:
+    supplied_causal = ["CAPDEF-0001"]
+    supplied_trust = ["TAUTH-000001"]
+    assembled = assemble_evidence(
+        "capability-definition", actor="operator:cschott",
+        approving_authority="operator:cschott", reason_category="declaration",
+        recorded_at=WHEN, request_id=REQUEST, request_digest=digest,
+        causal_references=supplied_causal, trust_evidence_references=supplied_trust)
+    record = accepted("capability-definition", assembled)
+    first = json.dumps(record.to_dict(), sort_keys=True, default=str)
+
+    for field in ("causal_references", "trust_evidence_references"):
+        held = record.evidence[field]
+        mutated = True
+        try:
+            held.append("CAPDEF-9999")
+            mutated = False
+        except AttributeError:
+            pass
+        check(mutated, f"a frozen record's evidence '{field}' cannot be appended to")
+    replaced = True
+    try:
+        record.evidence["actor"] = "operator:someone-else"
+        replaced = False
+    except TypeError:
+        pass
+    check(replaced, "a frozen record's evidence mapping cannot be reassigned")
+
+    supplied_causal.append("CAPDEF-8888")
+    supplied_trust.append("TAUTH-999999")
+    assembled["reason_category"] = "withdrawal"
+    check(json.dumps(record.to_dict(), sort_keys=True, default=str) == first,
+          "mutating the caller's collections after construction cannot change the record")
+    check(json.dumps(record.to_dict(), sort_keys=True, default=str) == first,
+          "repeated to_dict() output stays byte-equivalent")
+    check(isinstance(record.to_dict()["evidence"]["causal_references"], list),
+          "serialisation still produces the accepted JSON/YAML-compatible shapes")
+
+    unchanged = ["CAPDEF-0001"]
+    snapshot_input = list(unchanged)
+    refuses_fabric(lambda: assemble_evidence(
+                       "capability-definition", actor="", approving_authority="operator:c",
+                       reason_category="declaration", recorded_at=WHEN,
+                       request_id=REQUEST, request_digest=digest,
+                       causal_references=unchanged, trust_evidence_references=[]),
+                   "a refused assembly still fails closed")
+    check(unchanged == snapshot_input,
+          "validation never mutates the caller's input")
+
+# --- 5. Unsupported canonical input fails closed (AC 82) --------------------
+# Defect caught: json.dumps(default=str), which turns an unsupported value into
+# an implementation-defined string -- one that carries a memory address, so the
+# same input digests differently in the same process and across processes.
+class Unsupported:
+    pass
+
+
+held_a = Unsupported()
+held_b = Unsupported()
+UNCANONICAL = (
+    (held_a, "an arbitrary object"),
+    ({1, 2, 3}, "a set"),
+    (frozenset({1}), "a frozenset"),
+    (float("nan"), "a NaN"),
+    (float("inf"), "an infinity"),
+    (float("-inf"), "a negative infinity"),
+    (WHEN, "a datetime"),
+    (b"bytes", "raw bytes"),
+    (object(), "a bare object"),
+)
+for value, description in UNCANONICAL:
+    refuses_fabric(lambda v=value: compute_request_digest(OPERATION, {"value": v}),
+                   f"authoritative input carrying {description} fails closed")
+refuses_fabric(lambda: compute_request_digest(OPERATION, {"nested": {"deep": {1, 2}}}),
+               "an unsupported value nested inside a mapping fails closed")
+refuses_fabric(lambda: compute_request_digest(OPERATION, {"nested": [1, {2, 3}]}),
+               "an unsupported value nested inside a sequence fails closed")
+refuses_fabric(lambda: compute_request_digest(OPERATION, {1: "int key"}),
+               "a non-string mapping key fails closed")
+refuses_fabric(lambda: compute_request_digest(OPERATION, {"nested": {2: "int key"}}),
+               "a nested non-string mapping key fails closed")
+
+# Supported JSON values keep the released convention exactly.
+SUPPORTED = {"text": "value", "count": 7, "ratio": 1.5, "flag": True,
+             "absent": None, "list": ["a", "b"], "nested": {"k": "v"}}
+supported_digest = compute_request_digest(OPERATION, SUPPORTED)
+supported_expected = json.dumps(
+    {"canonicalisation": SUPPORTED_CANONICALISATION, "digest": SUPPORTED_DIGEST,
+     "operation": OPERATION, "inputs": SUPPORTED},
+    sort_keys=True, separators=(",", ":")).encode("utf-8")
+check(supported_digest == f"sha256:{hashlib.sha256(supported_expected).hexdigest()}",
+      "supported canonical values keep the released sorted-key, stable-separator convention")
+check(compute_request_digest(OPERATION, SUPPORTED) == supported_digest,
+      "supported canonical values digest identically on repetition")
 
 print(f"__FAILURES__={failures}")
 IDENTITYPY
