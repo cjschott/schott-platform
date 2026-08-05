@@ -1641,6 +1641,154 @@ for absent in ("inspection.py", "cli.py", "eligibility.py", "selection.py",
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 3 creates no {absent}")
 
+
+# --- Every exact file passes the store's guard (AC 39, FC 19) ----------------
+# Defect caught: enumerating a directory the store guarded and then reading
+# each entry directly. Ownership and containment are then enforced on the
+# directory but not on the record or sequence file actually opened -- weaker
+# than FabricStore.validate() and list_records(), which guard the exact path.
+from tools.fabric.errors import FabricError  # noqa: E402
+
+
+class RefusingStore(FabricStore):
+    """The real store, with designated exact paths refused by its own guard.
+
+    Ownership cannot be varied without privilege, so the refusal the accepted
+    guard raises for a foreign-owned inode is raised here for a named path
+    instead. Nothing else changes: every path not designated still goes
+    through FabricStore._guard_path unmodified. If the validator never asks
+    the guard about a file, the refusal never fires and the assertion fails --
+    which is exactly what must be proven.
+    """
+
+    def refuse(self, *names):
+        self._refused = frozenset(names)
+        return self
+
+    def _guard_path(self, path, description):
+        if Path(path).name in getattr(self, "_refused", frozenset()):
+            raise FabricError(f"{description} is not owned by the supplied uid/gid")
+        return super()._guard_path(path, description)
+
+
+def refusing(tmp, *names):
+    """A consistent store whose accepted guard refuses the named exact paths."""
+    fabric = Path(tmp) / "fabric"
+    store = RefusingStore(fabric, expected_uid=UID, expected_gid=GID)
+    for kind, identifier, fields in CONSISTENT:
+        path = fabric / DIRS[kind] / f"{identifier}.yaml"
+        path.write_text(serialise(kind, fields), encoding="utf-8")
+        path.chmod(0o600)
+        sequence = fabric / "sequences" / f"{kind}.seq"
+        sequence.write_text("1\n", encoding="utf-8")
+        sequence.chmod(0o600)
+    store.refuse(*names)
+    return store, fabric
+
+
+def forensic(base):
+    """Path inventory including inode identity and ownership, not just bytes."""
+    entries = {}
+    for path in sorted(base.rglob("*")):
+        info = path.lstat()
+        entries[str(path.relative_to(base))] = (
+            stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode),
+            info.st_uid, info.st_gid, info.st_ino, info.st_mtime_ns, info.st_size,
+            path.read_bytes() if stat.S_ISREG(info.st_mode) else b"")
+    return entries
+
+
+with TemporaryDirectory() as tmp:
+    store, fabric = refusing(tmp, "CAPDEF-0001.yaml")
+    before = forensic(fabric)
+    report = reports(store, "a refused record file becomes a finding")
+    if report is not None:
+        ok("a refused record file becomes a finding")
+        check(named(report, "CAPDEF-0001.yaml"),
+              "a record refused by the exact-path guard is reported as a finding")
+        # If the refused record had been read anyway it would still resolve the
+        # references that point at it. It must not.
+        check(any("CCON-0001.yaml" in str(finding) and "CAPDEF-0001" in str(finding)
+                  for finding in report.findings),
+              "a refused record is not parsed, so a reference to it stops resolving")
+        check(tuple(report.findings) == tuple(sorted(report.findings)),
+              "findings over a refused record are returned in sorted order")
+        check(tuple(validate_store(store).findings) == tuple(report.findings),
+              "findings over a refused record are identical across repeated runs")
+    check(forensic(fabric) == before,
+          "refusing a record file changes no byte, mode, owner, inode, or path")
+
+with TemporaryDirectory() as tmp:
+    store, fabric = refusing(tmp, "capability-definition.seq")
+    before = forensic(fabric)
+    report = reports(store, "a refused sequence file becomes a finding")
+    if report is not None:
+        ok("a refused sequence file becomes a finding")
+        check(named(report, "capability-definition.seq"),
+              "a sequence file refused by the exact-path guard is reported as a finding")
+        check(tuple(validate_store(store).findings) == tuple(report.findings),
+              "findings over a refused sequence file are identical across repeated runs")
+    check(forensic(fabric) == before,
+          "refusing a sequence file changes no byte, mode, owner, inode, or path")
+
+# --- AC 39: a mode mismatch is reported and never corrected ------------------
+# Defect caught: validation that reads a record whose mode was widened without
+# saying so, or that quietly restores the mode it expected.
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    widened = fabric / "capability-definitions" / "CAPDEF-0001.yaml"
+    widened.chmod(0o644)
+    loosened = fabric / "sequences" / "capability-contract.seq"
+    loosened.chmod(0o640)
+    before = forensic(fabric)
+    report = reports(store, "a mode mismatch becomes a finding")
+    if report is not None:
+        ok("a mode mismatch becomes a finding")
+        check(named(report, "CAPDEF-0001.yaml"),
+              "a record file whose mode is not 0600 is reported as a finding")
+        check(named(report, "capability-contract.seq"),
+              "a sequence file whose mode is not 0600 is reported as a finding")
+    check(stat.S_IMODE(widened.lstat().st_mode) == 0o644,
+          "a wrong-mode record is left at the mode it was found with")
+    check(stat.S_IMODE(loosened.lstat().st_mode) == 0o640,
+          "a wrong-mode sequence file is left at the mode it was found with")
+    check(forensic(fabric) == before,
+          "reporting a mode mismatch changes no byte, mode, owner, inode, or path")
+
+# --- Undecodable bytes are a finding, not a UnicodeDecodeError ---------------
+# Defect caught: read_text() raising UnicodeDecodeError, which is a ValueError
+# and not an OSError, so a record holding invalid UTF-8 escapes validation
+# entirely instead of being reported.
+INVALID_UTF8 = b"capability_id: \xff\xfe\x00 not utf-8\n"
+with TemporaryDirectory() as tmp:
+    store, fabric = built(tmp)
+    undecodable = fabric / "capability-definitions" / "CAPDEF-0014.yaml"
+    undecodable.write_bytes(INVALID_UTF8)
+    undecodable.chmod(0o600)
+    broken_sequence = fabric / "sequences" / "capability-host.seq"
+    broken_sequence.write_bytes(INVALID_UTF8)
+    broken_sequence.chmod(0o600)
+    before = forensic(fabric)
+    report = reports(store, "undecodable bytes become a finding rather than an exception")
+    if report is not None:
+        ok("undecodable bytes become a finding rather than an exception")
+        check(named(report, "CAPDEF-0014.yaml"),
+              "a record file that is not valid UTF-8 is reported as a finding")
+        check(named(report, "capability-host.seq"),
+              "a sequence file that is not valid UTF-8 is reported as a finding")
+        check(not any("\\xff" in str(finding) or "0xff" in str(finding)
+                      or "utf-8 not" in str(finding) or "byte 0x" in str(finding)
+                      for finding in report.findings),
+              "the finding names the file without quoting the bytes it could not decode")
+        check(tuple(report.findings) == tuple(sorted(report.findings)),
+              "findings over undecodable bytes are returned in sorted order")
+        check(tuple(validate_store(store).findings) == tuple(report.findings),
+              "findings over undecodable bytes are identical across repeated runs")
+    check(undecodable.read_bytes() == INVALID_UTF8,
+          "an undecodable record keeps the exact bytes it was found with")
+    check(forensic(fabric) == before,
+          "an undecodable file is not repaired, removed, rewritten, or quarantined")
+
 print(f"__FAILURES__={failures}")
 VALIDATORPY
 )"

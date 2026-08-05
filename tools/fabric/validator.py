@@ -30,12 +30,14 @@ no eligibility, chooses nothing, and presents nothing.
 
 from __future__ import annotations
 
+import stat
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
 
 import yaml
 
+from ..common.immutable_store import FILE_MODE
 from .errors import FabricError
 from .identifiers import ID_FIELDS
 from .models import RECORD_MODELS
@@ -128,8 +130,17 @@ def _read_entries(store, kind: str, findings: list[str]) -> tuple[list, int]:
 
     records = []
     for entry in entries:
+        # The link check runs on the unresolved path and comes first: a link is
+        # named, never followed, and never handed to anything that would open it.
         if entry.is_symlink():
             findings.append(f"{entry.name}: is a symbolic link, not a record")
+            continue
+        # The exact file, not merely the directory holding it. Guarding the
+        # directory says nothing about who owns the inode about to be read.
+        try:
+            store._guard_path(entry, f"record '{entry.name}'")
+        except FabricError as error:
+            findings.append(f"{entry.name}: {error}")
             continue
         if entry.suffix == ".tmp":
             findings.append(f"{entry.name}: partial write left behind")
@@ -137,14 +148,29 @@ def _read_entries(store, kind: str, findings: list[str]) -> tuple[list, int]:
         if entry.suffix != ".yaml":
             findings.append(f"{entry.name}: is not a record file")
             continue
+        findings.extend(_mode_findings(entry))
         records.append(entry)
     return records, len(records)
+
+
+def _mode_findings(path) -> list[str]:
+    """A mode other than the released one is reported, never corrected."""
+    mode = stat.S_IMODE(path.lstat().st_mode)
+    if mode == FILE_MODE:
+        return []
+    return [f"{path.name}: has mode {oct(mode)}, not {oct(FILE_MODE)}"]
 
 
 def _load(path, findings: list[str]) -> Any:
     """The stored mapping, or None with the reason already recorded."""
     try:
         text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # UnicodeDecodeError is a ValueError, not an OSError, so it would
+        # otherwise escape as a crash. Its message quotes the offending bytes;
+        # the filename is the whole finding.
+        findings.append(f"{path.name}: is not valid UTF-8")
+        return None
     except OSError as error:
         findings.append(f"{path.name}: could not be read ({error.strerror})")
         return None
@@ -236,6 +262,12 @@ def _sequence_findings(store, identifiers: Mapping[str, set[str]]) -> list[str]:
         if path.is_symlink():
             findings.append(f"{name}: is a symbolic link, not a sequence file")
             continue
+        # The exact sequence file, the same way allocate_id() guards it.
+        try:
+            store._guard_path(path, f"sequence file for '{kind}'")
+        except FabricError as error:
+            findings.append(f"{name}: {error}")
+            continue
         try:
             raw = path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
@@ -243,9 +275,13 @@ def _sequence_findings(store, identifiers: Mapping[str, set[str]]) -> list[str]:
                 findings.append(
                     f"{name}: is absent although {highest} identifier(s) are in use")
             continue
+        except UnicodeDecodeError:
+            findings.append(f"{name}: is not valid UTF-8")
+            continue
         except OSError as error:
             findings.append(f"{name}: could not be read ({error.strerror})")
             continue
+        findings.extend(_mode_findings(path))
         if not raw.isdigit():
             findings.append(f"{name}: does not hold a sequence number")
             continue
