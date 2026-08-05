@@ -1386,14 +1386,16 @@ assert_contains "${CI_WF}" 'pull_request:' "ci triggers on pull_request"
 assert_contains "${CI_WF}" '^concurrency:' "ci uses concurrency cancellation"
 assert_contains "${CI_WF}" 'bash -n scripts/\*\.sh' "ci runs shell syntax check"
 assert_contains "${CI_WF}" 'bash -n tests/\*\.sh' "ci syntax-checks every test file"
-# --- v0.9.5 Distributed Capability Fabric: architecture only -----------------
-# No runtime package of any kind may appear. Each name is a different way the
-# same line gets crossed, so each is checked rather than inferred from one.
-for fabric_pkg in tools/fabric tools/capability tools/scheduler tools/placement \
+# --- Distributed Capability Fabric: only the ENG-0004 package may exist ------
+# v0.9.5 defined the Fabric as architecture only. ENG-0004 implements the
+# runtime, so `tools/fabric` is now permitted -- and nothing else is. Each name
+# is a different way the same line gets crossed, so each is checked rather than
+# inferred from one.
+for fabric_pkg in tools/capability tools/scheduler tools/placement \
                   tools/clustering tools/routing tools/health tools/discovery \
                   tools/lease tools/admission tools/capability_fabric; do
   if [[ -d "${ROOT}/${fabric_pkg}" ]]; then
-    fail "v0.9.5 is architecture only; ${fabric_pkg} must not exist"
+    fail "only the ENG-0004 fabric package may exist; ${fabric_pkg} must not"
   else
     pass "no fabric runtime package: ${fabric_pkg}"
   fi
@@ -1903,7 +1905,7 @@ done
 # v0.9.3 is the release that implements it, so the runtime is now expected --
 # and the Fabric, enrollment, and capability packages remain forbidden. The
 # boundary moved by one release; it did not dissolve.
-for trust_impl in tools/fabric tools/capability tools/enrollment; do
+for trust_impl in tools/capability tools/enrollment; do
   if [[ -e "${ROOT}/${trust_impl}" ]]; then
     fail "no trust implementation belongs in the architecture sprint: ${trust_impl}"
   else
@@ -1925,8 +1927,9 @@ for trust_runtime_doc in runtime-overview root-authority-operations \
   assert_file "docs/trust/${trust_runtime_doc}.md"
 done
 
-# The Fabric stays blocked. Trust runtime does not smuggle it in.
-for still_forbidden in tools/fabric tools/capability tools/enrollment; do
+# The trust runtime did not smuggle the Fabric in. `tools/fabric` arrives with
+# ENG-0004 and its own accepted plan; these names still may not.
+for still_forbidden in tools/capability tools/enrollment; do
   if [[ -e "${ROOT}/${still_forbidden}" ]]; then
     fail "v0.9.3 implements trust only: ${still_forbidden} must not exist"
   else
@@ -1942,8 +1945,9 @@ assert_file "tools/trust/gateway.py"
 assert_file "tools/trust/policy.py"
 assert_file "docs/trust/trust-migration.md"
 
-# The Fabric stays out. This sprint unifies trust; it does not begin placement.
-for still_forbidden in tools/fabric tools/capability tools/clustering tools/scheduler; do
+# That sprint unified trust; it did not begin placement. `tools/fabric` arrives
+# with ENG-0004; placement and clustering still may not.
+for still_forbidden in tools/capability tools/clustering tools/scheduler; do
   if [[ -e "${ROOT}/${still_forbidden}" ]]; then
     fail "v0.9.4 migrates trust only: ${still_forbidden} must not exist"
   else

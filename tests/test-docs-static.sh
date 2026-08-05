@@ -799,12 +799,13 @@ assert_contains "${ROADMAP}" 'No machine is Kyri' "roadmap states no machine is 
 assert_contains "${ROADMAP}" 'governed core' \
   "roadmap defines Kyri as the governed core and its contracts"
 
-# v0.9.5 is a reservation only in this release.
+# The roadmap reserved v0.9.5; ENG-0004 implements the Fabric runtime, so
+# `tools/fabric` is expected. Capability execution is ENG-0005 and stays out.
 refute_contains_docs() {
-  if [[ -d "${ROOT}/tools/fabric" ]] || [[ -d "${ROOT}/tools/capability" ]]; then
-    fail "v0.9.5 is a roadmap reservation; no fabric implementation belongs here"
+  if [[ -d "${ROOT}/tools/capability" ]]; then
+    fail "capability execution is ENG-0005; no implementation belongs here"
   else
-    pass "v0.9.5 remains a reservation with no implementation"
+    pass "capability execution remains unimplemented"
   fi
 }
 refute_contains_docs
@@ -1108,8 +1109,9 @@ for example in "Fabric-eligible.*[Hh]ealth unknown" \
     "worked examples cover: ${example}"
 done
 
-# Architecture defines nothing that runs.
-for premature in tools/health tools/fabric tools/capability tools/monitor \
+# ADR-0013 architecture defines nothing that runs. `tools/fabric` is released
+# by ENG-0004; the health-runtime names stay forbidden.
+for premature in tools/health tools/capability tools/monitor \
                  tools/heartbeat tools/probe tools/telemetry; do
   if [[ -e "${ROOT}/${premature}" ]]; then
     fail "v0.9.6 is architecture only; ${premature} must not exist"

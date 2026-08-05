@@ -192,11 +192,13 @@ for ontology in entity-types relationship-types; do
     "${ontology} hardcodes no host or hardware model"
 done
 
-# --- No runtime, no networking, no execution ---------------------------------
-for forbidden_dir in tools/fabric tools/capability tools/scheduler tools/placement \
+# --- Only the ENG-0004 fabric package, no networking, no execution -----------
+# ADR-0012 remains architecture. ENG-0004 implements the fabric runtime, so
+# `tools/fabric` is permitted; every other runtime package still is not.
+for forbidden_dir in tools/capability tools/scheduler tools/placement \
                      tools/clustering tools/routing; do
   if [[ -d "${ROOT}/${forbidden_dir}" ]]; then
-    fail "architecture only; ${forbidden_dir} must not exist"
+    fail "only the ENG-0004 fabric package may exist; ${forbidden_dir} must not"
   else
     pass "no implementation directory: ${forbidden_dir}"
   fi
@@ -768,14 +770,15 @@ done
 assert_contains "${ADR}" '[Rr]outing outcomes|routing outcome' \
   "ADR-0012 forbids the Trust Plane using routing outcomes as evidence"
 
-# --- No runtime of any kind --------------------------------------------------
+# --- No runtime beyond the ENG-0004 fabric package ---------------------------
 # Named individually because each is a different way the same line gets
-# crossed, and a single directory check would miss most of them.
-for forbidden_dir in tools/fabric tools/capability tools/scheduler tools/placement \
+# crossed, and a single directory check would miss most of them. `tools/fabric`
+# is released by ENG-0004; the rest stay forbidden.
+for forbidden_dir in tools/capability tools/scheduler tools/placement \
                      tools/clustering tools/routing tools/health tools/discovery \
                      tools/lease tools/admission; do
   if [[ -d "${ROOT}/${forbidden_dir}" ]]; then
-    fail "architecture only; ${forbidden_dir} must not exist"
+    fail "only the ENG-0004 fabric package may exist; ${forbidden_dir} must not"
   else
     pass "no implementation directory: ${forbidden_dir}"
   fi

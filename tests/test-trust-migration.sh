@@ -102,8 +102,10 @@ assert_absent_in "tools/trust" \
   '(def[[:space:]]+(remediate|repair|restore_trust)_?|auto_remediate|auto_recover)' \
   "the migration introduces no remediation or recovery path"
 
-# --- The Fabric stays out ----------------------------------------------------
-for forbidden in tools/fabric tools/capability tools/clustering tools/scheduler; do
+# --- Placement stays out -----------------------------------------------------
+# That sprint unified trust. `tools/fabric` arrives with ENG-0004; capability
+# execution, clustering, and scheduling still may not.
+for forbidden in tools/capability tools/clustering tools/scheduler; do
   if [[ -e "${ROOT}/${forbidden}" ]]; then
     fail "v0.9.4 migrates trust only: ${forbidden} must not exist"
   else

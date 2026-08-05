@@ -171,6 +171,12 @@ jobs:
       - name: Trust runtime tests
         run: bash tests/test-trust-runtime.sh
 
+      # Builds synthetic fabric records in memory and destroys nothing because
+      # it writes nothing. No network, no SSH, no subprocess from library code,
+      # no Docker, no secrets file of any kind, and no store of any kind.
+      - name: Fabric runtime tests
+        run: bash tests/test-fabric-runtime.sh
+
       # Drives the trust gateway directly. Asserts one decision point and that
       # every migrated allow and deny is unchanged from v0.9.3.
       - name: Trust migration tests

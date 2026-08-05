@@ -120,6 +120,10 @@ code, and selects no release version.
 |---|---|---|
 | `tests/test-static.sh` | 1 | **four** `tools/fabric` guard blocks (lines ~1392, ~1906, ~1929, ~1946) |
 | `tests/test-capability-fabric.sh` | 1 | **two** `tools/fabric` guard blocks (lines ~196, ~774) |
+| `tests/test-trust-plane.sh` | 1 | **three** `tools/fabric` guard blocks (lines ~64, ~226, ~318) |
+| `tests/test-docs-static.sh` | 1 | **two** `tools/fabric` guard blocks (lines ~804, ~1112) |
+| `tests/test-capability-health.sh` | 1 | **one** `tools/fabric` guard block (line ~215) |
+| `tests/test-trust-migration.sh` | 1 | **one** `tools/fabric` guard block (line ~106) |
 | `.github/workflows/ci.yml` | 1 | run the new suite |
 | `tools/dev/run-validation.sh` | 1 | wire the suite; `TOTAL_STEPS` 33 → **34**; quick-mode omission list |
 | `tools/common/immutable_store.py` | 2 | per-kind identifier width (see §6) |
@@ -194,10 +198,14 @@ narrowing, and full CI/validation wiring — as one Red→Green increment.
 - **Created:** `tests/test-fabric-runtime.sh`, `tools/fabric/__init__.py`,
   `tools/fabric/models.py`, `tools/fabric/identifiers.py`
 - **Modified:** `tests/test-static.sh`, `tests/test-capability-fabric.sh`,
+  `tests/test-trust-plane.sh`, `tests/test-docs-static.sh`,
+  `tests/test-capability-health.sh`, `tests/test-trust-migration.sh`,
   `.github/workflows/ci.yml`, `tools/dev/run-validation.sh`
 - **Inspect first:** `tools/trust/models.py`, `tools/trust/identifiers.py`,
-  the four guard blocks in `tests/test-static.sh` and two in
-  `tests/test-capability-fabric.sh`, how `tests/test-trust-runtime.sh` is wired
+  the **thirteen** `tools/fabric` guard blocks across six suites — four in
+  `tests/test-static.sh`, three in `tests/test-trust-plane.sh`, two each in
+  `tests/test-capability-fabric.sh` and `tests/test-docs-static.sh`, and one
+  each in `tests/test-capability-health.sh` and `tests/test-trust-migration.sh`, how `tests/test-trust-runtime.sh` is wired
   into `ci.yml` and `run-validation.sh`, `tests/test-developer-experience.sh:458`
 - **AC:** 32, 48, 55 · **FC:** 4
 - **Dependency check:** models and identifiers only. **AC 3 moves to increment 6** (it needs an accepted declaration) and **AC 87 to increment 12** (it needs a fully exercised store).
@@ -208,7 +216,10 @@ narrowing, and full CI/validation wiring — as one Red→Green increment.
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric'` — the package does not exist.
 - **Green:** frozen dataclasses for the eight types; per-kind identifier
-  patterns; remove **only** `tools/fabric` from the six guard blocks, preserving
+  patterns; remove **only** `tools/fabric` from the **thirteen** guard blocks
+  (three of which are single-directory `if` checks rather than loops, at
+  `test-docs-static.sh:804`, `test-trust-plane.sh:318`, and the mixed list at
+  `test-capability-health.sh:215`), preserving
   `tools/capability`, `tools/scheduler`, `tools/placement`, `tools/clustering`,
   `tools/routing`, `tools/health`, `tools/discovery`, `tools/lease`,
   `tools/enrollment`, `tools/admission`, `tools/capability_fabric`; update stale

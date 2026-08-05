@@ -210,9 +210,12 @@ assert_contains "${ADR}" '[Tt]rust Plane .*(does not|never) (use|consume)' \
 assert_contains "${ADR}" 'lease' "ADR-0013 reconciles the reserved lease-health entity"
 assert_contains "${ADR}" 'placement' "ADR-0013 reconciles the reserved placement-health entity"
 
-# --- No runtime --------------------------------------------------------------
+# --- No health runtime -------------------------------------------------------
+# ADR-0013 remains architecture. `tools/fabric` is released by ENG-0004, which
+# implements the Fabric and evaluates no health; every health-runtime name here
+# stays forbidden.
 for forbidden_dir in tools/health tools/monitor tools/heartbeat tools/probe \
-                     tools/telemetry tools/metrics tools/fabric tools/capability; do
+                     tools/telemetry tools/metrics tools/capability; do
   if [[ -d "${ROOT}/${forbidden_dir}" ]]; then
     fail "architecture only; ${forbidden_dir} must not exist"
   else
