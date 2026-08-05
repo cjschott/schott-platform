@@ -35,6 +35,7 @@ from typing import Any, Mapping
 
 from ..common.immutable_store import DIR_MODE, ImmutableStore, StoreError
 from .errors import FabricError
+from .evidence import validate_record_evidence
 from .identifiers import ID_FIELDS, PATTERNS, PREFIXES
 
 # Four digits for the records an operator writes deliberately, six for the ones
@@ -292,6 +293,19 @@ class FabricStore(ImmutableStore):
 
     def write_record(self, kind: str, record) -> Path:
         """The inherited name, reaching the same guarded path."""
+        return self.write(kind, record)
+
+    def write_accepted(self, kind: str, record) -> Path:
+        """The governed write: a record is accepted only with its evidence.
+
+        The evidence is validated before anything touches the filesystem, so a
+        record whose evidence cannot stand is refused rather than committed and
+        annotated afterwards. Nothing is allocated, no temporary artefact is
+        created, and no sequence advances on the refusal path.
+        """
+        if kind not in ID_FIELDS:
+            raise FabricError(f"unknown record kind '{kind}'")
+        validate_record_evidence(kind, getattr(record, "evidence", None))
         return self.write(kind, record)
 
     def read_record(self, kind: str, identifier: str) -> dict[str, Any]:

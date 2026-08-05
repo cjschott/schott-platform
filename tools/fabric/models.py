@@ -113,6 +113,18 @@ class FabricRecord:
             value = getattr(self, name)
             object.__setattr__(self, name, MappingProxyType(dict(value or {})))
 
+    def _freeze_evidence(self) -> None:
+        """Evidence is a mapping or it is absent. Nothing else is accepted.
+
+        Absent stays absent rather than becoming an empty mapping, so a record
+        written before evidence existed serialises exactly as it always did.
+        """
+        if self.evidence is None:
+            return
+        if not isinstance(self.evidence, Mapping):
+            raise FabricError("evidence must be a mapping")
+        object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
+
     def _seal(self) -> None:
         for name in self._SEQUENCES:
             object.__setattr__(self, name, tuple(getattr(self, name) or ()))
@@ -183,6 +195,9 @@ class CapabilityDefinition(FabricRecord):
     superseded_by: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-definition"
     _SEQUENCES: ClassVar[tuple[str, ...]] = ("contract_ids",)
 
@@ -195,6 +210,7 @@ class CapabilityDefinition(FabricRecord):
         for contract_id in self.contract_ids:
             _require_identifier(contract_id, "capability-contract", "contract_ids entry")
         self._freeze("provenance")
+        self._freeze_evidence()
 
 
 @dataclass(frozen=True)
@@ -221,6 +237,9 @@ class CapabilityContract(FabricRecord):
     superseded_by: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-contract"
     _SEQUENCES: ClassVar[tuple[str, ...]] = ("failure_modes", "compatible_with")
 
@@ -232,6 +251,7 @@ class CapabilityContract(FabricRecord):
         _require_text(self.determinism_class, "determinism_class")
         self._seal()
         self._freeze("request_shape", "response_shape", "resource_requirements", "provenance")
+        self._freeze_evidence()
 
 
 @dataclass(frozen=True)
@@ -258,6 +278,9 @@ class CapabilityPackage(FabricRecord):
     superseded_by: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-package"
     _SEQUENCES: ClassVar[tuple[str, ...]] = ("satisfied_contract_versions",)
 
@@ -270,6 +293,7 @@ class CapabilityPackage(FabricRecord):
         _require_text(self.trust_domain, "trust_domain")
         self._seal()
         self._freeze("resource_requirements", "provenance")
+        self._freeze_evidence()
 
 
 @dataclass(frozen=True)
@@ -296,6 +320,9 @@ class CapabilityHost(FabricRecord):
     superseded_by: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-host"
 
     def __post_init__(self) -> None:
@@ -306,6 +333,7 @@ class CapabilityHost(FabricRecord):
         _require_text(self.data_classification_ceiling, "data_classification_ceiling")
         _require_text(self.availability_intent, "availability_intent")
         self._freeze("verified_resource_profile", "provenance")
+        self._freeze_evidence()
 
 
 @dataclass(frozen=True)
@@ -330,6 +358,9 @@ class CapabilityAdvertisement(FabricRecord):
     superseded_by: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-advertisement"
     _TIMESTAMPS: ClassVar[tuple[str, ...]] = ("observed_at", "valid_until")
     _SEQUENCES: ClassVar[tuple[str, ...]] = ("satisfied_contract_versions",)
@@ -344,6 +375,7 @@ class CapabilityAdvertisement(FabricRecord):
         _require_aware(self.valid_until, "valid_until")
         self._seal()
         self._freeze("advertised_resource_profile", "provenance")
+        self._freeze_evidence()
 
 
 @dataclass(frozen=True)
@@ -374,6 +406,9 @@ class CapabilityInstance(FabricRecord):
     superseded_by: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-instance"
     _TIMESTAMPS: ClassVar[tuple[str, ...]] = ("admitted_at", "admitted_until")
     _SEQUENCES: ClassVar[tuple[str, ...]] = ("satisfied_contract_versions",)
@@ -392,6 +427,7 @@ class CapabilityInstance(FabricRecord):
         _require_aware(self.admitted_until, "admitted_until")
         self._seal()
         self._freeze("verified_resource_profile", "effective_scope", "provenance")
+        self._freeze_evidence()
 
 
 @dataclass(frozen=True)
@@ -417,6 +453,9 @@ class CapabilityRoute(FabricRecord):
     superseded_by: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-route"
     _SEQUENCES: ClassVar[tuple[str, ...]] = ("accepted_contract_versions", "candidate_instances")
 
@@ -436,6 +475,7 @@ class CapabilityRoute(FabricRecord):
         self._freeze("provenance")
         if self.overlap_window is not None:
             self._freeze("overlap_window")
+        self._freeze_evidence()
 
 
 @dataclass(frozen=True)
@@ -459,6 +499,9 @@ class CapabilitySelection(FabricRecord):
     refusal_reason: str | None = None
     notes: str | None = None
 
+    # Evidence rides the accepted record; there is no ninth record type.
+    evidence: Mapping[str, Any] | None = None
+
     kind: ClassVar[str] = "capability-selection"
     _TIMESTAMPS: ClassVar[tuple[str, ...]] = ("selected_at",)
     _SEQUENCES: ClassVar[tuple[str, ...]] = ("considered_candidates", "excluded_candidates")
@@ -479,6 +522,7 @@ class CapabilitySelection(FabricRecord):
             _require_identifier(
                 self.selected_instance_id, "capability-instance", "selected_instance_id")
         self._freeze("request_class", "provenance")
+        self._freeze_evidence()
 
 
 # Exactly eight. A ninth persistent record type is a new architectural
