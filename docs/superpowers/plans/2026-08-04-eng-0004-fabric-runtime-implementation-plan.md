@@ -142,6 +142,32 @@ Per-kind exhaustion refuses at that kind's maximum rather than rolling over.
 This modifies a released shared module, so increment 2 requires
 backward-compatibility tests and every released Trust Plane behaviour preserved.
 
+### The request critical section — Option A, named call path
+
+The request lock must enclose **replay lookup, record-identity allocation, and
+the accepted write**. Replay lookup happens in C7/C4 code, **not** inside the
+physical writer, so changing only C1's writer could never enclose it. The plan
+therefore uses an explicit **context-manager seam**:
+
+`ImmutableStore.request_critical_section(request_id)` — introduced in
+**increment 2** as a **behavioural no-op that yields immediately**.
+
+**Every call site enters it before replay lookup and stays inside through
+allocation and the accepted write:**
+
+| Increment | Module | Call sites entering the context |
+|---|---|---|
+| 4 | `tools/fabric/request_identity.py` | the replay-lookup helper |
+| 6 | `tools/fabric/admission.py` | capability, contract, and package declaration; subject admission; advertisement registration |
+| 7 | `tools/fabric/admission.py` | instance admission; route creation; route supersession; withdrawal/retirement |
+| 9 | `tools/fabric/selection.py` | the `CSEL` write, for selection, refusal, and no-candidate outcomes |
+
+Because the context manager is a **no-op until increment 12**, the deterministic
+race Red in increment 12 can observe genuine pre-fix behaviour. **Increment 12
+changes only C1's implementation** of that context manager to acquire the guarded
+lock — no call site moves, and **logical authorisation stays in C4/C6 while
+physical lock ownership stays in C1**.
+
 ### Runtime-suite wiring order
 
 `tests/test-developer-experience.sh` iterates **every** `tests/test-*.sh` and
@@ -212,8 +238,9 @@ containment, explicit ownership, and preservation of pre-existing residue.
   (`:171`, `O_TRUNC` at `:185` and `unlink` in `finally`), `write_record`
   (`:211`), `read_record` (`:217`), `list_records` (`:223`), `validate` (`:238`),
   `counts` (`:258`); `tools/trust/store.py`
-- **AC:** 1, 2, 4, 33, 34, 39, 40, 41, 44, 52, 68, 78 · **FC:** 1, 2, 6, 12, 13,
-  19, 20, 21
+- **AC:** 1, 2, 4, 33, **34**, 39, 40, 41, 44, 52, 68, 78 · **FC:** 1, 2, 6, 12,
+  **13**, 19, 20, 21 — **AC 34 and FC 13 are owned here**, as an executable Red
+  that fails before this increment's Green
 
 ### Ownership — the approved rule
 
@@ -323,19 +350,59 @@ invocation**. The physical write body stays in `ImmutableStore.write_atomic()`.
   no-default-root refusal; repository-root refusal; overwrite refusal; **no update
   and no delete method exists**; new directories `0700`, records `0600`; and an
   allocation collision is a **storage conflict, never replay evidence**.
-- **Red — commit race (AC 34, FC 13).** See the deterministic protocol in
-  increment 12; the **no-op pre-link hook** it depends on is introduced here.
+### Ordered sequence inside this increment
+
+The commit-race assertion is a **behavioural Red in this increment**, before this
+increment's Green. Its synchronisation mechanism must therefore exist first:
+
+1. **Introduce the byte-neutral no-op hook**
+   `ImmutableStore._pre_link_sync_point(destination, temporary)`, called between
+   `fsync`/`close` and `os.link()` in the shared physical write body. It does
+   nothing, changes no bytes, and leaves released Trust Plane output identical.
+   A purely test-side wrapper cannot reach between sync and link, which is why a
+   named hook is used rather than monkey-patching.
+2. **Write the behavioural commit-race Red** (below). It fails against the
+   released `O_CREAT | O_TRUNC` write path.
+3. **Green:** add `exclusive_temporary_create` / `O_EXCL` and same-invocation
+   cleanup ownership, turning it green.
+
+- **Red — deterministic commit race (AC 34, FC 13).** Writer **A** allocates a
+  record identity, writes and syncs its temporary content, and **pauses in
+  `_pre_link_sync_point` before linking**. Writer **B** targets the **same record
+  path**. **Pre-Green this must fail for a real reason, not a contrived one:**
+  the released body opens the deterministic temporary sibling with
+  `O_CREAT | O_TRUNC` and no `O_EXCL`, so **B truncates A's synced temporary
+  content to zero**, and either writer's `finally` can `unlink` a temporary inode
+  the other created — producing truncation, interference, or a missing-source
+  commit failure. **Post-Green** B receives a **storage conflict** *without
+  altering or removing A's temporary inode*, **A commits byte-identical
+  content**, allocated identifiers stay **unique and monotonic**, the conflict is
+  **never classified as replay**, and there is **no silent overwrite**. Every
+  wait is bounded; **a timeout fails the test**.
+
+### Shared-store seams introduced here — five, individually classified
+
+| # | Seam | Kind | Default |
+|---|---|---|---|
+| 1 | `ImmutableStore.id_widths: Mapping[str, int]` | **class attribute** | `{}` ⇒ six digits, released behaviour |
+| 2 | `ImmutableStore.exclusive_temporary_create: bool` | **class attribute** | `False` ⇒ released `O_CREAT \| O_TRUNC` |
+| 3 | `ImmutableStore._pre_link_sync_point(destination, temporary)` | **method hook** | no-op, byte-neutral |
+| 4 | `FabricStore._test_sync_point(phase, request_id)` | **method hook** | no-op; writes nothing |
+| 5 | `ImmutableStore.request_critical_section(request_id)` | **context-manager seam** | **no-op — yields immediately**; C1 gains a real lock only in increment 12 |
+
+Seams 1–3 and 5 live on the shared module and **all default to released
+behaviour**; seam 4 is Fabric-only. **No seam creates a persistent record.**
 - **Observable Red reason:** `ModuleNotFoundError: No module named
   'tools.fabric.store'`, then — once the module exists — four-digit allocation
   failing against the hardcoded `:06d` at `:153`, ownership assertions failing
   because no ownership inputs exist, and the residue assertions failing because
   `O_TRUNC` at `:185` truncates the pre-existing artifact and `finally` unlinks
   it.
-- **Green:** `FabricStore(ImmutableStore)` with the seams above; three
-  backward-compatible opt-in attributes on the shared module — `id_widths`,
-  `exclusive_temporary_create`, and the **no-op pre-link and sync hooks** — each
-  defaulting to released behaviour. Regression assertions must prove
-  `TrustStore` allocation, modes, and every released Trust Plane behaviour are
+- **Green:** `FabricStore(ImmutableStore)` with the containment, ownership, and
+  residue seams above, plus the **five classified shared-store seams** — two
+  class attributes, two method hooks, and one context-manager seam — each
+  defaulting to released behaviour. Regression assertions must prove `TrustStore`
+  allocation, modes, and every released Trust Plane behaviour are
   **byte-identical**.
 - **Focused:** `bash tests/test-fabric-runtime.sh`,
   `bash tests/test-trust-runtime.sh`, `bash tests/test-trust-plane.sh`,
@@ -347,9 +414,10 @@ invocation**. The physical write body stays in `ImmutableStore.write_atomic()`.
 - **Excluded:** governed acceptance of any record — increments 2 and 3 write only
   test fixtures, never an accepted governed operation.
 - **Commit:** `feat: add the immutable fabric store`
-- **Review checkpoint:** reviewer confirms the three shared-module seams default
-  to released behaviour, no second physical write path exists, and no `chown`
-  appears anywhere.
+- **Review checkpoint:** reviewer confirms **all five seams** default to released
+  behaviour, `request_critical_section` is a **behavioural no-op at this
+  increment**, no second physical write path exists, and no `chown` appears
+  anywhere.
 - **Rollback:** revert both files; increment 1 stands.
 
 ## Increment 3 — Record validator (C2)
@@ -388,6 +456,10 @@ invocation**. The physical write body stays in `ImmutableStore.write_atomic()`.
 accepted.
 
 - **Created:** `tools/fabric/request_identity.py`, `tools/fabric/evidence.py`
+- **Critical section:** the replay-lookup helper **enters
+  `ImmutableStore.request_critical_section(request_id)` before replay lookup**
+  and stays inside through allocation and the accepted write. Behavioural
+  **no-op** until increment 12.
 - **Modified:** `tools/fabric/models.py` (evidence fields on all eight types),
   `tools/fabric/store.py` (refuse a record whose evidence cannot be assembled)
 - **Inspect first:** `tools/observation/evidence_builder.py` and
@@ -458,6 +530,10 @@ accepted.
 
 - **Created:** `tools/fabric/admission.py`
 - **Modified:** `tools/fabric/evidence.py` (wire evidence into acceptance)
+- **Critical section:** capability, contract, and package declaration, subject
+  admission, and advertisement registration each **enter
+  `request_critical_section()` before replay lookup** and remain inside through
+  allocation and the accepted write.
 - **Inspect first:** `tools/trust/root_authority.py`; specification §6.1–6.3
 - **AC:** 3, 5, 6, 7 (integrated), 8 (integrated), 11, 12, 35 (repeat), 37, 49 (part-1 classes), 55 (repeat, declaration boundary), 63 (repeat), 64, 66, 67, 75, 76 (repeat), 77 (repeat), 79 (part-1), 85 (subject admission), 86 · **FC:** 5, 7, 8, 9, 11, 14 (integrated), 15 (integrated)
 - **Dependency check:** **C5 does not exist yet.** The "eligibility names the absent admission" halves of **AC 9 and 10 move to increment 8**; increment 6 asserts only that trust alone creates no instance record.
@@ -508,6 +584,9 @@ accepted.
 and supersession**.
 
 - **Modified:** `tools/fabric/admission.py`
+- **Critical section:** instance admission, route creation, route supersession,
+  and withdrawal/retirement each **enter `request_critical_section()` before
+  replay lookup** and remain inside through allocation and the accepted write.
 - **Inspect first:** specification §6.4, §6.5, §6.6, §7 transition table, §10
   two-record request identity
 - **AC:** 7 (integrated), 8 (integrated), 9 (authoritative half), 15, 16, 17 (authoritative half), 18 (authoritative half), 19, 35 (repeat), 37 (repeat), 49 (part-2 classes), 51 (authoritative half), 63 (repeat), 64 (repeat), 69 (authoritative half), 70, 72, 73, 76 (repeat), 77 (repeat), 79 (instance admission), 85 (instance admission) · **FC:** 5 (part-2 classes), 11 (repeat), 14 (integrated), 15 (integrated), 17 (authoritative half), 18 (authoritative half)
@@ -626,6 +705,9 @@ working node"*.
 only.
 
 - **Created:** `tools/fabric/selection.py`
+- **Critical section:** the `CSEL` write — selection, refusal, and no-candidate
+  alike — **enters `request_critical_section()` before replay lookup** and
+  remains inside through allocation and the accepted write.
 - **Inspect first:** ADR-0012 "How routing occurs";
   `docs/fabric/failure-behaviour.md`; specification §8 selection constraints;
   ELIG-13 and ELIG-14
@@ -743,11 +825,15 @@ only.
 partial state; then document.
 
 - **Modified:** `tests/test-fabric-runtime.sh`, `tools/fabric/store.py`
-  (request-identity serialisation seam), `docs/fabric/capability-fabric.md`,
+  (**C1's `request_critical_section()` implementation only**),
+  `docs/fabric/capability-fabric.md`,
   `docs/fabric/node-model.md`, `docs/history/v1.0-engineering-ledger.md`
 - **Inspect first:** specification §9 failure matrix, §10 ordering and two-record
   request identity
-- **AC (own Red):** 34, 62, 74, 87 · **FC (own Red):** 8, 9, 12, 13, 25
+- **AC (own Red):** 62, 74, 87 · **FC (own Red):** 8, 9, 12, 25
+- **Regression only (owned earlier):** **AC 34 and FC 13** — the commit race is
+  increment 2's executable Red; it re-runs here and is **not** claimed as a new
+  observable.
 - **Regression coverage:** every test introduced through increments 1–11 re-runs
   here via `tools/dev/run-validation.sh`. That is **regression coverage, not new
   Red** — the remaining failure conditions are **not** claimed as new
@@ -760,18 +846,11 @@ or ninth record type**. The request-identity check and the accepted write are
 **serialised through C1**; any lock or sequence artifact used for that
 serialisation is **owned physically by C1 and is not a Fabric record**.
 
-- **Deterministic commit-race protocol (AC 34, FC 13).** The seam is a
-  **backward-compatible no-op hook in the shared physical write path**, called
-  after the current invocation has **exclusively created, written, and synced**
-  its temporary file but **before `os.link()`**. It defaults to no-op and
-  preserves released Trust Plane behaviour. The Red proves:
-  writer **A** owns the exclusively created temporary file and **pauses before
-  commit**; writer **B** targets the same record path; **B receives a storage
-  conflict without truncating or unlinking A's temporary file**; **A commits
-  successfully after release**; allocated identifiers remain **unique and
-  monotonic**; the committed record is **byte-identical to A's payload**; there
-  is **no silent overwrite**; the conflict is **never classified as replay**; and
-  **every synchronisation wait is bounded, with a timeout failing the test**.
+- **Commit race — regression only.** The deterministic commit-race assertion is
+  **owned by increment 2**, where it fails before that increment's Green. It
+  re-runs here as **regression coverage**, not as a new Red. **This increment
+  does not observe silent overwrite** — increment 2's `O_EXCL` Green already
+  makes that impossible.
 - **Red:** **AC 62 and 87:** against a **fully exercised** store, enumerate every
   persistent record and assert only the **eight accepted types** exist, with **no
   audit-record class and no ninth type**; assert interruption after the new `CINST` and before the new `CROUTE`
@@ -819,15 +898,18 @@ serialisation is **owned physically by C1 and is not a Fabric record**.
   Both the **exact** and the **conflicting** same-`request_id` races are
   exercised. Post-fix outcomes are **one accepted record plus a replay**, or
   **one accepted record plus `request_identity_conflict`**, respectively.
-- **Observable Red reason:** with the protocol engaged, **both callers observe
-  *not found* on replay lookup on every run**, so one `request_id` yields two
-  accepted records — and, in the conflicting variant, two records for
-  contradictory digests — instead of one record plus a replay or
-  `request_identity_conflict`. The competing-writer variant additionally shows a
-  **silent overwrite instead of a storage conflict**. No run times out.
-- **Green:** the request-identity serialisation seam in
-  `tools/fabric/store.py`, using the released `fcntl.flock` discipline already
-  used by `allocate_id()`. **No transaction is introduced** (**A21**). Then
+- **Observable Red reason:** `request_critical_section()` is still C1's
+  **no-op**, so **both callers observe *not found* on replay lookup on every
+  run** — one `request_id` yields two accepted records, and in the conflicting
+  variant two records for contradictory digests, instead of one record plus a
+  replay or `request_identity_conflict`. No run times out. The commit race is
+  **not** part of this Red; it was proven in increment 2.
+- **Green:** change **only C1's implementation** of
+  `request_critical_section()` in `tools/fabric/store.py` so it acquires the
+  guarded `sequences/request_identity.lock` using the released `fcntl.flock`
+  discipline already used by `allocate_id()`. **No call site moves** — increments
+  4, 6, 7 and 9 already enter the context. **No transaction is introduced**
+  (**A21**). Then
   update the Fabric documents from "no runtime exists" to the implemented
   surface, and the ledger's ENG-0004 row.
 - **Focused:** `bash tests/test-fabric-runtime.sh`,
@@ -867,7 +949,7 @@ increment**, and after each stated Green every test introduced so far plus
 | 9 | C1–C5, C7 | C6 | route membership, effect class, health removal, `CSEL` |
 | 10 | C1–C7 | C8 | read-only inspection over C2 |
 | 11 | C1–C8 | interface | the twelve operations, so AC 25 is assertable **here and not earlier** |
-| 12 | everything, incl. the increment-2 no-op sync hook | — | the race protocol needs a seam that **already exists**; its Red claims only its own observables, the rest is regression |
+| 12 | everything, incl. the increment-2 no-op hooks and the **no-op `request_critical_section()`** already entered by increments 4, 6, 7 and 9 | — | Green changes **only C1's implementation** of that context manager; no call site moves. Its Red claims only its own observables — the commit race is increment 2's, and the rest is regression |
 
 **Criteria moved to remove forward dependencies:** AC 3, 5, 75 → 6 · AC 87 → 12
 · AC 7, 8 → 6, 7, 8 (C3 alone proves neither refusal nor ineligibility) ·
@@ -894,7 +976,7 @@ Every entry points to an observable assertion in that exact increment's Red.
 | 9 | 20, 21, 22, 23, 24, 26, 27, 35, 36, 38, 42, 50, 51, 53, 54, 57, 59, 60, 63, 65, 76, 77, 80 |
 | 10 | 28, 29, 30, 33, 44, 47 |
 | 11 | 25, 43, 45 |
-| 12 | 34, 62, 74, 87 |
+| 12 | 62, 74, 87 |
 
 **Coverage: 87/87.**
 
@@ -906,7 +988,7 @@ Every entry points to an observable assertion in that exact increment's Red.
 | 9 | 7, 8 | Authoritative half (no `CINST` exists) and eligibility half (absent admission named as the unmet condition) |
 | 17, 18 | 7, 8 | Expiry writes no authoritative record (C4); expiry removes eligibility (C5) |
 | 32 | 1, 3 | Model-level version refusal, then refusal when a stored record is read |
-| 34 | 2, 12 | Allocation and commit-race conflict at the store; then integrated under the deterministic race protocol |
+| 34 | **2** (own Red) · 12 (**regression only**) | The commit race is executable in increment 2, failing before its own Green. Increment 12 re-runs it and claims no new observable |
 | 35, 63 | 4, 6, 7, 9 | Evidence construction is a primitive; it must also hold on every accepted C4 record **and** on `CSEL` |
 | 37 | 6, 7 | Zero-record rejection for part-1 and part-2 operations separately |
 | 42 | 8, 9 | Derived staleness recomputed for eligibility **and** for selection |
@@ -936,15 +1018,15 @@ Every entry points to an observable assertion in that exact increment's Red.
 | 9 | 7, 8, 9, 16, 18, 22, 23, 24, 26, 28 |
 | 10 | 1, 2, 3, 12 |
 | 11 | 25 |
-| 12 | 8, 9, 12, 13, 25 |
+| 12 | 8, 9, 12, 25 |
 
 **Coverage: 28/28.** Increment 5 owns no failure condition outright — C3 returns
 a verdict, and the refusal it causes is observable only at C4 or C5.
 
 **Repeats, justified:** FC 5 and 11 (6, 7 — part-1 and part-2 classes) · FC 7, 8,
 9 (4, 6, 9, 12 — identity primitives, then **each accepted part-1 operation
-class**, then all three `CSEL` outcomes, then the race protocol) · FC 13 (2, 12 —
-allocation conflict, then the deterministic commit race) · FC 14, 15 (6, 7, 8 —
+class**, then all three `CSEL` outcomes, then the race protocol) · FC 13 (**2** own Red — the deterministic
+commit race; 12 **regression only**) · FC 14, 15 (6, 7, 8 —
 subject admission, instance admission, and **eligibility**) · FC 16 (3, 8, 9 —
 validator **reporting**, eligibility recomputation, selection recomputation) ·
 FC 17 (7, 8 — authoritative and eligibility halves) · FC 18 (7, 8, 9 —
@@ -999,8 +1081,8 @@ cannot reintroduce what it forbids. It covers:
 | Symlink and path traversal | Increment 2 Red — directory **and** record escape refused, full resolution |
 | Malformed or unsupported record version | Increments 1, 3, 10 Red — fails closed; malformed becomes a finding |
 | Permission failures | Increment 2 Red — mode **and explicit UID/GID** mismatch refused or reported, **never `chown`ed, repaired, or silently changed** |
-| Concurrent identity allocation | Increments 2 and 12 Red |
-| Concurrent same-`request_id` races | **Increment 12 Red** — exact and conflicting concurrent reuse |
+| Concurrent identity allocation | Increment 2 Red (own); increment 12 regression |
+| Concurrent same-`request_id` races | **Increment 12 Red** — exact and conflicting concurrent reuse, observable because `request_critical_section()` is C1's no-op until this increment's Green |
 | Missing or unavailable Trust Plane evidence | Increment 5 Red — fails closed, no cached verdict |
 | Unknown health state | **Increment 9 Red** — unknown stays unknown, removes nothing, adds nothing; C5 accepts no health input at all |
 | Deterministic-selection drift | Increment 9 Red — identical inputs choose identically |
