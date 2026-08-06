@@ -3251,8 +3251,11 @@ from tools.fabric.trust_adapter import (  # noqa: E402
     REASON_NOT_USABLE,
     REASON_NO_STANDING,
     REASON_REVOKED,
+    REASON_SUBJECT_TYPE_MISMATCH,
+    REASON_UNAVAILABLE,
     REASON_UNREADABLE,
     UNVERIFIED,
+    UNVERIFIED_REASONS,
     VERIFIED,
     TrustVerification,
     verify_subject,
@@ -4245,6 +4248,242 @@ with TemporaryDirectory() as tmp:
     check(verify_subject(store, "HOST-NEVER-SEEN", evaluated_at=STAMP).reasons
           == (REASON_NO_STANDING,),
           "a real absent subject still reports no trust standing")
+
+
+# --- The authoritative subject type rides the record, not the evaluation ----
+# Defect caught: C4 will need to prove a referenced trust record belongs to the
+# fabric-node domain and is still the subject's current record. The released
+# evaluation carries neither fact, so without this an admission would have to
+# read trust records directly -- exactly what C3 exists to prevent.
+check(REASON_SUBJECT_TYPE_MISMATCH in UNVERIFIED_REASONS,
+      "the subject-type mismatch is a named refusal in the controlled vocabulary")
+check(REASON_SUBJECT_TYPE_MISMATCH == "trust-subject-type-mismatch",
+      "the subject-type refusal is named trust-subject-type-mismatch")
+check("subject_type" in TrustVerification.__dataclass_fields__,
+      "a verification result carries a subject type")
+
+FABRIC_NODE = "fabric-node"
+
+
+def trust_record(**overrides):
+    """A retrieved trust record with the shape the released store returns."""
+    record = {"record_id": "TREC-000001", "subject_id": "HOST-A",
+              "subject_type": FABRIC_NODE, "state": TrustState.TRUSTED.value}
+    record.update(overrides)
+    return record
+
+
+def under_forged_pair(record, payload, requested="TREC-000001", **keywords):
+    """Forge both released interfaces: the record lookup and the evaluation."""
+    lookup = ForgedRecord(record)
+    query = ForgedQuery(payload)
+    adapter_module.get_trust_record = lookup
+    adapter_module.get_current_trust = query
+    try:
+        return verify_trust_record(object(), requested, evaluated_at=STAMP,
+                                   **keywords), lookup, query
+    finally:
+        adapter_module.get_trust_record = RELEASED_RECORD
+        adapter_module.get_current_trust = RELEASED_QUERY
+
+
+# A direct subject verification never learns a domain, and must not guess one.
+direct, _ = under_forged_query(released_shape())
+check(direct.subject_type is None,
+      "a direct subject verification reports no subject type")
+check("subject_type" in direct.to_dict(),
+      "the subject type appears in the serialised result")
+check(direct.to_dict()["subject_type"] is None,
+      "the serialised subject type of a direct verification is nothing")
+scoped, _ = under_forged_query(released_shape(
+    scope={"scope_id": "TSCOPE-000001", "subject_type": FABRIC_NODE}))
+check(scoped.subject_type is None,
+      "a subject type present in the evaluation scope is never adopted as the domain")
+
+# Through the record, the authoritative subject type is carried exactly.
+result, lookup, query = under_forged_pair(trust_record(), released_shape())
+check(result.status == VERIFIED,
+      "a current fabric-node record verifies its subject")
+check(result.subject_type == FABRIC_NODE,
+      "the verification carries the record's authoritative subject type")
+check(result.to_dict()["subject_type"] == FABRIC_NODE,
+      "the authoritative subject type is serialised deterministically")
+check(lookup.calls == 1 and query.calls == 1,
+      "a record verification fetches the record once and evaluates once")
+repeated, _, _ = under_forged_pair(trust_record(), released_shape())
+check(repeated == result, "a record verification repeats identically")
+
+for domain, description in ((None, "no subject type"),
+                            ("", "an empty subject type"),
+                            ("   ", "a blank subject type"),
+                            (" fabric-node", "a subject type with leading whitespace"),
+                            ("fabric-node ", "a subject type with trailing whitespace"),
+                            ("fabric-node\n", "a subject type with a trailing newline"),
+                            (12345, "a numeric subject type"),
+                            (["fabric-node"], "a subject type inside a list")):
+    record = trust_record(subject_type=domain)
+    if domain is None:
+        del record["subject_type"]
+        description = "no subject type at all"
+    outcome, forged_lookup, _ = under_forged_pair(record, released_shape())
+    check(outcome.status == UNVERIFIED,
+          f"a record carrying {description} does not verify")
+    check(outcome.reasons == (REASON_UNREADABLE,),
+          f"a record carrying {description} is reported as unreadable")
+    check(forged_lookup.calls == 1,
+          f"a record carrying {description} is fetched once")
+
+# --- The optional exact domain requirement ----------------------------------
+required, _, _ = under_forged_pair(trust_record(), released_shape(),
+                                   expected_subject_type=FABRIC_NODE)
+check(required.status == VERIFIED,
+      "an exact fabric-node record verifies when fabric-node is required")
+check(required.subject_type == FABRIC_NODE,
+      "a domain-checked verification still carries the authoritative subject type")
+
+OTHER_DOMAINS = ("fabric-package", "host", "plugin", "Fabric-Node", "FABRIC-NODE",
+                 "fabric_node", "fabric-nodes", "fabric-nod")
+for domain in OTHER_DOMAINS:
+    outcome, _, _ = under_forged_pair(trust_record(subject_type=domain),
+                                      released_shape(),
+                                      expected_subject_type=FABRIC_NODE)
+    check(outcome.status == UNVERIFIED,
+          f"a '{domain}' record does not verify when fabric-node is required")
+    check(outcome.reasons == (REASON_SUBJECT_TYPE_MISMATCH,),
+          f"a '{domain}' record is refused as a subject-type mismatch")
+    check(outcome.subject_type == domain,
+          f"a refused '{domain}' record still reports the domain it actually carried")
+
+# The comparison transforms nothing on either side.
+for supplied in (" fabric-node", "fabric-node ", "", "   ", "\n", 12345,
+                 ["fabric-node"], FABRIC_NODE.upper() + " "):
+    try:
+        under_forged_pair(trust_record(), released_shape(),
+                          expected_subject_type=supplied)
+        bad(f"a required subject type supplied as {supplied!r} fails closed "
+            "(was accepted)")
+    except FabricError:
+        ok(f"a required subject type supplied as {supplied!r} fails closed")
+    except Exception as error:  # noqa: BLE001
+        bad(f"a required subject type supplied as {supplied!r} fails closed "
+            f"(raised {type(error).__name__})")
+
+# Omitting the requirement remains valid: the parameter is optional.
+without, _, _ = under_forged_pair(trust_record(subject_type="fabric-package"),
+                                  released_shape())
+check(without.status == VERIFIED,
+      "a record of any domain still verifies when no domain is required")
+check(without.subject_type == "fabric-package",
+      "the authoritative subject type is reported when no domain is required")
+
+# --- The referenced record must still be the subject's current record -------
+# Defect caught: a subject that has since been re-decided verifies through its
+# new current record, which would let an obsolete reference be admitted.
+superseded, _, _ = under_forged_pair(
+    trust_record(), released_shape(record_id="TREC-000002"))
+check(superseded.status == UNVERIFIED,
+      "a referenced record that is no longer current does not verify")
+check(superseded.reasons == (REASON_UNREADABLE,),
+      "an obsolete referenced record is reported as unreadable")
+
+current, _, _ = under_forged_pair(trust_record(), released_shape(
+    record_id="TREC-000001"))
+check(current.status == VERIFIED,
+      "a referenced record that is still current verifies")
+
+# A matching current record preserves every established standing outcome.
+STANDING_OUTCOMES = (
+    (TrustState.TRUSTED.value, TrustState.TRUSTED.value, True, VERIFIED, None),
+    (TrustState.RESTRICTED.value, TrustState.RESTRICTED.value, True, VERIFIED, None),
+    (TrustState.TRUSTED.value, TrustState.EXPIRED.value, False, UNVERIFIED,
+     REASON_EXPIRED),
+    (TrustState.REVOKED.value, TrustState.REVOKED.value, False, UNVERIFIED,
+     REASON_REVOKED),
+    (TrustState.QUARANTINED.value, TrustState.QUARANTINED.value, False, UNVERIFIED,
+     REASON_NOT_USABLE),
+    (TrustState.REJECTED.value, TrustState.REJECTED.value, False, UNVERIFIED,
+     REASON_NOT_USABLE),
+    (TrustState.PENDING.value, TrustState.PENDING.value, False, UNVERIFIED,
+     REASON_NOT_USABLE),
+)
+for stored, effective, usable, status, reason in STANDING_OUTCOMES:
+    outcome, _, _ = under_forged_pair(trust_record(), released_shape(
+        stored_state=stored, effective_state=effective, usable=usable))
+    check(outcome.status == status,
+          f"a current record whose subject is effectively '{effective}' is {status}")
+    if reason is not None:
+        check(outcome.reasons == (reason,),
+              f"a current record whose subject is effectively '{effective}' "
+              f"keeps the reason {reason}")
+    check(outcome.subject_type == FABRIC_NODE,
+          f"a current record whose subject is effectively '{effective}' still "
+          "carries its authoritative subject type")
+
+# An unknown standing cites no record, and that is absence, not obsolescence.
+unknown_outcome, _, _ = under_forged_pair(trust_record(), released_shape(
+    stored_state=TrustState.UNKNOWN.value,
+    effective_state=TrustState.UNKNOWN.value, usable=False,
+    lineage_id=None, record_id=None, decision_id=None))
+check(unknown_outcome.reasons == (REASON_NO_STANDING,),
+      "a subject with no standing keeps its absent reason, not an obsolescence one")
+
+# --- Unavailable and unreadable outcomes are not reclassified ---------------
+# Defect caught: an unavailable trust plane cites no current record, and
+# treating that as an obsolete reference would hide why the answer was missing.
+unavailable_outcome, _, _ = under_forged_pair(
+    trust_record(), OSError("the trust plane is unavailable"))
+check(unavailable_outcome.reasons == (REASON_UNAVAILABLE,),
+      "an unavailable evaluation keeps its unavailable reason through the record path")
+unreadable_outcome, _, _ = under_forged_pair(
+    trust_record(), released_shape(subject_id="SOMEONE-ELSE"))
+check(unreadable_outcome.reasons == (REASON_UNREADABLE,),
+      "an unreadable evaluation keeps its unreadable reason through the record path")
+
+# --- The new refusals leak nothing and change nothing -----------------------
+SUBJECT_TYPE_REFUSALS = (
+    (trust_record(subject_type="fabric-package"), released_shape(),
+     {"expected_subject_type": FABRIC_NODE}),
+    (trust_record(subject_type=""), released_shape(), {}),
+    (trust_record(), released_shape(record_id="TREC-000002"), {}),
+    (trust_record(), OSError("unavailable"), {}),
+)
+for record, payload, keywords in SUBJECT_TYPE_REFUSALS:
+    outcome, _, _ = under_forged_pair(record, payload, **keywords)
+    leaked = " ".join(outcome.reasons) + " " + str(outcome.to_dict())
+    for token, leak in ((" 0x", "an object address"), ("/tmp/", "a filesystem path"),
+                        ("Traceback", "a traceback"), ("object at", "an object repr")):
+        check(token not in leaked, f"a subject-type refusal leaks no {leak}")
+
+with TemporaryDirectory() as tmp:
+    store, granted, _ = seeded(tmp)
+    fabric = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    trust_root = Path(tmp) / "trust"
+    fabric_root = Path(tmp) / "fabric"
+    trust_before = forensic(trust_root)
+    fabric_before = forensic(fabric_root)
+    for record, payload, keywords in SUBJECT_TYPE_REFUSALS:
+        under_forged_pair(record, payload, **keywords)
+    check(forensic(trust_root) == trust_before,
+          "refusing a subject type changes nothing in the trust store")
+    check(forensic(fabric_root) == fabric_before,
+          "refusing a subject type changes nothing in the fabric store")
+
+    # The real store, end to end, through the accepted adapter only.
+    real = verify_trust_record(store, granted.record.record_id, evaluated_at=STAMP)
+    check(real.status == VERIFIED,
+          "a real current trust record still verifies through the adapter")
+    check(real.subject_type == "host",
+          "a real verification carries the subject type its record declares")
+    check(verify_trust_record(store, granted.record.record_id, evaluated_at=STAMP,
+                              expected_subject_type="host").status == VERIFIED,
+          "a real record verifies when its own domain is required")
+    mismatched = verify_trust_record(store, granted.record.record_id,
+                                     evaluated_at=STAMP,
+                                     expected_subject_type=FABRIC_NODE)
+    check(mismatched.reasons == (REASON_SUBJECT_TYPE_MISMATCH,),
+          "a real record of another domain is refused when fabric-node is required")
+    check(verify_subject(store, "HOST-GOOD", evaluated_at=STAMP).subject_type is None,
+          "a real direct subject verification still reports no subject type")
 
 print(f"__FAILURES__={failures}")
 TRUSTPY

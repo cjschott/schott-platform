@@ -63,6 +63,7 @@ REASON_REVOKED = "trust-revoked"
 REASON_NOT_USABLE = "trust-not-usable"
 REASON_UNREADABLE = "trust-unreadable"
 REASON_UNAVAILABLE = "trust-unavailable"
+REASON_SUBJECT_TYPE_MISMATCH = "trust-subject-type-mismatch"
 
 UNVERIFIED_REASONS = (
     REASON_NO_STANDING,
@@ -71,6 +72,7 @@ UNVERIFIED_REASONS = (
     REASON_NOT_USABLE,
     REASON_UNREADABLE,
     REASON_UNAVAILABLE,
+    REASON_SUBJECT_TYPE_MISMATCH,
 )
 
 _REASON_FOR_STANDING = {
@@ -99,6 +101,10 @@ class TrustVerification:
     decision_id: str | None = None
     evidence_reference_ids: tuple[str, ...] = ()
     reasons: tuple[str, ...] = ()
+    # The domain the subject was admitted under, from the trust record itself.
+    # A direct subject verification leaves it unknown: the released evaluation
+    # does not carry it, and inferring it from a scope would be a guess.
+    subject_type: str | None = None
 
     @property
     def verified(self) -> bool:
@@ -116,6 +122,7 @@ class TrustVerification:
             "decision_id": self.decision_id,
             "evidence_reference_ids": list(self.evidence_reference_ids),
             "reasons": list(self.reasons),
+            "subject_type": self.subject_type,
         }
 
 
@@ -244,6 +251,59 @@ def _identity(value: Any, pattern) -> str | None:
     return value if isinstance(value, str) and pattern.fullmatch(value) else None
 
 
+def _clean_subject_type(value: Any) -> str | None:
+    """A subject type exactly as stored, or nothing.
+
+    Text, non-empty, and already free of surrounding whitespace. A value that
+    had to be trimmed to be usable is not the value that was stored, and the
+    domain a subject was admitted under is not something to tidy up.
+    """
+    if not isinstance(value, str) or not value or value != value.strip():
+        return None
+    return value
+
+
+def _require_subject_type(value: Any) -> str:
+    """A domain requirement a caller supplies is exact, or it is refused."""
+    cleaned = _clean_subject_type(value)
+    if cleaned is None:
+        raise FabricError(
+            "an expected subject type must be supplied as exact text")
+    return cleaned
+
+
+def _with_subject_type(verification: TrustVerification,
+                       subject_type: str) -> TrustVerification:
+    """The same answer, carrying the domain its record declares.
+
+    Rebuilt rather than altered: the result is frozen, and a verification a
+    caller already holds must not change underneath them.
+    """
+    return TrustVerification(
+        subject_id=verification.subject_id, status=verification.status,
+        standing=verification.standing,
+        stored_standing=verification.stored_standing,
+        evaluated_at=verification.evaluated_at,
+        lineage_id=verification.lineage_id, record_id=verification.record_id,
+        decision_id=verification.decision_id,
+        evidence_reference_ids=verification.evidence_reference_ids,
+        reasons=verification.reasons, subject_type=subject_type)
+
+
+def _refused(verification: TrustVerification, reason: str,
+             subject_type: str | None = None) -> TrustVerification:
+    """The same answer, refused for a stated reason."""
+    return TrustVerification(
+        subject_id=verification.subject_id, status=UNVERIFIED,
+        standing=verification.standing,
+        stored_standing=verification.stored_standing,
+        evaluated_at=verification.evaluated_at,
+        lineage_id=verification.lineage_id, record_id=verification.record_id,
+        decision_id=verification.decision_id,
+        evidence_reference_ids=verification.evidence_reference_ids,
+        reasons=(reason,), subject_type=subject_type)
+
+
 def _require_record_identity(record_id: Any) -> str:
     """A trust record identity a caller supplies is a released identifier."""
     if not isinstance(record_id, str) or not RECORD_ID.fullmatch(record_id):
@@ -303,16 +363,27 @@ def verify_subject(store, subject_id: Any, *, evaluated_at: Any) -> TrustVerific
     return TrustVerification(status=UNVERIFIED, reasons=(reason,), **common)
 
 
-def verify_trust_record(store, record_id: Any, *,
-                        evaluated_at: Any) -> TrustVerification:
+def verify_trust_record(store, record_id: Any, *, evaluated_at: Any,
+                        expected_subject_type: Any = None) -> TrustVerification:
     """The same answer, reached from a trust record identity.
 
     Fabric records reference trust by record identity; the released query
     interface answers by subject. This resolves one to the other and asks the
     same question, so there is still only one route to standing.
+
+    It also answers two questions the evaluation cannot. The **domain** comes
+    from the record, because the evaluation does not carry it. And the
+    referenced record must still be the subject's **current** record: a subject
+    re-decided since the reference was written verifies through a newer record,
+    and admitting the old one on the strength of that would admit a reference
+    that no longer describes anything.
+
+    `expected_subject_type` is optional and compared exactly.
     """
     identifier = _require_record_identity(record_id)
     instant = _require_instant(evaluated_at)
+    required = (None if expected_subject_type is None
+                else _require_subject_type(expected_subject_type))
 
     try:
         record = get_trust_record(store, identifier)
@@ -333,4 +404,22 @@ def verify_trust_record(store, record_id: Any, *,
     if not isinstance(subject, str) or not subject.strip():
         return _unverified(identifier, instant, REASON_UNREADABLE)
 
-    return verify_subject(store, subject, evaluated_at=instant)
+    subject_type = _clean_subject_type(record.get("subject_type"))
+    if subject_type is None:
+        return _unverified(identifier, instant, REASON_UNREADABLE)
+
+    verification = verify_subject(store, subject, evaluated_at=instant)
+
+    # An answer that cites a record must cite this one. An answer that cites
+    # none -- absent standing, an unavailable plane -- keeps its own reason
+    # rather than being reported as an obsolete reference.
+    if verification.record_id is not None:
+        if verification.record_id != identifier:
+            return _refused(verification, REASON_UNREADABLE, subject_type)
+    elif verification.status == VERIFIED:
+        return _refused(verification, REASON_UNREADABLE, subject_type)
+
+    if required is not None and subject_type != required:
+        return _refused(verification, REASON_SUBJECT_TYPE_MISMATCH, subject_type)
+
+    return _with_subject_type(verification, subject_type)
