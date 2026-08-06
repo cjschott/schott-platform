@@ -631,6 +631,24 @@ def is_c1_delegation(call):
             and len(call.args) == 2)
 
 
+def eligible_commits(tree):
+    """The module's own `_commit` definitions that could carry the delegation.
+
+    Module-level only. A `_commit` nested in a class or another function is not
+    the reviewed commit path, and treating it as one would authorise a writer
+    that no reader of this module's top level would ever see.
+    """
+    return [node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_commit"
+            and "store" in formal_parameters(node) and not rebinds(node, "store")]
+
+
+def delegation_calls(scope):
+    """The `store.write(kind, record)` calls made in this scope's own body."""
+    return [node for node in own_scope(scope)
+            if isinstance(node, ast.Call) and is_c1_delegation(node)]
+
+
 def permitted_delegations(tree):
     """The C1 commit calls, bound to the formal receiver that makes them one.
 
@@ -641,17 +659,19 @@ def permitted_delegations(tree):
     Another receiver, another write name, a getattr indirection, an alias, a
     shadowed or rebound `store`, and a nested scope's own `store` all stay
     forbidden.
+
+    **The authorisation is singular.** Exactly one eligible `_commit`, making
+    exactly one delegation. Two definitions or two calls are an ambiguity, and
+    an ambiguous authorisation authorises whichever site nobody reviewed, so
+    any count other than one permits nothing at all.
     """
-    permitted = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or node.name != "_commit":
-            continue
-        if "store" not in formal_parameters(node) or rebinds(node, "store"):
-            continue
-        for inner in own_scope(node):
-            if isinstance(inner, ast.Call) and is_c1_delegation(inner):
-                permitted.add(id(inner))
-    return permitted
+    commits = eligible_commits(tree)
+    if len(commits) != 1:
+        return set()
+    calls = delegation_calls(commits[0])
+    if len(calls) != 1:
+        return set()
+    return {id(calls[0])}
 
 
 def scan(tree, aliased, name):
@@ -727,6 +747,22 @@ GUARD_REFUSED = (
      "a commit call made by keyword"),
     (COMMIT + "    def inner(store):\n        store.write(kind, record)\n",
      "a commit from a nested scope's own store"),
+    # The authorisation is for one delegation at one call site. Two of anything
+    # is an ambiguity, and an ambiguous authorisation authorises whichever site
+    # nobody looked at.
+    (COMMIT + "    store.write(kind, record)\n    store.write(kind, record)\n",
+     "two commit calls inside one _commit"),
+    (COMMIT + "    store.write(kind, record)\n\n"
+     + COMMIT + "    store.write(kind, record)\n",
+     "two _commit definitions each carrying a commit"),
+    (COMMIT + "    other.write(kind, record)\n",
+     "a commit through a receiver that is not the store parameter"),
+    (COMMIT + "    store.write_atomic(kind, record)\n",
+     "write_atomic passed the commit arguments"),
+    ("def wrong(store, kind, record):\n    store.write(kind, record)\n",
+     "a commit function that is not named _commit"),
+    ("class Holder:\n" + "    " + COMMIT + "        store.write(kind, record)\n",
+     "a _commit that is not the module's own definition"),
 )
 for snippet, description in GUARD_ALLOWED:
     parsed = ast.parse(snippet)
@@ -742,6 +778,39 @@ for snippet, description in GUARD_REFUSED:
     else:
         failures += 1
         print(f"FAIL: the writer guard no longer refuses {description}")
+
+
+# The authorised delegation is singular, and the real module is asserted to be
+# what the narrowing assumes. A guard that permits "at least one" would let a
+# second commit site appear beside the reviewed one and still report success,
+# so zero and two are both failures here.
+ADMISSION_SOURCE = (root / "tools" / "fabric" / "admission.py").read_text(encoding="utf-8")
+ADMISSION_TREE = ast.parse(ADMISSION_SOURCE, filename="admission.py")
+DEFINED_COMMITS = [node for node in ast.walk(ADMISSION_TREE)
+                   if isinstance(node, ast.FunctionDef) and node.name == "_commit"]
+ELIGIBLE_COMMITS = eligible_commits(ADMISSION_TREE)
+AUTHORISED = permitted_delegations(ADMISSION_TREE)
+WRITE_CALLS = [node for node in ast.walk(ADMISSION_TREE)
+               if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr == "write"]
+for condition, description in (
+        (len(DEFINED_COMMITS) == 1,
+         f"admission.py defines exactly one _commit ({len(DEFINED_COMMITS)})"),
+        (len(ELIGIBLE_COMMITS) == 1,
+         f"exactly one _commit is eligible to delegate ({len(ELIGIBLE_COMMITS)})"),
+        (len(ELIGIBLE_COMMITS) == 1 and len(delegation_calls(ELIGIBLE_COMMITS[0])) == 1,
+         "the eligible _commit makes exactly one C1 delegation"),
+        (len(AUTHORISED) == 1,
+         f"exactly one C1 delegation is authorised in admission.py ({len(AUTHORISED)})"),
+        (len(WRITE_CALLS) == 1,
+         f"admission.py contains exactly one .write call at all ({len(WRITE_CALLS)})"),
+        (len(permitted_delegations(ast.parse(ADMISSION_SOURCE))) == 1,
+         "the authorisation is stable across a second parse")):
+    if condition:
+        print(f"PASS: {description}")
+    else:
+        failures += 1
+        print(f"FAIL: {description}")
 
 
 for path in sorted((root / "tools" / "fabric").glob("*.py")):
@@ -4699,7 +4768,7 @@ import os
 import stat
 import sys
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -5373,6 +5442,10 @@ RELEASED_TRUST_VERIFY = trust_adapter.verify_trust_record
 CONFLICT_REASON = "request_identity_conflict"
 MALFORMED_CONTENT = "malformed-operation-content"
 NAIVE_INSTANT = "timestamp-carries-no-offset"
+MISSING_ACTOR = "missing-actor"
+MISSING_AUTHORITY = "missing-approving-authority"
+UNEXPECTED_AUTHORITY = "unexpected-approving-authority"
+INVALID_WINDOW = "invalid-validity-window"
 
 
 class CountingTrust:
@@ -5679,9 +5752,12 @@ try:
              ("advertised_resource_profile", {"host_cpu_cores": 8}),
              ("observed_at", STAMP - timedelta(hours=1)),
              ("valid_until", LATER + timedelta(hours=1)),
-             ("provenance", dict(OTHER_PROV)),
-             ("approving_authority", OPERATOR)),
+             ("provenance", dict(OTHER_PROV))),
             Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+        # `approving_authority` stays in the digest, but no non-`None` value is
+        # ever structurally reachable: naming an approver is refused before the
+        # request is identified at all, so it is asserted below as a structural
+        # prohibition rather than as one more digestible change.
 
     # --- An optional that was supplied is not the same request as one that
     #     was not, in either direction --------------------------------------
@@ -5720,13 +5796,20 @@ try:
               "the declaration establishing an authority regression is accepted")
         before = forensic(fabric_root)
         allocated = list(store.allocations)
-        for field, value, description in (
-                ("actor", None, "no actor"),
-                ("actor", "", "an empty actor"),
-                ("actor", 7, "a non-textual actor"),
-                ("approving_authority", None, "no approving authority"),
-                ("approving_authority", "", "an empty approving authority"),
-                ("approving_authority", 7, "a non-textual approving authority")):
+        # Malformed authority is not a different request -- it is not a request.
+        # It is refused on its structure, so it can be neither a replay of the
+        # accepted operation nor a conflict with it.
+        for field, value, reason, description in (
+                ("actor", None, MISSING_ACTOR, "no actor"),
+                ("actor", "", MISSING_ACTOR, "an empty actor"),
+                ("actor", 7, MISSING_ACTOR, "a non-textual actor"),
+                ("approving_authority", None, MISSING_AUTHORITY,
+                 "no approving authority"),
+                ("approving_authority", "", MISSING_AUTHORITY,
+                 "an empty approving authority"),
+                ("approving_authority", 7, MISSING_AUTHORITY,
+                 "a non-textual approving authority")):
+            entries = store.entries
             result, error = attempted(lambda: declare_capability(
                 store, **dict(BASE_CAPABILITY, request_id="req-authority",
                               **{field: value})))
@@ -5736,8 +5819,12 @@ try:
                 continue
             check(result.outcome != EXACT_REPLAY,
                   f"a reused request identity with {description} is never an exact replay")
-            check(result.outcome == CONFLICT,
-                  f"a reused request identity with {description} is a conflict")
+            check(result.outcome != CONFLICT,
+                  f"a reused request identity with {description} is never a conflict")
+            check(result.outcome == INVALID and result.reason == reason,
+                  f"a reused request identity with {description} is refused as {reason}")
+            check(store.entries == entries,
+                  f"a reused request identity with {description} enters no critical section")
             check(result.record_id is None,
                   f"a reused request identity with {description} names no record")
             check(store.allocations == allocated,
@@ -5753,8 +5840,8 @@ try:
         check(error is None, "an unrepresentable actor raises nothing")
         check(result is not None and result.outcome == INVALID,
               "an unrepresentable actor is refused as invalid")
-        check(result is not None and result.reason == MALFORMED_CONTENT,
-              "an unrepresentable actor is named malformed-operation-content")
+        check(result is not None and result.reason == MISSING_ACTOR,
+              "an unrepresentable actor is named missing-actor")
         check(result is not None and result.outcome != EXACT_REPLAY,
               "an unrepresentable actor is never an exact replay")
         check(store.entries == entries,
@@ -5924,6 +6011,313 @@ try:
               "a model-construction failure allocates no identity at all")
         check(sequences_of(fabric_root) == counters,
               "a model-construction failure leaves every sequence exactly where it was")
+
+    # --- Structure is judged before identity, not after ---------------------
+    # A caller value whose form is wrong does not describe a different request;
+    # it describes no request. Digesting it first lets it borrow an accepted
+    # request's identity: an ISO string and the datetime it renders produce the
+    # same canonical text, so a malformed timestamp could return the accepted
+    # record as though the caller had submitted it.
+
+    class ExplodingInstant(datetime):
+        """An aware instant whose rendering fails. Structure alone cannot tell."""
+
+        def isoformat(self, *args, **kwargs):
+            raise RuntimeError("this instant refuses to be rendered")
+
+    class ExplodingZone(tzinfo):
+        """An offset that raises when it is asked what it is."""
+
+        def utcoffset(self, instant):
+            raise RuntimeError("this zone refuses to answer")
+
+        def tzname(self, instant):
+            return "exploding"
+
+        def dst(self, instant):
+            return None
+
+    def exploding_at(instant):
+        """The same instant, rendered by something that refuses to render."""
+        return ExplodingInstant(instant.year, instant.month, instant.day,
+                                instant.hour, instant.minute, instant.second,
+                                tzinfo=instant.tzinfo)
+
+    def zoned_at(instant):
+        """The same wall time, offset by something that refuses to answer."""
+        return datetime(instant.year, instant.month, instant.day, instant.hour,
+                        instant.minute, instant.second, tzinfo=ExplodingZone())
+
+    def structural_matrix(label, run, base, cases, fabric_root, trust_root, store,
+                          trust):
+        """One accepted request, then structurally malformed reuses of its identity.
+
+        Each case must be refused on its structure alone: before the digest,
+        before the critical section, before replay or conflict classification,
+        and before anything is resolved, queried, allocated, or written.
+        """
+        original = run(**base)
+        check(original.outcome == ACCEPTED,
+              f"the {label} establishing a structural regression is accepted")
+        if original.outcome != ACCEPTED:
+            return
+        before = forensic(fabric_root)
+        trust_before = forensic(trust_root)
+        counters = sequences_of(fabric_root)
+        allocated = list(store.allocations)
+        written = list(store.writes)
+        recorded = store.read_record(original.record_kind, original.record_id)
+        resolutions = store.reads
+        queries = trust.calls
+
+        for field, value, outcome, reason, description in cases:
+            entries = store.entries
+            result, error = attempted(lambda: run(**dict(base, **{field: value})))
+            check(error is None,
+                  f"a {label} reusing its identity with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome and result.reason == reason,
+                  f"a {label} reusing its identity with {description} is refused as {reason}")
+            check(result.outcome != EXACT_REPLAY,
+                  f"a {label} reusing its identity with {description} is never an exact replay")
+            check(result.outcome != CONFLICT,
+                  f"a {label} reusing its identity with {description} is never a conflict")
+            check(store.entries == entries,
+                  f"a {label} reusing its identity with {description} enters no critical section")
+            check(result.record_id is None and result.record_kind is None,
+                  f"a {label} reusing its identity with {description} names no record")
+            check(store.allocations == allocated,
+                  f"a {label} reusing its identity with {description} allocates nothing")
+            check(store.writes == written,
+                  f"a {label} reusing its identity with {description} writes nothing")
+            check(store.reads == resolutions,
+                  f"a {label} reusing its identity with {description} resolves no reference")
+            check(trust.calls == queries,
+                  f"a {label} reusing its identity with {description} queries no trust")
+            check(sequences_of(fabric_root) == counters,
+                  f"a {label} reusing its identity with {description} advances no sequence")
+            check(forensic(fabric_root) == before,
+                  f"a {label} reusing its identity with {description} leaves the fabric identical")
+            check(forensic(trust_root) == trust_before,
+                  f"a {label} reusing its identity with {description} leaves trust identical")
+            rendered = str(result.to_dict())
+            for token, leak in ((" 0x", "an object address"),
+                                ("/tmp/", "a filesystem path"),
+                                ("Traceback", "a traceback"),
+                                ("object at", "an object repr"),
+                                ("RuntimeError", "an exception type")):
+                check(token not in rendered,
+                      f"a {label} reusing its identity with {description} leaks no {leak}")
+            repeated, repeated_error = attempted(
+                lambda: run(**dict(base, **{field: value})))
+            check(repeated_error is None and repeated is not None
+                  and repeated.outcome == result.outcome
+                  and repeated.reason == result.reason,
+                  f"a {label} reusing its identity with {description} refuses identically twice")
+
+        # The accepted record is still exactly what it was, and still replays.
+        check(store.read_record(original.record_kind, original.record_id) == recorded,
+              f"the accepted {label} record is unchanged after every structural refusal")
+        survivor = run(**base)
+        check(survivor.outcome == EXACT_REPLAY and survivor.record_id == original.record_id,
+              f"the accepted {label} still replays exactly after every structural refusal")
+
+    # A timestamp's own ISO text is the case that motivated the correction: it
+    # canonicalises identically to the datetime it renders. The hostile
+    # instants keep the field's own value, so a window check cannot refuse them
+    # before the rendering that is actually under test is reached.
+    NAIVE_STAMP = STAMP.replace(tzinfo=None)
+
+    def instant_cases(field, accepted_value):
+        return ((field, accepted_value.isoformat(), INVALID, NAIVE_INSTANT,
+                 f"{field} as its own ISO text"),
+                (field, NAIVE_STAMP, INVALID, NAIVE_INSTANT,
+                 f"a naive {field}"),
+                (field, 7, INVALID, NAIVE_INSTANT, f"a numeric {field}"),
+                (field, None, INVALID, NAIVE_INSTANT, f"an absent {field}"),
+                (field, exploding_at(accepted_value), INVALID, MALFORMED_CONTENT,
+                 f"a {field} that cannot be rendered"),
+                (field, zoned_at(accepted_value), INVALID, MALFORMED_CONTENT,
+                 f"a {field} whose offset raises"))
+
+    AUTHORITY_CASES = (
+        ("actor", "", INVALID, MISSING_ACTOR, "an empty actor"),
+        ("actor", None, INVALID, MISSING_ACTOR, "no actor"),
+        ("approving_authority", None, INVALID, MISSING_AUTHORITY,
+         "no approving authority"),
+        ("approving_authority", "", INVALID, MISSING_AUTHORITY,
+         "an empty approving authority"),
+    )
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        structural_matrix(
+            "capability declaration",
+            lambda **fields: declare_capability(store, **fields),
+            dict(BASE_CAPABILITY, request_id="req-structural"),
+            AUTHORITY_CASES + instant_cases("recorded_at", STAMP),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        structural_matrix(
+            "contract declaration",
+            lambda **fields: declare_contract(store, **fields),
+            dict(BASE_CONTRACT, request_id="req-structural",
+                 capability_id=cap.record_id),
+            AUTHORITY_CASES + instant_cases("recorded_at", STAMP),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        con = declare_contract(store, **dict(BASE_CONTRACT,
+                                             request_id="req-seed-con",
+                                             capability_id=cap.record_id))
+        structural_matrix(
+            "package declaration",
+            lambda **fields: declare_package(store, **fields),
+            dict(BASE_PACKAGE, request_id="req-structural",
+                 capability_id=cap.record_id, contract_id=con.record_id),
+            AUTHORITY_CASES + instant_cases("recorded_at", STAMP),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        structural_matrix(
+            "subject admission",
+            lambda **fields: admit_subject(store, trust_store, **fields),
+            dict(BASE_SUBJECT, request_id="req-structural",
+                 fabric_node_trust_record_id=granted.record.record_id),
+            AUTHORITY_CASES + instant_cases("recorded_at", STAMP)
+            + instant_cases("evaluated_at", STAMP),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        con = declare_contract(store, **dict(BASE_CONTRACT,
+                                             request_id="req-seed-con",
+                                             capability_id=cap.record_id))
+        pkg = declare_package(store, **dict(BASE_PACKAGE, request_id="req-seed-pkg",
+                                            capability_id=cap.record_id,
+                                            contract_id=con.record_id))
+        adm = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id="req-seed-host",
+            fabric_node_trust_record_id=granted.record.record_id))
+        structural_matrix(
+            "advertisement registration",
+            lambda **fields: register_advertisement(store, **fields),
+            dict(BASE_ADVERT, request_id="req-structural", actor=adm.record_id,
+                 capability_host_id=adm.record_id,
+                 capability_package_id=pkg.record_id, contract_id=con.record_id),
+            (("actor", "", INVALID, MISSING_ACTOR, "an empty actor"),
+             ("actor", None, INVALID, MISSING_ACTOR, "no actor"),
+             # An advertisement names no approver, and one is refused on
+             # structure: recording it would turn a self-report into approval.
+             ("approving_authority", OPERATOR, REFUSED, UNEXPECTED_AUTHORITY,
+              "a supplied approving authority"),
+             ("approving_authority", "operator:other", REFUSED,
+              UNEXPECTED_AUTHORITY, "another supplied approving authority"),
+             ("valid_until", STAMP, REFUSED, INVALID_WINDOW,
+              "a window that ends when it starts"),
+             ("valid_until", STAMP - timedelta(hours=1), REFUSED, INVALID_WINDOW,
+              "a reversed validity window"))
+            + instant_cases("recorded_at", STAMP)
+            + instant_cases("observed_at", STAMP)
+            + instant_cases("valid_until", LATER),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    # --- Structural refusal does not displace conflict ----------------------
+    # The preflight must refuse malformed structure without swallowing the
+    # conflict a structurally valid change still owes.
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        con = declare_contract(store, **dict(BASE_CONTRACT,
+                                             request_id="req-seed-con",
+                                             capability_id=cap.record_id))
+        pkg = declare_package(store, **dict(BASE_PACKAGE, request_id="req-seed-pkg",
+                                            capability_id=cap.record_id,
+                                            contract_id=con.record_id))
+        adm = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id="req-seed-host",
+            fabric_node_trust_record_id=granted.record.record_id))
+        VALID_CHANGES = (
+            ("capability declaration",
+             lambda **fields: declare_capability(store, **fields),
+             dict(BASE_CAPABILITY, request_id="req-valid-cap"),
+             (("actor", "operator:other"),
+              ("approving_authority", "operator:other"),
+              ("recorded_at", LATER))),
+            ("contract declaration",
+             lambda **fields: declare_contract(store, **fields),
+             dict(BASE_CONTRACT, request_id="req-valid-con",
+                  capability_id=cap.record_id),
+             (("actor", "operator:other"),
+              ("approving_authority", "operator:other"),
+              ("recorded_at", LATER))),
+            ("package declaration",
+             lambda **fields: declare_package(store, **fields),
+             dict(BASE_PACKAGE, request_id="req-valid-pkg",
+                  capability_id=cap.record_id, contract_id=con.record_id),
+             (("actor", "operator:other"),
+              ("approving_authority", "operator:other"),
+              ("recorded_at", LATER))),
+            ("subject admission",
+             lambda **fields: admit_subject(store, trust_store, **fields),
+             dict(BASE_SUBJECT, request_id="req-valid-host",
+                  node_identity_reference="node/schai",
+                  fabric_node_trust_record_id=granted.record.record_id),
+             (("actor", "operator:other"),
+              ("approving_authority", "operator:other"),
+              ("recorded_at", LATER),
+              ("evaluated_at", LATER))),
+            ("advertisement registration",
+             lambda **fields: register_advertisement(store, **fields),
+             dict(BASE_ADVERT, request_id="req-valid-adv", actor=adm.record_id,
+                  capability_host_id=adm.record_id,
+                  capability_package_id=pkg.record_id, contract_id=con.record_id),
+             (("actor", "CHOST-9999"),
+              ("recorded_at", LATER),
+              ("observed_at", STAMP - timedelta(hours=1)),
+              ("valid_until", LATER + timedelta(hours=1)))),
+        )
+        for label, run, base, changes in VALID_CHANGES:
+            accepted = run(**base)
+            check(accepted.outcome == ACCEPTED,
+                  f"the {label} establishing a valid-change regression is accepted")
+            before = forensic(fabric_root)
+            for field, value in changes:
+                entries = store.entries
+                result, error = attempted(lambda: run(**dict(base, **{field: value})))
+                check(error is None,
+                      f"a structurally valid changed {field} on a {label} raises nothing")
+                if error is not None:
+                    continue
+                check(result.outcome == CONFLICT and result.reason == CONFLICT_REASON,
+                      f"a structurally valid changed {field} on a {label} still conflicts")
+                check(store.entries == entries + 1,
+                      f"a structurally valid changed {field} on a {label} enters the section once")
+                check(forensic(fabric_root) == before,
+                      f"a structurally valid changed {field} on a {label} changes nothing")
+            replayed = run(**base)
+            check(replayed.outcome == EXACT_REPLAY
+                  and replayed.record_id == accepted.record_id,
+                  f"the byte-identical {label} still replays exactly")
 
     # --- A refused request is not durably replayed --------------------------
     with TemporaryDirectory() as tmp:

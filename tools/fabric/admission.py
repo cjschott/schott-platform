@@ -204,21 +204,37 @@ def _contained(claim: Mapping[str, Any], verified: Mapping[str, Any]) -> bool:
     return True
 
 
-def _digestible(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _human_preflight(actor: Any, approving_authority: Any, *instants: Any) -> None:
+    """The structure a human-authorised request must have to be a request.
+
+    Named authority and real instants only. Everything checked here is checked
+    before the request is identified, because a value of the wrong form does
+    not describe a *different* request -- it describes none.
+    """
+    _human_authority(actor, approving_authority)
+    for instant in instants:
+        _aware(instant)
+
+
+def _digestible(payload: Mapping[str, Any],
+                instants: tuple[str, ...]) -> dict[str, Any]:
     """The authoritative payload in the form the released canonicaliser reads.
 
-    A timestamp becomes its own offset-carrying text, which is the convention
-    the released digest already uses. That is the only conversion: everything
-    else is passed through exactly as it was supplied, so a value the
-    canonicaliser cannot represent is refused rather than flattened into
-    something that would collide with a different input.
+    Only the named timestamp fields become text, and only because the preflight
+    has already proved each of them is a timezone-aware `datetime`. Converting
+    by *type* instead would erase the difference between an instant and its own
+    ISO rendering: the two would canonicalise identically, and a malformed
+    request could borrow an accepted one's identity and be answered with its
+    record. A `datetime` anywhere else is left alone, so the released
+    canonicaliser refuses it as the unrepresentable value it is.
     """
-    return {name: value.isoformat() if isinstance(value, datetime) else value
+    return {name: value.isoformat() if name in instants else value
             for name, value in payload.items()}
 
 
 def _governed(store, *, operation: str, request_id: Any,
-              payload: Mapping[str, Any], accept) -> OperationResult:
+              payload: Mapping[str, Any], instants: tuple[str, ...], preflight,
+              accept) -> OperationResult:
     """The operation boundary every governed acceptance shares.
 
     **The digest covers the whole operation.** Every caller-supplied
@@ -229,18 +245,28 @@ def _governed(store, *, operation: str, request_id: Any,
     identity, not a store, and not a resolved prerequisite, because none of
     those is what the caller asked for.
 
-    A request identity that cannot be validated, or a payload the released
-    canonicaliser cannot represent, is refused before the critical section:
-    there is nothing yet to serialise against.
+    **Structure is judged before identity.** The preflight runs first, so a
+    request identity that cannot be validated, authority that is missing or
+    prohibited, an instant that is not an instant, a window that closes before
+    it opens, or a payload the released canonicaliser cannot represent is
+    refused before the critical section is entered and before replay is
+    classified at all. Answering a malformed request with a replay or a
+    conflict would report on an operation nobody submitted, and there is
+    nothing yet to serialise against either way.
 
     One acquisition of the critical section, taken before replay lookup and
     held through allocation and the accepted write.
     """
+    supplied = request_id if isinstance(request_id, str) else ""
     try:
         identifier = validate_request_id(request_id)
-        digest = compute_request_digest(operation, _digestible(payload))
-    except FabricError:
-        supplied = request_id if isinstance(request_id, str) else ""
+        preflight()
+        digest = compute_request_digest(operation, _digestible(payload, instants))
+    except _Refusal as refusal:
+        return OperationResult(refusal.outcome, supplied, reason=refusal.reason)
+    except Exception:  # noqa: BLE001
+        # Including whatever a hostile timestamp raises while being examined or
+        # rendered. It is named as malformed content and never echoed.
         return OperationResult(INVALID, supplied, reason=REASON_CONTENT)
 
     with store.request_critical_section(identifier):
@@ -319,11 +345,9 @@ def declare_capability(store, *, request_id: Any, actor: Any,
                        provenance: Any, notes: Any = None) -> OperationResult:
     """Record an abstract ability. Declaration confers nothing."""
     def accept(identifier, digest):
-        _human_authority(actor, approving_authority)
         _text(name, REASON_CONTENT)
         _text(description, REASON_CONTENT)
         _effect_class(effect_class)
-        _aware(recorded_at)
         _mapping(provenance)
         references = _sequence(contract_ids)
         for reference in references:
@@ -349,6 +373,9 @@ def declare_capability(store, *, request_id: Any, actor: Any,
                               "effect_class": effect_class,
                               "contract_ids": contract_ids,
                               "provenance": provenance, "notes": notes},
+                     instants=("recorded_at",),
+                     preflight=lambda: _human_preflight(
+                         actor, approving_authority, recorded_at),
                      accept=accept)
 
 
@@ -361,11 +388,9 @@ def declare_contract(store, *, request_id: Any, actor: Any,
                      provenance: Any, description: Any = None) -> OperationResult:
     """Record a versioned interface against a declared capability."""
     def accept(identifier, digest):
-        _human_authority(actor, approving_authority)
         _text(contract_version, REASON_CONTENT)
         _effect_class(effect_class)
         _text(determinism_class, REASON_CONTENT)
-        _aware(recorded_at)
         modes = _sequence(failure_modes)
         compatible = _sequence(compatible_with)
         _resolve(store, "capability-definition", capability_id)
@@ -404,6 +429,9 @@ def declare_contract(store, *, request_id: Any, actor: Any,
                               "compatible_with": compatible_with,
                               "provenance": provenance,
                               "description": description},
+                     instants=("recorded_at",),
+                     preflight=lambda: _human_preflight(
+                         actor, approving_authority, recorded_at),
                      accept=accept)
 
 
@@ -415,10 +443,8 @@ def declare_package(store, *, request_id: Any, actor: Any,
                     description: Any = None) -> OperationResult:
     """Record a package claiming contract versions. Nothing is read or run."""
     def accept(identifier, digest):
-        _human_authority(actor, approving_authority)
         _text(package_version, REASON_CONTENT)
         _text(artifact_reference, REASON_CONTENT)
-        _aware(recorded_at)
         if trust_domain != PACKAGE_TRUST_DOMAIN:
             _refuse(REFUSED, REASON_TRUST_DOMAIN)
         versions = _sequence(satisfied_contract_versions)
@@ -463,6 +489,9 @@ def declare_package(store, *, request_id: Any, actor: Any,
                               "trust_domain": trust_domain,
                               "provenance": provenance,
                               "description": description},
+                     instants=("recorded_at",),
+                     preflight=lambda: _human_preflight(
+                         actor, approving_authority, recorded_at),
                      accept=accept)
 
 
@@ -477,13 +506,10 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
                   name: Any = None, description: Any = None) -> OperationResult:
     """Make a machine a fabric participant. There is no automatic path."""
     def accept(identifier, digest):
-        _human_authority(actor, approving_authority)
         _text(node_identity_reference, REASON_CONTENT)
         _text(location_class, REASON_CONTENT)
         _text(data_classification_ceiling, REASON_CONTENT)
         _text(availability_intent, REASON_CONTENT)
-        _aware(recorded_at)
-        _aware(evaluated_at)
         profile = _mapping(verified_resource_profile)
         # Verified out of band, and provably so. A profile with nothing
         # recording how it was obtained cannot be distinguished from one copied
@@ -542,6 +568,9 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
                               "availability_intent": availability_intent,
                               "provenance": provenance, "name": name,
                               "description": description},
+                     instants=("recorded_at", "evaluated_at"),
+                     preflight=lambda: _human_preflight(
+                         actor, approving_authority, recorded_at, evaluated_at),
                      accept=accept)
 
 
@@ -554,17 +583,20 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                            valid_until: Any, provenance: Any,
                            approving_authority: Any = None) -> OperationResult:
     """The subject's own claim. It grants nothing, including to itself."""
-    def accept(identifier, digest):
+    def preflight():
         _text(actor, REASON_ACTOR)
         # No fresh human approval, and none accepted: recording one would make
-        # a self-report into an approval.
+        # a self-report into an approval. Refused on structure, so naming an
+        # approver can never be mistaken for a differently-identified request.
         if approving_authority is not None:
             _refuse(REFUSED, REASON_UNEXPECTED_AUTHORITY)
         _aware(recorded_at)
-        observed = _aware(observed_at)
-        until = _aware(valid_until)
-        if until <= observed:
+        _aware(observed_at)
+        _aware(valid_until)
+        if valid_until <= observed_at:
             _refuse(REFUSED, REASON_WINDOW)
+
+    def accept(identifier, digest):
         claim = _mapping(advertised_resource_profile)
         versions = _sequence(satisfied_contract_versions)
         if not versions:
@@ -602,7 +634,7 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                            contract_id=contract_id,
                            satisfied_contract_versions=versions,
                            advertised_resource_profile=claim,
-                           observed_at=observed, valid_until=until,
+                           observed_at=observed_at, valid_until=valid_until,
                            provenance=provenance, evidence=carried))
 
     # `approving_authority` is part of what was asked for even though the only
@@ -622,4 +654,5 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                               "valid_until": valid_until,
                               "provenance": provenance,
                               "approving_authority": approving_authority},
-                     accept=accept)
+                     instants=("recorded_at", "observed_at", "valid_until"),
+                     preflight=preflight, accept=accept)
