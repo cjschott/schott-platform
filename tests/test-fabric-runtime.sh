@@ -32,6 +32,19 @@ assert_file() {
   if [[ -f "${ROOT}/$1" ]]; then pass "file exists: $1"; else fail "required file missing: $1"; fi
 }
 
+assert_contains() {
+  local target="$1" pattern="$2" description="$3"
+  if [[ ! -e "${ROOT}/${target}" ]]; then
+    fail "${description} (missing ${target})"
+    return
+  fi
+  if grep -qE -e "${pattern}" "${ROOT}/${target}"; then
+    pass "${description}"
+  else
+    fail "${description}"
+  fi
+}
+
 assert_absent_in() {
   local target="$1" pattern="$2" description="$3" matches
   if [[ ! -e "${ROOT}/${target}" ]]; then
@@ -3177,6 +3190,506 @@ if [[ -z "${IDENTITY_FAILURES}" ]]; then
 else
   FAILURES=$((FAILURES + IDENTITY_FAILURES))
 fi
+
+# --- Trust verification adapter, C3 (increment 5) ----------------------------
+# A read-only bridge to the released Trust Plane. It resolves standing through
+# the released query interfaces and nothing else: no direct trust-store path,
+# no cache, no retry, no verdict of its own.
+TRUSTPY_OUTPUT="$(python3 - "${ROOT}" <<'TRUSTPY' 2>&1 || true
+import hashlib
+import os
+import stat
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+
+failures = 0
+
+
+def ok(message):
+    print(f"PASS: {message}")
+
+
+def bad(message):
+    global failures
+    failures += 1
+    print(f"FAIL: {message}")
+
+
+def check(condition, message):
+    if condition:
+        ok(message)
+    else:
+        bad(message)
+
+
+from tools.trust.store import TrustStore  # noqa: E402
+from tools.trust.models import (  # noqa: E402
+    TrustEvidenceReference, TrustScope, TrustState, TrustVerificationDetails,
+    VerificationMethod,
+)
+from tools.trust.root_authority import (  # noqa: E402
+    declare_root_authority, load_root_declaration,
+)
+from tools.trust.evaluator import create_decision  # noqa: E402
+from tools.trust import query as Q  # noqa: E402
+from tools.fabric.errors import FabricError  # noqa: E402
+from tools.fabric.store import FabricStore  # noqa: E402
+from tools.fabric.models import RECORD_MODELS  # noqa: E402
+from tools.fabric.evidence import assemble_evidence  # noqa: E402
+from tools.fabric.request_identity import compute_request_digest  # noqa: E402
+# The import that must fail before increment 5 exists.
+from tools.fabric.trust_adapter import (  # noqa: E402
+    UNVERIFIED,
+    VERIFIED,
+    TrustVerification,
+    verify_subject,
+    verify_trust_record,
+)
+import tools.fabric.trust_adapter as adapter_module  # noqa: E402
+
+import yaml as _yaml  # noqa: E402
+
+UID = os.geteuid()
+GID = os.getegid()
+
+STAMP = datetime(2026, 8, 2, 9, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+SHORT = STAMP + timedelta(days=2)
+AFTER = STAMP + timedelta(days=3)
+YEAR = STAMP + timedelta(days=365)
+NAIVE = datetime(2026, 8, 2, 9, 0, 0)
+WHEN = datetime(2026, 8, 5, 9, 0, 0, tzinfo=timezone.utc)
+PROV = {"class": "declared", "source": "operator"}
+DIGEST = compute_request_digest("select", {"route_id": "CROUTE-0001"})
+
+
+def selection_evidence(request_id):
+    """Valid CSEL evidence: a requesting actor and no human approver."""
+    return assemble_evidence(
+        "capability-selection", actor="fabric:selection",
+        reason_category="selection", recorded_at=WHEN, request_id=request_id,
+        request_digest=DIGEST, causal_references=("CROUTE-0001",),
+        trust_evidence_references=())
+
+
+def forensic(base):
+    """Every path, type, mode, owner, inode, mtime, size, and byte."""
+    entries = {}
+    if not base.exists():
+        return entries
+    for path in sorted(base.rglob("*")):
+        info = path.lstat()
+        digest = (hashlib.sha256(path.read_bytes()).hexdigest()
+                  if stat.S_ISREG(info.st_mode) else "")
+        entries[str(path.relative_to(base))] = (
+            stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode),
+            info.st_uid, info.st_gid, info.st_ino, info.st_mtime_ns,
+            info.st_size, digest)
+    return entries
+
+
+def evidence():
+    return (TrustEvidenceReference(
+        evidence_id="TEVID-000001", kind="fingerprint",
+        reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),)
+
+
+def details():
+    return TrustVerificationDetails(
+        subject_property="ssh-host-key-fingerprint",
+        observed_value_reference="/approved/evidence/observed.txt",
+        comparison_source="printed-console-readout",
+        performed_by="operator-role-reference", performed_at=STAMP)
+
+
+def scope():
+    return TrustScope(
+        scope_id="TSCOPE-000001", subject_type="host",
+        permitted_capabilities=("coding-workload",),
+        permitted_operations=("linux.hostname",),
+        permitted_data_classifications=("internal",),
+        permitted_targets=("schmgmt.home.arpa",),
+        validity_start=STAMP, validity_end=YEAR)
+
+
+def root_input():
+    return {
+        "display_name": "Operator Root Authority",
+        "external_identity_reference": "secret-source://approved/operator-root",
+        "verification_method": VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        "verification_details": {
+            "subject_property": "operator-root-identity",
+            "observed_value_reference": "/approved/evidence/root-observed.txt",
+            "comparison_source": "in-person-verification-record",
+            "performed_by": "operator-role-reference",
+            "performed_at": STAMP.isoformat(),
+        },
+        "evidence_references": [{
+            "evidence_id": "TEVID-000001", "kind": "attestation",
+            "reference": "/approved/evidence/root-attestation.txt",
+            "recorded_at": STAMP.isoformat(),
+        }],
+        "created_at": STAMP.isoformat(),
+        "provenance": {"class": "declared", "source": "operator-out-of-band"},
+    }
+
+
+def seeded(tmp):
+    """A real trust store: an operator root, plus trusted, expiring, revoked."""
+    store = TrustStore(Path(tmp) / "trust")
+    approved = Path(tmp) / "approved"
+    approved.mkdir()
+    (approved / "root.yaml").write_text(_yaml.safe_dump(root_input()),
+                                        encoding="utf-8")
+    authority = declare_root_authority(
+        store, load_root_declaration("root.yaml", approved_directory=str(approved)))
+
+    def decide(subject, state, decided_at, expiration, reason, lineage_id=None,
+               revokes_record_id=None):
+        return create_decision(
+            store, subject_id=subject, subject_type="host", requested_state=state,
+            actor_authority_id=authority.authority_id, decided_at=decided_at,
+            reason=reason, evidence_references=evidence(),
+            verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+            verification_details=details(), scope=scope(), expiration=expiration,
+            lineage_id=lineage_id, revokes_record_id=revokes_record_id)
+
+    granted = decide("HOST-GOOD", TrustState.TRUSTED.value, STAMP, YEAR,
+                     "granted for the fabric trust adapter regression")
+    lapsing = decide("HOST-LAPSED", TrustState.TRUSTED.value, STAMP, SHORT,
+                     "granted with a short expiration for the adapter regression")
+    revoking = decide("HOST-REVOKED", TrustState.TRUSTED.value, STAMP, YEAR,
+                      "granted before revocation for the adapter regression")
+    decide("HOST-REVOKED", TrustState.REVOKED.value, AFTER, None,
+           "revoked by explicit operator decision",
+           lineage_id=revoking.lineage.lineage_id,
+           revokes_record_id=revoking.record.record_id)
+    return store, granted, lapsing
+
+
+class CountingStore:
+    """The real store, counting every read the adapter performs."""
+
+    def __init__(self, store):
+        self._store = store
+        self.calls = 0
+
+    def __getattr__(self, name):
+        attribute = getattr(self._store, name)
+        if not callable(attribute):
+            return attribute
+
+        def counted(*args, **kwargs):
+            self.calls += 1
+            return attribute(*args, **kwargs)
+
+        return counted
+
+
+class UnavailableStore:
+    """A Trust Plane that cannot be read at all."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __getattr__(self, name):
+        def unavailable(*args, **kwargs):
+            self.calls += 1
+            raise OSError("the trust store is unavailable")
+
+        return unavailable
+
+
+class MalformedStore:
+    """A Trust Plane whose records are unreadable nonsense."""
+
+    def read(self, *args, **kwargs):
+        return {"state": object(), "expiration": "not-a-timestamp"}
+
+    def all_records(self, *args, **kwargs):
+        return [{"lineage_id": None, "current_decision_id": None}]
+
+    def __getattr__(self, name):
+        def anything(*args, **kwargs):
+            return []
+
+        return anything
+
+
+# --- 1. Valid current trust --------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store, granted, _ = seeded(tmp)
+    released = Q.get_current_trust(store, "HOST-GOOD", evaluated_at=STAMP)
+    verification = verify_subject(store, "HOST-GOOD", evaluated_at=STAMP)
+
+    check(isinstance(verification, TrustVerification),
+          "the adapter returns its immutable verification result")
+    check(verification.status == VERIFIED,
+          "a usable trust record verifies")
+    check(verification.subject_id == released["subject_id"] == "HOST-GOOD",
+          "the verified subject is the subject that was asked about")
+    check(verification.standing == released["effective_state"],
+          "the effective standing is the one the trust plane reports")
+    check(verification.stored_standing == released["stored_state"],
+          "the stored standing is preserved alongside the effective one")
+    check(verification.evaluated_at == STAMP.isoformat(),
+          "the result carries the caller's evaluation instant, unchanged")
+    check(verification.record_id == released["record_id"],
+          "the trust record identity agrees with the trust plane")
+    check(verification.decision_id == released["decision_id"],
+          "the trust decision identity agrees with the trust plane")
+    check(verification.lineage_id == released["lineage_id"],
+          "the lineage identity agrees with the trust plane")
+    check(list(verification.evidence_reference_ids)
+          == list(released["evidence_reference_ids"]),
+          "the evidence references agree with the trust plane")
+    check(verify_subject(store, "HOST-GOOD", evaluated_at=STAMP) == verification,
+          "identical authoritative inputs return an identical result")
+    check(verify_subject(store, "HOST-GOOD", evaluated_at=STAMP).to_dict()
+          == verification.to_dict(),
+          "repeated results serialise identically")
+
+    # The record-identity entry point resolves to the same standing.
+    by_record = verify_trust_record(store, granted.record.record_id,
+                                    evaluated_at=STAMP)
+    check(by_record.status == VERIFIED and by_record.subject_id == "HOST-GOOD",
+          "a trust record identity resolves to the same verified subject")
+
+    # Nothing about the result is mutable.
+    frozen = True
+    try:
+        verification.evidence_reference_ids.append("TEVID-999999")
+        frozen = False
+    except AttributeError:
+        pass
+    check(frozen, "the verification's evidence references cannot be appended to")
+    try:
+        object.__setattr__  # noqa: B018 - presence only
+        verification.status = "tampered"
+        frozen = False
+    except Exception:  # noqa: BLE001
+        pass
+    check(frozen, "the verification result cannot be reassigned")
+
+    # An evaluation instant is required, and must be an instant.
+    for bad_instant, description in ((NAIVE, "a naive datetime"),
+                                     ("2026-08-02T09:00:00-05:00", "text"),
+                                     (None, "nothing at all")):
+        try:
+            verify_subject(store, "HOST-GOOD", evaluated_at=bad_instant)
+            bad(f"an evaluation instant supplied as {description} fails closed "
+                "(was accepted)")
+        except FabricError:
+            ok(f"an evaluation instant supplied as {description} fails closed")
+        except Exception as error:  # noqa: BLE001
+            bad(f"an evaluation instant supplied as {description} fails closed "
+                f"(raised {type(error).__name__})")
+
+# --- 2. Absent trust ---------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    absent = verify_subject(store, "HOST-NEVER-SEEN", evaluated_at=STAMP)
+    check(absent.status == UNVERIFIED, "a subject with no trust lineage is unverified")
+    check(absent.standing == TrustState.UNKNOWN.value,
+          "absent trust reports the unknown standing the trust plane returned")
+    check(absent.reasons, "an unverified result explains itself")
+    check(all(isinstance(reason, str) and reason for reason in absent.reasons),
+          "every refusal reason is written text")
+    for forbidden in ("trusted", "admitted", "eligible", "provisional"):
+        check(not any(forbidden in reason.lower() for reason in absent.reasons)
+              or absent.status == UNVERIFIED,
+              f"absent trust is never reported as {forbidden}")
+    check(absent.record_id is None and absent.decision_id is None,
+          "absent trust cites no trust record or decision")
+    check(verify_subject(store, "HOST-NEVER-SEEN", evaluated_at=STAMP) == absent,
+          "an absent subject verifies identically on repetition")
+
+# --- 3. Expired trust --------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store, _, lapsing = seeded(tmp)
+    stored_before = Q.get_trust_record(store, lapsing.record.record_id)
+    lapsed = verify_subject(store, "HOST-LAPSED", evaluated_at=AFTER)
+    check(lapsed.status == UNVERIFIED,
+          "trust that has expired at the evaluation instant is unverified")
+    check(lapsed.stored_standing == TrustState.TRUSTED.value,
+          "the stored standing is still what the record says")
+    check(lapsed.standing == TrustState.EXPIRED.value,
+          "the effective standing at that instant is expired")
+    check(lapsed.status == UNVERIFIED,
+          "stored historical trust does not override the effective expired standing")
+    live = verify_subject(store, "HOST-LAPSED", evaluated_at=STAMP)
+    check(live.status == VERIFIED,
+          "the same subject verifies before its expiration elapsed")
+    check(Q.get_trust_record(store, lapsing.record.record_id) == stored_before,
+          "verifying an expired subject leaves the historical record untouched")
+
+# --- 4. Revoked trust --------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    revoked = verify_subject(store, "HOST-REVOKED", evaluated_at=AFTER)
+    check(revoked.status == UNVERIFIED, "a revoked subject is unverified")
+    check(revoked.standing == TrustState.REVOKED.value,
+          "the revoked standing is reported as the trust plane reports it")
+    # Revocation moves the lineage head. The evaluation instant governs expiry,
+    # not which decision is current, so a revoked subject is revoked at every
+    # instant -- the earlier grant is history, and history is not standing.
+    earlier = verify_subject(store, "HOST-REVOKED", evaluated_at=STAMP)
+    check(earlier.status == UNVERIFIED,
+          "a revoked subject is unverified even at an instant before the revocation")
+    check(earlier.standing == TrustState.REVOKED.value,
+          "earlier trusted history is not reused after revocation")
+    check(earlier.reasons == revoked.reasons,
+          "the refusal reason does not vary with the instant once trust is revoked")
+
+# --- 5. Malformed or unverifiable trust -------------------------------------
+malformed = verify_subject(MalformedStore(), "HOST-BROKEN", evaluated_at=STAMP)
+check(malformed.status == UNVERIFIED, "malformed trust data is unverified")
+check(malformed.standing == TrustState.UNKNOWN.value,
+      "malformed trust reports the unknown standing, never a guess")
+check(malformed.reasons, "malformed trust explains itself")
+serialised = " ".join(malformed.reasons) + " " + str(malformed.to_dict())
+for leak, description in ((" 0x", "an object address"),
+                          ("/tmp/", "a filesystem path"),
+                          ("Traceback", "a traceback"),
+                          ("object at", "an object repr")):
+    check(leak not in serialised,
+          f"an unverified result never carries {description}")
+check(verify_subject(MalformedStore(), "HOST-BROKEN", evaluated_at=STAMP)
+      == malformed,
+      "malformed trust returns an identical result on repetition")
+
+# --- 6. Trust Plane unavailable ---------------------------------------------
+unavailable_store = UnavailableStore()
+unavailable = verify_subject(unavailable_store, "HOST-GOOD", evaluated_at=STAMP)
+check(unavailable.status == UNVERIFIED,
+      "an unavailable trust plane yields an unverified result")
+check(unavailable.standing == TrustState.UNKNOWN.value,
+      "an unavailable trust plane assumes no standing")
+check(unavailable_store.calls == 1,
+      f"an unavailable trust plane is queried once and not retried "
+      f"({unavailable_store.calls} calls)")
+second = UnavailableStore()
+verify_subject(second, "HOST-GOOD", evaluated_at=STAMP)
+check(second.calls == 1, "a second unavailable verification also queries once")
+
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    counting = CountingStore(store)
+    first_calls = None
+    verify_subject(counting, "HOST-GOOD", evaluated_at=STAMP)
+    first_calls = counting.calls
+    counting.calls = 0
+    verify_subject(counting, "HOST-GOOD", evaluated_at=STAMP)
+    check(counting.calls == first_calls,
+          "a repeated verification performs the same reads, so nothing was cached")
+    check(first_calls > 0, "verification actually consults the trust plane")
+
+# --- 7. No stateful influence ------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    baseline = verify_subject(store, "HOST-LAPSED", evaluated_at=AFTER)
+    for _ in range(5):
+        verify_subject(store, "HOST-LAPSED", evaluated_at=AFTER)
+    check(verify_subject(store, "HOST-LAPSED", evaluated_at=AFTER) == baseline,
+          "repeated verification populates no cache and drifts nowhere")
+
+    # A history of successful fabric selections is not trust evidence.
+    fabric = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    for number in range(1, 4):
+        selection = RECORD_MODELS["capability-selection"](
+            selection_id=f"CSEL-00000{number}", route_id="CROUTE-0001",
+            route_version=1, request_class={"data_classification": "internal"},
+            considered_candidates=("CINST-000001",), excluded_candidates=(),
+            selected_instance_id="CINST-000001",
+            selection_reason="first eligible candidate in declared order",
+            selected_at=WHEN, provenance=PROV,
+            evidence=selection_evidence(f"request-selection-{number}"))
+        fabric.write("capability-selection", selection)
+    check(fabric.counts()["capability-selection"] == 3,
+          "a history of successful selections exists")
+    check(verify_subject(store, "HOST-LAPSED", evaluated_at=AFTER) == baseline,
+          "a history of successful selections alters no trust standing")
+    check(verify_subject(store, "HOST-NEVER-SEEN", evaluated_at=STAMP).status
+          == UNVERIFIED,
+          "selection history is never accepted as trust evidence for an unknown subject")
+
+# --- 8. Read-only against both stores ---------------------------------------
+SUBJECTS = ("HOST-GOOD", "HOST-LAPSED", "HOST-REVOKED", "HOST-NEVER-SEEN")
+for subject in SUBJECTS:
+    for instant, moment in ((STAMP, "at the grant instant"), (AFTER, "after it")):
+        with TemporaryDirectory() as tmp:
+            store, _, _ = seeded(tmp)
+            fabric = FabricStore(Path(tmp) / "fabric", expected_uid=UID,
+                                 expected_gid=GID)
+            trust_root = Path(tmp) / "trust"
+            fabric_root = Path(tmp) / "fabric"
+            trust_before = forensic(trust_root)
+            fabric_before = forensic(fabric_root)
+            verify_subject(store, subject, evaluated_at=instant)
+            check(forensic(trust_root) == trust_before,
+                  f"verifying {subject} {moment} changes nothing in the trust store")
+            check(forensic(fabric_root) == fabric_before,
+                  f"verifying {subject} {moment} changes nothing in the fabric store")
+
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    trust_root = Path(tmp) / "trust"
+    before = forensic(trust_root)
+    verify_subject(MalformedStore(), "HOST-BROKEN", evaluated_at=STAMP)
+    verify_subject(UnavailableStore(), "HOST-GOOD", evaluated_at=STAMP)
+    check(forensic(trust_root) == before,
+          "a refused verification creates no trust file, sequence, or temporary")
+    residue = sorted(p.name for p in trust_root.rglob("*.tmp"))
+    check(residue == [], "a refused verification leaves no temporary artefact")
+
+# --- 9. The adapter claims nothing beyond verification ----------------------
+for later in ("admit", "reject", "evaluate_eligibility", "compute_eligibility",
+              "select", "transition", "advertise", "route", "load", "invoke",
+              "health", "remediate", "repair", "retry", "cache", "refresh"):
+    check(not hasattr(adapter_module, later),
+          f"the trust adapter exposes no '{later}' behaviour at increment 5")
+for writer in ("write", "write_record", "create_decision", "declare_root_authority",
+               "record_decision", "revoke", "grant"):
+    check(not hasattr(adapter_module, writer),
+          f"the trust adapter writes no trust or fabric state: no '{writer}'")
+for absent in ("admission.py", "eligibility.py", "selection.py", "inspection.py",
+               "cli.py", "health.py"):
+    check(not (root / "tools" / "fabric" / absent).exists(),
+          f"increment 5 creates no {absent}")
+
+print(f"__FAILURES__={failures}")
+TRUSTPY
+)"
+printf '%s\n' "${TRUSTPY_OUTPUT}" | grep -v '^__FAILURES__=' || true
+TRUSTPY_FAILURES="$(printf '%s\n' "${TRUSTPY_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+if [[ -z "${TRUSTPY_FAILURES}" ]]; then
+  fail "fabric trust verification did not report a result"
+else
+  FAILURES=$((FAILURES + TRUSTPY_FAILURES))
+fi
+
+# --- C3 containment: released interfaces only, no writer, no network --------
+assert_absent_in "${FABRIC}/trust_adapter.py" \
+  '(open\(|write_text|write_bytes|mkdir|makedirs|chmod|chown|unlink|rename|replace\(|os\.remove|shutil\.)' \
+  "the trust adapter contains no filesystem-writing operation"
+assert_absent_in "${FABRIC}/trust_adapter.py" \
+  '(socket|requests|urllib|http\.client|paramiko|subprocess|os\.environ|getenv|Thread|Process|asyncio)' \
+  "the trust adapter opens no network, environment, or background worker path"
+assert_absent_in "${FABRIC}/trust_adapter.py" \
+  '(create_decision|declare_root_authority|TrustStore\(|lru_cache|_cache|retry|sleep)' \
+  "the trust adapter calls no trust mutation interface and caches or retries nothing"
+assert_absent_in "${FABRIC}/trust_adapter.py" \
+  '(/var/lib/kyri|platform-model/trust-store|trust-store)' \
+  "the trust adapter opens no production trust plane path"
+assert_contains "${FABRIC}/trust_adapter.py" 'get_current_trust' \
+  "the trust adapter resolves standing through the released query interface"
+assert_absent_in "${FABRIC}" \
+  '(subject_is_trusted|is_trusted|trust_state|trusted=|untrusted)' \
+  "no fabric record asserts that a subject is trusted or untrusted"
 
 # Nothing was written inside the repository by any of the above.
 if [[ -n "$(find "${ROOT}/tools" -name 'C*-[0-9]*' -print -quit 2>/dev/null)" ]]; then
