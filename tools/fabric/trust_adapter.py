@@ -40,7 +40,9 @@ VERIFIED = "verified"
 UNVERIFIED = "unverified"
 
 # Every standing the released Trust Plane vocabulary defines. A value outside
-# it is not interpreted -- it is reported as unknown, which fails closed.
+# it is not interpreted and not downgraded: the response carrying it is
+# refused as unreadable, because guessing what an unknown standing meant is
+# how an unrecognised value becomes a permissive one.
 KNOWN_STANDINGS = frozenset(state.value for state in TrustState)
 
 # Standings a subject may actually be used in. Taken from the released
@@ -126,16 +128,69 @@ def _require_subject(subject_id: Any) -> str:
     return subject_id
 
 
-def _standing(value: Any) -> str:
-    """A standing the released vocabulary defines, or unknown."""
-    return value if value in KNOWN_STANDINGS else TrustState.UNKNOWN.value
-
-
-def _references(value: Any) -> tuple[str, ...]:
-    """Evidence identities, preserved in order and never interpreted."""
+def _references(value: Any) -> tuple[str, ...] | None:
+    """Evidence identities in order, or None when the collection is not one."""
     if not isinstance(value, (list, tuple)):
-        return ()
-    return tuple(entry for entry in value if isinstance(entry, str))
+        return None
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip():
+            return None
+    return tuple(value)
+
+
+def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
+    """Whether the released response can be relied on at all.
+
+    A standing is only as good as the record it came from. A response that
+    reports somebody else's subject, a standing outside the released
+    vocabulary, a `usable` flag that is not a flag, or authoritative
+    identities that are partly missing is not a weaker answer -- it is not an
+    answer, and treating it as one would grant standing nothing actually says.
+    """
+    if not isinstance(reported, dict):
+        return True
+    if reported.get("subject_id") != subject:
+        return True
+
+    standing = reported.get("effective_state")
+    stored = reported.get("stored_state")
+    if standing not in KNOWN_STANDINGS or stored not in KNOWN_STANDINGS:
+        return True
+
+    usable = reported.get("usable")
+    if not isinstance(usable, bool):
+        return True
+    # The released flag is exactly membership of the usable set; a response
+    # where they disagree cannot be interpreted either way.
+    if usable != (standing in USABLE_STANDINGS):
+        return True
+
+    stamp = reported.get("evaluated_at")
+    if stamp is not None and stamp != instant.isoformat():
+        return True
+
+    if _references(reported.get("evidence_reference_ids")) is None:
+        return True
+
+    reasons = reported.get("reasons")
+    if not isinstance(reasons, (list, tuple)):
+        return True
+    if any(not isinstance(entry, str) for entry in reasons):
+        return True
+
+    identities = (_identity(reported.get("lineage_id")),
+                  _identity(reported.get("record_id")),
+                  _identity(reported.get("decision_id")))
+    resolved = sum(1 for entry in identities if entry is not None)
+    if usable:
+        # A verified subject is verified by something nameable.
+        return resolved != len(identities)
+    if resolved == 0:
+        # Nothing to cite. Only genuine absence looks like this.
+        return standing != TrustState.UNKNOWN.value
+    # Some cited and some missing: a reference that did not resolve, which is
+    # a different fact from no lineage at all.
+    return resolved != len(identities)
 
 
 def _identity(value: Any) -> str | None:
@@ -168,12 +223,12 @@ def verify_subject(store, subject_id: Any, *, evaluated_at: Any) -> TrustVerific
         # reported: its text is not something a caller can depend on.
         return _unverified(subject, instant, REASON_UNAVAILABLE)
 
-    if not isinstance(reported, dict):
+    if _incoherent(reported, subject, instant):
         return _unverified(subject, instant, REASON_UNREADABLE)
 
-    standing = _standing(reported.get("effective_state"))
-    stored = _standing(reported.get("stored_state"))
-    usable = reported.get("usable") is True and standing in USABLE_STANDINGS
+    standing = reported["effective_state"]
+    stored = reported["stored_state"]
+    usable = reported["usable"]
 
     common = dict(
         subject_id=subject,
@@ -183,7 +238,7 @@ def verify_subject(store, subject_id: Any, *, evaluated_at: Any) -> TrustVerific
         lineage_id=_identity(reported.get("lineage_id")),
         record_id=_identity(reported.get("record_id")),
         decision_id=_identity(reported.get("decision_id")),
-        evidence_reference_ids=_references(reported.get("evidence_reference_ids")),
+        evidence_reference_ids=_references(reported.get("evidence_reference_ids")) or (),
     )
 
     if usable:
@@ -209,7 +264,16 @@ def verify_trust_record(store, record_id: Any, *,
     except Exception:  # noqa: BLE001
         return _unverified(identifier, instant, REASON_UNAVAILABLE)
 
-    subject = record.get("subject_id") if isinstance(record, dict) else None
+    if not isinstance(record, dict):
+        return _unverified(identifier, instant, REASON_UNREADABLE)
+
+    # The record that came back must be the record that was asked for. A
+    # lookup that answers with a different record answers a different question.
+    stored_identity = record.get("record_id")
+    if not isinstance(stored_identity, str) or stored_identity != identifier:
+        return _unverified(identifier, instant, REASON_UNREADABLE)
+
+    subject = record.get("subject_id")
     if not isinstance(subject, str) or not subject.strip():
         return _unverified(identifier, instant, REASON_UNREADABLE)
 

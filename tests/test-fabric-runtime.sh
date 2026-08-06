@@ -3244,6 +3244,11 @@ from tools.fabric.evidence import assemble_evidence  # noqa: E402
 from tools.fabric.request_identity import compute_request_digest  # noqa: E402
 # The import that must fail before increment 5 exists.
 from tools.fabric.trust_adapter import (  # noqa: E402
+    REASON_EXPIRED,
+    REASON_NOT_USABLE,
+    REASON_NO_STANDING,
+    REASON_REVOKED,
+    REASON_UNREADABLE,
     UNVERIFIED,
     VERIFIED,
     TrustVerification,
@@ -3660,6 +3665,214 @@ for absent in ("admission.py", "eligibility.py", "selection.py", "inspection.py"
                "cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 5 creates no {absent}")
+
+
+# --- Structural coherence of the released response (increment 5 correction) --
+# Defect caught: trusting `usable` and the standing alone. A response that
+# looks trusted but carries no lineage, no record, no decision, or somebody
+# else's subject would verify -- so a malformed answer could grant standing
+# that nothing in the Trust Plane actually says.
+RELEASED_QUERY = adapter_module.get_current_trust
+RELEASED_RECORD = adapter_module.get_trust_record
+
+
+class ForgedQuery:
+    """Substitutes the released query so a malformed response can be observed.
+
+    There is no way to make the real Trust Plane return an incoherent answer,
+    and that is the point: the adapter must not assume its dependency is
+    well-behaved. The substitution is test-only and is undone below; the
+    adapter gains no hook.
+    """
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = 0
+
+    def __call__(self, store, subject_id, *, evaluated_at):
+        self.calls += 1
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+def under_forged_query(payload, subject="HOST-A", instant=None):
+    """Verify `subject` against a forged released response."""
+    query = ForgedQuery(payload)
+    adapter_module.get_current_trust = query
+    try:
+        return verify_subject(object(), subject,
+                              evaluated_at=instant or STAMP), query
+    finally:
+        adapter_module.get_current_trust = RELEASED_QUERY
+
+
+def released_shape(**overrides):
+    """A response with the shape the released query produces."""
+    payload = {
+        "subject_id": "HOST-A",
+        "stored_state": TrustState.TRUSTED.value,
+        "effective_state": TrustState.TRUSTED.value,
+        "lineage_id": "TLIN-000001-v0001",
+        "evaluated_at": STAMP.isoformat(),
+        "scope": None,
+        "record_id": "TREC-000001",
+        "decision_id": "TDEC-000001",
+        "evidence_reference_ids": ["TEVID-000001"],
+        "reasons": [],
+        "usable": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+# The coherent shape must still verify, or the guard is simply refusing.
+coherent, _ = under_forged_query(released_shape())
+check(coherent.status == VERIFIED,
+      "a coherent released response still verifies")
+check(coherent.record_id == "TREC-000001" and coherent.decision_id == "TDEC-000001"
+      and coherent.lineage_id == "TLIN-000001-v0001",
+      "a coherent released response preserves its authoritative identities")
+
+INCOHERENT = (
+    (released_shape(lineage_id=None), "no lineage identity"),
+    (released_shape(record_id=None), "no trust record identity"),
+    (released_shape(decision_id=None), "no decision identity"),
+    (released_shape(lineage_id=""), "an empty lineage identity"),
+    (released_shape(record_id=12345), "a non-textual record identity"),
+    (released_shape(decision_id=["TDEC-000001"]), "a decision identity in a list"),
+    (released_shape(subject_id="SOMEONE-ELSE"), "a different subject than requested"),
+    (released_shape(subject_id=None), "no subject identity"),
+    (released_shape(subject_id="host-a"), "a subject differing only in case"),
+    (released_shape(usable="yes"), "a usable flag that is text"),
+    (released_shape(usable=1), "a usable flag that is a number"),
+    (released_shape(usable=None), "no usable flag"),
+    (released_shape(effective_state="banana"), "an unrecognised effective standing"),
+    (released_shape(stored_state="banana"), "an unrecognised stored standing"),
+    (released_shape(effective_state=None), "no effective standing"),
+    (released_shape(evaluated_at="1999-01-01T00:00:00+00:00"),
+     "an evaluation instant that is not the one supplied"),
+    (released_shape(evidence_reference_ids="TEVID-000001"),
+     "evidence references supplied as a bare string"),
+    (released_shape(evidence_reference_ids=[123]),
+     "a non-textual evidence reference"),
+    (released_shape(evidence_reference_ids=["", "TEVID-000001"]),
+     "an empty evidence reference"),
+    (released_shape(evidence_reference_ids=None), "no evidence reference collection"),
+    (released_shape(reasons="something went wrong"), "reasons supplied as a bare string"),
+    ("not a mapping at all", "a response that is not a mapping"),
+    (None, "a response that is nothing"),
+)
+for payload, description in INCOHERENT:
+    result, query = under_forged_query(payload)
+    check(result.status == UNVERIFIED,
+          f"a released response carrying {description} does not verify")
+    check(result.reasons == (REASON_UNREADABLE,),
+          f"a released response carrying {description} is reported as unreadable")
+    check(query.calls == 1,
+          f"a released response carrying {description} is not asked for twice")
+    repeated, _ = under_forged_query(payload)
+    check(repeated == result,
+          f"a released response carrying {description} refuses identically on repetition")
+    leaked = " ".join(result.reasons) + " " + str(result.to_dict())
+    for token, leak in ((" 0x", "an object address"), ("/tmp/", "a filesystem path"),
+                        ("Traceback", "a traceback"), ("object at", "an object repr")):
+        check(token not in leaked,
+              f"a response carrying {description} leaks no {leak}")
+
+# An unresolved reference is not the same fact as absent trust.
+UNRESOLVED = released_shape(
+    stored_state=TrustState.UNKNOWN.value, effective_state=TrustState.UNKNOWN.value,
+    usable=False, record_id=None, decision_id=None, evidence_reference_ids=[],
+    reasons=["the lineage head cites a decision with no trust record"])
+unresolved, _ = under_forged_query(UNRESOLVED)
+check(unresolved.status == UNVERIFIED, "an unresolved lineage reference does not verify")
+check(unresolved.reasons == (REASON_UNREADABLE,),
+      "an unresolved lineage reference is unreadable, not merely absent")
+
+ABSENT = released_shape(
+    stored_state=TrustState.UNKNOWN.value, effective_state=TrustState.UNKNOWN.value,
+    usable=False, lineage_id=None, record_id=None, decision_id=None,
+    evidence_reference_ids=[], reasons=["no trust lineage exists for this subject"])
+absent_shape, _ = under_forged_query(ABSENT)
+check(absent_shape.reasons == (REASON_NO_STANDING,),
+      "trust that is genuinely absent is still reported as absent, not unreadable")
+check(unresolved.reasons != absent_shape.reasons,
+      "an unresolved reference is distinguishable from truly absent trust")
+
+# A standing that is recognised but unusable keeps its own reason.
+for standing, reason, description in (
+        (TrustState.EXPIRED.value, REASON_EXPIRED, "expired"),
+        (TrustState.REVOKED.value, REASON_REVOKED, "revoked"),
+        (TrustState.QUARANTINED.value, REASON_NOT_USABLE, "quarantined")):
+    result, _ = under_forged_query(released_shape(
+        effective_state=standing, usable=False))
+    check(result.reasons == (reason,),
+          f"a {description} standing keeps its own reason rather than becoming unreadable")
+
+# --- A trust record must be the record that was asked for -------------------
+class ForgedRecord:
+    def __init__(self, record):
+        self.record = record
+        self.calls = 0
+
+    def __call__(self, store, record_id):
+        self.calls += 1
+        if isinstance(self.record, Exception):
+            raise self.record
+        return self.record
+
+
+def under_forged_record(record, requested="TREC-000001"):
+    lookup = ForgedRecord(record)
+    adapter_module.get_trust_record = lookup
+    try:
+        return verify_trust_record(object(), requested, evaluated_at=STAMP), lookup
+    finally:
+        adapter_module.get_trust_record = RELEASED_RECORD
+
+
+MISMATCHED_RECORDS = (
+    ({"subject_id": "HOST-A"}, "no record identity"),
+    ({"subject_id": "HOST-A", "record_id": "TREC-999999"},
+     "a record identity that is not the one requested"),
+    ({"subject_id": "HOST-A", "record_id": ""}, "an empty record identity"),
+    ({"subject_id": "HOST-A", "record_id": 1}, "a non-textual record identity"),
+    ({"record_id": "TREC-000001"}, "no subject identity"),
+    ({"record_id": "TREC-000001", "subject_id": ""}, "an empty subject identity"),
+    ("not a mapping", "a record that is not a mapping"),
+)
+for record, description in MISMATCHED_RECORDS:
+    result, lookup = under_forged_record(record)
+    check(result.status == UNVERIFIED,
+          f"a retrieved record carrying {description} does not verify")
+    check(result.reasons == (REASON_UNREADABLE,),
+          f"a retrieved record carrying {description} is reported as unreadable")
+    check(lookup.calls == 1,
+          f"a retrieved record carrying {description} is not fetched twice")
+
+check(adapter_module.get_current_trust is RELEASED_QUERY
+      and adapter_module.get_trust_record is RELEASED_RECORD,
+      "the released query interfaces are restored after the substitution")
+
+# --- The corrected guard changes nothing on disk ----------------------------
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    fabric = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    trust_root = Path(tmp) / "trust"
+    fabric_root = Path(tmp) / "fabric"
+    trust_before = forensic(trust_root)
+    fabric_before = forensic(fabric_root)
+    for payload, _ in INCOHERENT:
+        under_forged_query(payload)
+    for record, _ in MISMATCHED_RECORDS:
+        under_forged_record(record)
+    verify_subject(store, "HOST-GOOD", evaluated_at=STAMP)
+    verify_subject(store, "HOST-NEVER-SEEN", evaluated_at=STAMP)
+    check(forensic(trust_root) == trust_before,
+          "refusing every malformed response changes nothing in the trust store")
+    check(forensic(fabric_root) == fabric_before,
+          "refusing every malformed response changes nothing in the fabric store")
 
 print(f"__FAILURES__={failures}")
 TRUSTPY
