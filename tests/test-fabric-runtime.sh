@@ -545,12 +545,8 @@ WRITE_ATTRS = {
 }
 WRITE_MODULES = {"os", "shutil", "tempfile", "pathlib"}
 
-for path in sorted((root / "tools" / "fabric").glob("*.py")):
-    if path.name == "store.py":
-        continue
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-
-    # Names bound by `from os import replace as _r` and `import shutil as sh`.
+def aliases_in(tree):
+    """Names bound by `from os import replace as _r` and `import shutil as sh`."""
     aliased = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in WRITE_MODULES:
@@ -561,19 +557,86 @@ for path in sorted((root / "tools" / "fabric").glob("*.py")):
                 base = alias.name.split(".")[0]
                 if base in WRITE_MODULES and alias.asname:
                     aliased[alias.asname] = alias.name
+    return aliased
 
+
+def delegates_to_c1(func):
+    """`store.write(kind, record)` on the formal store receiver.
+
+    C4 commits through C1; that call is delegation to the only writer, not a
+    filesystem call of its own. Nothing else is permitted: another receiver,
+    another write name, or a getattr indirection all stay forbidden.
+    """
+    return (isinstance(func, ast.Attribute) and func.attr == "write"
+            and isinstance(func.value, ast.Name) and func.value.id == "store")
+
+
+def scan(tree, aliased, name):
+    """Every mechanism by which this module could mutate the filesystem."""
     hits = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in WRITE_ATTRS:
-            hits.append(f"{path.name}:{node.lineno}:.{func.attr}")
+            if delegates_to_c1(func):
+                continue
+            hits.append(f"{name}:{node.lineno}:.{func.attr}")
         elif isinstance(func, ast.Name):
             if func.id in aliased:
-                hits.append(f"{path.name}:{node.lineno}:{aliased[func.id]}")
+                hits.append(f"{name}:{node.lineno}:{aliased[func.id]}")
             elif func.id == "open":
-                hits.append(f"{path.name}:{node.lineno}:builtin open")
+                hits.append(f"{name}:{node.lineno}:builtin open")
+            elif func.id == "getattr":
+                # getattr(store, "write") would reach a writer without naming
+                # it, which is exactly what the narrowing must not permit.
+                for argument in node.args[1:2]:
+                    if (isinstance(argument, ast.Constant)
+                            and argument.value in WRITE_ATTRS):
+                        hits.append(f"{name}:{node.lineno}:getattr bypass")
+    return hits
+
+
+# The narrowing is itself asserted, so it cannot quietly widen.
+GUARD_ALLOWED = (
+    ("store.write(kind, record)", "the C1 commit call"),
+    ("store.allocate_id(kind)", "a non-writing store call"),
+    ('getattr(record, "supersedes", None)', "a getattr that reads a field"),
+)
+GUARD_REFUSED = (
+    ('path.write_text("x")', "a direct path write"),
+    ('open("f", "w")', "a builtin open"),
+    ("os.replace(a, b)", "a direct filesystem replace"),
+    ("elsewhere.write(kind, record)", "a write on another receiver"),
+    ("store.write_record(kind, record)", "write_record on the store"),
+    ("store.write_atomic(destination, payload)", "write_atomic on the store"),
+    ('getattr(store, "write")(kind, record)', "a getattr write bypass"),
+    ("shutil.copy(a, b)", "a shutil copy"),
+    ("path.mkdir()", "a directory creation"),
+)
+for snippet, description in GUARD_ALLOWED:
+    parsed = ast.parse(snippet)
+    if scan(parsed, aliases_in(parsed), "<self-test>"):
+        failures += 1
+        print(f"FAIL: the writer guard permits {description}")
+    else:
+        print(f"PASS: the writer guard permits {description}")
+for snippet, description in GUARD_REFUSED:
+    parsed = ast.parse(snippet)
+    if scan(parsed, aliases_in(parsed), "<self-test>"):
+        print(f"PASS: the writer guard still refuses {description}")
+    else:
+        failures += 1
+        print(f"FAIL: the writer guard no longer refuses {description}")
+
+
+for path in sorted((root / "tools" / "fabric").glob("*.py")):
+    if path.name == "store.py":
+        continue
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    aliased = aliases_in(tree)
+    hits = scan(tree, aliased, path.name)
     if hits:
         failures += 1
         print(f"FAIL: only store.py may mutate the filesystem; {path.name} does ({hits[:3]})")
@@ -1696,7 +1759,7 @@ for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
           f"the validator exposes no '{later}' behaviour at increment 3")
 
 for absent in ("inspection.py", "cli.py", "eligibility.py", "selection.py",
-               "admission.py", "trust.py"):
+               "trust.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 3 creates no {absent}")
 
@@ -2552,7 +2615,7 @@ for later in ("admit", "evaluate_eligibility", "compute_eligibility", "select",
           f"request identity exposes no '{later}' behaviour at increment 4")
     check(not hasattr(evidence_module, later),
           f"evidence exposes no '{later}' behaviour at increment 4")
-for absent in ("admission.py", "eligibility.py", "selection.py", "inspection.py",
+for absent in ("eligibility.py", "selection.py", "inspection.py",
                "cli.py", "trust.py", "health.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 4 creates no {absent}")
@@ -3667,7 +3730,7 @@ for writer in ("write", "write_record", "create_decision", "declare_root_authori
                "record_decision", "revoke", "grant"):
     check(not hasattr(adapter_module, writer),
           f"the trust adapter writes no trust or fabric state: no '{writer}'")
-for absent in ("admission.py", "eligibility.py", "selection.py", "inspection.py",
+for absent in ("eligibility.py", "selection.py", "inspection.py",
                "cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 5 creates no {absent}")
@@ -4514,6 +4577,688 @@ assert_contains "${FABRIC}/trust_adapter.py" 'get_current_trust' \
 assert_absent_in "${FABRIC}" \
   '(subject_is_trusted|is_trusted|trust_state|trusted=|untrusted)' \
   "no fabric record asserts that a subject is trusted or untrusted"
+
+# --- Governed declaration, subject admission, advertisement, C4 part 1 -------
+ADMIT_OUTPUT="$(python3 - "${ROOT}" <<'ADMITPY' 2>&1 || true
+import hashlib
+import os
+import stat
+import sys
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import yaml as _yaml
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+
+failures = 0
+
+
+def ok(message):
+    print(f"PASS: {message}")
+
+
+def bad(message):
+    global failures
+    failures += 1
+    print(f"FAIL: {message}")
+
+
+def check(condition, message):
+    if condition:
+        ok(message)
+    else:
+        bad(message)
+
+
+from tools.fabric.errors import FabricError  # noqa: E402
+from tools.fabric.store import FabricStore  # noqa: E402
+from tools.trust.store import TrustStore  # noqa: E402
+from tools.trust.models import (  # noqa: E402
+    TrustEvidenceReference, TrustScope, TrustState, TrustVerificationDetails,
+    VerificationMethod,
+)
+from tools.trust.root_authority import (  # noqa: E402
+    declare_root_authority, load_root_declaration,
+)
+from tools.trust.evaluator import create_decision  # noqa: E402
+import tools.fabric.trust_adapter as trust_adapter  # noqa: E402
+# The import that must fail before increment 6 exists.
+from tools.fabric.admission import (  # noqa: E402
+    ACCEPTED, CONFLICT, EXACT_REPLAY, INVALID, NOT_FOUND, REFUSED, UNAVAILABLE,
+    OperationResult,
+    admit_subject,
+    declare_capability,
+    declare_contract,
+    declare_package,
+    register_advertisement,
+)
+import tools.fabric.admission as admission_module  # noqa: E402
+
+UID = os.geteuid()
+GID = os.getegid()
+STAMP = datetime(2026, 8, 2, 9, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+LATER = STAMP + timedelta(days=1)
+YEAR = STAMP + timedelta(days=365)
+OPERATOR = "operator:cschott"
+PROV = {"class": "declared", "source": "operator"}
+
+
+def forensic(base):
+    entries = {}
+    if not base.exists():
+        return entries
+    for path in sorted(base.rglob("*")):
+        info = path.lstat()
+        digest = (hashlib.sha256(path.read_bytes()).hexdigest()
+                  if stat.S_ISREG(info.st_mode) else "")
+        entries[str(path.relative_to(base))] = (
+            stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), info.st_uid,
+            info.st_gid, info.st_ino, info.st_mtime_ns, info.st_size, digest)
+    return entries
+
+
+class WatchedStore(FabricStore):
+    """The real store, counting critical-section entries and allocations."""
+
+    def __init__(self, *args, **kwargs):
+        self.entries = 0
+        self.depth = 0
+        self.deepest = 0
+        self.allocations = []
+        super().__init__(*args, **kwargs)
+
+    @contextmanager
+    def request_critical_section(self, request_id):
+        self.entries += 1
+        self.depth += 1
+        self.deepest = max(self.deepest, self.depth)
+        try:
+            with super().request_critical_section(request_id):
+                yield
+        finally:
+            self.depth -= 1
+
+    def allocate_id(self, kind):
+        identifier = super().allocate_id(kind)
+        self.allocations.append(identifier)
+        return identifier
+
+
+def opened(tmp):
+    return WatchedStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+
+
+def seeded_trust(tmp, subject="node/schai", state=TrustState.TRUSTED.value,
+                 expiration=None, subject_type="fabric-node"):
+    """A real trust store with one decided subject."""
+    store = TrustStore(Path(tmp) / "trust")
+    approved = Path(tmp) / "approved"
+    approved.mkdir()
+    approved.joinpath("root.yaml").write_text(_yaml.safe_dump({
+        "display_name": "Operator Root Authority",
+        "external_identity_reference": "secret-source://approved/operator-root",
+        "verification_method": VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        "verification_details": {
+            "subject_property": "operator-root-identity",
+            "observed_value_reference": "/approved/evidence/root-observed.txt",
+            "comparison_source": "in-person-verification-record",
+            "performed_by": "operator-role-reference",
+            "performed_at": STAMP.isoformat()},
+        "evidence_references": [{
+            "evidence_id": "TEVID-000001", "kind": "attestation",
+            "reference": "/approved/evidence/root-attestation.txt",
+            "recorded_at": STAMP.isoformat()}],
+        "created_at": STAMP.isoformat(),
+        "provenance": {"class": "declared", "source": "operator-out-of-band"},
+    }), encoding="utf-8")
+    authority = declare_root_authority(store, load_root_declaration(
+        "root.yaml", approved_directory=str(approved)))
+    granted = create_decision(
+        store, subject_id=subject, subject_type=subject_type,
+        requested_state=state, actor_authority_id=authority.authority_id,
+        decided_at=STAMP, reason="granted for the fabric admission regression",
+        evidence_references=(TrustEvidenceReference(
+            evidence_id="TEVID-000001", kind="fingerprint",
+            reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
+        verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        verification_details=TrustVerificationDetails(
+            subject_property="ssh-host-key-fingerprint",
+            observed_value_reference="/approved/evidence/observed.txt",
+            comparison_source="printed-console-readout",
+            performed_by="operator-role-reference", performed_at=STAMP),
+        scope=TrustScope(
+            scope_id="TSCOPE-000001", subject_type=subject_type,
+            permitted_capabilities=("coding-workload",),
+            permitted_operations=("linux.hostname",),
+            permitted_data_classifications=("internal",),
+            permitted_targets=("schmgmt.home.arpa",),
+            validity_start=STAMP, validity_end=YEAR),
+        expiration=expiration)
+    return store, granted
+
+
+PROFILE = {"host_memory_mb": 8192, "host_cpu_cores": 8, "architecture": "x86_64"}
+
+
+def capability(store, request_id="req-cap-1", **overrides):
+    fields = dict(request_id=request_id, actor=OPERATOR,
+                  approving_authority=OPERATOR, recorded_at=STAMP,
+                  name="summarise text",
+                  description="Reduce a document to its essentials.",
+                  effect_class="read-only", contract_ids=(), provenance=PROV)
+    fields.update(overrides)
+    return declare_capability(store, **fields)
+
+
+def contract(store, capability_id, request_id="req-con-1", **overrides):
+    fields = dict(request_id=request_id, actor=OPERATOR,
+                  approving_authority=OPERATOR, recorded_at=STAMP,
+                  capability_id=capability_id, contract_version="1.0.0",
+                  effect_class="read-only", determinism_class="deterministic",
+                  request_shape={"text": "string"},
+                  response_shape={"summary": "string"},
+                  failure_modes=("unavailable",),
+                  resource_requirements={"host_memory_mb": 512},
+                  compatible_with=(), provenance=PROV)
+    fields.update(overrides)
+    return declare_contract(store, **fields)
+
+
+def package(store, capability_id, contract_id, request_id="req-pkg-1", **overrides):
+    fields = dict(request_id=request_id, actor=OPERATOR,
+                  approving_authority=OPERATOR, recorded_at=STAMP,
+                  capability_id=capability_id, contract_id=contract_id,
+                  satisfied_contract_versions=("1.0.0",), package_version="1.0.0",
+                  artifact_reference="oci://registry.invalid/summarise",
+                  resource_requirements={"host_memory_mb": 512},
+                  trust_domain="capability-package", provenance=PROV)
+    fields.update(overrides)
+    return declare_package(store, **fields)
+
+
+def subject(store, trust_store, request_id="req-host-1", **overrides):
+    fields = dict(request_id=request_id, actor=OPERATOR,
+                  approving_authority=OPERATOR, recorded_at=STAMP,
+                  evaluated_at=STAMP, node_identity_reference="node/schai",
+                  fabric_node_trust_record_id=None,
+                  verified_resource_profile=dict(PROFILE),
+                  verification_reference="/approved/evidence/host-observed.txt",
+                  location_class="on-premises",
+                  data_classification_ceiling="internal",
+                  availability_intent="in-service", provenance=PROV)
+    fields.update(overrides)
+    return admit_subject(store, trust_store, **fields)
+
+
+def advertisement(store, host_id, package_id, contract_id,
+                  request_id="req-adv-1", **overrides):
+    fields = dict(request_id=request_id, actor=host_id, recorded_at=STAMP,
+                  capability_host_id=host_id, capability_package_id=package_id,
+                  contract_id=contract_id, satisfied_contract_versions=("1.0.0",),
+                  advertised_resource_profile={"host_memory_mb": 8192},
+                  observed_at=STAMP, valid_until=LATER, provenance=PROV)
+    fields.update(overrides)
+    return register_advertisement(store, **fields)
+
+
+def advertise(store, host_id, package_id, contract_id, **overrides):
+    """The same call, with every field overridable by name."""
+    return advertisement(store, host_id, package_id, contract_id, **overrides)
+
+
+def declared(store, trust_store=None, record_id=None):
+    """Capability, contract, package, and optionally an admitted subject."""
+    cap = capability(store)
+    con = contract(store, cap.record_id)
+    pkg = package(store, cap.record_id, con.record_id)
+    if trust_store is None:
+        return cap, con, pkg, None
+    host = subject(store, trust_store,
+                   fabric_node_trust_record_id=record_id)
+    return cap, con, pkg, host
+
+
+# --- 1-2. Each class writes exactly its own record, allocated by C1 ---------
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    trust_store, granted = seeded_trust(tmp)
+    cap, con, pkg, host = declared(store, trust_store, granted.record.record_id)
+    adv = advertisement(store, host.record_id, pkg.record_id, con.record_id)
+    EXPECTED = ((cap, "capability-definition", "CAPDEF-0001"),
+                (con, "capability-contract", "CCON-0001"),
+                (pkg, "capability-package", "CPKG-0001"),
+                (host, "capability-host", "CHOST-0001"),
+                (adv, "capability-advertisement", "CADV-000001"))
+    for result, kind, identifier in EXPECTED:
+        check(result.outcome == ACCEPTED, f"a governed {kind} is accepted")
+        check(result.record_kind == kind and result.record_id == identifier,
+              f"a governed {kind} is allocated as {identifier} by the store")
+        check(identifier in store.allocations,
+              f"{identifier} was allocated through C1, not chosen by the caller")
+    counts = store.counts()
+    check(counts["capability-definition"] == 1 and counts["capability-contract"] == 1
+          and counts["capability-package"] == 1 and counts["capability-host"] == 1
+          and counts["capability-advertisement"] == 1,
+          "each accepted operation wrote exactly one record of its own class")
+    check(counts["capability-instance"] == 0 and counts["capability-route"] == 0
+          and counts["capability-selection"] == 0,
+          "part-1 operations create no instance, route, or selection")
+    check(store.entries == 5 and store.deepest == 1,
+          f"each operation entered the critical section exactly once "
+          f"({store.entries} entries, depth {store.deepest})")
+    # 18. Every accepted record carries complete applicable evidence.
+    for kind, identifier in (("capability-definition", "CAPDEF-0001"),
+                             ("capability-contract", "CCON-0001"),
+                             ("capability-package", "CPKG-0001"),
+                             ("capability-host", "CHOST-0001"),
+                             ("capability-advertisement", "CADV-000001")):
+        stored = store.read_record(kind, identifier)
+        carried = stored.get("evidence") or {}
+        for field in ("actor", "causal_references", "trust_evidence_references",
+                      "reason_category", "recorded_at", "request_id",
+                      "request_digest"):
+            check(field in carried, f"the accepted {kind} evidence carries '{field}'")
+        if kind == "capability-advertisement":
+            check(carried.get("approving_authority") is None,
+                  "an accepted advertisement records no approving authority")
+            check(carried.get("actor") == "CHOST-0001",
+                  "an accepted advertisement records its subject as the actor")
+        else:
+            check(carried.get("approving_authority") == OPERATOR,
+                  f"the accepted {kind} records its approving authority")
+    check(store.read_record("capability-host", "CHOST-0001")[
+              "fabric_node_trust_record_id"] == granted.record.record_id,
+          "the admitted host references the verified trust record")
+    check(granted.record.record_id in (store.read_record(
+              "capability-host", "CHOST-0001")["evidence"]
+              ["trust_evidence_references"]),
+          "the admitted host's evidence references the verified trust record")
+
+# --- 3. Identical content under different request identities stays distinct --
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    first = capability(store, request_id="req-A")
+    second = capability(store, request_id="req-B")
+    check(first.outcome == ACCEPTED and second.outcome == ACCEPTED,
+          "byte-identical declarations under different request identities are both accepted")
+    check(first.record_id != second.record_id,
+          "byte-identical declarations under different request identities allocate distinct records")
+    check(second.outcome != EXACT_REPLAY,
+          "a second identity is never treated as replay of the first")
+    check(store.counts()["capability-definition"] == 2,
+          "neither declaration overwrote the other")
+
+# --- 4-6. Replay and conflicting reuse, per operation class -----------------
+def rerun(store, trust_store, kind, record_id=None):
+    """The same operation twice: once replayed, once with different content."""
+    if kind == "capability-definition":
+        return (lambda **k: capability(store, **k),
+                {"request_id": "req-replay"}, {"name": "a different capability"})
+    if kind == "capability-contract":
+        cap = capability(store, request_id="req-seed-cap")
+        return (lambda **k: contract(store, cap.record_id, **k),
+                {"request_id": "req-replay"}, {"contract_version": "2.0.0"})
+    if kind == "capability-package":
+        cap = capability(store, request_id="req-seed-cap")
+        con = contract(store, cap.record_id, request_id="req-seed-con")
+        return (lambda **k: package(store, cap.record_id, con.record_id, **k),
+                {"request_id": "req-replay"}, {"package_version": "2.0.0"})
+    if kind == "capability-host":
+        return (lambda **k: subject(store, trust_store,
+                                    fabric_node_trust_record_id=record_id, **k),
+                {"request_id": "req-replay"}, {"location_class": "third-party-hosted"})
+    cap = capability(store, request_id="req-seed-cap")
+    con = contract(store, cap.record_id, request_id="req-seed-con")
+    pkg = package(store, cap.record_id, con.record_id, request_id="req-seed-pkg")
+    host = subject(store, trust_store, request_id="req-seed-host",
+                   fabric_node_trust_record_id=record_id)
+    return (lambda **k: advertisement(store, host.record_id, pkg.record_id,
+                                      con.record_id, **k),
+            {"request_id": "req-replay"},
+            {"advertised_resource_profile": {"host_cpu_cores": 8}})
+
+
+for kind in ("capability-definition", "capability-contract", "capability-package",
+             "capability-host", "capability-advertisement"):
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        operation, replayed, differing = rerun(store, trust_store, kind,
+                                               granted.record.record_id)
+        original = operation(**replayed)
+        check(original.outcome == ACCEPTED, f"the first {kind} operation is accepted")
+        before_allocations = len(store.allocations)
+        fabric_root = Path(tmp) / "fabric"
+        before = forensic(fabric_root)
+
+        again = operation(**replayed)
+        check(again.outcome == EXACT_REPLAY, f"an exact {kind} replay is recognised")
+        check(again.record_id == original.record_id and
+              again.record_kind == original.record_kind,
+              f"an exact {kind} replay returns the original identity")
+        check(len(store.allocations) == before_allocations,
+              f"an exact {kind} replay allocates nothing")
+        check(forensic(fabric_root) == before,
+              f"an exact {kind} replay writes nothing")
+
+        conflicting = operation(**dict(replayed, **differing))
+        check(conflicting.outcome == CONFLICT,
+              f"conflicting {kind} reuse is refused as a conflict")
+        check(conflicting.reason == "request_identity_conflict",
+              f"conflicting {kind} reuse is named request_identity_conflict")
+        check(conflicting.record_id is None,
+              f"conflicting {kind} reuse allocates no record")
+        check(forensic(fabric_root) == before,
+              f"conflicting {kind} reuse leaves the original byte-identical")
+
+# --- 7-8. Authority ----------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    trust_store, granted = seeded_trust(tmp)
+    cap = capability(store, request_id="req-seed-cap")
+    con = contract(store, cap.record_id, request_id="req-seed-con")
+    fabric_root = Path(tmp) / "fabric"
+    HUMAN = (
+        ("capability declaration", lambda **k: capability(store, request_id="req-x", **k)),
+        ("contract declaration",
+         lambda **k: contract(store, cap.record_id, request_id="req-x", **k)),
+        ("package declaration",
+         lambda **k: package(store, cap.record_id, con.record_id,
+                             request_id="req-x", **k)),
+        ("subject admission",
+         lambda **k: subject(store, trust_store, request_id="req-x",
+                             fabric_node_trust_record_id=granted.record.record_id, **k)),
+    )
+    for label, operation in HUMAN:
+        for missing, description in ((dict(approving_authority=None), "no approving authority"),
+                                     (dict(approving_authority=""), "an empty approving authority"),
+                                     (dict(actor=None), "no actor"),
+                                     (dict(actor=""), "an empty actor")):
+            before = forensic(fabric_root)
+            result = operation(**missing)
+            check(result.outcome in (REFUSED, INVALID),
+                  f"a {label} with {description} is refused")
+            check(result.record_id is None,
+                  f"a {label} with {description} allocates nothing")
+            check(forensic(fabric_root) == before,
+                  f"a {label} with {description} writes nothing")
+
+# --- 9-10. References and the declaration boundary ---------------------------
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    fabric_root = Path(tmp) / "fabric"
+    cap = capability(store, request_id="req-seed-cap")
+    con = contract(store, cap.record_id, request_id="req-seed-con")
+    MISSING = (
+        ("a capability declaring an absent contract",
+         lambda: capability(store, request_id="req-m1", contract_ids=("CCON-9999",))),
+        ("a contract naming an absent capability",
+         lambda: contract(store, "CAPDEF-9999", request_id="req-m2")),
+        ("a package naming an absent capability",
+         lambda: package(store, "CAPDEF-9999", con.record_id, request_id="req-m3")),
+        ("a package naming an absent contract",
+         lambda: package(store, cap.record_id, "CCON-9999", request_id="req-m4")),
+    )
+    for description, operation in MISSING:
+        before = forensic(fabric_root)
+        result = operation()
+        check(result.outcome == NOT_FOUND,
+              f"{description} is refused as not-found")
+        check(result.record_id is None, f"{description} allocates nothing")
+        check(forensic(fabric_root) == before, f"{description} writes nothing")
+
+    for effect, description in ((None, "an absent effect class"),
+                                ("", "an empty effect class"),
+                                ("Read-Only", "a differently cased effect class"),
+                                (" read-only", "a padded effect class"),
+                                ("unheard-of", "an unrecognised effect class")):
+        before = forensic(fabric_root)
+        result = contract(store, cap.record_id, request_id="req-e", effect_class=effect)
+        check(result.outcome in (REFUSED, INVALID),
+              f"a contract declaring {description} is refused")
+        check(result.record_id is None,
+              f"a contract declaring {description} creates zero records")
+        check(forensic(fabric_root) == before,
+              f"a contract declaring {description} writes nothing")
+        result = capability(store, request_id="req-e2", effect_class=effect)
+        check(result.record_id is None,
+              f"a capability declaring {description} creates zero records")
+
+    # The contract must belong to the referenced capability.
+    other = capability(store, request_id="req-other")
+    before = forensic(fabric_root)
+    mismatched = package(store, other.record_id, con.record_id, request_id="req-mm")
+    check(mismatched.outcome in (REFUSED, NOT_FOUND),
+          "a package whose contract belongs to another capability is refused")
+    check(forensic(fabric_root) == before,
+          "a mismatched package writes nothing")
+    for domain, description in (("fabric-node", "another trust domain"),
+                                ("", "an empty trust domain"),
+                                ("Capability-Package", "a differently cased trust domain")):
+        result = package(store, cap.record_id, con.record_id, request_id="req-td",
+                         trust_domain=domain)
+        check(result.record_id is None,
+              f"a package declaring {description} creates zero records")
+
+# --- 11-14. Subject admission and C3 integration ----------------------------
+TRUST_OUTCOMES = (
+    ("no-trust-standing", "absent trust"),
+    ("trust-expired", "expired trust"),
+    ("trust-revoked", "revoked trust"),
+    ("trust-not-usable", "quarantined trust"),
+    ("trust-unreadable", "malformed trust"),
+    ("trust-unavailable", "an unavailable trust plane"),
+    ("trust-subject-type-mismatch", "a wrong trust subject type"),
+)
+RELEASED_VERIFY = trust_adapter.verify_trust_record
+
+
+class CountingVerify:
+    def __init__(self, verification):
+        self.verification = verification
+        self.calls = 0
+
+    def __call__(self, store, record_id, *, evaluated_at, expected_subject_type=None):
+        self.calls += 1
+        return self.verification
+
+
+for reason, description in TRUST_OUTCOMES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        refusal = trust_adapter.TrustVerification(
+            subject_id="node/schai", status=trust_adapter.UNVERIFIED,
+            standing=TrustState.UNKNOWN.value,
+            stored_standing=TrustState.UNKNOWN.value,
+            evaluated_at=STAMP.isoformat(), reasons=(reason,))
+        counting = CountingVerify(refusal)
+        admission_module.verify_trust_record = counting
+        try:
+            before = forensic(fabric_root)
+            result = subject(store, trust_store, request_id="req-t",
+                             fabric_node_trust_record_id=granted.record.record_id)
+        finally:
+            admission_module.verify_trust_record = RELEASED_VERIFY
+        check(result.outcome in (REFUSED, UNAVAILABLE),
+              f"subject admission with {description} is refused")
+        check(result.reason == reason,
+              f"subject admission with {description} preserves the C3 reason {reason}")
+        check(result.record_id is None,
+              f"subject admission with {description} creates no record")
+        check(store.counts()["capability-host"] == 0,
+              f"subject admission with {description} leaves zero host records")
+        check(forensic(fabric_root) == before,
+              f"subject admission with {description} changes nothing on disk")
+        check(counting.calls == 1,
+              f"subject admission with {description} consults C3 exactly once")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    trust_store, granted = seeded_trust(tmp)
+    fabric_root = Path(tmp) / "fabric"
+    # A subject mismatch: the trust record names a different node.
+    before = forensic(fabric_root)
+    mismatched = subject(store, trust_store, request_id="req-sm",
+                         fabric_node_trust_record_id=granted.record.record_id,
+                         node_identity_reference="node/somewhere-else")
+    check(mismatched.outcome in (REFUSED, NOT_FOUND),
+          "an admission whose trust record names another subject is refused")
+    check(forensic(fabric_root) == before,
+          "a subject mismatch writes nothing")
+    # Self-admission: the subject cannot be its own approving authority.
+    self_admitted = subject(store, trust_store, request_id="req-self",
+                            fabric_node_trust_record_id=granted.record.record_id,
+                            actor="node/schai", approving_authority="node/schai")
+    check(self_admitted.record_id is None, "self-admission is refused")
+    # Out-of-band verification must be provable.
+    for reference, description in ((None, "no verification reference"),
+                                   ("", "an empty verification reference")):
+        result = subject(store, trust_store, request_id="req-oob",
+                         fabric_node_trust_record_id=granted.record.record_id,
+                         verification_reference=reference)
+        check(result.record_id is None,
+              f"an admission with {description} is refused")
+    # Trust alone creates no instance.
+    admitted = subject(store, trust_store, request_id="req-ok",
+                       fabric_node_trust_record_id=granted.record.record_id)
+    check(admitted.outcome == ACCEPTED, "a verified subject is admitted")
+    check(store.counts()["capability-instance"] == 0,
+          "trust alone creates no instance record")
+    check(store.counts()["capability-advertisement"] == 0,
+          "admission creates no advertisement")
+
+# --- 15-17. Advertisement registration ---------------------------------------
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    trust_store, granted = seeded_trust(tmp)
+    fabric_root = Path(tmp) / "fabric"
+    cap, con, pkg, host = declared(store, trust_store, granted.record.record_id)
+
+    unadmitted = advertisement(store, "CHOST-9999", pkg.record_id, con.record_id,
+                               request_id="req-una")
+    check(unadmitted.outcome == NOT_FOUND,
+          "an advertisement from an unadmitted subject is refused")
+    check(unadmitted.record_id is None,
+          "an unadmitted advertisement is not queued, staged, or persisted")
+    check(store.counts()["capability-advertisement"] == 0,
+          "an unadmitted advertisement leaves no authoritative state")
+
+    impersonating = advertisement(store, host.record_id, pkg.record_id,
+                                  con.record_id, request_id="req-imp",
+                                  actor="CHOST-9999")
+    check(impersonating.record_id is None,
+          "a subject advertising as another subject is refused")
+    approved = advertisement(store, host.record_id, pkg.record_id, con.record_id,
+                             request_id="req-app", approving_authority=OPERATOR)
+    check(approved.record_id is None,
+          "an advertisement supplying an approving authority is refused")
+
+    ADVERTISEMENT_REFUSALS = (
+        ({"capability_package_id": "CPKG-9999"}, "an absent package"),
+        ({"contract_id": "CCON-9999"}, "an absent contract"),
+        ({"satisfied_contract_versions": ("2.0.0",)}, "versions outside the declaration"),
+        ({"satisfied_contract_versions": ()}, "no satisfied versions"),
+        ({"advertised_resource_profile": {"host_memory_mb": 65536}},
+         "a resource claim not contained by the verified profile"),
+        ({"advertised_resource_profile": {"accelerator_memory_mb": 4096}},
+         "a resource dimension the operator never verified"),
+        ({"valid_until": STAMP}, "a window that ends when it starts"),
+        ({"valid_until": STAMP - timedelta(hours=1)}, "a reversed validity window"),
+        ({"observed_at": STAMP.replace(tzinfo=None)}, "a naive observation instant"),
+        ({"valid_until": LATER.replace(tzinfo=None)}, "a naive validity boundary"),
+    )
+    for overrides, description in ADVERTISEMENT_REFUSALS:
+        before = forensic(fabric_root)
+        result = advertisement(store, host.record_id, pkg.record_id,
+                               overrides.pop("contract_id", con.record_id),
+                               request_id="req-adv-bad", **overrides)
+        check(result.record_id is None,
+              f"an advertisement carrying {description} is refused")
+        check(forensic(fabric_root) == before,
+              f"an advertisement carrying {description} writes nothing")
+
+    # A contract that is not the package's contract.
+    other_con = contract(store, cap.record_id, request_id="req-oc",
+                         contract_version="9.9.9")
+    inconsistent = advertisement(store, host.record_id, pkg.record_id,
+                                 other_con.record_id, request_id="req-inc")
+    check(inconsistent.record_id is None,
+          "an advertisement whose contract is not the package's contract is refused")
+
+    accepted_adv = advertisement(store, host.record_id, pkg.record_id,
+                                 con.record_id, request_id="req-adv-ok")
+    check(accepted_adv.outcome == ACCEPTED,
+          "an admitted subject may publish its own advertisement without new approval")
+    stored_host = store.read_record("capability-host", host.record_id)
+    check(stored_host["verified_resource_profile"] == PROFILE,
+          "a fresh advertisement does not modify the host record")
+    check(store.counts()["capability-instance"] == 0,
+          "a fresh advertisement creates no instance")
+
+# --- 20. A rejected operation is freshly evaluated when prerequisites change --
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    first = contract(store, "CAPDEF-0001", request_id="req-fresh")
+    check(first.outcome == NOT_FOUND,
+          "a contract naming an absent capability is refused")
+    cap = capability(store, request_id="req-late-cap")
+    check(cap.record_id == "CAPDEF-0001",
+          "the capability the refused contract named is declared afterwards")
+    second = contract(store, "CAPDEF-0001", request_id="req-fresh")
+    check(second.outcome == ACCEPTED,
+          "repeating the rejected request after the prerequisite exists is evaluated afresh")
+    check(second.record_id == "CCON-0001",
+          "the freshly evaluated request allocates its own record")
+
+# --- 22-23. Boundaries and determinism ---------------------------------------
+for later in ("admit_instance", "create_route", "supersede_route", "evaluate_eligibility",
+              "select", "write_atomic", "load_capability", "invoke", "health",
+              "remediate", "retry", "refresh"):
+    check(not hasattr(admission_module, later),
+          f"admission exposes no '{later}' behaviour at increment 6")
+for absent in ("eligibility.py", "selection.py", "inspection.py", "cli.py", "health.py"):
+    check(not (root / "tools" / "fabric" / absent).exists(),
+          f"increment 6 creates no {absent}")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    refused = capability(store, request_id="req-det", effect_class="unheard-of")
+    again = capability(store, request_id="req-det2", effect_class="unheard-of")
+    check(refused.outcome == again.outcome and refused.reason == again.reason,
+          "a refusal is deterministic across repetition")
+    rendered = str(refused.to_dict())
+    for token, leak in ((" 0x", "an object address"), ("/tmp/", "a filesystem path"),
+                        ("Traceback", "a traceback"), ("object at", "an object repr"),
+                        ("unheard-of", "the rejected value")):
+        check(token not in rendered, f"a refusal leaks no {leak}")
+
+print(f"__FAILURES__={failures}")
+ADMITPY
+)"
+printf '%s\n' "${ADMIT_OUTPUT}" | grep -v '^__FAILURES__=' || true
+ADMIT_FAILURES="$(printf '%s\n' "${ADMIT_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+if [[ -z "${ADMIT_FAILURES}" ]]; then
+  fail "fabric governed admission did not report a result"
+else
+  FAILURES=$((FAILURES + ADMIT_FAILURES))
+fi
+
+# --- C4 and C7 reach the filesystem through C1 only -------------------------
+assert_absent_in "${FABRIC}/admission.py" \
+  '(open\(|write_text|write_bytes|mkdir|makedirs|chmod|chown|unlink|os\.remove|shutil\.|tempfile)' \
+  "the admission controller contains no filesystem-writing operation"
+assert_absent_in "${FABRIC}/admission.py" \
+  '(socket|requests|urllib|paramiko|subprocess|os\.environ|getenv|Thread|asyncio|lru_cache|sleep)' \
+  "the admission controller opens no network, environment, worker, or caching path"
+assert_absent_in "${FABRIC}/admission.py" \
+  '(get_current_trust|TrustStore\(|create_decision|declare_root_authority)' \
+  "the admission controller reaches trust only through the accepted adapter"
 
 # Nothing was written inside the repository by any of the above.
 if [[ -n "$(find "${ROOT}/tools" -name 'C*-[0-9]*' -print -quit 2>/dev/null)" ]]; then
