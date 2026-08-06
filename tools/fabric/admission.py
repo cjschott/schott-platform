@@ -38,12 +38,14 @@ from datetime import datetime
 from typing import Any, Mapping
 
 from .errors import FabricError
-from .evidence import assemble_evidence
+from .evidence import assemble_evidence, validate_record_evidence
+from .identifiers import PREFIXES
 from .models import EFFECT_CLASSES, RECORD_MODELS
 from .request_identity import (
     REPLAY_CONFLICT, REPLAY_EXACT, compute_request_digest, replay_lookup,
     validate_request_id,
 )
+from .store import ID_WIDTHS
 from .trust_adapter import UNVERIFIED, verify_trust_record
 
 # Outcomes. `accepted` and `exact-replay` are the only two that leave a record.
@@ -86,6 +88,13 @@ HOST_TRUST_DOMAIN = "fabric-node"
 # A C3 refusal that means the Trust Plane could not answer at all, rather than
 # that it answered no.
 TRUST_UNAVAILABLE = "trust-unavailable"
+
+# A schema-valid identity of the right kind and width that C1 never allocates,
+# because every sequence starts at 1. It exists only to prove that the exact
+# evidence and record content are constructible *before* an identity is
+# allocated. It is never returned, never written, and never persisted.
+PROBE_IDS = {kind: f"{prefix}-{0:0{ID_WIDTHS[kind]}d}"
+             for kind, prefix in PREFIXES.items()}
 
 
 @dataclass(frozen=True)
@@ -195,15 +204,44 @@ def _contained(claim: Mapping[str, Any], verified: Mapping[str, Any]) -> bool:
     return True
 
 
-def _governed(store, *, operation: str, request_id: Any, inputs: Mapping[str, Any],
-              accept) -> OperationResult:
+def _digestible(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The authoritative payload in the form the released canonicaliser reads.
+
+    A timestamp becomes its own offset-carrying text, which is the convention
+    the released digest already uses. That is the only conversion: everything
+    else is passed through exactly as it was supplied, so a value the
+    canonicaliser cannot represent is refused rather than flattened into
+    something that would collide with a different input.
+    """
+    return {name: value.isoformat() if isinstance(value, datetime) else value
+            for name, value in payload.items()}
+
+
+def _governed(store, *, operation: str, request_id: Any,
+              payload: Mapping[str, Any], accept) -> OperationResult:
     """The operation boundary every governed acceptance shares.
+
+    **The digest covers the whole operation.** Every caller-supplied
+    authoritative input participates, including the optional ones supplied as
+    nothing, so a reused request identity carrying any changed input is a
+    conflict rather than a replay of an operation nobody submitted. Nothing
+    else participates: not the request identity, not an allocated record
+    identity, not a store, and not a resolved prerequisite, because none of
+    those is what the caller asked for.
+
+    A request identity that cannot be validated, or a payload the released
+    canonicaliser cannot represent, is refused before the critical section:
+    there is nothing yet to serialise against.
 
     One acquisition of the critical section, taken before replay lookup and
     held through allocation and the accepted write.
     """
-    identifier = validate_request_id(request_id)
-    digest = compute_request_digest(operation, inputs)
+    try:
+        identifier = validate_request_id(request_id)
+        digest = compute_request_digest(operation, _digestible(payload))
+    except FabricError:
+        supplied = request_id if isinstance(request_id, str) else ""
+        return OperationResult(INVALID, supplied, reason=REASON_CONTENT)
 
     with store.request_critical_section(identifier):
         replay = replay_lookup(store, identifier, digest)
@@ -221,14 +259,39 @@ def _governed(store, *, operation: str, request_id: Any, inputs: Mapping[str, An
         return OperationResult(ACCEPTED, identifier, digest, kind, record_id)
 
 
-def _commit(store, kind: str, evidence: Mapping[str, Any],
-            build) -> tuple[str, str]:
-    """Allocate through C1, construct the model, and write through C1."""
-    identifier = store.allocate_id(kind)
+def _constructed(kind: str, identifier: str, evidence: Mapping[str, Any], build):
+    """The complete record, or a controlled refusal naming malformed content.
+
+    Freezing, conversion, evidence validation, and the model's own rules all
+    run here, so a caller value that fails any of them is named as malformed
+    content rather than raised. A raw exception would carry the rejected value,
+    its type, a path, or an address out of the governed boundary.
+    """
     try:
         record = build(identifier, evidence)
-    except FabricError:
+        validate_record_evidence(kind, record)
+        record.to_dict()
+    except _Refusal:
+        raise
+    except Exception:  # noqa: BLE001
         _refuse(INVALID, REASON_CONTENT)
+    return record
+
+
+def _commit(store, kind: str, evidence: Mapping[str, Any],
+            build) -> tuple[str, str]:
+    """Prove the record is constructible, then allocate through C1 and write.
+
+    Allocation advances a persistent sequence, so nothing is allocated until
+    the exact evidence and record content are known to be constructible.
+    The proof is a construction against a probe identity of this kind and
+    width -- the model's own rules applied to the real content, not a
+    restatement of them -- which allocates nothing, writes nothing, and leaves
+    nothing behind. Only then does C1 mint the identity the record will carry.
+    """
+    _constructed(kind, PROBE_IDS[kind], evidence, build)
+    identifier = store.allocate_id(kind)
+    record = _constructed(kind, identifier, evidence, build)
     store.write(kind, record)
     return kind, identifier
 
@@ -278,10 +341,15 @@ def declare_capability(store, *, request_id: Any, actor: Any,
                            contract_ids=references, provenance=provenance,
                            notes=notes, evidence=carried))
 
-    return _guarded(store, "declare-capability", request_id, accept, {
-        "name": name, "description": description, "effect_class": effect_class,
-        "contract_ids": list(contract_ids) if isinstance(
-            contract_ids, (list, tuple)) else contract_ids})
+    return _governed(store, operation="declare-capability", request_id=request_id,
+                     payload={"actor": actor,
+                              "approving_authority": approving_authority,
+                              "recorded_at": recorded_at, "name": name,
+                              "description": description,
+                              "effect_class": effect_class,
+                              "contract_ids": contract_ids,
+                              "provenance": provenance, "notes": notes},
+                     accept=accept)
 
 
 def declare_contract(store, *, request_id: Any, actor: Any,
@@ -298,6 +366,8 @@ def declare_contract(store, *, request_id: Any, actor: Any,
         _effect_class(effect_class)
         _text(determinism_class, REASON_CONTENT)
         _aware(recorded_at)
+        modes = _sequence(failure_modes)
+        compatible = _sequence(compatible_with)
         _resolve(store, "capability-definition", capability_id)
         evidence = _evidence(
             "capability-contract", actor=actor,
@@ -313,15 +383,28 @@ def declare_contract(store, *, request_id: Any, actor: Any,
                            determinism_class=determinism_class,
                            request_shape=request_shape,
                            response_shape=response_shape,
-                           failure_modes=_sequence(failure_modes),
+                           failure_modes=modes,
                            resource_requirements=resource_requirements,
-                           compatible_with=_sequence(compatible_with),
+                           compatible_with=compatible,
                            provenance=provenance, description=description,
                            evidence=carried))
 
-    return _guarded(store, "declare-contract", request_id, accept, {
-        "capability_id": capability_id, "contract_version": contract_version,
-        "effect_class": effect_class, "determinism_class": determinism_class})
+    return _governed(store, operation="declare-contract", request_id=request_id,
+                     payload={"actor": actor,
+                              "approving_authority": approving_authority,
+                              "recorded_at": recorded_at,
+                              "capability_id": capability_id,
+                              "contract_version": contract_version,
+                              "effect_class": effect_class,
+                              "determinism_class": determinism_class,
+                              "request_shape": request_shape,
+                              "response_shape": response_shape,
+                              "failure_modes": failure_modes,
+                              "resource_requirements": resource_requirements,
+                              "compatible_with": compatible_with,
+                              "provenance": provenance,
+                              "description": description},
+                     accept=accept)
 
 
 def declare_package(store, *, request_id: Any, actor: Any,
@@ -366,13 +449,21 @@ def declare_package(store, *, request_id: Any, actor: Any,
                            trust_domain=trust_domain, provenance=provenance,
                            description=description, evidence=carried))
 
-    return _guarded(store, "declare-package", request_id, accept, {
-        "capability_id": capability_id, "contract_id": contract_id,
-        "package_version": package_version,
-        "artifact_reference": artifact_reference,
-        "satisfied_contract_versions": list(satisfied_contract_versions)
-        if isinstance(satisfied_contract_versions, (list, tuple))
-        else satisfied_contract_versions})
+    return _governed(store, operation="declare-package", request_id=request_id,
+                     payload={"actor": actor,
+                              "approving_authority": approving_authority,
+                              "recorded_at": recorded_at,
+                              "capability_id": capability_id,
+                              "contract_id": contract_id,
+                              "satisfied_contract_versions":
+                                  satisfied_contract_versions,
+                              "package_version": package_version,
+                              "artifact_reference": artifact_reference,
+                              "resource_requirements": resource_requirements,
+                              "trust_domain": trust_domain,
+                              "provenance": provenance,
+                              "description": description},
+                     accept=accept)
 
 
 # --- 6.2 Admit a subject (host) to the fabric -------------------------------
@@ -434,12 +525,24 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
                            verification_reference=verification_reference,
                            evidence=carried))
 
-    return _guarded(store, "admit-subject", request_id, accept, {
-        "node_identity_reference": node_identity_reference,
-        "fabric_node_trust_record_id": fabric_node_trust_record_id,
-        "location_class": location_class,
-        "data_classification_ceiling": data_classification_ceiling,
-        "availability_intent": availability_intent})
+    return _governed(store, operation="admit-subject", request_id=request_id,
+                     payload={"actor": actor,
+                              "approving_authority": approving_authority,
+                              "recorded_at": recorded_at,
+                              "evaluated_at": evaluated_at,
+                              "node_identity_reference": node_identity_reference,
+                              "fabric_node_trust_record_id":
+                                  fabric_node_trust_record_id,
+                              "verified_resource_profile":
+                                  verified_resource_profile,
+                              "verification_reference": verification_reference,
+                              "location_class": location_class,
+                              "data_classification_ceiling":
+                                  data_classification_ceiling,
+                              "availability_intent": availability_intent,
+                              "provenance": provenance, "name": name,
+                              "description": description},
+                     accept=accept)
 
 
 # --- 6.3 Register an advertisement ------------------------------------------
@@ -502,34 +605,21 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                            observed_at=observed, valid_until=until,
                            provenance=provenance, evidence=carried))
 
-    return _guarded(store, "register-advertisement", request_id, accept, {
-        "capability_host_id": capability_host_id,
-        "capability_package_id": capability_package_id,
-        "contract_id": contract_id,
-        "satisfied_contract_versions": list(satisfied_contract_versions)
-        if isinstance(satisfied_contract_versions, (list, tuple))
-        else satisfied_contract_versions,
-        "advertised_resource_profile": advertised_resource_profile
-        if isinstance(advertised_resource_profile, Mapping) else None,
-        "observed_at": observed_at.isoformat()
-        if isinstance(observed_at, datetime) else None,
-        "valid_until": valid_until.isoformat()
-        if isinstance(valid_until, datetime) else None})
-
-
-def _guarded(store, operation: str, request_id: Any, accept,
-             inputs: Mapping[str, Any]) -> OperationResult:
-    """Validate the request identity and digest inputs, then run the boundary.
-
-    A malformed identity or an uncanonicalisable input is refused before the
-    critical section is entered: there is nothing yet to serialise against.
-    """
-    try:
-        identifier = validate_request_id(request_id)
-        digest_inputs = {name: value for name, value in inputs.items()}
-        compute_request_digest(operation, digest_inputs)
-    except FabricError:
-        supplied = request_id if isinstance(request_id, str) else ""
-        return OperationResult(INVALID, supplied, reason=REASON_CONTENT)
-    return _governed(store, operation=operation, request_id=identifier,
-                     inputs=digest_inputs, accept=accept)
+    # `approving_authority` is part of what was asked for even though the only
+    # acceptable value is none: supplying one is a different request, refused
+    # as `unexpected-approving-authority` rather than quietly identical.
+    return _governed(store, operation="register-advertisement",
+                     request_id=request_id,
+                     payload={"actor": actor, "recorded_at": recorded_at,
+                              "capability_host_id": capability_host_id,
+                              "capability_package_id": capability_package_id,
+                              "contract_id": contract_id,
+                              "satisfied_contract_versions":
+                                  satisfied_contract_versions,
+                              "advertised_resource_profile":
+                                  advertised_resource_profile,
+                              "observed_at": observed_at,
+                              "valid_until": valid_until,
+                              "provenance": provenance,
+                              "approving_authority": approving_authority},
+                     accept=accept)

@@ -560,26 +560,110 @@ def aliases_in(tree):
     return aliased
 
 
-def delegates_to_c1(func):
-    """`store.write(kind, record)` on the formal store receiver.
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
-    C4 commits through C1; that call is delegation to the only writer, not a
-    filesystem call of its own. Nothing else is permitted: another receiver,
-    another write name, or a getattr indirection all stay forbidden.
+
+def formal_parameters(scope):
+    """Every name this scope binds as a parameter of its own."""
+    spec = scope.args
+    names = [argument.arg for argument in
+             (*spec.posonlyargs, *spec.args, *spec.kwonlyargs)]
+    if spec.vararg:
+        names.append(spec.vararg.arg)
+    if spec.kwarg:
+        names.append(spec.kwarg.arg)
+    return names
+
+
+def own_scope(scope):
+    """The nodes belonging to this scope's own body, nested scopes excluded.
+
+    A call made inside a nested function or lambda is that scope's call, not
+    this one's, so it can never be this function's authorised delegation.
     """
+    pending = list(scope.body)
+    while pending:
+        node = pending.pop()
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, SCOPES):
+                pending.append(child)
+
+
+def rebinds(scope, target):
+    """Whether `target` is bound anywhere inside the body, by any mechanism.
+
+    A parameter that is reassigned, shadowed, imported over, re-declared
+    global, or reused as a nested scope's own parameter is no longer proof of
+    the receiver: the call site would still read `store` either way.
+    """
+    for statement in scope.body:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                if node.id == target:
+                    return True
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                if target in node.names:
+                    return True
+            elif isinstance(node, SCOPES):
+                if target in formal_parameters(node):
+                    return True
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                if any((alias.asname or alias.name.split(".")[0]) == target
+                       for alias in node.names):
+                    return True
+    return False
+
+
+def is_c1_delegation(call):
+    """Exactly `store.write(kind, record)`, positionally and by name.
+
+    The shape is asserted as well as the receiver: a call with other arguments,
+    with keywords, or with a starred argument is a different call, and the
+    guard must not permit one because it happens to be spelled `.write`.
+    """
+    func = call.func
     return (isinstance(func, ast.Attribute) and func.attr == "write"
-            and isinstance(func.value, ast.Name) and func.value.id == "store")
+            and isinstance(func.value, ast.Name) and func.value.id == "store"
+            and not call.keywords
+            and [argument.id for argument in call.args
+                 if isinstance(argument, ast.Name)] == ["kind", "record"]
+            and len(call.args) == 2)
+
+
+def permitted_delegations(tree):
+    """The C1 commit calls, bound to the formal receiver that makes them one.
+
+    C4 commits through C1; *that* call is delegation to the only writer, not a
+    filesystem call of its own. The permission is bound to the delegation, not
+    to a name: the call must sit in the intended `_commit()`, be made through
+    `_commit()`'s own `store` parameter, and be exactly `.write(kind, record)`.
+    Another receiver, another write name, a getattr indirection, an alias, a
+    shadowed or rebound `store`, and a nested scope's own `store` all stay
+    forbidden.
+    """
+    permitted = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "_commit":
+            continue
+        if "store" not in formal_parameters(node) or rebinds(node, "store"):
+            continue
+        for inner in own_scope(node):
+            if isinstance(inner, ast.Call) and is_c1_delegation(inner):
+                permitted.add(id(inner))
+    return permitted
 
 
 def scan(tree, aliased, name):
     """Every mechanism by which this module could mutate the filesystem."""
     hits = []
+    permitted = permitted_delegations(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in WRITE_ATTRS:
-            if delegates_to_c1(func):
+            if id(node) in permitted:
                 continue
             hits.append(f"{name}:{node.lineno}:.{func.attr}")
         elif isinstance(func, ast.Name):
@@ -598,8 +682,14 @@ def scan(tree, aliased, name):
 
 
 # The narrowing is itself asserted, so it cannot quietly widen.
+#
+# The permitted call is the *formal* delegation, not a name. Recognising a
+# receiver merely spelled `store` would let a module-level rebinding, a global,
+# a shadowed parameter, or an alias reach a writer without ever proving it is
+# the enclosing function's own parameter, so every one of those stays refused.
+COMMIT = "def _commit(store, kind, evidence, build):\n"
 GUARD_ALLOWED = (
-    ("store.write(kind, record)", "the C1 commit call"),
+    (COMMIT + "    store.write(kind, record)\n", "the C1 commit call"),
     ("store.allocate_id(kind)", "a non-writing store call"),
     ('getattr(record, "supersedes", None)', "a getattr that reads a field"),
 )
@@ -613,6 +703,30 @@ GUARD_REFUSED = (
     ('getattr(store, "write")(kind, record)', "a getattr write bypass"),
     ("shutil.copy(a, b)", "a shutil copy"),
     ("path.mkdir()", "a directory creation"),
+    ("store = foreign_writer\nstore.write(kind, record)\n",
+     "a module-level name that is merely called store"),
+    ("def wrong():\n    store.write(kind, record)\n",
+     "a commit through a name that is no formal parameter"),
+    ("def wrong(other):\n    store = other\n    store.write(kind, record)\n",
+     "a shadowed store receiver"),
+    ("def wrong(store):\n    store.write(kind, record)\n",
+     "a commit outside the intended _commit function"),
+    (COMMIT + "    store = elsewhere\n    store.write(kind, record)\n",
+     "a store parameter rebound inside _commit"),
+    (COMMIT + "    store.write_record(kind, record)\n",
+     "write_record through the formal store parameter"),
+    (COMMIT + "    store.write_atomic(destination, payload)\n",
+     "write_atomic through the formal store parameter"),
+    (COMMIT + '    getattr(store, "write")(kind, record)\n',
+     "a getattr write through the formal store parameter"),
+    (COMMIT + "    alias = store\n    alias.write(kind, record)\n",
+     "an aliased store receiver inside _commit"),
+    (COMMIT + "    store.write(kind, record, extra)\n",
+     "a commit call of another shape"),
+    (COMMIT + "    store.write(kind=kind, record=record)\n",
+     "a commit call made by keyword"),
+    (COMMIT + "    def inner(store):\n        store.write(kind, record)\n",
+     "a commit from a nested scope's own store"),
 )
 for snippet, description in GUARD_ALLOWED:
     parsed = ast.parse(snippet)
@@ -5237,6 +5351,607 @@ with TemporaryDirectory() as tmp:
                         ("Traceback", "a traceback"), ("object at", "an object repr"),
                         ("unheard-of", "the rejected value")):
         check(token not in rendered, f"a refusal leaks no {leak}")
+
+# ===========================================================================
+# Increment 6 correction — complete request identity, complete validation
+# before allocation, and refusals that change nothing
+# ===========================================================================
+# Three defects, corrected as causes rather than as examples:
+#
+#   * a request digest derived from a subset of the caller's authoritative
+#     inputs, so a reused request identity carrying a changed authority,
+#     timestamp, provenance, profile, shape, or optional value was misread as
+#     an exact replay of an operation nobody submitted;
+#   * allocation before the record content was known to be constructible, so
+#     malformed caller content advanced a persistent sequence and let a raw
+#     exception out of the boundary;
+#   * a writer guard that recognised a receiver merely *named* `store`.
+#
+# Every assertion below is over synthetic records in a temporary directory.
+
+RELEASED_TRUST_VERIFY = trust_adapter.verify_trust_record
+CONFLICT_REASON = "request_identity_conflict"
+MALFORMED_CONTENT = "malformed-operation-content"
+NAIVE_INSTANT = "timestamp-carries-no-offset"
+
+
+class CountingTrust:
+    """The released C3 adapter, counting every query it is asked to make.
+
+    Delegates rather than answers: a stub would prove nothing about how often
+    the real adapter is reached, which is exactly what is being counted.
+    """
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, store, record_id, *, evaluated_at, expected_subject_type=None):
+        self.calls += 1
+        return RELEASED_TRUST_VERIFY(store, record_id, evaluated_at=evaluated_at,
+                                     expected_subject_type=expected_subject_type)
+
+
+class AuditStore(WatchedStore):
+    """The real store, additionally counting writes and reference resolutions."""
+
+    def __init__(self, *args, **kwargs):
+        self.writes = []
+        self.reads = 0
+        super().__init__(*args, **kwargs)
+
+    def write(self, kind, record):
+        path = super().write(kind, record)
+        self.writes.append(kind)
+        return path
+
+    def read_record(self, kind, identifier):
+        self.reads += 1
+        return super().read_record(kind, identifier)
+
+
+def audited(tmp):
+    return AuditStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+
+
+def attempted(operation):
+    """Run a governed operation, reporting anything that escapes it.
+
+    A governed boundary that raises has already leaked: the exception carries
+    the rejected value, its type, and a traceback naming real paths. Catching
+    it here turns that leak into a reportable failure instead of a dead suite.
+    """
+    try:
+        return operation(), None
+    except BaseException as error:  # noqa: BLE001
+        return None, error
+
+
+def temporaries(base):
+    return sorted(str(path) for path in base.rglob(".*.tmp"))
+
+
+def sequences_of(base):
+    directory = base / "sequences"
+    if not directory.is_dir():
+        return {}
+    return {path.name: path.read_bytes() for path in sorted(directory.glob("*.seq"))}
+
+
+BASE_CAPABILITY = dict(
+    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+    name="summarise text", description="Reduce a document to its essentials.",
+    effect_class="read-only", contract_ids=(), provenance=dict(PROV), notes=None)
+
+BASE_CONTRACT = dict(
+    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+    contract_version="1.0.0", effect_class="read-only",
+    determinism_class="deterministic", request_shape={"text": "string"},
+    response_shape={"summary": "string"}, failure_modes=("unavailable",),
+    resource_requirements={"host_memory_mb": 512}, compatible_with=(),
+    provenance=dict(PROV), description=None)
+
+BASE_PACKAGE = dict(
+    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+    satisfied_contract_versions=("1.0.0",), package_version="1.0.0",
+    artifact_reference="oci://registry.invalid/summarise",
+    resource_requirements={"host_memory_mb": 512},
+    trust_domain="capability-package", provenance=dict(PROV), description=None)
+
+BASE_SUBJECT = dict(
+    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+    evaluated_at=STAMP, node_identity_reference="node/schai",
+    verified_resource_profile=dict(PROFILE),
+    verification_reference="/approved/evidence/host-observed.txt",
+    location_class="on-premises", data_classification_ceiling="internal",
+    availability_intent="in-service", provenance=dict(PROV),
+    name=None, description=None)
+
+BASE_ADVERT = dict(
+    recorded_at=STAMP, satisfied_contract_versions=("1.0.0",),
+    advertised_resource_profile={"host_memory_mb": 8192},
+    observed_at=STAMP, valid_until=LATER, provenance=dict(PROV),
+    approving_authority=None)
+
+OTHER_PROV = {"class": "declared", "source": "another operator"}
+
+
+def identity_matrix(label, run, base, mutations, fabric_root, trust_root, store,
+                    trust):
+    """One accepted request, one byte-identical repeat, one change at a time.
+
+    A structurally valid change to any authoritative input must be a conflict
+    *before* any prerequisite is resolved or any trust standing is queried, so
+    the counters are compared rather than the outcome alone.
+    """
+    original = run(**base)
+    check(original.outcome == ACCEPTED,
+          f"the {label} establishing a request identity is accepted")
+    if original.outcome != ACCEPTED:
+        return
+    before = forensic(fabric_root)
+    trust_before = forensic(trust_root)
+    allocated = list(store.allocations)
+    written = list(store.writes)
+    resolutions = store.reads
+    queries = trust.calls
+    entries = store.entries
+
+    repeated = run(**base)
+    check(repeated.outcome == EXACT_REPLAY,
+          f"a byte-identical {label} is an exact replay")
+    check(repeated.record_id == original.record_id
+          and repeated.record_kind == original.record_kind,
+          f"a byte-identical {label} replay returns the original identity")
+    check(repeated.request_digest == original.request_digest,
+          f"a byte-identical {label} replay derives the same complete digest")
+    check(store.allocations == allocated and store.writes == written,
+          f"an exact {label} replay allocates and writes nothing")
+    check(store.reads == resolutions,
+          f"an exact {label} replay resolves no reference")
+    check(trust.calls == queries, f"an exact {label} replay queries no trust")
+    check(store.entries == entries + 1,
+          f"an exact {label} replay enters the critical section exactly once")
+    check(store.deepest == 1, f"an exact {label} replay nests no critical section")
+    check(forensic(fabric_root) == before,
+          f"an exact {label} replay leaves the fabric byte-identical")
+    check(forensic(trust_root) == trust_before,
+          f"an exact {label} replay leaves the trust plane byte-identical")
+    entries = store.entries
+
+    for field, value in mutations:
+        result, error = attempted(lambda: run(**dict(base, **{field: value})))
+        check(error is None,
+              f"a changed {field} on a {label} raises nothing out of the boundary")
+        if error is not None:
+            continue
+        check(result.outcome == CONFLICT,
+              f"a changed {field} on a {label} reusing its request identity conflicts")
+        check(result.reason == CONFLICT_REASON,
+              f"a changed {field} on a {label} is named request_identity_conflict")
+        check(result.request_digest != original.request_digest,
+              f"a changed {field} changes the {label} request digest")
+        check(result.record_id is None and result.record_kind is None,
+              f"a changed {field} on a {label} names no record")
+        check(store.allocations == allocated,
+              f"a changed {field} on a {label} allocates nothing")
+        check(store.writes == written,
+              f"a changed {field} on a {label} writes nothing")
+        check(store.reads == resolutions,
+              f"a changed {field} on a {label} resolves no reference")
+        check(trust.calls == queries,
+              f"a changed {field} on a {label} queries no trust")
+        check(store.entries == entries + 1,
+              f"a changed {field} on a {label} enters the critical section once")
+        check(forensic(fabric_root) == before,
+              f"a changed {field} on a {label} leaves the original byte-identical")
+        check(forensic(trust_root) == trust_before,
+              f"a changed {field} on a {label} leaves the trust plane byte-identical")
+        entries = store.entries
+
+
+COUNTING_TRUST = CountingTrust()
+admission_module.verify_trust_record = COUNTING_TRUST
+try:
+    # --- Every authoritative input participates in request identity ---------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        identity_matrix(
+            "capability declaration",
+            lambda **fields: declare_capability(store, **fields),
+            dict(BASE_CAPABILITY, request_id="req-identity"),
+            (("actor", "operator:other"),
+             ("approving_authority", "operator:other"),
+             ("recorded_at", LATER),
+             ("name", "summarise audio"),
+             ("description", "Reduce a recording to its essentials."),
+             ("effect_class", "computational"),
+             ("contract_ids", ("CCON-9999",)),
+             ("provenance", dict(OTHER_PROV)),
+             ("notes", "an operator note")),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        identity_matrix(
+            "contract declaration",
+            lambda **fields: declare_contract(store, **fields),
+            dict(BASE_CONTRACT, request_id="req-identity",
+                 capability_id=cap.record_id),
+            (("actor", "operator:other"),
+             ("approving_authority", "operator:other"),
+             ("recorded_at", LATER),
+             ("capability_id", "CAPDEF-9999"),
+             ("contract_version", "2.0.0"),
+             ("effect_class", "computational"),
+             ("determinism_class", "nondeterministic"),
+             ("request_shape", {"text": "string", "locale": "string"}),
+             ("response_shape", {"summary": "string", "confidence": "string"}),
+             ("failure_modes", ("unavailable", "timed-out")),
+             ("resource_requirements", {"host_memory_mb": 1024}),
+             ("compatible_with", ("0.9.0",)),
+             ("provenance", dict(OTHER_PROV)),
+             ("description", "The summarising interface.")),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        con = declare_contract(store, **dict(BASE_CONTRACT,
+                                             request_id="req-seed-con",
+                                             capability_id=cap.record_id))
+        identity_matrix(
+            "package declaration",
+            lambda **fields: declare_package(store, **fields),
+            dict(BASE_PACKAGE, request_id="req-identity",
+                 capability_id=cap.record_id, contract_id=con.record_id),
+            (("actor", "operator:other"),
+             ("approving_authority", "operator:other"),
+             ("recorded_at", LATER),
+             ("capability_id", "CAPDEF-9999"),
+             ("contract_id", "CCON-9999"),
+             ("satisfied_contract_versions", ("1.0.0", "2.0.0")),
+             ("package_version", "2.0.0"),
+             ("artifact_reference", "oci://registry.invalid/summarise-audio"),
+             ("resource_requirements", {"host_memory_mb": 1024}),
+             ("trust_domain", "fabric-node"),
+             ("provenance", dict(OTHER_PROV)),
+             ("description", "The summarising package.")),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        identity_matrix(
+            "subject admission",
+            lambda **fields: admit_subject(store, trust_store, **fields),
+            dict(BASE_SUBJECT, request_id="req-identity",
+                 fabric_node_trust_record_id=granted.record.record_id),
+            (("actor", "operator:other"),
+             ("approving_authority", "operator:other"),
+             ("recorded_at", LATER),
+             ("evaluated_at", LATER),
+             ("node_identity_reference", "node/elsewhere"),
+             ("fabric_node_trust_record_id", "TREC-999999"),
+             ("verified_resource_profile", {"host_memory_mb": 4096,
+                                            "host_cpu_cores": 8,
+                                            "architecture": "x86_64"}),
+             ("verification_reference", "/approved/evidence/host-reobserved.txt"),
+             ("location_class", "third-party-hosted"),
+             ("data_classification_ceiling", "confidential"),
+             ("availability_intent", "drained"),
+             ("provenance", dict(OTHER_PROV)),
+             ("name", "schai"),
+             ("description", "The on-premises inference host.")),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        con = declare_contract(store, **dict(BASE_CONTRACT,
+                                             request_id="req-seed-con",
+                                             capability_id=cap.record_id))
+        pkg = declare_package(store, **dict(BASE_PACKAGE, request_id="req-seed-pkg",
+                                            capability_id=cap.record_id,
+                                            contract_id=con.record_id))
+        adm = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id="req-seed-host",
+            fabric_node_trust_record_id=granted.record.record_id))
+        identity_matrix(
+            "advertisement registration",
+            lambda **fields: register_advertisement(store, **fields),
+            dict(BASE_ADVERT, request_id="req-identity", actor=adm.record_id,
+                 capability_host_id=adm.record_id,
+                 capability_package_id=pkg.record_id, contract_id=con.record_id),
+            (("actor", "CHOST-9999"),
+             ("recorded_at", LATER),
+             ("capability_host_id", "CHOST-9999"),
+             ("capability_package_id", "CPKG-9999"),
+             ("contract_id", "CCON-9999"),
+             ("satisfied_contract_versions", ("1.0.0", "2.0.0")),
+             ("advertised_resource_profile", {"host_cpu_cores": 8}),
+             ("observed_at", STAMP - timedelta(hours=1)),
+             ("valid_until", LATER + timedelta(hours=1)),
+             ("provenance", dict(OTHER_PROV)),
+             ("approving_authority", OPERATOR)),
+            Path(tmp) / "fabric", Path(tmp) / "trust", store, COUNTING_TRUST)
+
+    # --- An optional that was supplied is not the same request as one that
+    #     was not, in either direction --------------------------------------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        supplied = declare_capability(store, **dict(
+            BASE_CAPABILITY, request_id="req-optional", notes="an operator note"))
+        check(supplied.outcome == ACCEPTED,
+              "a declaration supplying an optional value is accepted")
+        before = forensic(fabric_root)
+        withdrawn = declare_capability(store, **dict(
+            BASE_CAPABILITY, request_id="req-optional", notes=None))
+        check(withdrawn.outcome == CONFLICT,
+              "withdrawing an optional value under the same request identity conflicts")
+        check(withdrawn.reason == CONFLICT_REASON,
+              "a withdrawn optional value is named request_identity_conflict")
+        check(forensic(fabric_root) == before,
+              "a withdrawn optional value leaves the original byte-identical")
+        again = declare_capability(store, **dict(
+            BASE_CAPABILITY, request_id="req-optional", notes="an operator note"))
+        check(again.outcome == EXACT_REPLAY,
+              "restoring the optional value replays the original exactly")
+        check(again.record_id == supplied.record_id,
+              "the restored replay returns the original identity")
+
+    # --- Malformed authority never becomes an exact replay ------------------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        established = declare_capability(store, **dict(BASE_CAPABILITY,
+                                                       request_id="req-authority"))
+        check(established.outcome == ACCEPTED,
+              "the declaration establishing an authority regression is accepted")
+        before = forensic(fabric_root)
+        allocated = list(store.allocations)
+        for field, value, description in (
+                ("actor", None, "no actor"),
+                ("actor", "", "an empty actor"),
+                ("actor", 7, "a non-textual actor"),
+                ("approving_authority", None, "no approving authority"),
+                ("approving_authority", "", "an empty approving authority"),
+                ("approving_authority", 7, "a non-textual approving authority")):
+            result, error = attempted(lambda: declare_capability(
+                store, **dict(BASE_CAPABILITY, request_id="req-authority",
+                              **{field: value})))
+            check(error is None,
+                  f"a reused request identity with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome != EXACT_REPLAY,
+                  f"a reused request identity with {description} is never an exact replay")
+            check(result.outcome == CONFLICT,
+                  f"a reused request identity with {description} is a conflict")
+            check(result.record_id is None,
+                  f"a reused request identity with {description} names no record")
+            check(store.allocations == allocated,
+                  f"a reused request identity with {description} allocates nothing")
+            check(forensic(fabric_root) == before,
+                  f"a reused request identity with {description} changes nothing")
+        # An authority the released canonicaliser cannot represent is refused
+        # before the critical section is entered at all.
+        entries = store.entries
+        result, error = attempted(lambda: declare_capability(
+            store, **dict(BASE_CAPABILITY, request_id="req-authority",
+                          actor=object())))
+        check(error is None, "an unrepresentable actor raises nothing")
+        check(result is not None and result.outcome == INVALID,
+              "an unrepresentable actor is refused as invalid")
+        check(result is not None and result.reason == MALFORMED_CONTENT,
+              "an unrepresentable actor is named malformed-operation-content")
+        check(result is not None and result.outcome != EXACT_REPLAY,
+              "an unrepresentable actor is never an exact replay")
+        check(store.entries == entries,
+              "an unrepresentable payload enters no critical section")
+        check(forensic(fabric_root) == before,
+              "an unrepresentable actor changes nothing")
+
+    # --- Nothing is allocated until the content is known constructible ------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, granted = seeded_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="req-seed-cap"))
+        con = declare_contract(store, **dict(BASE_CONTRACT,
+                                             request_id="req-seed-con",
+                                             capability_id=cap.record_id))
+        pkg = declare_package(store, **dict(BASE_PACKAGE, request_id="req-seed-pkg",
+                                            capability_id=cap.record_id,
+                                            contract_id=con.record_id))
+        adm = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id="req-seed-host",
+            fabric_node_trust_record_id=granted.record.record_id))
+        adv = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="req-seed-adv", actor=adm.record_id,
+            capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id))
+        check(all(result.outcome == ACCEPTED
+                  for result in (cap, con, pkg, adm, adv)),
+              "every sequence exists before the malformed-content matrix runs")
+
+        def bad_capability(index, **overrides):
+            return lambda: declare_capability(store, **dict(
+                BASE_CAPABILITY, request_id=f"req-malformed-{index}", **overrides))
+
+        def bad_contract(index, **overrides):
+            return lambda: declare_contract(store, **dict(
+                BASE_CONTRACT, request_id=f"req-malformed-{index}",
+                capability_id=cap.record_id, **overrides))
+
+        def bad_package(index, **overrides):
+            return lambda: declare_package(store, **dict(
+                BASE_PACKAGE, request_id=f"req-malformed-{index}",
+                capability_id=cap.record_id, contract_id=con.record_id,
+                **overrides))
+
+        def bad_subject(index, **overrides):
+            return lambda: admit_subject(store, trust_store, **dict(
+                BASE_SUBJECT, request_id=f"req-malformed-{index}",
+                fabric_node_trust_record_id=granted.record.record_id, **overrides))
+
+        def bad_advertisement(index, **overrides):
+            return lambda: register_advertisement(store, **dict(
+                BASE_ADVERT, request_id=f"req-malformed-{index}",
+                actor=adm.record_id, capability_host_id=adm.record_id,
+                capability_package_id=pkg.record_id, contract_id=con.record_id,
+                **overrides))
+
+        MALFORMED = (
+            ("a capability whose provenance is not a mapping", MALFORMED_CONTENT,
+             bad_capability(1, provenance=7)),
+            ("a capability whose contract references are not a sequence",
+             MALFORMED_CONTENT, bad_capability(2, contract_ids=7)),
+            ("a capability whose notes cannot be represented", MALFORMED_CONTENT,
+             bad_capability(3, notes=object())),
+            ("a contract whose request shape is not a mapping", MALFORMED_CONTENT,
+             bad_contract(4, request_shape=7)),
+            ("a contract whose response shape is not a mapping", MALFORMED_CONTENT,
+             bad_contract(5, response_shape=7)),
+            ("a contract whose failure modes are not a sequence", MALFORMED_CONTENT,
+             bad_contract(6, failure_modes=7)),
+            ("a contract whose resource requirements are not a mapping",
+             MALFORMED_CONTENT, bad_contract(7, resource_requirements=7)),
+            ("a contract whose compatibility is a bare string", MALFORMED_CONTENT,
+             bad_contract(8, compatible_with="1.0.0")),
+            ("a contract whose provenance is not a mapping", MALFORMED_CONTENT,
+             bad_contract(9, provenance=7)),
+            ("a contract whose description cannot be represented",
+             MALFORMED_CONTENT, bad_contract(10, description=object())),
+            ("a contract whose recorded instant carries no offset", NAIVE_INSTANT,
+             bad_contract(11, recorded_at=STAMP.replace(tzinfo=None))),
+            ("a package whose resource requirements are not a mapping",
+             MALFORMED_CONTENT, bad_package(12, resource_requirements=7)),
+            ("a package whose provenance is not a mapping", MALFORMED_CONTENT,
+             bad_package(13, provenance=7)),
+            ("a package whose satisfied versions are not a sequence",
+             MALFORMED_CONTENT, bad_package(14, satisfied_contract_versions=7)),
+            ("a package whose description cannot be represented",
+             MALFORMED_CONTENT, bad_package(15, description=object())),
+            ("an admission whose verified profile is not a mapping",
+             MALFORMED_CONTENT, bad_subject(16, verified_resource_profile=7)),
+            ("an admission whose provenance is not a mapping", MALFORMED_CONTENT,
+             bad_subject(17, provenance=7)),
+            ("an admission whose name cannot be represented", MALFORMED_CONTENT,
+             bad_subject(18, name=object())),
+            ("an admission whose evaluation instant carries no offset",
+             NAIVE_INSTANT, bad_subject(19, evaluated_at=STAMP.replace(tzinfo=None))),
+            ("an advertisement whose advertised profile is not a mapping",
+             MALFORMED_CONTENT, bad_advertisement(20, advertised_resource_profile=7)),
+            ("an advertisement whose provenance is not a mapping",
+             MALFORMED_CONTENT, bad_advertisement(21, provenance=7)),
+            ("an advertisement whose satisfied versions are not a sequence",
+             MALFORMED_CONTENT, bad_advertisement(22, satisfied_contract_versions=7)),
+            ("an advertisement whose observation instant is text", NAIVE_INSTANT,
+             bad_advertisement(23, observed_at=STAMP.isoformat())),
+        )
+        for description, reason, operation in MALFORMED:
+            before = forensic(fabric_root)
+            trust_before = forensic(trust_root)
+            allocated = list(store.allocations)
+            written = list(store.writes)
+            residue = temporaries(fabric_root)
+            counters = sequences_of(fabric_root)
+            result, error = attempted(operation)
+            check(error is None,
+                  f"{description} raises nothing out of the governed boundary")
+            if error is not None:
+                continue
+            check(result.outcome in (INVALID, REFUSED),
+                  f"{description} returns a controlled result")
+            check(result.reason == reason,
+                  f"{description} is refused as {reason}")
+            check(result.record_id is None and result.record_kind is None,
+                  f"{description} names no record")
+            check(store.allocations == allocated,
+                  f"{description} allocates no identity")
+            check(store.writes == written, f"{description} writes no record")
+            check(sequences_of(fabric_root) == counters,
+                  f"{description} creates and advances no sequence")
+            check(temporaries(fabric_root) == residue,
+                  f"{description} leaves no temporary artefact")
+            check(forensic(fabric_root) == before,
+                  f"{description} leaves the fabric forensically identical")
+            check(forensic(trust_root) == trust_before,
+                  f"{description} leaves the trust plane forensically identical")
+            rendered = str(result.to_dict())
+            for token, leak in ((" 0x", "an object address"),
+                                ("/tmp/", "a filesystem path"),
+                                ("Traceback", "a traceback"),
+                                ("object at", "an object repr")):
+                check(token not in rendered, f"{description} leaks no {leak}")
+            repeated, repeated_error = attempted(operation)
+            check(repeated_error is None and repeated is not None
+                  and repeated.outcome == result.outcome
+                  and repeated.reason == result.reason,
+                  f"{description} is refused identically on repetition")
+
+        check(temporaries(fabric_root) == [],
+              "the malformed-content matrix left no temporary artefact at all")
+
+        # The construction failure the correction was raised against: it used
+        # to be discovered only after C1 had already advanced the sequence.
+        counters = sequences_of(fabric_root)
+        allocated = list(store.allocations)
+        check("capability-contract.seq" in counters,
+              "the contract sequence exists before the model-construction case")
+        result, error = attempted(lambda: declare_contract(store, **dict(
+            BASE_CONTRACT, request_id="req-shape", capability_id=cap.record_id,
+            request_shape=7)))
+        check(error is None,
+              "declare_contract with a malformed request shape raises nothing")
+        check(result is not None and result.outcome == INVALID
+              and result.reason == MALFORMED_CONTENT,
+              "declare_contract with a malformed request shape is controlled content")
+        check(store.allocations == allocated,
+              "a model-construction failure allocates no identity at all")
+        check(sequences_of(fabric_root) == counters,
+              "a model-construction failure leaves every sequence exactly where it was")
+
+    # --- A refused request is not durably replayed --------------------------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        seeded_trust(tmp)
+        refused = declare_capability(store, **dict(BASE_CAPABILITY,
+                                                   request_id="req-retry",
+                                                   provenance=7))
+        check(refused.record_id is None, "a malformed declaration records nothing")
+        corrected = declare_capability(store, **dict(BASE_CAPABILITY,
+                                                     request_id="req-retry"))
+        check(corrected.outcome == ACCEPTED,
+              "the same request identity is evaluated afresh once the content is well formed")
+        check(corrected.record_id == "CAPDEF-0001",
+              "the freshly evaluated request allocates the first identity")
+finally:
+    admission_module.verify_trust_record = RELEASED_TRUST_VERIFY
+
+check(admission_module.verify_trust_record is RELEASED_TRUST_VERIFY,
+      "the released C3 adapter is restored after the correction regression")
+
+# --- The correction adds no module, and increment 7 has not begun -----------
+RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
+                    "identifiers.py", "models.py", "request_identity.py",
+                    "store.py", "trust_adapter.py", "validator.py"}
+check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
+      == RELEASED_MODULES,
+      "the correction adds no fabric module and increment 7 has not begun")
 
 print(f"__FAILURES__={failures}")
 ADMITPY
