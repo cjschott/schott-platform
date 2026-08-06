@@ -165,8 +165,11 @@ def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
     if usable != (standing in USABLE_STANDINGS):
         return True
 
-    stamp = reported.get("evaluated_at")
-    if stamp is not None and stamp != instant.isoformat():
+    # Stated, not merely not-contradicted. A response that never says which
+    # moment it describes cannot be checked against the moment that was asked
+    # about, so an answer about any instant would pass as an answer about this
+    # one.
+    if reported.get("evaluated_at") != instant.isoformat():
         return True
 
     if _references(reported.get("evidence_reference_ids")) is None:
@@ -182,14 +185,20 @@ def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
                   _identity(reported.get("record_id")),
                   _identity(reported.get("decision_id")))
     resolved = sum(1 for entry in identities if entry is not None)
-    if usable:
-        # A verified subject is verified by something nameable.
-        return resolved != len(identities)
-    if resolved == 0:
-        # Nothing to cite. Only genuine absence looks like this.
-        return standing != TrustState.UNKNOWN.value
-    # Some cited and some missing: a reference that did not resolve, which is
-    # a different fact from no lineage at all.
+
+    if standing == TrustState.UNKNOWN.value:
+        # Absence cites nothing. A response naming a lineage, a record, or a
+        # decision is describing something that exists and could not be read,
+        # and calling that "no trust" would lose the difference. Absence also
+        # has nothing stored: an unknown effective standing over a stored
+        # grant is a record that failed to interpret, not a subject never found.
+        if stored != TrustState.UNKNOWN.value:
+            return True
+        return resolved != 0
+
+    # Every recognised standing rests on a record, so it cites all three.
+    # A verified subject is verified by something nameable; an expired or
+    # revoked one is refused on the strength of something equally nameable.
     return resolved != len(identities)
 
 

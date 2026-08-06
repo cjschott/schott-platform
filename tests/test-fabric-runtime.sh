@@ -3874,6 +3874,157 @@ with TemporaryDirectory() as tmp:
     check(forensic(fabric_root) == fabric_before,
           "refusing every malformed response changes nothing in the fabric store")
 
+
+# --- The evaluation instant must be stated, not merely not-contradicted ------
+# Defect caught: tolerating an absent evaluated_at. A response that never says
+# which moment it describes cannot be checked against the moment that was
+# asked about, so an answer about any instant would pass as an answer about
+# this one.
+NO_INSTANT = released_shape()
+del NO_INSTANT["evaluated_at"]
+MISSING_INSTANT = (
+    (NO_INSTANT, "no evaluation instant at all"),
+    (released_shape(evaluated_at=None), "an evaluation instant of nothing"),
+    (released_shape(evaluated_at=12345), "a numeric evaluation instant"),
+    (released_shape(evaluated_at=STAMP), "an evaluation instant that is not text"),
+    (released_shape(evaluated_at=""), "an empty evaluation instant"),
+    (released_shape(evaluated_at=[STAMP.isoformat()]),
+     "an evaluation instant inside a list"),
+)
+for payload, description in MISSING_INSTANT:
+    result, query = under_forged_query(payload)
+    check(result.status == UNVERIFIED,
+          f"a released response carrying {description} does not verify")
+    check(result.reasons == (REASON_UNREADABLE,),
+          f"a released response carrying {description} is reported as unreadable")
+    check(query.calls == 1,
+          f"a released response carrying {description} is asked for once")
+    repeated, _ = under_forged_query(payload)
+    check(repeated == result,
+          f"a released response carrying {description} refuses identically on repetition")
+
+# --- Absent trust cites nothing. Anything cited is a reference, not absence --
+# Defect caught: reading an unknown standing as "no trust exists" even when the
+# response names a lineage, a record, and a decision. A response citing
+# authoritative identities is describing something that exists and could not be
+# read -- reporting that as absence loses the difference.
+IDENTITY_FIELDS = ("lineage_id", "record_id", "decision_id")
+IDENTITY_VALUES = {"lineage_id": "TLIN-000001-v0001",
+                   "record_id": "TREC-000001",
+                   "decision_id": "TDEC-000001"}
+
+
+def unknown_citing(*fields):
+    """An unknown standing that cites exactly the named identities."""
+    return released_shape(
+        stored_state=TrustState.UNKNOWN.value,
+        effective_state=TrustState.UNKNOWN.value, usable=False,
+        **{name: (IDENTITY_VALUES[name] if name in fields else None)
+           for name in IDENTITY_FIELDS})
+
+
+CITED_COMBINATIONS = (
+    (("lineage_id", "record_id", "decision_id"), "a lineage, a record, and a decision"),
+    (("lineage_id",), "only a lineage"),
+    (("record_id",), "only a record"),
+    (("decision_id",), "only a decision"),
+    (("lineage_id", "record_id"), "a lineage and a record"),
+    (("lineage_id", "decision_id"), "a lineage and a decision"),
+    (("record_id", "decision_id"), "a record and a decision"),
+)
+for fields, description in CITED_COMBINATIONS:
+    result, query = under_forged_query(unknown_citing(*fields))
+    check(result.status == UNVERIFIED,
+          f"an unknown standing citing {description} does not verify")
+    check(result.reasons == (REASON_UNREADABLE,),
+          f"an unknown standing citing {description} is unreadable, not absent")
+    check(query.calls == 1,
+          f"an unknown standing citing {description} is asked for once")
+
+# An unknown effective standing over a stored standing that is not unknown is
+# describing a record it could not interpret, not a subject it never found.
+result, _ = under_forged_query(released_shape(
+    stored_state=TrustState.TRUSTED.value,
+    effective_state=TrustState.UNKNOWN.value, usable=False))
+check(result.reasons == (REASON_UNREADABLE,),
+      "an unknown effective standing over a stored grant is unreadable, not absent")
+
+# Exactly one shape is genuine absence: unknown, unusable, citing nothing.
+genuinely_absent, _ = under_forged_query(unknown_citing())
+check(genuinely_absent.status == UNVERIFIED,
+      "genuinely absent trust does not verify")
+check(genuinely_absent.reasons == (REASON_NO_STANDING,),
+      "only the exact absent shape is reported as no trust standing")
+check(genuinely_absent.lineage_id is None and genuinely_absent.record_id is None
+      and genuinely_absent.decision_id is None,
+      "genuinely absent trust cites no lineage, record, or decision")
+
+# --- Coherent responses keep the behaviour established at 9659acd -----------
+for standing, description in ((TrustState.TRUSTED.value, "trusted"),
+                              (TrustState.RESTRICTED.value, "restricted")):
+    result, _ = under_forged_query(released_shape(
+        effective_state=standing, stored_state=standing, usable=True))
+    check(result.status == VERIFIED,
+          f"a coherent {description} response still verifies")
+    check(result.reasons == (),
+          f"a coherent {description} response carries no refusal reason")
+    check(result.evaluated_at == STAMP.isoformat(),
+          f"a coherent {description} response reports the instant it was asked about")
+
+for standing, reason, description in (
+        (TrustState.EXPIRED.value, REASON_EXPIRED, "expired"),
+        (TrustState.REVOKED.value, REASON_REVOKED, "revoked"),
+        (TrustState.QUARANTINED.value, REASON_NOT_USABLE, "quarantined"),
+        (TrustState.PENDING.value, REASON_NOT_USABLE, "pending"),
+        (TrustState.REJECTED.value, REASON_NOT_USABLE, "rejected")):
+    result, _ = under_forged_query(released_shape(
+        effective_state=standing, usable=False))
+    check(result.status == UNVERIFIED,
+          f"a coherent {description} response does not verify")
+    check(result.reasons == (reason,),
+          f"a coherent {description} response keeps its own refusal reason")
+    check(result.standing == standing,
+          f"a coherent {description} response preserves the reported standing")
+
+# --- The new refusals leak nothing and change nothing ------------------------
+NEW_REFUSALS = [payload for payload, _ in MISSING_INSTANT]
+NEW_REFUSALS += [unknown_citing(*fields) for fields, _ in CITED_COMBINATIONS]
+for payload in NEW_REFUSALS:
+    result, _ = under_forged_query(payload)
+    leaked = " ".join(result.reasons) + " " + str(result.to_dict())
+    for token, leak in ((" 0x", "an object address"), ("/tmp/", "a filesystem path"),
+                        ("Traceback", "a traceback"), ("object at", "an object repr")):
+        check(token not in leaked, f"a newly refused response leaks no {leak}")
+
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    fabric = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    trust_root = Path(tmp) / "trust"
+    fabric_root = Path(tmp) / "fabric"
+    trust_before = forensic(trust_root)
+    fabric_before = forensic(fabric_root)
+    for payload in NEW_REFUSALS:
+        under_forged_query(payload)
+    check(forensic(trust_root) == trust_before,
+          "refusing an incoherent evaluation changes nothing in the trust store")
+    check(forensic(fabric_root) == fabric_before,
+          "refusing an incoherent evaluation changes nothing in the fabric store")
+
+# The real store still answers as it did: this narrows nothing that was right.
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    check(verify_subject(store, "HOST-GOOD", evaluated_at=STAMP).status == VERIFIED,
+          "a real trusted subject still verifies after the coherence guard")
+    check(verify_subject(store, "HOST-NEVER-SEEN", evaluated_at=STAMP).reasons
+          == (REASON_NO_STANDING,),
+          "a real absent subject still reports no trust standing")
+    check(verify_subject(store, "HOST-LAPSED", evaluated_at=AFTER).reasons
+          == (REASON_EXPIRED,),
+          "a real expired subject still reports expired trust")
+    check(verify_subject(store, "HOST-REVOKED", evaluated_at=AFTER).reasons
+          == (REASON_REVOKED,),
+          "a real revoked subject still reports revoked trust")
+
 print(f"__FAILURES__={failures}")
 TRUSTPY
 )"
