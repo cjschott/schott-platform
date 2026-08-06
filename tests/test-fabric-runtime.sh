@@ -3237,6 +3237,9 @@ from tools.trust.root_authority import (  # noqa: E402
 )
 from tools.trust.evaluator import create_decision  # noqa: E402
 from tools.trust import query as Q  # noqa: E402
+from tools.trust.identifiers import (  # noqa: E402
+    DECISION_ID, EVIDENCE_ID, LINEAGE_ID, RECORD_ID,
+)
 from tools.fabric.errors import FabricError  # noqa: E402
 from tools.fabric.store import FabricStore  # noqa: E402
 from tools.fabric.models import RECORD_MODELS  # noqa: E402
@@ -3713,7 +3716,7 @@ def released_shape(**overrides):
         "subject_id": "HOST-A",
         "stored_state": TrustState.TRUSTED.value,
         "effective_state": TrustState.TRUSTED.value,
-        "lineage_id": "TLIN-000001-v0001",
+        "lineage_id": "TLIN-000001",
         "evaluated_at": STAMP.isoformat(),
         "scope": None,
         "record_id": "TREC-000001",
@@ -3731,7 +3734,7 @@ coherent, _ = under_forged_query(released_shape())
 check(coherent.status == VERIFIED,
       "a coherent released response still verifies")
 check(coherent.record_id == "TREC-000001" and coherent.decision_id == "TDEC-000001"
-      and coherent.lineage_id == "TLIN-000001-v0001",
+      and coherent.lineage_id == "TLIN-000001",
       "a coherent released response preserves its authoritative identities")
 
 INCOHERENT = (
@@ -3806,6 +3809,8 @@ for standing, reason, description in (
         (TrustState.REVOKED.value, REASON_REVOKED, "revoked"),
         (TrustState.QUARANTINED.value, REASON_NOT_USABLE, "quarantined")):
     result, _ = under_forged_query(released_shape(
+        stored_state=(TrustState.TRUSTED.value
+                      if standing == TrustState.EXPIRED.value else standing),
         effective_state=standing, usable=False))
     check(result.reasons == (reason,),
           f"a {description} standing keeps its own reason rather than becoming unreadable")
@@ -3909,7 +3914,7 @@ for payload, description in MISSING_INSTANT:
 # authoritative identities is describing something that exists and could not be
 # read -- reporting that as absence loses the difference.
 IDENTITY_FIELDS = ("lineage_id", "record_id", "decision_id")
-IDENTITY_VALUES = {"lineage_id": "TLIN-000001-v0001",
+IDENTITY_VALUES = {"lineage_id": "TLIN-000001",
                    "record_id": "TREC-000001",
                    "decision_id": "TDEC-000001"}
 
@@ -3978,6 +3983,8 @@ for standing, reason, description in (
         (TrustState.PENDING.value, REASON_NOT_USABLE, "pending"),
         (TrustState.REJECTED.value, REASON_NOT_USABLE, "rejected")):
     result, _ = under_forged_query(released_shape(
+        stored_state=(TrustState.TRUSTED.value
+                      if standing == TrustState.EXPIRED.value else standing),
         effective_state=standing, usable=False))
     check(result.status == UNVERIFIED,
           f"a coherent {description} response does not verify")
@@ -4024,6 +4031,220 @@ with TemporaryDirectory() as tmp:
     check(verify_subject(store, "HOST-REVOKED", evaluated_at=AFTER).reasons
           == (REASON_REVOKED,),
           "a real revoked subject still reports revoked trust")
+
+
+# --- Stored and effective standing must be a pair expiry can produce --------
+# Defect caught: accepting any two recognised standings side by side. The
+# released expiry contract only ever leaves a standing unchanged or ages a
+# usable one out, so 'stored revoked, effectively trusted' is not a weaker
+# answer -- it is a combination nothing can produce, and it verified.
+ALL_STANDINGS = tuple(state.value for state in TrustState)
+EXPIRABLE_STANDINGS = (TrustState.TRUSTED.value, TrustState.RESTRICTED.value)
+USABLE_SET = (TrustState.TRUSTED.value, TrustState.RESTRICTED.value)
+check(len(ALL_STANDINGS) >= 6,
+      "the released standing vocabulary is enumerated for the pair matrix")
+
+for stored in ALL_STANDINGS:
+    for effective in ALL_STANDINGS:
+        producible = (effective == stored
+                      or (stored in EXPIRABLE_STANDINGS
+                          and effective == TrustState.EXPIRED.value))
+        cites = effective != TrustState.UNKNOWN.value
+        payload = released_shape(
+            stored_state=stored, effective_state=effective,
+            usable=effective in USABLE_SET,
+            lineage_id="TLIN-000001" if cites else None,
+            record_id="TREC-000001" if cites else None,
+            decision_id="TDEC-000001" if cites else None)
+        result, query = under_forged_query(payload)
+        pair = f"stored '{stored}' reported effectively '{effective}'"
+        if producible:
+            check(result.reasons != (REASON_UNREADABLE,),
+                  f"{pair} is a pair the expiry contract produces")
+        else:
+            check(result.status == UNVERIFIED and result.reasons == (REASON_UNREADABLE,),
+                  f"{pair} is impossible and fails closed")
+        check(query.calls == 1, f"{pair} is asked for once")
+
+# The two expiry pairs specifically, and a usable standing never invented.
+for stored in EXPIRABLE_STANDINGS:
+    result, _ = under_forged_query(released_shape(
+        stored_state=stored, effective_state=TrustState.EXPIRED.value, usable=False))
+    check(result.reasons == (REASON_EXPIRED,),
+          f"a stored '{stored}' grant reported expired keeps its expiry reason")
+
+for stored in ALL_STANDINGS:
+    for usable_standing in USABLE_SET:
+        if stored == usable_standing:
+            continue
+        result, _ = under_forged_query(released_shape(
+            stored_state=stored, effective_state=usable_standing, usable=True))
+        check(result.status == UNVERIFIED,
+              f"a usable '{usable_standing}' standing is never derived from stored '{stored}'")
+
+# Matching standings keep exactly the behaviour established earlier.
+for standing, expected in ((TrustState.TRUSTED.value, VERIFIED),
+                           (TrustState.RESTRICTED.value, VERIFIED),
+                           (TrustState.EXPIRED.value, UNVERIFIED),
+                           (TrustState.REVOKED.value, UNVERIFIED),
+                           (TrustState.QUARANTINED.value, UNVERIFIED)):
+    result, _ = under_forged_query(released_shape(
+        stored_state=standing, effective_state=standing,
+        usable=standing in USABLE_SET))
+    check(result.status == expected,
+          f"a response whose stored and effective standing are both "
+          f"'{standing}' is {expected}")
+
+# --- Authoritative identities must be released identifiers ------------------
+# Defect caught: treating any non-empty string as a resolved identity. A
+# response citing 'arbitrary text' as its lineage cites nothing verifiable,
+# and it verified.
+MALFORMED_IDENTITIES = (
+    ("lineage_id", "TLIN-000001-v0001", "a lineage record identity, not a lineage"),
+    ("lineage_id", "tlin-000001", "a lowercase lineage identifier"),
+    ("lineage_id", "TLIN-0001", "a lineage of the wrong width"),
+    ("lineage_id", "TLIN-0000001", "a lineage identifier too wide"),
+    ("lineage_id", " TLIN-000001", "a lineage with leading whitespace"),
+    ("lineage_id", "TLIN-000001 ", "a lineage with trailing whitespace"),
+    ("lineage_id", "trust:TLIN-000001", "a namespaced lineage identifier"),
+    ("lineage_id", "arbitrary text", "a lineage that is arbitrary text"),
+    ("lineage_id", "TREC-000001", "a record identifier in the lineage field"),
+    ("record_id", "TDEC-000001", "a decision identifier in the record field"),
+    ("record_id", "TREC-00001", "a record identifier of the wrong width"),
+    ("record_id", "TREC-0000001", "a record identifier too wide"),
+    ("record_id", "trec-000001", "a lowercase record identifier"),
+    ("record_id", "TREC-00000A", "a record identifier carrying a letter"),
+    ("record_id", "trust://TREC-000001", "a record identifier behind a scheme"),
+    ("decision_id", "TREC-000001", "a record identifier in the decision field"),
+    ("decision_id", "TDEC-00001", "a decision identifier of the wrong width"),
+    ("decision_id", "TDEC-000001\n", "a decision identifier with a trailing newline"),
+)
+for field, value, description in MALFORMED_IDENTITIES:
+    result, query = under_forged_query(released_shape(**{field: value}))
+    check(result.status == UNVERIFIED,
+          f"a response citing {description} does not verify")
+    check(result.reasons == (REASON_UNREADABLE,),
+          f"a response citing {description} is reported as unreadable")
+    check(query.calls == 1, f"a response citing {description} is asked for once")
+    repeated, _ = under_forged_query(released_shape(**{field: value}))
+    check(repeated == result,
+          f"a response citing {description} refuses identically on repetition")
+
+MALFORMED_EVIDENCE = (
+    (["TAUTH-000001"], "an authority identifier as evidence"),
+    (["TEVID-00001"], "an evidence identifier of the wrong width"),
+    (["tevid-000001"], "a lowercase evidence identifier"),
+    ([" TEVID-000001"], "an evidence identifier with leading whitespace"),
+    (["TEVID-000001 "], "an evidence identifier with trailing whitespace"),
+    (["TEVID-000001", "not-an-identifier"], "one valid and one arbitrary evidence entry"),
+    (["TEVID-000001", 12345], "a non-textual evidence entry"),
+)
+for references, description in MALFORMED_EVIDENCE:
+    result, _ = under_forged_query(released_shape(evidence_reference_ids=references))
+    check(result.status == UNVERIFIED,
+          f"a response citing {description} does not verify")
+    check(result.reasons == (REASON_UNREADABLE,),
+          f"a response citing {description} is reported as unreadable")
+
+# The exact released forms are still accepted, unchanged.
+exact, _ = under_forged_query(released_shape(
+    lineage_id="TLIN-000001", record_id="TREC-000001",
+    decision_id="TDEC-000001",
+    evidence_reference_ids=["TEVID-000001", "TEVID-000002"]))
+check(exact.status == VERIFIED,
+      "a response citing exact released identifier forms still verifies")
+check(exact.lineage_id == "TLIN-000001" and exact.record_id == "TREC-000001"
+      and exact.decision_id == "TDEC-000001",
+      "accepted identities are preserved exactly, never normalised")
+check(tuple(exact.evidence_reference_ids) == ("TEVID-000001", "TEVID-000002"),
+      "accepted evidence references are preserved in order and unchanged")
+
+# --- A trust record identity is a released record identifier ----------------
+BAD_RETURNED = (
+    ({"subject_id": "HOST-A", "record_id": "TREC-00001"},
+     "a returned record identifier of the wrong width"),
+    ({"subject_id": "HOST-A", "record_id": "trec-000001"},
+     "a lowercase returned record identifier"),
+    ({"subject_id": "HOST-A", "record_id": "TDEC-000001"},
+     "a decision identifier returned as a record"),
+    ({"subject_id": "HOST-A", "record_id": " TREC-000001"},
+     "a returned record identifier with leading whitespace"),
+)
+for record, description in BAD_RETURNED:
+    result, lookup = under_forged_record(record)
+    check(result.status == UNVERIFIED and result.reasons == (REASON_UNREADABLE,),
+          f"{description} is reported as unreadable")
+    check(lookup.calls == 1, f"{description} is fetched once")
+
+for requested, description in (("not-a-record", "arbitrary text"),
+                               ("TREC-00001", "the wrong width"),
+                               ("trec-000001", "lowercase"),
+                               ("TDEC-000001", "a decision identifier"),
+                               (" TREC-000001", "leading whitespace")):
+    try:
+        verify_trust_record(object(), requested, evaluated_at=STAMP)
+        bad(f"a trust record requested as {description} fails closed (was accepted)")
+    except FabricError:
+        ok(f"a trust record requested as {description} fails closed")
+    except Exception as error:  # noqa: BLE001
+        bad(f"a trust record requested as {description} fails closed "
+            f"(raised {type(error).__name__})")
+
+# --- The new refusals leak nothing and change nothing -----------------------
+COHERENCE_REFUSALS = [released_shape(**{field: value})
+                      for field, value, _ in MALFORMED_IDENTITIES]
+COHERENCE_REFUSALS += [released_shape(evidence_reference_ids=references)
+                       for references, _ in MALFORMED_EVIDENCE]
+COHERENCE_REFUSALS.append(released_shape(
+    stored_state=TrustState.REVOKED.value,
+    effective_state=TrustState.TRUSTED.value, usable=True))
+for payload in COHERENCE_REFUSALS:
+    result, _ = under_forged_query(payload)
+    leaked = " ".join(result.reasons) + " " + str(result.to_dict())
+    for token, leak in ((" 0x", "an object address"), ("/tmp/", "a filesystem path"),
+                        ("Traceback", "a traceback"), ("object at", "an object repr")):
+        check(token not in leaked, f"a coherence refusal leaks no {leak}")
+
+with TemporaryDirectory() as tmp:
+    store, _, _ = seeded(tmp)
+    fabric = FabricStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    trust_root = Path(tmp) / "trust"
+    fabric_root = Path(tmp) / "fabric"
+    trust_before = forensic(trust_root)
+    fabric_before = forensic(fabric_root)
+    for payload in COHERENCE_REFUSALS:
+        under_forged_query(payload)
+    for record, _ in BAD_RETURNED:
+        under_forged_record(record)
+    check(forensic(trust_root) == trust_before,
+          "refusing an incoherent standing or identity changes nothing in the trust store")
+    check(forensic(fabric_root) == fabric_before,
+          "refusing an incoherent standing or identity changes nothing in the fabric store")
+
+# The real store, which produces real identifiers, is unaffected.
+with TemporaryDirectory() as tmp:
+    store, granted, _ = seeded(tmp)
+    live = verify_subject(store, "HOST-GOOD", evaluated_at=STAMP)
+    check(live.status == VERIFIED,
+          "a real trusted subject still verifies against the released identifier syntax")
+    check(RECORD_ID.match(live.record_id or "") is not None,
+          "a real verification cites a released record identifier")
+    check(DECISION_ID.match(live.decision_id or "") is not None,
+          "a real verification cites a released decision identifier")
+    check(LINEAGE_ID.match(live.lineage_id or "") is not None,
+          "a real verification cites a released lineage identifier")
+    by_record = verify_trust_record(store, granted.record.record_id, evaluated_at=STAMP)
+    check(by_record.status == VERIFIED,
+          "a real trust record identity still resolves to its verified subject")
+    check(verify_subject(store, "HOST-LAPSED", evaluated_at=AFTER).reasons
+          == (REASON_EXPIRED,),
+          "a real expired subject still reports expired trust")
+    check(verify_subject(store, "HOST-REVOKED", evaluated_at=AFTER).reasons
+          == (REASON_REVOKED,),
+          "a real revoked subject still reports revoked trust")
+    check(verify_subject(store, "HOST-NEVER-SEEN", evaluated_at=STAMP).reasons
+          == (REASON_NO_STANDING,),
+          "a real absent subject still reports no trust standing")
 
 print(f"__FAILURES__={failures}")
 TRUSTPY

@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from ..trust.identifiers import DECISION_ID, EVIDENCE_ID, LINEAGE_ID, RECORD_ID
 from ..trust.models import TrustState
 from ..trust.query import get_current_trust, get_trust_record
 from .errors import FabricError
@@ -48,6 +49,11 @@ KNOWN_STANDINGS = frozenset(state.value for state in TrustState)
 # Standings a subject may actually be used in. Taken from the released
 # vocabulary rather than restated as a policy of the Fabric's own.
 USABLE_STANDINGS = frozenset({TrustState.TRUSTED.value, TrustState.RESTRICTED.value})
+
+# Only a usable standing can age out, and expiry is the one change time makes.
+# So a stored standing either survives unchanged or becomes expired -- every
+# other pairing is one the released contract cannot yield.
+EXPIRABLE_STANDINGS = frozenset({TrustState.TRUSTED.value, TrustState.RESTRICTED.value})
 
 # Controlled refusal vocabulary, for C4 and C5 to act on. Deterministic by
 # construction: nothing here is derived from an exception or an object.
@@ -128,12 +134,22 @@ def _require_subject(subject_id: Any) -> str:
     return subject_id
 
 
+def _producible(stored: str, standing: str) -> bool:
+    """Whether the released expiry contract can yield this pair of standings."""
+    if standing == stored:
+        return True
+    return stored in EXPIRABLE_STANDINGS and standing == TrustState.EXPIRED.value
+
+
 def _references(value: Any) -> tuple[str, ...] | None:
-    """Evidence identities in order, or None when the collection is not one."""
+    """Evidence identities in order, or None when any is not a released one."""
     if not isinstance(value, (list, tuple)):
         return None
     for entry in value:
-        if not isinstance(entry, str) or not entry.strip():
+        # fullmatch, not match: the released patterns anchor with `$`, which
+        # matches before a trailing newline, so an identity with one would
+        # otherwise pass as the identity without it.
+        if not isinstance(entry, str) or not EVIDENCE_ID.fullmatch(entry):
             return None
     return tuple(value)
 
@@ -155,6 +171,8 @@ def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
     standing = reported.get("effective_state")
     stored = reported.get("stored_state")
     if standing not in KNOWN_STANDINGS or stored not in KNOWN_STANDINGS:
+        return True
+    if not _producible(stored, standing):
         return True
 
     usable = reported.get("usable")
@@ -181,9 +199,23 @@ def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
     if any(not isinstance(entry, str) for entry in reasons):
         return True
 
-    identities = (_identity(reported.get("lineage_id")),
-                  _identity(reported.get("record_id")),
-                  _identity(reported.get("decision_id")))
+    # An identity is either absent or a released identifier. Present but
+    # unrecognisable is neither absence nor a citation: 'arbitrary text' names
+    # nothing the Trust Plane could have allocated.
+    identities = []
+    # The released evaluation carries the bare lineage identity; the versioned
+    # form (TLIN-000001-v0001) names the lineage *record*, not the lineage.
+    for name, pattern in (("lineage_id", LINEAGE_ID),
+                          ("record_id", RECORD_ID),
+                          ("decision_id", DECISION_ID)):
+        value = reported.get(name)
+        if value is None:
+            identities.append(None)
+            continue
+        recognised = _identity(value, pattern)
+        if recognised is None:
+            return True
+        identities.append(recognised)
     resolved = sum(1 for entry in identities if entry is not None)
 
     if standing == TrustState.UNKNOWN.value:
@@ -202,8 +234,22 @@ def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
     return resolved != len(identities)
 
 
-def _identity(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None
+def _identity(value: Any, pattern) -> str | None:
+    """A released identifier, exactly as written, or nothing.
+
+    Matched against the released pattern rather than merely checked for
+    content, and never trimmed or reshaped: an identity that needed correcting
+    to match is not the identity that was reported.
+    """
+    return value if isinstance(value, str) and pattern.fullmatch(value) else None
+
+
+def _require_record_identity(record_id: Any) -> str:
+    """A trust record identity a caller supplies is a released identifier."""
+    if not isinstance(record_id, str) or not RECORD_ID.fullmatch(record_id):
+        raise FabricError(
+            "a trust record identity must be a released record identifier")
+    return record_id
 
 
 def _unverified(subject_id: str, evaluated_at: datetime, reason: str,
@@ -244,9 +290,9 @@ def verify_subject(store, subject_id: Any, *, evaluated_at: Any) -> TrustVerific
         standing=standing,
         stored_standing=stored,
         evaluated_at=instant.isoformat(),
-        lineage_id=_identity(reported.get("lineage_id")),
-        record_id=_identity(reported.get("record_id")),
-        decision_id=_identity(reported.get("decision_id")),
+        lineage_id=_identity(reported.get("lineage_id"), LINEAGE_ID),
+        record_id=_identity(reported.get("record_id"), RECORD_ID),
+        decision_id=_identity(reported.get("decision_id"), DECISION_ID),
         evidence_reference_ids=_references(reported.get("evidence_reference_ids")) or (),
     )
 
@@ -265,7 +311,7 @@ def verify_trust_record(store, record_id: Any, *,
     interface answers by subject. This resolves one to the other and asks the
     same question, so there is still only one route to standing.
     """
-    identifier = _require_subject(record_id)
+    identifier = _require_record_identity(record_id)
     instant = _require_instant(evaluated_at)
 
     try:
@@ -279,7 +325,8 @@ def verify_trust_record(store, record_id: Any, *,
     # The record that came back must be the record that was asked for. A
     # lookup that answers with a different record answers a different question.
     stored_identity = record.get("record_id")
-    if not isinstance(stored_identity, str) or stored_identity != identifier:
+    if (_identity(stored_identity, RECORD_ID) is None
+            or stored_identity != identifier):
         return _unverified(identifier, instant, REASON_UNREADABLE)
 
     subject = record.get("subject_id")
