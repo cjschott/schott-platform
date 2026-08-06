@@ -78,12 +78,33 @@ REASON_SUBJECT_MISMATCH = "trust-subject-mismatch"
 REASON_UNVERIFIED_PROFILE = "resource-profile-not-verified-out-of-band"
 REASON_CONTENT = "malformed-operation-content"
 
+# Categories the part-2 operations add. Each names a condition that did not
+# exist before instances and routes did; none replaces or widens one above.
+REASON_PACKAGE_OWNER = "package-not-of-capability"
+REASON_ADVERT_SUBJECT = "advertisement-not-of-subject"
+REASON_ADVERT_CONTRACT = "advertisement-not-of-contract"
+REASON_ADVERT_PACKAGE = "advertisement-not-of-package"
+REASON_ADVERT_STALE = "advertisement-not-fresh"
+REASON_ADMISSION_EXPIRED = "admission-window-expired"
+REASON_EMPTY_SCOPE = "empty-effective-scope"
+REASON_CLASSIFICATION = "data-classification-exceeds-ceiling"
+REASON_NO_CANDIDATE = "no-declared-candidate"
+REASON_DUPLICATE_CANDIDATE = "duplicate-candidate"
+REASON_CANDIDATE_OWNER = "candidate-not-of-route"
+REASON_ROUTE_VERSION = "invalid-route-version"
+REASON_SUPERSEDES_SUBJECT = "supersedes-different-subject"
+
 # The trust domain every capability package is decided in, per the accepted
 # package schema. It is a constant of the contract, not a caller's choice.
 PACKAGE_TRUST_DOMAIN = "capability-package"
 
 # The domain a fabric host is a trust subject in, per the accepted host schema.
 HOST_TRUST_DOMAIN = "fabric-node"
+
+# The released Trust Plane scope vocabulary, read rather than restated. The
+# Fabric defines no scope algebra of its own: the operator supplies the
+# intersection, and this only asks what it permits.
+SCOPE_CLASSIFICATIONS = "permitted_data_classifications"
 
 # A C3 refusal that means the Trust Plane could not answer at all, rather than
 # that it answered no.
@@ -188,6 +209,52 @@ def _resolve(store, kind: str, identifier: Any) -> Mapping[str, Any]:
     except Exception:  # noqa: BLE001
         # A reference that cannot be read is a reference that did not resolve.
         _refuse(NOT_FOUND, REASON_UNRESOLVED)
+
+
+def _stored_instant(value: Any) -> datetime | None:
+    """An instant read back off a stored record, or nothing at all.
+
+    A stored timestamp arrives either already parsed or as its offset-carrying
+    text. One without an offset is not a point in time, so it is reported as
+    absent rather than placed in a zone nobody wrote down.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        return None
+    return parsed
+
+
+def _verified_standing(trust_store, record_id: Any, evaluated_at: datetime,
+                       domain: str):
+    """One C3 answer about one subject, or C3's own refusal reported unchanged.
+
+    The Fabric asks; it never reads a trust record and never forms a verdict.
+    A refusal keeps the reason C3 gave it, so a caller can explain what
+    happened without the Fabric restating a judgement it does not own.
+    """
+    verification = verify_trust_record(trust_store, record_id,
+                                       evaluated_at=evaluated_at,
+                                       expected_subject_type=domain)
+    if verification.status == UNVERIFIED:
+        reason = verification.reasons[0] if verification.reasons else REASON_UNRESOLVED
+        _refuse(UNAVAILABLE if reason == TRUST_UNAVAILABLE else REFUSED, reason)
+    return verification
+
+
+def _no_self_governance(actor: Any, approving_authority: Any,
+                        *identities: Any) -> None:
+    """A machine governs nothing about itself, under any identity it has."""
+    for identity in identities:
+        if identity is not None and identity in (actor, approving_authority):
+            _refuse(REFUSED, REASON_SELF_ADMISSION)
 
 
 def _contained(claim: Mapping[str, Any], verified: Mapping[str, Any]) -> bool:
@@ -655,4 +722,391 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                               "provenance": provenance,
                               "approving_authority": approving_authority},
                      instants=("recorded_at", "observed_at", "valid_until"),
+                     preflight=preflight, accept=accept)
+
+
+# --- 6.4 Admit an instance ---------------------------------------------------
+
+def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
+                   approving_authority: Any, recorded_at: Any, evaluated_at: Any,
+                   capability_id: Any, capability_package_id: Any,
+                   capability_host_id: Any, contract_id: Any,
+                   satisfied_contract_versions: Any,
+                   verified_resource_profile: Any, admission_decision_id: Any,
+                   package_trust_record_id: Any, host_trust_record_id: Any,
+                   effective_scope: Any, admitted_at: Any, admitted_until: Any,
+                   provenance: Any, advertisement_id: Any = None,
+                   endpoint_reference: Any = None, supersedes: Any = None,
+                   notes: Any = None) -> OperationResult:
+    """Bind one package to one host for one contract. A human decides this.
+
+    **A trust verdict alone never creates an instance**, and neither does an
+    advertisement. Both are consulted; the decision is the operator's, and it
+    is the approving authority on this record that makes the binding exist.
+
+    Trust is composed by intersection and never inherited: the package is
+    verified in `capability-package`, the host in `fabric-node`, separately,
+    through C3 and nowhere else. Trusting one trusts nothing about the other.
+
+    **Comparison is containment, and versions are declared.** The operator's
+    verified profile is authoritative -- never the advertised one -- and no
+    number here is ordered, no version string is interpreted, and no nearest
+    compatible match is sought.
+
+    Nothing about eligibility is computed or stored. These are the admission-
+    time preconditions §6.4 requires; the derived verdict belongs to C5.
+    """
+    def preflight():
+        _human_preflight(actor, approving_authority, recorded_at, evaluated_at,
+                         admitted_at, admitted_until)
+        if admitted_until <= admitted_at:
+            _refuse(REFUSED, REASON_WINDOW)
+        _sequence(satisfied_contract_versions)
+        _mapping(verified_resource_profile)
+        _mapping(effective_scope)
+        _mapping(provenance)
+
+    def accept(identifier, digest):
+        # 1. Content the operator supplied, before anything is dereferenced.
+        _text(admission_decision_id, REASON_CONTENT)
+        versions = _sequence(satisfied_contract_versions)
+        if not versions:
+            _refuse(REFUSED, REASON_VERSIONS)
+        profile = _mapping(verified_resource_profile)
+        scope = _mapping(effective_scope)
+
+        # 2. Every reference resolves before any relationship is read from it.
+        _resolve(store, "capability-definition", capability_id)
+        contract = _resolve(store, "capability-contract", contract_id)
+        package = _resolve(store, "capability-package", capability_package_id)
+        host = _resolve(store, "capability-host", capability_host_id)
+        advertisement = _resolve(store, "capability-advertisement", advertisement_id)
+        node = host.get("node_identity_reference")
+
+        # 3. No machine admits its own binding, under either identity it has.
+        _no_self_governance(actor, approving_authority, node, capability_host_id)
+
+        # 4. The four records must describe one binding, not four opinions.
+        if package.get("capability_id") != capability_id:
+            _refuse(REFUSED, REASON_PACKAGE_OWNER)
+        if contract.get("capability_id") != capability_id:
+            _refuse(REFUSED, REASON_CONTRACT_OWNER)
+        if package.get("contract_id") != contract_id:
+            _refuse(REFUSED, REASON_PACKAGE_CONTRACT)
+        if advertisement.get("capability_host_id") != capability_host_id:
+            _refuse(REFUSED, REASON_ADVERT_SUBJECT)
+        if advertisement.get("contract_id") != contract_id:
+            _refuse(REFUSED, REASON_ADVERT_CONTRACT)
+        if advertisement.get("capability_package_id") != capability_package_id:
+            _refuse(REFUSED, REASON_ADVERT_PACKAGE)
+
+        # 5. Declared versions only: set membership, twice, with no arithmetic.
+        declared = tuple(package.get("satisfied_contract_versions") or ())
+        advertised = tuple(advertisement.get("satisfied_contract_versions") or ())
+        if any(version not in declared for version in versions):
+            _refuse(REFUSED, REASON_VERSIONS)
+        if any(version not in advertised for version in versions):
+            _refuse(REFUSED, REASON_VERSIONS)
+
+        # 6. Both clocks the caller can be judged against, at the caller's own
+        #    evaluation instant. Nothing here reads a system clock.
+        observed = _stored_instant(advertisement.get("observed_at"))
+        expires = _stored_instant(advertisement.get("valid_until"))
+        if observed is None or expires is None:
+            _refuse(REFUSED, REASON_ADVERT_STALE)
+        if not observed <= evaluated_at < expires:
+            _refuse(REFUSED, REASON_ADVERT_STALE)
+        if evaluated_at >= admitted_until:
+            _refuse(REFUSED, REASON_ADMISSION_EXPIRED)
+
+        # 7. Trust, twice, in two domains, through C3 and nowhere else.
+        package_standing = _verified_standing(
+            trust_store, package_trust_record_id, evaluated_at,
+            PACKAGE_TRUST_DOMAIN)
+        host_standing = _verified_standing(
+            trust_store, host_trust_record_id, evaluated_at, HOST_TRUST_DOMAIN)
+        # Each verified subject must be the fabric subject it authorises. The
+        # package's is its artifact reference, as the host's is its node
+        # identity reference: the external identity the Trust Plane decided on,
+        # never the Fabric's own record identifier.
+        if package_standing.subject_id != package.get("artifact_reference"):
+            _refuse(REFUSED, REASON_SUBJECT_MISMATCH)
+        if host_standing.subject_id != node:
+            _refuse(REFUSED, REASON_SUBJECT_MISMATCH)
+
+        # 8. Containment against what the operator verified, never what the
+        #    host claimed, and never an ordering of two numbers.
+        verified = host.get("verified_resource_profile")
+        if not isinstance(verified, Mapping) or dict(profile) != dict(verified):
+            _refuse(REFUSED, REASON_RESOURCE_CLAIM)
+        requirements = package.get("resource_requirements")
+        if not isinstance(requirements, Mapping):
+            _refuse(REFUSED, REASON_RESOURCE_CLAIM)
+        if not _contained(requirements, verified):
+            _refuse(REFUSED, REASON_RESOURCE_CLAIM)
+
+        # 9. An empty intersection is a valid outcome, and it admits nothing.
+        if not scope:
+            _refuse(REFUSED, REASON_EMPTY_SCOPE)
+        permitted = scope.get(SCOPE_CLASSIFICATIONS)
+        if permitted is not None:
+            if isinstance(permitted, str) or not isinstance(permitted, (list, tuple)):
+                _refuse(INVALID, REASON_CONTENT)
+            ceiling = host.get("data_classification_ceiling")
+            for classification in permitted:
+                # Containment, not ordering: the accepted vocabulary declares
+                # no ranking of classifications, so none is inferred here.
+                if classification != ceiling:
+                    _refuse(REFUSED, REASON_CLASSIFICATION)
+
+        references = [capability_id, contract_id, capability_package_id,
+                      capability_host_id, advertisement_id]
+        if supersedes is not None:
+            # Migration destroys one binding and declares another; it never
+            # repoints an instance, and the prior record is left as written.
+            _resolve(store, "capability-instance", supersedes)
+            references.append(supersedes)
+        evidence = _evidence(
+            "capability-instance", actor=actor,
+            approving_authority=approving_authority,
+            reason_category="supersession" if supersedes is not None
+            else "instance-admission",
+            recorded_at=recorded_at, request_id=identifier, request_digest=digest,
+            causal_references=tuple(references),
+            trust_evidence_references=(package_trust_record_id,
+                                       host_trust_record_id))
+        return _commit(store, "capability-instance", evidence,
+                       lambda allocated, carried: RECORD_MODELS[
+                           "capability-instance"](
+                           instance_id=allocated, capability_id=capability_id,
+                           capability_package_id=capability_package_id,
+                           capability_host_id=capability_host_id,
+                           contract_id=contract_id,
+                           satisfied_contract_versions=versions,
+                           verified_resource_profile=profile,
+                           admission_decision_id=admission_decision_id,
+                           package_trust_record_id=package_trust_record_id,
+                           host_trust_record_id=host_trust_record_id,
+                           effective_scope=scope, admitted_at=admitted_at,
+                           admitted_until=admitted_until,
+                           advertisement_id=advertisement_id,
+                           endpoint_reference=endpoint_reference,
+                           supersedes=supersedes, provenance=provenance,
+                           notes=notes, evidence=carried))
+
+    return _governed(store, operation="admit-instance", request_id=request_id,
+                     payload={"actor": actor,
+                              "approving_authority": approving_authority,
+                              "recorded_at": recorded_at,
+                              "evaluated_at": evaluated_at,
+                              "capability_id": capability_id,
+                              "capability_package_id": capability_package_id,
+                              "capability_host_id": capability_host_id,
+                              "contract_id": contract_id,
+                              "satisfied_contract_versions":
+                                  satisfied_contract_versions,
+                              "verified_resource_profile":
+                                  verified_resource_profile,
+                              "admission_decision_id": admission_decision_id,
+                              "package_trust_record_id": package_trust_record_id,
+                              "host_trust_record_id": host_trust_record_id,
+                              "effective_scope": effective_scope,
+                              "admitted_at": admitted_at,
+                              "admitted_until": admitted_until,
+                              "advertisement_id": advertisement_id,
+                              "endpoint_reference": endpoint_reference,
+                              "provenance": provenance,
+                              "supersedes": supersedes, "notes": notes},
+                     instants=("recorded_at", "evaluated_at", "admitted_at",
+                               "admitted_until"),
+                     preflight=preflight, accept=accept)
+
+
+# --- 6.5 Create or supersede a route -----------------------------------------
+
+def create_route(store, *, request_id: Any, actor: Any, approving_authority: Any,
+                 recorded_at: Any, capability_id: Any, contract_id: Any,
+                 accepted_contract_versions: Any, locality: Any,
+                 candidate_instances: Any, data_classification: Any,
+                 route_version: Any, provenance: Any, description: Any = None,
+                 overlap_window: Any = None, supersedes: Any = None,
+                 notes: Any = None) -> OperationResult:
+    """Declare which admitted instances may serve a request class, in order.
+
+    **The order is written by a human and stored.** Nothing here derives it,
+    and nothing here consults load, latency, success rate, health, or any
+    other measurement -- a router that orders candidates by observed behaviour
+    is deriving placement from reasoning.
+
+    A route targets admitted instances only: targeting an advertisement would
+    mean routing to a self-report. **Cutover is a route change**, so a new
+    version is a new record naming the one it supersedes, and the prior route
+    is left exactly as written rather than edited to point forward.
+
+    This declares candidates. It selects nothing, excludes nothing, computes
+    no eligibility, and writes no selection record.
+    """
+    def preflight():
+        _human_preflight(actor, approving_authority, recorded_at)
+        _sequence(accepted_contract_versions)
+        _sequence(candidate_instances)
+        _mapping(provenance)
+
+    def accept(identifier, digest):
+        _text(locality, REASON_CONTENT)
+        _text(data_classification, REASON_CONTENT)
+        if (isinstance(route_version, bool) or not isinstance(route_version, int)
+                or route_version < 1):
+            _refuse(REFUSED, REASON_ROUTE_VERSION)
+        versions = _sequence(accepted_contract_versions)
+        if not versions:
+            _refuse(REFUSED, REASON_VERSIONS)
+
+        _resolve(store, "capability-definition", capability_id)
+        contract = _resolve(store, "capability-contract", contract_id)
+        if contract.get("capability_id") != capability_id:
+            _refuse(REFUSED, REASON_CONTRACT_OWNER)
+
+        if supersedes is not None:
+            prior = _resolve(store, "capability-route", supersedes)
+            if (prior.get("capability_id") != capability_id
+                    or prior.get("contract_id") != contract_id):
+                _refuse(REFUSED, REASON_SUPERSEDES_SUBJECT)
+            previous = prior.get("route_version")
+            if (isinstance(previous, bool) or not isinstance(previous, int)
+                    or route_version <= previous):
+                _refuse(REFUSED, REASON_ROUTE_VERSION)
+
+        candidates = _sequence(candidate_instances)
+        if not candidates:
+            _refuse(REFUSED, REASON_NO_CANDIDATE)
+        seen: list = []
+        for candidate in candidates:
+            # Compared by equality rather than hashed: a candidate the caller
+            # supplied need not be hashable to be refused.
+            if candidate in seen:
+                _refuse(REFUSED, REASON_DUPLICATE_CANDIDATE)
+            seen.append(candidate)
+        for candidate in candidates:
+            instance = _resolve(store, "capability-instance", candidate)
+            if (instance.get("capability_id") != capability_id
+                    or instance.get("contract_id") != contract_id):
+                _refuse(REFUSED, REASON_CANDIDATE_OWNER)
+        if overlap_window is not None:
+            _mapping(overlap_window)
+
+        references = [capability_id, contract_id, *candidates]
+        if supersedes is not None:
+            references.append(supersedes)
+        evidence = _evidence(
+            "capability-route", actor=actor,
+            approving_authority=approving_authority,
+            reason_category="supersession" if supersedes is not None
+            else "route-change",
+            recorded_at=recorded_at, request_id=identifier, request_digest=digest,
+            causal_references=tuple(references))
+        return _commit(store, "capability-route", evidence,
+                       lambda allocated, carried: RECORD_MODELS[
+                           "capability-route"](
+                           route_id=allocated, route_version=route_version,
+                           capability_id=capability_id, contract_id=contract_id,
+                           accepted_contract_versions=versions,
+                           locality=locality, candidate_instances=candidates,
+                           data_classification=data_classification,
+                           provenance=provenance, description=description,
+                           overlap_window=overlap_window, supersedes=supersedes,
+                           notes=notes, evidence=carried))
+
+    # `candidate_instances` is authoritative in order, so it is digested in
+    # order. `accepted_contract_versions` is a set by the released contract and
+    # is ordered deterministically before digesting, as sets already are.
+    return _governed(store, operation="create-route", request_id=request_id,
+                     payload={"actor": actor,
+                              "approving_authority": approving_authority,
+                              "recorded_at": recorded_at,
+                              "capability_id": capability_id,
+                              "contract_id": contract_id,
+                              "accepted_contract_versions":
+                                  accepted_contract_versions,
+                              "locality": locality,
+                              "candidate_instances": candidate_instances,
+                              "data_classification": data_classification,
+                              "route_version": route_version,
+                              "provenance": provenance,
+                              "description": description,
+                              "overlap_window": overlap_window,
+                              "supersedes": supersedes, "notes": notes},
+                     instants=("recorded_at",),
+                     preflight=preflight, accept=accept)
+
+
+# --- 6.6 Withdraw or retire a subject by decision ----------------------------
+
+def withdraw_subject(store, *, request_id: Any, actor: Any,
+                     approving_authority: Any, recorded_at: Any,
+                     capability_host_id: Any, availability_intent: Any,
+                     provenance: Any, notes: Any = None) -> OperationResult:
+    """End a subject's availability by decision. Nothing is edited or deleted.
+
+    **Withdrawal is a decision, not an event.** A host that fails, disappears,
+    or stops advertising has changed no authoritative state; a host is removed
+    from service because an operator said so, and `availability_intent` is
+    where that is said.
+
+    The successor supersedes the prior record and carries the same verified
+    facts about the same machine. The prior record stays byte-identical and
+    readable -- it is not edited to point at what replaced it, because a record
+    that can be rewritten after the fact is not a history.
+
+    **No trust is consulted and none is changed.** Withdrawing a host says
+    nothing about whether it is trusted; that is the Trust Plane's to say, and
+    the successor references the same trust record rather than restating it.
+    """
+    def preflight():
+        _human_preflight(actor, approving_authority, recorded_at)
+        _mapping(provenance)
+
+    def accept(identifier, digest):
+        _text(availability_intent, REASON_CONTENT)
+        prior = _resolve(store, "capability-host", capability_host_id)
+        node = prior.get("node_identity_reference")
+        # A subject does not decide its own withdrawal any more than its own
+        # admission.
+        _no_self_governance(actor, approving_authority, node, capability_host_id)
+        trust_reference = prior.get("fabric_node_trust_record_id")
+
+        evidence = _evidence(
+            "capability-host", actor=actor,
+            approving_authority=approving_authority,
+            reason_category="supersession", recorded_at=recorded_at,
+            request_id=identifier, request_digest=digest,
+            causal_references=(capability_host_id,),
+            trust_evidence_references=(trust_reference,))
+        return _commit(store, "capability-host", evidence,
+                       lambda allocated, carried: RECORD_MODELS[
+                           "capability-host"](
+                           capability_host_id=allocated,
+                           node_identity_reference=node,
+                           fabric_node_trust_record_id=trust_reference,
+                           verified_resource_profile=prior.get(
+                               "verified_resource_profile"),
+                           location_class=prior.get("location_class"),
+                           data_classification_ceiling=prior.get(
+                               "data_classification_ceiling"),
+                           availability_intent=availability_intent,
+                           provenance=provenance, name=prior.get("name"),
+                           description=prior.get("description"),
+                           verification_reference=prior.get(
+                               "verification_reference"),
+                           supersedes=capability_host_id, notes=notes,
+                           evidence=carried))
+
+    return _governed(store, operation="withdraw-subject", request_id=request_id,
+                     payload={"actor": actor,
+                              "approving_authority": approving_authority,
+                              "recorded_at": recorded_at,
+                              "capability_host_id": capability_host_id,
+                              "availability_intent": availability_intent,
+                              "provenance": provenance, "notes": notes},
+                     instants=("recorded_at",),
                      preflight=preflight, accept=accept)

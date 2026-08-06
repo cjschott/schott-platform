@@ -5400,7 +5400,10 @@ with TemporaryDirectory() as tmp:
           "the freshly evaluated request allocates its own record")
 
 # --- 22-23. Boundaries and determinism ---------------------------------------
-for later in ("admit_instance", "create_route", "supersede_route", "evaluate_eligibility",
+# `admit_instance` and `create_route` were part of this boundary at increment 6
+# and are the two operations increment 7 exists to add, so they moved to the
+# increment 7 surface assertions below. Every other name stays absent.
+for later in ("supersede_route", "evaluate_eligibility",
               "select", "write_atomic", "load_capability", "invoke", "health",
               "remediate", "retry", "refresh"):
     check(not hasattr(admission_module, later),
@@ -6346,6 +6349,1228 @@ RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
       "the correction adds no fabric module and increment 7 has not begun")
+
+# =======================================================================
+# Increment 7 — instance admission, lifecycle transitions, route governance
+# =======================================================================
+# C4 part 2. Three governed operations, each single-record, each delegating
+# its one physical write to C1 through the same `_commit`.
+#
+# What is *not* here is as deliberate as what is: no eligibility verdict is
+# computed or stored, no selection happens, no `CSEL` exists, and the
+# derived statuses -- expiry, disappearance, return, staleness -- write
+# nothing at all. They are observations, and an observation that writes a
+# record has been promoted to a decision.
+
+OPERATIONS = {}
+for _name in ("admit_instance", "create_route", "withdraw_subject"):
+    _operation = getattr(admission_module, _name, None)
+    check(callable(_operation), f"increment 7 exposes the governed operation {_name}")
+    OPERATIONS[_name] = _operation
+
+
+# A result-shaped placeholder, so an operation that does not exist yet fails an
+# assertion instead of ending the suite with an AttributeError.
+MISSING = OperationResult("missing-operation", "", reason="not-implemented")
+
+
+def record_of(store, kind, identifier):
+    """The stored record, or an empty mapping when there is none to read."""
+    try:
+        return store.read_record(kind, identifier)
+    except BaseException:  # noqa: BLE001
+        return {}
+
+
+
+class MissingOperation(Exception):
+    """Reported instead of a crash when an operation does not exist yet."""
+
+
+def call(name, *args, **kwargs):
+    """Invoke an increment 7 operation, reporting anything that escapes it."""
+    operation = OPERATIONS.get(name)
+    if operation is None:
+        return MISSING, MissingOperation(name)
+    try:
+        return operation(*args, **kwargs), None
+    except BaseException as error:  # noqa: BLE001
+        return MISSING, error
+
+
+class DomainTrust:
+    """The released C3 adapter, counting queries by the domain asked about.
+
+    Delegates rather than answers: counting a stub would prove nothing
+    about how often the real adapter is reached.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, store, record_id, *, evaluated_at, expected_subject_type=None):
+        self.calls.append(expected_subject_type)
+        return RELEASED_TRUST_VERIFY(store, record_id, evaluated_at=evaluated_at,
+                                     expected_subject_type=expected_subject_type)
+
+    def counts(self):
+        return (self.calls.count("capability-package"),
+                self.calls.count("fabric-node"))
+
+
+ARTIFACT = "oci://registry.invalid/summarise"
+# Exact containment, never interpretation: the package may require only
+# dimensions the operator verified, at the values the operator verified.
+INSTANCE_PACKAGE = dict(BASE_PACKAGE,
+                        resource_requirements={"architecture": "x86_64"})
+SCOPE = {"permitted_capabilities": ["coding-workload"],
+         "permitted_operations": ["linux.hostname"],
+         "permitted_data_classifications": ["internal"]}
+BASE_INSTANCE = dict(
+    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+    evaluated_at=STAMP, satisfied_contract_versions=("1.0.0",),
+    verified_resource_profile=dict(PROFILE),
+    admission_decision_id="TDEC-000001",
+    effective_scope=dict(SCOPE), admitted_at=STAMP, admitted_until=YEAR,
+    endpoint_reference=None, provenance=dict(PROV), supersedes=None, notes=None)
+BASE_ROUTE = dict(
+    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+    accepted_contract_versions=("1.0.0",), locality="operator-controlled-only",
+    data_classification="internal", route_version=1, provenance=dict(PROV),
+    description=None, overlap_window=None, supersedes=None, notes=None)
+BASE_WITHDRAWAL = dict(
+    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+    availability_intent="withheld", provenance=dict(PROV), notes=None)
+
+
+def seeded_fabric_trust(tmp, node="node/schai", artifact=ARTIFACT,
+                        node_state=TrustState.TRUSTED.value,
+                        package_state=TrustState.TRUSTED.value,
+                        node_expiration=None, package_expiration=None,
+                        node_type="fabric-node",
+                        package_type="capability-package"):
+    """A trust store holding two separately decided subjects.
+
+    Trusting a package trusts no machine and trusting a machine trusts no
+    package, so the host and the package are decided independently, in
+    their own domains, and the Fabric reads neither -- it asks C3 twice.
+    """
+    store = TrustStore(Path(tmp) / "trust")
+    approved = Path(tmp) / "approved"
+    approved.mkdir()
+    approved.joinpath("root.yaml").write_text(_yaml.safe_dump({
+        "display_name": "Operator Root Authority",
+        "external_identity_reference": "secret-source://approved/operator-root",
+        "verification_method": VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        "verification_details": {
+            "subject_property": "operator-root-identity",
+            "observed_value_reference": "/approved/evidence/root-observed.txt",
+            "comparison_source": "in-person-verification-record",
+            "performed_by": "operator-role-reference",
+            "performed_at": STAMP.isoformat()},
+        "evidence_references": [{
+            "evidence_id": "TEVID-000001", "kind": "attestation",
+            "reference": "/approved/evidence/root-attestation.txt",
+            "recorded_at": STAMP.isoformat()}],
+        "created_at": STAMP.isoformat(),
+        "provenance": {"class": "declared", "source": "operator-out-of-band"},
+    }), encoding="utf-8")
+    authority = declare_root_authority(store, load_root_declaration(
+        "root.yaml", approved_directory=str(approved)))
+
+    def decide(subject_id, subject_type, state, expiration):
+        return create_decision(
+            store, subject_id=subject_id, subject_type=subject_type,
+            requested_state=state, actor_authority_id=authority.authority_id,
+            decided_at=STAMP, reason="granted for the fabric admission regression",
+            evidence_references=(TrustEvidenceReference(
+                evidence_id="TEVID-000001", kind="fingerprint",
+                reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
+            verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+            verification_details=TrustVerificationDetails(
+                subject_property="ssh-host-key-fingerprint",
+                observed_value_reference="/approved/evidence/observed.txt",
+                comparison_source="printed-console-readout",
+                performed_by="operator-role-reference", performed_at=STAMP),
+            scope=TrustScope(
+                scope_id="TSCOPE-000001", subject_type=subject_type,
+                permitted_capabilities=("coding-workload",),
+                permitted_operations=("linux.hostname",),
+                permitted_data_classifications=("internal",),
+                permitted_targets=("schmgmt.home.arpa",),
+                validity_start=STAMP, validity_end=YEAR),
+            expiration=expiration)
+
+    host_trust = decide(node, node_type, node_state, node_expiration)
+    package_trust = decide(artifact, package_type, package_state, package_expiration)
+    return store, host_trust, package_trust
+
+
+def fabric_ready(tmp, store, trust_store, host_trust, package_trust, **overrides):
+    """Capability, contract, package, admitted host, and a fresh claim."""
+    cap = declare_capability(store, **dict(BASE_CAPABILITY, request_id="i7-cap"))
+    con = declare_contract(store, **dict(BASE_CONTRACT, request_id="i7-con",
+                                         capability_id=cap.record_id))
+    pkg = declare_package(store, **dict(INSTANCE_PACKAGE, request_id="i7-pkg",
+                                        capability_id=cap.record_id,
+                                        contract_id=con.record_id))
+    adm = admit_subject(store, trust_store, **dict(
+        BASE_SUBJECT, request_id="i7-host",
+        fabric_node_trust_record_id=host_trust.record.record_id))
+    adv = register_advertisement(store, **dict(
+        BASE_ADVERT, request_id="i7-adv", actor=adm.record_id,
+        capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+        contract_id=con.record_id))
+    check(all(result.outcome == ACCEPTED for result in (cap, con, pkg, adm, adv)),
+          "the increment 7 prerequisites are all accepted")
+    base = dict(BASE_INSTANCE, capability_id=cap.record_id,
+                capability_package_id=pkg.record_id,
+                capability_host_id=adm.record_id, contract_id=con.record_id,
+                advertisement_id=adv.record_id,
+                package_trust_record_id=package_trust.record.record_id,
+                host_trust_record_id=host_trust.record.record_id)
+    base.update(overrides)
+    return cap, con, pkg, adm, adv, base
+
+
+RELEASED_TRUST_VERIFY_7 = trust_adapter.verify_trust_record
+DOMAIN_TRUST = DomainTrust()
+admission_module.verify_trust_record = DOMAIN_TRUST
+try:
+    # --- 1. A governed instance admission writes exactly one CINST ------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        before_trust = forensic(trust_root)
+        entries = store.entries
+        queries = list(DOMAIN_TRUST.calls)
+        admitted, error = call("admit_instance", store, trust_store,
+                               **dict(base, request_id="i7-inst"))
+        check(error is None, "a governed instance admission raises nothing")
+        check(admitted is not None and admitted.outcome == ACCEPTED,
+              "a governed instance admission is accepted")
+        check(admitted is not None and admitted.record_kind == "capability-instance"
+              and admitted.record_id == "CINST-000001",
+              "a governed instance admission allocates CINST-000001 through C1")
+        check("CINST-000001" in store.allocations,
+              "CINST-000001 was allocated by the store, not chosen by the caller")
+        check(store.entries == entries + 1,
+              "instance admission enters the critical section exactly once")
+        check(store.deepest == 1, "instance admission nests no critical section")
+        fresh = [domain for domain in DOMAIN_TRUST.calls[len(queries):]]
+        check(fresh.count("capability-package") == 1,
+              "a fresh instance admission queries package trust exactly once")
+        check(fresh.count("fabric-node") == 1,
+              "a fresh instance admission queries host trust exactly once")
+        check(len(fresh) == 2,
+              "a fresh instance admission makes no other trust query")
+        check(forensic(trust_root) == before_trust,
+              "instance admission writes nothing to the Trust Plane")
+        counts = store.counts()
+        check(counts["capability-instance"] == 1,
+              "instance admission wrote exactly one instance record")
+        check(counts["capability-route"] == 0 and counts["capability-selection"] == 0,
+              "instance admission creates no route and no selection")
+
+        stored = record_of(store, "capability-instance", "CINST-000001")
+        check(stored.get("schema_version") == "schott-platform/v1"
+              and stored.get("kind") == "capability-instance",
+              "the accepted instance declares its schema identity and version")
+        for field, value in (("capability_id", cap.record_id),
+                             ("capability_package_id", pkg.record_id),
+                             ("capability_host_id", adm.record_id),
+                             ("contract_id", con.record_id),
+                             ("advertisement_id", adv.record_id),
+                             ("admission_decision_id", "TDEC-000001"),
+                             ("package_trust_record_id",
+                              package_trust.record.record_id),
+                             ("host_trust_record_id", host_trust.record.record_id)):
+            check(stored.get(field) == value,
+                  f"the accepted instance records its {field}")
+        check(stored.get("verified_resource_profile") == PROFILE,
+              "the accepted instance carries the host's verified profile")
+        check(stored.get("effective_scope") == SCOPE,
+              "the accepted instance carries its effective scope")
+        check(tuple(stored.get("satisfied_contract_versions") or ()) == ("1.0.0",),
+              "the accepted instance carries its satisfied contract versions")
+        check("superseded_by" not in stored,
+              "a fresh instance names no superseded_by")
+        evidence = stored.get("evidence") or {}
+        for field in ("actor", "approving_authority", "causal_references",
+                      "trust_evidence_references", "reason_category",
+                      "recorded_at", "request_id", "request_digest"):
+            check(field in evidence, f"the accepted instance evidence carries '{field}'")
+        check(evidence.get("reason_category") == "instance-admission",
+              "a fresh instance admission is recorded as instance-admission")
+        check(evidence.get("approving_authority") == OPERATOR,
+              "the accepted instance records its approving authority")
+        causal = tuple(evidence.get("causal_references") or ())
+        for reference in (cap.record_id, con.record_id, pkg.record_id,
+                          adm.record_id, adv.record_id):
+            check(reference in causal,
+                  f"the accepted instance evidence references {reference}")
+        trust_refs = tuple(evidence.get("trust_evidence_references") or ())
+        check(package_trust.record.record_id in trust_refs
+              and host_trust.record.record_id in trust_refs,
+              "the accepted instance evidence references both trust records")
+        rendered = _yaml.safe_dump(stored)
+        for forbidden in ("trust_score", "health_score", "auto_admit",
+                          "auto_renew", "auto_failover", "weight",
+                          "load_factor", "eligible", "ineligible"):
+            check(forbidden not in rendered,
+                  f"the accepted instance carries no '{forbidden}'")
+
+        # Exact replay: the original identity, no governed re-evaluation.
+        before = forensic(fabric_root)
+        allocated = list(store.allocations)
+        written = list(store.writes)
+        reads = store.reads
+        queries = list(DOMAIN_TRUST.calls)
+        replayed, error = call("admit_instance", store, trust_store,
+                               **dict(base, request_id="i7-inst"))
+        check(error is None, "an instance-admission replay raises nothing")
+        check(replayed is not None and replayed.outcome == EXACT_REPLAY,
+              "a byte-identical instance admission is an exact replay")
+        check(replayed is not None and replayed.record_id == "CINST-000001",
+              "an instance-admission replay returns the original identity")
+        check(store.allocations == allocated and store.writes == written,
+              "an instance-admission replay allocates and writes nothing")
+        check(store.reads == reads,
+              "an instance-admission replay resolves no reference")
+        check(DOMAIN_TRUST.calls == queries,
+              "an instance-admission replay queries no trust")
+        check(forensic(fabric_root) == before,
+              "an instance-admission replay leaves the fabric byte-identical")
+
+        # A different request identity is a different decision.
+        distinct, error = call("admit_instance", store, trust_store,
+                               **dict(base, request_id="i7-inst-again"))
+        check(error is None and distinct is not None
+              and distinct.outcome == ACCEPTED
+              and distinct.record_id == "CINST-000002",
+              "identical content under a new request identity admits a second instance")
+        check(record_of(store, "capability-instance", "CINST-000001") == stored,
+              "the first instance is untouched by the second")
+
+    # --- 2. Every authoritative instance input participates in identity --
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        original, error = call("admit_instance", store, trust_store,
+                               **dict(base, request_id="i7-identity"))
+        check(error is None and original is not None
+              and original.outcome == ACCEPTED,
+              "the instance admission establishing a request identity is accepted")
+        before = forensic(fabric_root)
+        trust_before = forensic(trust_root)
+        allocated = list(store.allocations)
+        written = list(store.writes)
+        counters = sequences_of(fabric_root)
+        reads = store.reads
+        queries = list(DOMAIN_TRUST.calls)
+        INSTANCE_CHANGES = (
+            ("actor", "operator:other"),
+            ("approving_authority", "operator:other"),
+            ("recorded_at", LATER),
+            ("evaluated_at", LATER),
+            ("capability_id", "CAPDEF-9999"),
+            ("capability_package_id", "CPKG-9999"),
+            ("capability_host_id", "CHOST-9999"),
+            ("contract_id", "CCON-9999"),
+            ("satisfied_contract_versions", ("1.0.0", "2.0.0")),
+            ("verified_resource_profile", {"architecture": "x86_64"}),
+            ("admission_decision_id", "TDEC-000002"),
+            ("package_trust_record_id", "TREC-999999"),
+            ("host_trust_record_id", "TREC-999998"),
+            ("effective_scope", {"permitted_capabilities": ["observation"]}),
+            ("admitted_at", LATER),
+            ("admitted_until", YEAR + timedelta(days=1)),
+            ("advertisement_id", "CADV-999999"),
+            ("endpoint_reference", "https://schai.invalid/summarise"),
+            ("provenance", dict(OTHER_PROV)),
+            ("supersedes", "CINST-999999"),
+            ("notes", "an operator note"),
+        )
+        for field, value in INSTANCE_CHANGES:
+            entries = store.entries
+            result, error = call("admit_instance", store, trust_store,
+                                 **dict(base, request_id="i7-identity",
+                                        **{field: value}))
+            check(error is None,
+                  f"an instance admission with a changed {field} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == CONFLICT and result.reason == CONFLICT_REASON,
+                  f"an instance admission reusing its identity with a changed "
+                  f"{field} conflicts")
+            check(result.request_digest != original.request_digest,
+                  f"a changed {field} changes the instance-admission digest")
+            check(result.record_id is None,
+                  f"a changed {field} on an instance admission names no record")
+            check(store.allocations == allocated and store.writes == written,
+                  f"a changed {field} on an instance admission allocates and writes nothing")
+            check(store.reads == reads,
+                  f"a changed {field} on an instance admission resolves no reference")
+            check(DOMAIN_TRUST.calls == queries,
+                  f"a changed {field} on an instance admission queries no trust")
+            check(store.entries == entries + 1,
+                  f"a changed {field} on an instance admission enters the section once")
+            check(sequences_of(fabric_root) == counters,
+                  f"a changed {field} on an instance admission advances no sequence")
+            check(forensic(fabric_root) == before,
+                  f"a changed {field} on an instance admission changes nothing")
+            check(forensic(trust_root) == trust_before,
+                  f"a changed {field} on an instance admission leaves trust identical")
+
+    # --- 3. Admission prerequisites, each failing in isolation -----------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        # Real records for every mismatch, so nothing is proved against a fiction.
+        other_cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                                     request_id="i7-cap2",
+                                                     name="observe a host"))
+        other_con = declare_contract(store, **dict(BASE_CONTRACT,
+                                                   request_id="i7-con2",
+                                                   capability_id=other_cap.record_id))
+        other_pkg = declare_package(store, **dict(
+            INSTANCE_PACKAGE, request_id="i7-pkg2",
+            capability_id=other_cap.record_id, contract_id=other_con.record_id))
+        # A second package for the same capability and contract: advertising it
+        # names the right contract and the wrong package.
+        alt_pkg = declare_package(store, **dict(
+            INSTANCE_PACKAGE, request_id="i7-pkg-alt", capability_id=cap.record_id,
+            contract_id=con.record_id, package_version="2.0.0"))
+        # A package the verified host cannot satisfy. 512 is numerically below
+        # the host's 8192, and that is not containment, which is the point.
+        heavy_pkg = declare_package(store, **dict(
+            INSTANCE_PACKAGE, request_id="i7-pkg-heavy", capability_id=cap.record_id,
+            contract_id=con.record_id, package_version="3.0.0",
+            resource_requirements={"host_memory_mb": 512}))
+        second_host = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id="i7-host2",
+            fabric_node_trust_record_id=host_trust.record.record_id))
+        alt_adv = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-adv-alt", actor=adm.record_id,
+            capability_host_id=adm.record_id,
+            capability_package_id=alt_pkg.record_id, contract_id=con.record_id))
+        heavy_adv = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-adv-heavy", actor=adm.record_id,
+            capability_host_id=adm.record_id,
+            capability_package_id=heavy_pkg.record_id, contract_id=con.record_id))
+        other_adv = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-adv-other", actor=adm.record_id,
+            capability_host_id=adm.record_id,
+            capability_package_id=other_pkg.record_id,
+            contract_id=other_con.record_id))
+        foreign_adv = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-adv-foreign", actor=second_host.record_id,
+            capability_host_id=second_host.record_id,
+            capability_package_id=pkg.record_id, contract_id=con.record_id))
+        stale_adv = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-adv-stale", actor=adm.record_id,
+            capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id, observed_at=STAMP - timedelta(days=3),
+            valid_until=STAMP - timedelta(days=2)))
+        future_adv = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-adv-future", actor=adm.record_id,
+            capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id, observed_at=LATER, valid_until=YEAR))
+        check(all(result.outcome == ACCEPTED for result in (
+                  other_cap, other_con, other_pkg, alt_pkg, heavy_pkg, second_host,
+                  alt_adv, heavy_adv, other_adv, foreign_adv, stale_adv, future_adv)),
+              "the prerequisite-matrix fixtures are all accepted")
+
+        PREREQUISITES = (
+            ("an absent capability", NOT_FOUND, "unresolved-reference",
+             {"capability_id": "CAPDEF-9999"}),
+            ("an absent contract", NOT_FOUND, "unresolved-reference",
+             {"contract_id": "CCON-9999"}),
+            ("an absent package", NOT_FOUND, "unresolved-reference",
+             {"capability_package_id": "CPKG-9999"}),
+            ("an absent host", NOT_FOUND, "unresolved-reference",
+             {"capability_host_id": "CHOST-9999"}),
+            ("an absent advertisement", NOT_FOUND, "unresolved-reference",
+             {"advertisement_id": "CADV-999999"}),
+            ("no advertisement at all", NOT_FOUND, "unresolved-reference",
+             {"advertisement_id": None}),
+            ("a contract of another capability", REFUSED,
+             "contract-not-of-capability", {"contract_id": other_con.record_id}),
+            ("a capability the package does not implement", REFUSED,
+             "package-not-of-capability", {"capability_id": other_cap.record_id}),
+            ("an advertisement published by another subject", REFUSED,
+             "advertisement-not-of-subject", {"advertisement_id": "FOREIGN"}),
+            ("an advertisement for another contract", REFUSED,
+             "advertisement-not-of-contract", {"advertisement_id": "OTHER"}),
+            ("an advertisement for another package", REFUSED,
+             "advertisement-not-of-package", {"advertisement_id": "ALT"}),
+            ("a package the verified host cannot satisfy", REFUSED,
+             "resource-claim-not-verified",
+             {"capability_package_id": "HEAVY", "advertisement_id": "HEAVYADV"}),
+            ("an undeclared contract version", REFUSED, "versions-not-declared",
+             {"satisfied_contract_versions": ("2.0.0",)}),
+            ("no contract version at all", REFUSED, "versions-not-declared",
+             {"satisfied_contract_versions": ()}),
+            ("a stale advertisement", REFUSED, "advertisement-not-fresh",
+             {"advertisement_id": stale_adv.record_id}),
+            ("an advertisement not yet valid", REFUSED, "advertisement-not-fresh",
+             {"advertisement_id": future_adv.record_id}),
+            ("an admission window already elapsed", REFUSED,
+             "admission-window-expired",
+             {"admitted_at": STAMP - timedelta(days=10),
+              "admitted_until": STAMP - timedelta(days=5)}),
+            ("an admission window that closes before it opens", REFUSED,
+             "invalid-validity-window",
+             {"admitted_until": STAMP - timedelta(days=1)}),
+            ("an admission window of zero length", REFUSED,
+             "invalid-validity-window", {"admitted_until": STAMP}),
+            ("an empty effective scope", REFUSED, "empty-effective-scope",
+             {"effective_scope": {}}),
+            ("a resource profile the operator did not verify", REFUSED,
+             "resource-claim-not-verified",
+             {"verified_resource_profile": {"host_memory_mb": 4096}}),
+            ("a data classification above the host ceiling", REFUSED,
+             "data-classification-exceeds-ceiling",
+             {"effective_scope": dict(SCOPE,
+                                      permitted_data_classifications=["restricted"])}),
+            ("no approving authority", INVALID, "missing-approving-authority",
+             {"approving_authority": None}),
+            ("no actor", INVALID, "missing-actor", {"actor": None}),
+            ("an unresolved superseded instance", NOT_FOUND,
+             "unresolved-reference", {"supersedes": "CINST-999999"}),
+            ("malformed operation content", INVALID,
+             "malformed-operation-content", {"provenance": 7}),
+            ("a scope that is not a mapping", INVALID,
+             "malformed-operation-content", {"effective_scope": 7}),
+            ("a naive admission instant", INVALID, "timestamp-carries-no-offset",
+             {"admitted_at": STAMP.replace(tzinfo=None)}),
+        )
+        FIXTURES = {"FOREIGN": foreign_adv.record_id, "OTHER": other_adv.record_id,
+                    "ALT": alt_adv.record_id, "HEAVY": heavy_pkg.record_id,
+                    "HEAVYADV": heavy_adv.record_id}
+        for index, (description, outcome, reason, overrides) in enumerate(PREREQUISITES):
+            overrides = {key: FIXTURES.get(value, value) if isinstance(value, str)
+                         else value for key, value in overrides.items()}
+            before = forensic(fabric_root)
+            trust_before = forensic(trust_root)
+            allocated = list(store.allocations)
+            written = list(store.writes)
+            counters = sequences_of(fabric_root)
+            residue = temporaries(fabric_root)
+            result, error = call("admit_instance", store, trust_store,
+                                 **dict(base, request_id=f"i7-bad-{index}",
+                                        **overrides))
+            check(error is None,
+                  f"an instance admission with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome,
+                  f"an instance admission with {description} returns {outcome}")
+            check(result.reason == reason,
+                  f"an instance admission with {description} is refused as {reason}")
+            check(result.record_id is None and result.record_kind is None,
+                  f"an instance admission with {description} names no record")
+            check(store.allocations == allocated,
+                  f"an instance admission with {description} allocates nothing")
+            check(store.writes == written,
+                  f"an instance admission with {description} writes nothing")
+            check(sequences_of(fabric_root) == counters,
+                  f"an instance admission with {description} advances no sequence")
+            check(temporaries(fabric_root) == residue,
+                  f"an instance admission with {description} leaves no temporary artefact")
+            check(forensic(fabric_root) == before,
+                  f"an instance admission with {description} leaves the fabric identical")
+            check(forensic(trust_root) == trust_before,
+                  f"an instance admission with {description} leaves trust identical")
+            rendered = str(result.to_dict())
+            for token, leak in ((" 0x", "an object address"),
+                                ("/tmp/", "a filesystem path"),
+                                ("Traceback", "a traceback"),
+                                ("object at", "an object repr")):
+                check(token not in rendered,
+                      f"an instance admission with {description} leaks no {leak}")
+            repeated, repeat_error = call("admit_instance", store, trust_store,
+                                          **dict(base, request_id=f"i7-bad-{index}",
+                                                 **overrides))
+            check(repeat_error is None and repeated is not None
+                  and repeated.outcome == result.outcome
+                  and repeated.reason == result.reason,
+                  f"an instance admission with {description} refuses identically twice")
+
+        # Self-admission: the machine cannot admit its own binding.
+        for actor_value, approver_value, description in (
+                ("node/schai", OPERATOR, "the node as actor"),
+                (OPERATOR, "node/schai", "the node as approver"),
+                (adm.record_id, OPERATOR, "the host record as actor")):
+            before = forensic(fabric_root)
+            result, error = call("admit_instance", store, trust_store,
+                                 **dict(base, request_id="i7-self",
+                                        actor=actor_value,
+                                        approving_authority=approver_value))
+            check(error is None and result is not None
+                  and result.outcome == REFUSED
+                  and result.reason == "self-admission",
+                  f"an instance admission naming {description} is refused as self-admission")
+            check(forensic(fabric_root) == before,
+                  f"an instance admission naming {description} writes nothing")
+
+        check(store.counts()["capability-instance"] == 0,
+              "no refused instance admission left an instance record")
+
+    # --- 4. Trust integration, package and host separately --------------
+    TRUST_FAILURES = (
+        ("no-trust-standing", "absent trust"),
+        ("trust-expired", "expired trust"),
+        ("trust-revoked", "revoked trust"),
+        ("trust-not-usable", "quarantined trust"),
+        ("trust-unreadable", "malformed trust"),
+        ("trust-subject-type-mismatch", "a wrong trust subject type"),
+    )
+
+
+    class SelectiveTrust:
+        """Real C3 for one domain, a controlled refusal for the other."""
+
+        def __init__(self, failing_domain, verification):
+            self.failing_domain = failing_domain
+            self.verification = verification
+            self.calls = []
+
+        def __call__(self, store, record_id, *, evaluated_at,
+                     expected_subject_type=None):
+            self.calls.append(expected_subject_type)
+            if expected_subject_type == self.failing_domain:
+                return self.verification
+            return RELEASED_TRUST_VERIFY_7(
+                store, record_id, evaluated_at=evaluated_at,
+                expected_subject_type=expected_subject_type)
+
+
+    for domain, label in (("capability-package", "package"),
+                          ("fabric-node", "host")):
+        for reason, description in TRUST_FAILURES:
+            with TemporaryDirectory() as tmp:
+                store = audited(tmp)
+                trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+                fabric_root = Path(tmp) / "fabric"
+                trust_root = Path(tmp) / "trust"
+                cap, con, pkg, adm, adv, base = fabric_ready(
+                    tmp, store, trust_store, host_trust, package_trust)
+                refusal = trust_adapter.TrustVerification(
+                    subject_id="unused", status=trust_adapter.UNVERIFIED,
+                    standing=TrustState.UNKNOWN.value,
+                    stored_standing=TrustState.UNKNOWN.value,
+                    evaluated_at=STAMP.isoformat(), reasons=(reason,))
+                selective = SelectiveTrust(domain, refusal)
+                admission_module.verify_trust_record = selective
+                before = forensic(fabric_root)
+                trust_before = forensic(trust_root)
+                try:
+                    result, error = call("admit_instance", store, trust_store,
+                                         **dict(base, request_id="i7-trust"))
+                finally:
+                    admission_module.verify_trust_record = DOMAIN_TRUST
+                check(error is None,
+                      f"instance admission with {label} {description} raises nothing")
+                if error is not None:
+                    continue
+                check(result.outcome == REFUSED,
+                      f"instance admission with {label} {description} is refused")
+                check(result.reason == reason,
+                      f"instance admission with {label} {description} keeps the "
+                      f"C3 reason {reason}")
+                check(result.record_id is None,
+                      f"instance admission with {label} {description} creates no instance")
+                check(store.counts()["capability-instance"] == 0,
+                      f"instance admission with {label} {description} leaves zero instances")
+                check(forensic(fabric_root) == before,
+                      f"instance admission with {label} {description} changes nothing")
+                check(forensic(trust_root) == trust_before,
+                      f"instance admission with {label} {description} writes no trust")
+                check(selective.calls.count(domain) == 1,
+                      f"instance admission consults {label} trust exactly once")
+                check(len(selective.calls) <= 2,
+                      f"instance admission with {label} {description} makes "
+                      f"no other trust query")
+
+    for domain, label in (("capability-package", "package"),
+                          ("fabric-node", "host")):
+        with TemporaryDirectory() as tmp:
+            store = audited(tmp)
+            trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+            fabric_root = Path(tmp) / "fabric"
+            cap, con, pkg, adm, adv, base = fabric_ready(
+                tmp, store, trust_store, host_trust, package_trust)
+            unavailable = trust_adapter.TrustVerification(
+                subject_id="unused", status=trust_adapter.UNVERIFIED,
+                standing=TrustState.UNKNOWN.value,
+                stored_standing=TrustState.UNKNOWN.value,
+                evaluated_at=STAMP.isoformat(), reasons=("trust-unavailable",))
+            selective = SelectiveTrust(domain, unavailable)
+            admission_module.verify_trust_record = selective
+            before = forensic(fabric_root)
+            try:
+                result, error = call("admit_instance", store, trust_store,
+                                     **dict(base, request_id="i7-unavail"))
+            finally:
+                admission_module.verify_trust_record = DOMAIN_TRUST
+            check(error is None and result is not None
+                  and result.outcome == UNAVAILABLE
+                  and result.reason == "trust-unavailable",
+                  f"an unavailable Trust Plane for the {label} is UNAVAILABLE")
+            check(result is not None and result.record_id is None,
+                  f"an unavailable Trust Plane for the {label} creates no instance")
+            check(forensic(fabric_root) == before,
+                  f"an unavailable Trust Plane for the {label} writes nothing")
+
+    # A verified trust record for the wrong Fabric subject.
+    for override, description in (
+            ({"package_trust_record_id": "HOSTTRUST"}, "package"),
+            ({"host_trust_record_id": "PACKAGETRUST"}, "host")):
+        with TemporaryDirectory() as tmp:
+            store = audited(tmp)
+            trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+            fabric_root = Path(tmp) / "fabric"
+            cap, con, pkg, adm, adv, base = fabric_ready(
+                tmp, store, trust_store, host_trust, package_trust)
+            swapped = {"HOSTTRUST": host_trust.record.record_id,
+                       "PACKAGETRUST": package_trust.record.record_id}
+            overrides = {key: swapped[value] for key, value in override.items()}
+            before = forensic(fabric_root)
+            result, error = call("admit_instance", store, trust_store,
+                                 **dict(base, request_id="i7-swap", **overrides))
+            check(error is None and result is not None
+                  and result.outcome == REFUSED,
+                  f"a {description} trust record for the other subject is refused")
+            check(result is not None and result.record_id is None,
+                  f"a {description} trust subject mismatch creates no instance")
+            check(forensic(fabric_root) == before,
+                  f"a {description} trust subject mismatch writes nothing")
+
+    # --- 5. Route creation and supersession ------------------------------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        first, _ = call("admit_instance", store, trust_store,
+                        **dict(base, request_id="i7-r-inst-1"))
+        second, _ = call("admit_instance", store, trust_store,
+                         **dict(base, request_id="i7-r-inst-2"))
+        check(first is not None and second is not None
+              and first.record_id == "CINST-000001"
+              and second.record_id == "CINST-000002",
+              "two instances exist for the route matrix")
+        route_base = dict(BASE_ROUTE, capability_id=cap.record_id,
+                          contract_id=con.record_id,
+                          candidate_instances=("CINST-000002", "CINST-000001"))
+        entries = store.entries
+        queries = list(DOMAIN_TRUST.calls)
+        route, error = call("create_route", store,
+                            **dict(route_base, request_id="i7-route"))
+        check(error is None, "route creation raises nothing")
+        check(route is not None and route.outcome == ACCEPTED
+              and route.record_kind == "capability-route"
+              and route.record_id == "CROUTE-0001",
+              "route creation allocates CROUTE-0001 through C1")
+        check(store.entries == entries + 1,
+              "route creation enters the critical section exactly once")
+        check(DOMAIN_TRUST.calls == queries,
+              "route creation queries no trust")
+        stored_route = record_of(store, "capability-route", "CROUTE-0001")
+        check(stored_route.get("candidate_instances") == ["CINST-000002",
+                                                          "CINST-000001"],
+              "the route preserves the human-written candidate order exactly")
+        check(stored_route.get("route_version") == 1,
+              "the route records its declared version")
+        check(stored_route.get("locality") == "operator-controlled-only"
+              and stored_route.get("data_classification") == "internal",
+              "the route records its request class")
+        route_evidence = stored_route.get("evidence") or {}
+        check(route_evidence.get("reason_category") == "route-change",
+              "a fresh route is recorded as a route-change")
+        for reference in (cap.record_id, con.record_id, "CINST-000001",
+                          "CINST-000002"):
+            check(reference in tuple(route_evidence.get("causal_references") or ()),
+                  f"the accepted route evidence references {reference}")
+        check(store.counts()["capability-selection"] == 0,
+              "route creation creates no selection record")
+
+        # Order is authoritative: the reversed list is a different request.
+        before = forensic(fabric_root)
+        reordered, error = call("create_route", store,
+                                **dict(route_base, request_id="i7-route",
+                                       candidate_instances=("CINST-000001",
+                                                            "CINST-000002")))
+        check(error is None and reordered is not None
+              and reordered.outcome == CONFLICT
+              and reordered.reason == CONFLICT_REASON,
+              "reordering the candidate list under one request identity conflicts")
+        check(forensic(fabric_root) == before,
+              "a reordered candidate list writes nothing")
+        replayed, error = call("create_route", store,
+                               **dict(route_base, request_id="i7-route"))
+        check(error is None and replayed is not None
+              and replayed.outcome == EXACT_REPLAY
+              and replayed.record_id == "CROUTE-0001",
+              "a byte-identical route request replays the original route")
+        independent, error = call("create_route", store,
+                                  **dict(route_base, request_id="i7-route-2"))
+        check(error is None and independent is not None
+              and independent.outcome == ACCEPTED
+              and independent.record_id == "CROUTE-0002",
+              "identical route content under a new request identity is a new route")
+
+        ROUTE_REFUSALS = (
+            ("an unresolved candidate", NOT_FOUND, "unresolved-reference",
+             {"candidate_instances": ("CINST-999999",)}),
+            ("a malformed candidate identity", NOT_FOUND, "unresolved-reference",
+             {"candidate_instances": ("",)}),
+            ("a duplicated candidate", REFUSED, "duplicate-candidate",
+             {"candidate_instances": ("CINST-000001", "CINST-000001")}),
+            ("no candidate at all", REFUSED, "no-declared-candidate",
+             {"candidate_instances": ()}),
+            ("an absent capability", NOT_FOUND, "unresolved-reference",
+             {"capability_id": "CAPDEF-9999"}),
+            ("an absent contract", NOT_FOUND, "unresolved-reference",
+             {"contract_id": "CCON-9999"}),
+            ("a route version below one", REFUSED, "invalid-route-version",
+             {"route_version": 0}),
+            ("a non-integer route version", REFUSED, "invalid-route-version",
+             {"route_version": "1"}),
+            ("no accepted contract version", REFUSED, "versions-not-declared",
+             {"accepted_contract_versions": ()}),
+            ("a malformed overlap window", INVALID, "malformed-operation-content",
+             {"overlap_window": 7}),
+            ("an unresolved prior route", NOT_FOUND, "unresolved-reference",
+             {"supersedes": "CROUTE-9999"}),
+        )
+        for index, (description, outcome, reason, overrides) in enumerate(ROUTE_REFUSALS):
+            before = forensic(fabric_root)
+            allocated = list(store.allocations)
+            counters = sequences_of(fabric_root)
+            result, error = call("create_route", store,
+                                 **dict(route_base, request_id=f"i7-route-bad-{index}",
+                                        **overrides))
+            check(error is None, f"a route with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome and result.reason == reason,
+                  f"a route with {description} is refused as {reason}")
+            check(result.record_id is None,
+                  f"a route with {description} names no record")
+            check(store.allocations == allocated,
+                  f"a route with {description} allocates nothing")
+            check(sequences_of(fabric_root) == counters,
+                  f"a route with {description} advances no sequence")
+            check(forensic(fabric_root) == before,
+                  f"a route with {description} writes nothing")
+
+        # A candidate that is not of this route's capability or contract.
+        other_cap = declare_capability(store, **dict(BASE_CAPABILITY,
+                                                     request_id="i7-r-cap2",
+                                                     name="observe a host"))
+        other_con = declare_contract(store, **dict(BASE_CONTRACT,
+                                                   request_id="i7-r-con2",
+                                                   capability_id=other_cap.record_id))
+        before = forensic(fabric_root)
+        wrong_owner, error = call("create_route", store,
+                                  **dict(route_base, request_id="i7-route-owner",
+                                         capability_id=other_cap.record_id,
+                                         contract_id=other_con.record_id))
+        check(error is None and wrong_owner is not None
+              and wrong_owner.outcome == REFUSED
+              and wrong_owner.reason == "candidate-not-of-route",
+              "a candidate of another capability and contract is refused")
+        check(forensic(fabric_root) == before,
+              "a candidate of the wrong capability writes nothing")
+
+        # Supersession: a new version, the prior left exactly as written.
+        prior = record_of(store, "capability-route", "CROUTE-0001")
+        prior_forensic = forensic(fabric_root / "capability-routes")
+        superseded, error = call("create_route", store, **dict(
+            route_base, request_id="i7-route-v2", route_version=2,
+            candidate_instances=("CINST-000001",),
+            overlap_window={"starts_at": STAMP.isoformat(),
+                            "ends_at": LATER.isoformat()},
+            supersedes="CROUTE-0001"))
+        check(error is None and superseded is not None
+              and superseded.outcome == ACCEPTED
+              and superseded.record_id == "CROUTE-0003",
+              "a superseding route creates a new route record")
+        new_route = record_of(store, "capability-route", "CROUTE-0003")
+        check(new_route.get("supersedes") == "CROUTE-0001",
+              "the superseding route names the route it supersedes")
+        check(new_route.get("route_version") == 2,
+              "the superseding route carries its own version")
+        check((new_route.get("evidence") or {}).get("reason_category")
+              == "supersession",
+              "a superseding route is recorded as a supersession")
+        check("CROUTE-0001" in tuple((new_route.get("evidence") or {}).get(
+                  "causal_references") or ()),
+              "the superseding route's evidence references the prior route")
+        check(record_of(store, "capability-route", "CROUTE-0001") == prior,
+              "the superseded route is unchanged")
+        check("superseded_by" not in record_of(store, "capability-route",
+                                                        "CROUTE-0001"),
+              "the superseded route was not edited to point at its successor")
+        check(new_route.get("overlap_window") == {"starts_at": STAMP.isoformat(),
+                                                  "ends_at": LATER.isoformat()},
+              "the superseding route carries its declared overlap window")
+
+        SUPERSESSION_REFUSALS = (
+            ("a prior route of another capability", REFUSED,
+             "supersedes-different-subject",
+             {"capability_id": other_cap.record_id,
+              "contract_id": other_con.record_id,
+              "candidate_instances": (),
+              "supersedes": "CROUTE-0001", "route_version": 2}),
+            ("a version that does not increase", REFUSED, "invalid-route-version",
+             {"supersedes": "CROUTE-0001", "route_version": 1}),
+            ("a version that decreases", REFUSED, "invalid-route-version",
+             {"supersedes": "CROUTE-0003", "route_version": 1}),
+        )
+        for index, (description, outcome, reason, overrides) in enumerate(
+                SUPERSESSION_REFUSALS):
+            before = forensic(fabric_root)
+            result, error = call("create_route", store, **dict(
+                route_base, request_id=f"i7-sup-bad-{index}", **overrides))
+            check(error is None, f"a route superseding with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome,
+                  f"a route superseding with {description} returns {outcome}")
+            check(result.record_id is None,
+                  f"a route superseding with {description} names no record")
+            check(forensic(fabric_root) == before,
+                  f"a route superseding with {description} writes nothing")
+        check(forensic(fabric_root / "capability-routes") != prior_forensic,
+              "the route directory grew by supersession rather than by edit")
+        check(store.counts()["capability-selection"] == 0,
+              "the whole route matrix created no selection record")
+
+    # --- 6. CINST commits before CROUTE, under separate identities -------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        original_instance, _ = call("admit_instance", store, trust_store,
+                                    **dict(base, request_id="i7-cut-inst-1"))
+        route_base = dict(BASE_ROUTE, capability_id=cap.record_id,
+                          contract_id=con.record_id,
+                          candidate_instances=("CINST-000001",))
+        original_route, _ = call("create_route", store,
+                                 **dict(route_base, request_id="i7-cut-route-1"))
+        check(original_instance is not None and original_route is not None
+              and original_instance.outcome == ACCEPTED
+              and original_route.outcome == ACCEPTED,
+              "the cutover starting state is admitted and routed")
+
+        # The declared supersession: a new instance, then a new route.
+        written_before = list(store.writes)
+        new_instance, _ = call("admit_instance", store, trust_store, **dict(
+            base, request_id="i7-cut-inst-2", supersedes="CINST-000001"))
+        check(new_instance is not None and new_instance.outcome == ACCEPTED
+              and new_instance.record_id == "CINST-000002",
+              "the superseding instance is admitted first")
+        check(store.writes[len(written_before):] == ["capability-instance"],
+              "the superseding instance is the only record written so far")
+        check(record_of(store, "capability-instance", "CINST-000002").get(
+                  "supersedes") == "CINST-000001",
+              "the superseding instance names the instance it supersedes")
+        check((record_of(store, "capability-instance", "CINST-000002").get(
+                  "evidence") or {}).get("reason_category") == "supersession",
+              "a superseding instance is recorded as a supersession")
+        unreferenced = record_of(store, "capability-instance", "CINST-000002")
+        routes_before = store.counts()["capability-route"]
+        check(routes_before == 1,
+              "the new instance exists while no new route names it")
+        new_route, _ = call("create_route", store, **dict(
+            route_base, request_id="i7-cut-route-2", route_version=2,
+            candidate_instances=("CINST-000002",), supersedes="CROUTE-0001"))
+        check(new_route is not None and new_route.outcome == ACCEPTED,
+              "the cutover route version is created second")
+        order = store.writes[len(written_before):]
+        check(order == ["capability-instance", "capability-route"],
+              f"the CINST commits before the CROUTE (observed {order})")
+        check(record_of(store, "capability-instance", "CINST-000001") is not None
+              and record_of(store, "capability-route", "CROUTE-0001") is not None,
+              "both superseded records remain readable through the overlap window")
+        check(record_of(store, "capability-instance", "CINST-000002")
+              == unreferenced,
+              "creating the route did not alter the instance it names")
+
+        # One identity may not serve both operations.
+        before = forensic(fabric_root)
+        crossed, error = call("create_route", store, **dict(
+            route_base, request_id="i7-cut-inst-2", route_version=3,
+            candidate_instances=("CINST-000002",)))
+        check(error is None and crossed is not None
+              and crossed.outcome == CONFLICT
+              and crossed.reason == CONFLICT_REASON,
+              "reusing the instance request identity for a route is conflicting reuse")
+        crossed_back, error = call("admit_instance", store, trust_store, **dict(
+            base, request_id="i7-cut-route-2"))
+        check(error is None and crossed_back is not None
+              and crossed_back.outcome == CONFLICT
+              and crossed_back.reason == CONFLICT_REASON,
+              "reusing the route request identity for an instance is conflicting reuse")
+        check(forensic(fabric_root) == before,
+              "neither crossed request identity wrote anything")
+        check(original_instance.request_digest != original_route.request_digest,
+              "neither request digest is derived from the other")
+
+        # A failed route operation leaves the accepted instance intact.
+        instance_before = record_of(store, "capability-instance", "CINST-000002")
+        failed, error = call("create_route", store, **dict(
+            route_base, request_id="i7-cut-route-fail", route_version=3,
+            candidate_instances=("CINST-999999",)))
+        check(error is None and failed is not None and failed.outcome == NOT_FOUND,
+              "a route naming a missing instance is refused")
+        check(record_of(store, "capability-instance", "CINST-000002")
+              == instance_before,
+              "a failed route operation leaves the accepted instance byte-identical")
+        check(store.counts()["capability-instance"] == 2,
+              "a failed route operation rolls back no instance")
+
+    # --- 7. Lifecycle: derived events write nothing ----------------------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(
+            tmp, node_expiration=LATER, package_expiration=LATER)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        admitted, _ = call("admit_instance", store, trust_store, **dict(
+            base, request_id="i7-life", admitted_until=LATER))
+        check(admitted is not None and admitted.outcome == ACCEPTED,
+              "the lifecycle fixture admits an instance")
+        settled = forensic(fabric_root)
+        settled_trust = forensic(trust_root)
+        allocated = list(store.allocations)
+        instance_record = record_of(store, "capability-instance", "CINST-000001")
+
+        # Every clock lapsing is an observation. None of them writes.
+        AFTER = YEAR + timedelta(days=1)
+        DERIVED = (
+            ("advertisement validity lapsing",
+             lambda: call("admit_instance", store, trust_store,
+                          **dict(base, request_id="i7-expired-adv",
+                                 evaluated_at=AFTER, admitted_until=AFTER
+                                 + timedelta(days=1)))),
+            ("admission expiry lapsing",
+             lambda: call("admit_instance", store, trust_store,
+                          **dict(base, request_id="i7-expired-adm",
+                                 admitted_at=STAMP - timedelta(days=9),
+                                 admitted_until=STAMP - timedelta(days=8)))),
+            ("trust expiry lapsing",
+             lambda: call("admit_instance", store, trust_store,
+                          **dict(base, request_id="i7-expired-trust",
+                                 evaluated_at=YEAR,
+                                 admitted_until=YEAR + timedelta(days=2)))),
+        )
+        for description, operation in DERIVED:
+            before_writes = list(store.writes)
+            result, error = operation()
+            check(error is None, f"{description} raises nothing")
+            if error is not None:
+                continue
+            check(result.record_id is None,
+                  f"{description} creates no authoritative record")
+            check(store.writes == before_writes, f"{description} writes nothing")
+            check(store.allocations == allocated,
+                  f"{description} allocates nothing")
+            check(forensic(fabric_root) == settled,
+                  f"{description} leaves the fabric byte-identical")
+            check(forensic(trust_root) == settled_trust,
+                  f"{description} leaves the Trust Plane byte-identical")
+
+        # A host disappearing, returning, and advertising afresh.
+        check(forensic(fabric_root) == settled,
+              "host disappearance changes no authoritative record")
+        revived = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-revive", actor=adm.record_id,
+            capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id, observed_at=YEAR,
+            valid_until=YEAR + timedelta(days=1)))
+        check(revived.outcome == ACCEPTED,
+              "a returning host may publish a fresh advertisement")
+        check(store.counts()["capability-instance"] == 1,
+              "a fresh advertisement creates no instance and revives none")
+        check(record_of(store, "capability-instance", "CINST-000001")
+              == instance_record,
+              "a fresh advertisement leaves the lapsed instance byte-identical")
+        check(forensic(trust_root) == settled_trust,
+              "a fresh advertisement writes nothing to the Trust Plane")
+
+        # Re-admission is a new decision under a new request identity.
+        readmitted, error = call("admit_instance", store, trust_store, **dict(
+            base, request_id="i7-readmit", evaluated_at=YEAR,
+            advertisement_id=revived.record_id, admitted_at=YEAR,
+            admitted_until=YEAR + timedelta(days=30)))
+        check(error is None and readmitted is not None,
+              "a re-admission attempt raises nothing")
+        check(readmitted is not None and readmitted.outcome == REFUSED
+              and readmitted.reason == "trust-expired",
+              "re-admission is evaluated against then-current trust evidence")
+        check(store.counts()["capability-instance"] == 1,
+              "re-admission against expired trust creates no instance")
+
+    # --- 8. Withdrawal is a decision, and it edits nothing ---------------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        admitted, _ = call("admit_instance", store, trust_store,
+                           **dict(base, request_id="i7-w-inst"))
+        check(admitted is not None and admitted.outcome == ACCEPTED,
+              "the withdrawal fixture admits an instance")
+        prior_host = record_of(store, "capability-host", adm.record_id)
+        prior_instance = record_of(store, "capability-instance", "CINST-000001")
+        trust_before = forensic(trust_root)
+        queries = list(DOMAIN_TRUST.calls)
+        entries = store.entries
+        withdrawn, error = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-withdraw",
+            capability_host_id=adm.record_id,
+            notes="withdrawn from service by operator decision"))
+        check(error is None, "a governed withdrawal raises nothing")
+        check(withdrawn is not None and withdrawn.outcome == ACCEPTED
+              and withdrawn.record_kind == "capability-host"
+              and withdrawn.record_id == "CHOST-0002",
+              "withdrawal creates a new host record through C1")
+        check(store.entries == entries + 1,
+              "withdrawal enters the critical section exactly once")
+        check(DOMAIN_TRUST.calls == queries,
+              "withdrawal is a decision and queries no trust")
+        check(forensic(trust_root) == trust_before,
+              "withdrawal writes nothing to the Trust Plane")
+        successor = record_of(store, "capability-host", "CHOST-0002")
+        check(successor.get("availability_intent") == "withheld",
+              "the withdrawal record declares the operator's availability intent")
+        check(successor.get("supersedes") == adm.record_id,
+              "the withdrawal record names the host record it supersedes")
+        check((successor.get("evidence") or {}).get("reason_category")
+              == "supersession",
+              "a withdrawal is recorded as a supersession of the prior record")
+        check(successor.get("node_identity_reference")
+              == prior_host.get("node_identity_reference"),
+              "the withdrawal record describes the same machine")
+        check(successor.get("fabric_node_trust_record_id")
+              == prior_host.get("fabric_node_trust_record_id"),
+              "the withdrawal record references the same trust record")
+        check(successor.get("verified_resource_profile")
+              == prior_host.get("verified_resource_profile"),
+              "the withdrawal record carries the same verified profile")
+        check(record_of(store, "capability-host", adm.record_id) == prior_host,
+              "the withdrawn host record is byte-identical and still readable")
+        check("superseded_by" not in record_of(store, "capability-host",
+                                                        adm.record_id),
+              "the withdrawn host record was not edited to point forward")
+        check(record_of(store, "capability-instance", "CINST-000001")
+              == prior_instance,
+              "withdrawal edits no instance record")
+        check(store.counts()["capability-instance"] == 1,
+              "withdrawal deletes no instance")
+
+        # Retired stays retired: return and advertisement change nothing.
+        settled = forensic(fabric_root)
+        returned = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-w-return", actor=adm.record_id,
+            capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id))
+        check(returned.outcome == ACCEPTED,
+              "a withdrawn host's return is still recorded as a claim")
+        check(record_of(store, "capability-host", "CHOST-0002") == successor,
+              "a returning host does not reactivate the withdrawal decision")
+        check(record_of(store, "capability-instance", "CINST-000001")
+              == prior_instance,
+              "a returning host does not reactivate the retired instance")
+        check(store.counts()["capability-host"] == 2,
+              "a returning host writes no host record of its own")
+
+        # Withdrawal replay and conflict, and no self-withdrawal.
+        replayed, error = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-withdraw",
+            capability_host_id=adm.record_id,
+            notes="withdrawn from service by operator decision"))
+        check(error is None and replayed is not None
+              and replayed.outcome == EXACT_REPLAY
+              and replayed.record_id == "CHOST-0002",
+              "a byte-identical withdrawal replays exactly")
+        conflicting, error = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-withdraw",
+            capability_host_id=adm.record_id, availability_intent="draining",
+            notes="withdrawn from service by operator decision"))
+        check(error is None and conflicting is not None
+              and conflicting.outcome == CONFLICT
+              and conflicting.reason == CONFLICT_REASON,
+              "a changed availability intent under one identity conflicts")
+        WITHDRAWAL_REFUSALS = (
+            ("an absent host", NOT_FOUND, "unresolved-reference",
+             {"capability_host_id": "CHOST-9999"}),
+            ("no approving authority", INVALID, "missing-approving-authority",
+             {"approving_authority": None}),
+            ("no actor", INVALID, "missing-actor", {"actor": None}),
+            ("an empty availability intent", INVALID,
+             "malformed-operation-content", {"availability_intent": ""}),
+            ("the host withdrawing itself", REFUSED, "self-admission",
+             {"actor": "node/schai"}),
+        )
+        before = forensic(fabric_root)
+        for index, (description, outcome, reason, overrides) in enumerate(
+                WITHDRAWAL_REFUSALS):
+            allocated = list(store.allocations)
+            fields = dict(BASE_WITHDRAWAL, request_id=f"i7-w-bad-{index}",
+                          capability_host_id=adm.record_id)
+            fields.update(overrides)
+            result, error = call("withdraw_subject", store, **fields)
+            check(error is None, f"a withdrawal with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome and result.reason == reason,
+                  f"a withdrawal with {description} is refused as {reason}")
+            check(result.record_id is None,
+                  f"a withdrawal with {description} names no record")
+            check(store.allocations == allocated,
+                  f"a withdrawal with {description} allocates nothing")
+            check(forensic(fabric_root) == before,
+                  f"a withdrawal with {description} writes nothing")
+
+    # --- 9. Increment 7 stops where increment 8 begins -------------------
+    for later in ("evaluate_eligibility", "eligibility", "select", "selection",
+                  "compute_eligibility", "inspect", "validate_store",
+                  "admit_route", "retire_instance", "health", "remediate"):
+        check(not hasattr(admission_module, later),
+              f"admission exposes no '{later}' behaviour at increment 7")
+    for absent in ("eligibility.py", "selection.py", "inspection.py", "cli.py",
+                   "health.py"):
+        check(not (root / "tools" / "fabric" / absent).exists(),
+              f"increment 7 creates no {absent}")
+finally:
+    admission_module.verify_trust_record = RELEASED_TRUST_VERIFY_7
+
+check(admission_module.verify_trust_record is RELEASED_TRUST_VERIFY_7,
+      "the released C3 adapter is restored after the increment 7 regression")
 
 print(f"__FAILURES__={failures}")
 ADMITPY
