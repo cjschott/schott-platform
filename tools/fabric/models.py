@@ -46,6 +46,25 @@ EFFECT_CLASSES = (
     "side-effecting",
 )
 
+# The workload data sensitivity a machine may handle and a request class
+# carries. Mirrors `enums.data_classification` in the accepted
+# `capability-host` and `capability-route` schemas; a test binds the two.
+#
+# **Unordered, compared by exact equality.** No accepted source declares a
+# ranking of classifications, so none is inferred: this is not a scale and
+# there is no "higher" value. It is also a different axis entirely from the
+# storage recoverability labels (`authoritative`, `reconstructable`, `mixed`)
+# that share the key name elsewhere in the model, and the two never compare.
+WORKLOAD_DATA_CLASSIFICATIONS = ("internal",)
+
+# The authoritative lifecycle of one admitted binding. `admitted` is where a
+# binding starts; neither of the others ever returns to it, and `retired` is
+# terminal. Recovery is a new decision producing a new binding, never a
+# reactivation of this one.
+INSTANCE_LIFECYCLE_STATES = ("admitted", "withdrawn", "retired")
+INSTANCE_TERMINAL_STATES = ("retired",)
+INSTANCE_ROUTABLE_STATES = ("admitted",)
+
 
 def _encode(value: Any) -> Any:
     """Deterministic, JSON-friendly form. Mappings sort; times carry offsets."""
@@ -330,7 +349,10 @@ class CapabilityHost(FabricRecord):
     fabric_node_trust_record_id: str
     verified_resource_profile: Mapping[str, Any]
     location_class: str
-    data_classification_ceiling: str
+    # The one workload classification this machine may handle, compared by
+    # exact membership. Named `data_classification` rather than a ceiling: no
+    # accepted source declares an ordering, so nothing here is above anything.
+    data_classification: str
     availability_intent: str
     provenance: Mapping[str, Any]
     name: str | None = None
@@ -350,7 +372,7 @@ class CapabilityHost(FabricRecord):
         _require_text(self.node_identity_reference, "node_identity_reference")
         _require_text(self.fabric_node_trust_record_id, "fabric_node_trust_record_id")
         _require_text(self.location_class, "location_class")
-        _require_text(self.data_classification_ceiling, "data_classification_ceiling")
+        _require_text(self.data_classification, "data_classification")
         _require_text(self.availability_intent, "availability_intent")
         self._freeze("verified_resource_profile", "provenance")
         self._freeze_evidence()
@@ -420,6 +442,11 @@ class CapabilityInstance(FabricRecord):
     admitted_at: datetime
     admitted_until: datetime
     provenance: Mapping[str, Any]
+    # Authoritative, never derived and never absent. Eligibility is computed;
+    # this is decided, and a record that left it to be inferred from absence,
+    # from an elapsed expiry, or from a route no longer naming it would be
+    # answering a lifecycle question with a guess.
+    lifecycle_state: str
     advertisement_id: str | None = None
     endpoint_reference: str | None = None
     supersedes: str | None = None
@@ -445,6 +472,8 @@ class CapabilityInstance(FabricRecord):
         _require_text(self.host_trust_record_id, "host_trust_record_id")
         _require_aware(self.admitted_at, "admitted_at")
         _require_aware(self.admitted_until, "admitted_until")
+        if self.lifecycle_state not in INSTANCE_LIFECYCLE_STATES:
+            raise FabricError("lifecycle_state must be one of the accepted states")
         self._seal()
         self._freeze("verified_resource_profile", "effective_scope", "provenance")
         self._freeze_evidence()

@@ -66,6 +66,22 @@ DERIVED_KINDS = ("capability-selection",)
 # approver nobody gave is worse than evidence that records none.
 UNAPPROVED_KINDS = SELF_AUTHORED_KINDS + DERIVED_KINDS
 
+# The categories a record naming its predecessor may declare. Supersession
+# replaces a record with a newer one; withdrawal and retirement end what the
+# record described. All three name a predecessor, and none of them is the
+# other -- reporting a retirement as a plain supersession would lose the one
+# fact an operator most needs to read back.
+SUPERSEDING_CATEGORIES = ("supersession", "withdrawal", "retirement")
+
+# The lifecycle state each superseding category must record on an instance.
+# The category says what was decided; the field says what the binding now is,
+# and a record whose two halves disagree is not a decision anyone made.
+LIFECYCLE_FOR_CATEGORY = {
+    "supersession": "admitted",
+    "withdrawal": "withdrawn",
+    "retirement": "retired",
+}
+
 # A selection's outcome is not a stored field -- the accepted schema has none.
 # It is readable from what the selection says, and the reason category the
 # specification already requires names exactly these three.
@@ -263,7 +279,8 @@ def _validate_applicability(kind: str, record, evidence: Mapping[str, Any]) -> N
     # supersession would let a record that supersedes another hide the fact by
     # declaring some other reason.
     prior = getattr(record, "supersedes", None)
-    declared = evidence["reason_category"] == "supersession"
+    category = evidence["reason_category"]
+    declared = category in SUPERSEDING_CATEGORIES
     if declared or prior is not None:
         if not isinstance(prior, str) or not prior:
             raise FabricError(
@@ -275,6 +292,13 @@ def _validate_applicability(kind: str, record, evidence: Mapping[str, Any]) -> N
         if prior not in tuple(evidence["causal_references"]):
             raise FabricError(
                 "a superseding record's evidence must reference the record it supersedes")
+        # The decision and the state it produced must agree. One of them alone
+        # would let a retirement be read back as a migration, or the reverse.
+        expected = LIFECYCLE_FOR_CATEGORY[category]
+        lifecycle = getattr(record, "lifecycle_state", None)
+        if lifecycle is not None and lifecycle != expected:
+            raise FabricError(
+                f"a '{category}' must record the lifecycle state it produces")
 
     if kind == "capability-selection":
         _require_selection_outcome(record, evidence)

@@ -32,10 +32,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from ..trust.identifiers import DECISION_ID, EVIDENCE_ID, LINEAGE_ID, RECORD_ID
-from ..trust.models import TrustState
+from ..trust.identifiers import (
+    DECISION_ID, EVIDENCE_ID, LINEAGE_ID, RECORD_ID, SCOPE_ID,
+)
+from ..trust.models import TrustScope, TrustState
 from ..trust.query import get_current_trust, get_trust_record
 from .errors import FabricError
+from .models import deep_freeze
 
 VERIFIED = "verified"
 UNVERIFIED = "unverified"
@@ -105,6 +108,15 @@ class TrustVerification:
     # A direct subject verification leaves it unknown: the released evaluation
     # does not carry it, and inferring it from a scope would be a guess.
     subject_type: str | None = None
+    # The bounded grant the verified record carries, deeply frozen, exactly as
+    # the Trust Plane reported it in the same answer the standing came from.
+    #
+    # **Absent is a legal verified result, not an error.** The released
+    # contract requires a scope only of a `Restricted` grant; a `Trusted` one
+    # may lawfully bound nothing. A caller must decide what an unbounded grant
+    # permits -- which, by the released scope rules, is nothing -- rather than
+    # read absence as permission.
+    scope: Mapping[str, Any] | None = None
 
     @property
     def verified(self) -> bool:
@@ -123,6 +135,7 @@ class TrustVerification:
             "evidence_reference_ids": list(self.evidence_reference_ids),
             "reasons": list(self.reasons),
             "subject_type": self.subject_type,
+            "scope": dict(self.scope) if self.scope is not None else None,
         }
 
 
@@ -159,6 +172,77 @@ def _references(value: Any) -> tuple[str, ...] | None:
         if not isinstance(entry, str) or not EVIDENCE_ID.fullmatch(entry):
             return None
     return tuple(value)
+
+
+SCOPE_FIELDS = (
+    "scope_id", "subject_type", "permitted_capabilities", "permitted_operations",
+    "permitted_data_classifications", "permitted_targets",
+    "validity_start", "validity_end",
+)
+
+# Dimensions only. `scope_id`, `subject_type`, and the window are metadata a
+# caller reads; they are never members of a permission set.
+SCOPE_DIMENSIONS = tuple(TrustScope.DIMENSIONS)
+
+
+def _clean_scope(reported: Any, subject_type: str | None) -> Mapping[str, Any] | None:
+    """The verified record's grant, frozen, or nothing at all.
+
+    Absent means absent. Anything present but defective is refused outright
+    rather than narrowed: a grant that had to be repaired to be readable is
+    not the grant that was approved, and a partially-read one would bound less
+    than the operator wrote.
+    """
+    if reported is None:
+        return None
+    if not isinstance(reported, dict):
+        raise FabricError("the reported scope is not a mapping")
+    if set(reported) != set(SCOPE_FIELDS):
+        raise FabricError("the reported scope does not carry exactly the released fields")
+    if not _identity(reported.get("scope_id"), SCOPE_ID):
+        raise FabricError("the reported scope carries no released scope identity")
+    declared = _clean_subject_type(reported.get("subject_type"))
+    if declared is None or (subject_type is not None and declared != subject_type):
+        raise FabricError("the reported scope declares a different domain")
+
+    cleaned: dict[str, Any] = {"scope_id": reported["scope_id"],
+                               "subject_type": declared}
+    for dimension in SCOPE_DIMENSIONS:
+        members = reported[dimension]
+        if isinstance(members, str) or not isinstance(members, (list, tuple)):
+            raise FabricError("a reported scope dimension is not a sequence")
+        seen: list[str] = []
+        for member in members:
+            if type(member) is not str or not member.strip():
+                raise FabricError("a reported scope dimension carries a value that is not text")
+            if "*" in member or "?" in member:
+                raise FabricError("a reported scope dimension carries a wildcard")
+            if member in seen:
+                raise FabricError("a reported scope dimension repeats a value")
+            seen.append(member)
+        cleaned[dimension] = tuple(seen)
+
+    window: dict[str, datetime | None] = {}
+    for bound in ("validity_start", "validity_end"):
+        raw = reported[bound]
+        if raw is None:
+            window[bound] = None
+            continue
+        if not isinstance(raw, str):
+            raise FabricError("a reported scope boundary is not a readable instant")
+        try:
+            moment = datetime.fromisoformat(raw)
+        except ValueError:
+            raise FabricError("a reported scope boundary is not a readable instant") from None
+        if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+            raise FabricError("a reported scope boundary carries no offset")
+        window[bound] = moment
+    start, end = window["validity_start"], window["validity_end"]
+    if start is not None and end is not None and start >= end:
+        raise FabricError("a reported scope window closes before it opens")
+    cleaned["validity_start"] = start
+    cleaned["validity_end"] = end
+    return deep_freeze(cleaned)
 
 
 def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
@@ -287,7 +371,8 @@ def _with_subject_type(verification: TrustVerification,
         lineage_id=verification.lineage_id, record_id=verification.record_id,
         decision_id=verification.decision_id,
         evidence_reference_ids=verification.evidence_reference_ids,
-        reasons=verification.reasons, subject_type=subject_type)
+        reasons=verification.reasons, subject_type=subject_type,
+        scope=verification.scope)
 
 
 def _refused(verification: TrustVerification, reason: str,
@@ -301,7 +386,7 @@ def _refused(verification: TrustVerification, reason: str,
         lineage_id=verification.lineage_id, record_id=verification.record_id,
         decision_id=verification.decision_id,
         evidence_reference_ids=verification.evidence_reference_ids,
-        reasons=(reason,), subject_type=subject_type)
+        reasons=(reason,), subject_type=subject_type, scope=None)
 
 
 def _require_record_identity(record_id: Any) -> str:
@@ -345,6 +430,13 @@ def verify_subject(store, subject_id: Any, *, evaluated_at: Any) -> TrustVerific
     stored = reported["stored_state"]
     usable = reported["usable"]
 
+    try:
+        # Structure only, and only when one is present. Whether an unbounded
+        # grant may be used is the caller's decision, not this adapter's.
+        scope = _clean_scope(reported.get("scope"), None)
+    except Exception:  # noqa: BLE001
+        return _unverified(subject, instant, REASON_UNREADABLE)
+
     common = dict(
         subject_id=subject,
         standing=standing,
@@ -354,6 +446,7 @@ def verify_subject(store, subject_id: Any, *, evaluated_at: Any) -> TrustVerific
         record_id=_identity(reported.get("record_id"), RECORD_ID),
         decision_id=_identity(reported.get("decision_id"), DECISION_ID),
         evidence_reference_ids=_references(reported.get("evidence_reference_ids")) or (),
+        scope=scope,
     )
 
     if usable:
@@ -421,5 +514,11 @@ def verify_trust_record(store, record_id: Any, *, evaluated_at: Any,
 
     if required is not None and subject_type != required:
         return _refused(verification, REASON_SUBJECT_TYPE_MISMATCH, subject_type)
+
+    # A grant that declares a different domain than the record carrying it is
+    # not a weaker answer; it is an incoherent one.
+    if (verification.scope is not None
+            and verification.scope.get("subject_type") != subject_type):
+        return _refused(verification, REASON_UNREADABLE, subject_type)
 
     return _with_subject_type(verification, subject_type)

@@ -37,6 +37,7 @@ import hmac
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 from .errors import FabricError
@@ -277,3 +278,174 @@ def replay_lookup(store, request_id: Any, request_digest: Any) -> ReplayOutcome:
     # Named for a coordinating test, and a no-op in production.
     store._test_sync_point("after_replay_miss", identifier)
     return ReplayOutcome(REPLAY_NEW)
+
+
+# --- Prepare once, hash once -------------------------------------------------
+#
+# Everything above is the accepted convention and is unchanged. What follows is
+# a separate, narrower route for the governed operations added later, and it is
+# not a drop-in replacement for the helper above: it accepts less.
+#
+# **Caller content is visited exactly once.** `compute_request_digest` walks a
+# caller's containers to validate them and again to encode them. A container
+# that answers differently on the second walk would be hashed as something
+# nobody validated, so here one visit validates and materialises at the same
+# time, and the encoder only ever sees the materialised copy.
+#
+# **Ordering never runs `__str__` on a caller's object.** Unordered dimensions
+# admit exact text only, so their order comes from the value itself. A subclass
+# may carry a `__str__` that disagrees with the value encoded, and ordering by
+# it would mean hashing one thing having ordered by another.
+
+_PREPARATION = object()
+
+
+@dataclass(frozen=True)
+class _PreparedRequestDigestInput:
+    """The exact bytes that will be hashed, and nothing else.
+
+    It holds no caller-owned container, so nothing can change between
+    preparation and hashing. The operation and both versions live *inside* the
+    bytes, exactly as the accepted payload carries them, so there is no second
+    copy of them able to disagree with what was encoded.
+
+    Neither this type nor the token guarding it is a security boundary: code
+    running in this process that reaches for private names can do anything at
+    all, including replacing the hash. It is an accident guard, and it keeps
+    canonical bytes off every supported signature.
+    """
+
+    _token: object
+    _canonical_bytes: bytes
+
+    def __post_init__(self) -> None:
+        if self._token is not _PREPARATION:
+            raise FabricError("a prepared request input is created only by preparation")
+        if type(self._canonical_bytes) is not bytes:
+            raise FabricError("a prepared request input carries no canonical bytes")
+
+
+def _materialised(value: Any) -> Any:
+    """One caller value, validated as it is copied, in a single visit.
+
+    The accepted grammar decides what is representable; this decides only who
+    owns the result afterwards, so the encoder never reaches a caller's
+    container. Text, numbers, and `None` are immutable and are kept as they
+    are; a mapping or a sequence becomes a plain one this module owns.
+    """
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if value != value or value == _INFINITY or value == -_INFINITY:
+            raise FabricError("authoritative inputs carry a non-finite number")
+        return value
+    if isinstance(value, dict):
+        copied: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise FabricError("authoritative inputs carry a non-string mapping key")
+            copied[key] = _materialised(item)
+        return copied
+    if isinstance(value, (list, tuple)):
+        return [_materialised(item) for item in value]
+    # Named by type, never echoed: the value itself may be anything.
+    raise FabricError(
+        f"authoritative inputs carry an unsupported value of type '{type(value).__name__}'")
+
+
+def _materialised_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
+    """Authoritative inputs, owned here, with unordered sets ordered by value."""
+    canonical: dict[str, Any] = {}
+    for name in sorted(inputs):
+        if name in EXCLUDED_INPUTS:
+            continue
+        value = inputs[name]
+        if name in UNORDERED_INPUTS and isinstance(value, (list, tuple)):
+            members: list[str] = []
+            for member in value:
+                if type(member) is not str:
+                    raise FabricError(
+                        "an unordered authoritative input carries a member of type "
+                        f"'{type(member).__name__}'")
+                members.append(member)
+            # Ordered by the text itself. Nothing here calls `__str__`.
+            canonical[name] = sorted(members)
+        else:
+            canonical[name] = _materialised(value)
+    return canonical
+
+
+def _prepare_request_digest_input(operation: Any, authoritative_inputs: Any, *,
+                                  canonicalisation_version: str,
+                                  digest_version: str) -> _PreparedRequestDigestInput:
+    """Validate and encode in one pass. Allocates nothing and reads nothing."""
+    if canonicalisation_version != SUPPORTED_CANONICALISATION:
+        raise FabricError("unsupported canonicalisation version")
+    if digest_version != SUPPORTED_DIGEST:
+        raise FabricError("unsupported digest version")
+    if not isinstance(operation, str) or not operation.strip():
+        raise FabricError("an operation type is required")
+    if not isinstance(authoritative_inputs, Mapping):
+        raise FabricError("authoritative inputs must be a mapping")
+    for key in authoritative_inputs:
+        if not isinstance(key, str):
+            raise FabricError("authoritative inputs carry a non-string mapping key")
+
+    payload = {
+        "canonicalisation": canonicalisation_version,
+        "digest": digest_version,
+        "operation": operation,
+        "inputs": _materialised_inputs(authoritative_inputs),
+    }
+    try:
+        # The same encoder the accepted convention uses, over a payload this
+        # module built. No `default=`: a value it cannot represent is refused.
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                             allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError):
+        raise FabricError(
+            "authoritative inputs carry a value that cannot be canonicalised") from None
+    return _PreparedRequestDigestInput(_PREPARATION, encoded)
+
+
+def _hash_prepared_request_digest(prepared: Any) -> str:
+    """`sha256:` over bytes already prepared. No caller value is examined.
+
+    The provenance checks are exact rather than permissive: a subclass is a
+    different type, and an object that merely looks prepared is refused rather
+    than hashed. These paths are unreachable from the operation boundary, which
+    hashes only what it just prepared; they exist so misuse is loud.
+    """
+    if type(prepared) is not _PreparedRequestDigestInput:
+        raise FabricError("a prepared request input is required")
+    if prepared._token is not _PREPARATION:
+        raise FabricError("a prepared request input is created only by preparation")
+    if type(prepared._canonical_bytes) is not bytes:
+        raise FabricError("a prepared request input carries no canonical bytes")
+    return f"sha256:{hashlib.sha256(prepared._canonical_bytes).hexdigest()}"
+
+
+def prepare_and_compute_request_digest(
+        operation: Any, authoritative_inputs: Any, *,
+        canonicalisation_version: str = SUPPORTED_CANONICALISATION,
+        digest_version: str = SUPPORTED_DIGEST) -> str:
+    """Prepare, then hash. Takes authoritative inputs and never takes bytes.
+
+    The prepared representation never leaves this module, so nothing outside it
+    can supply or alter what gets hashed, and hashing cannot begin until
+    preparation has completed. Anything a caller's container raises on the way
+    is named as uncanonicalisable content rather than propagated: an internal
+    fault is indistinguishable from a hostile one here, and the ambiguous case
+    must fail closed rather than be reported as success.
+    """
+    try:
+        prepared = _prepare_request_digest_input(
+            operation, authoritative_inputs,
+            canonicalisation_version=canonicalisation_version,
+            digest_version=digest_version)
+        return _hash_prepared_request_digest(prepared)
+    except FabricError:
+        raise
+    except Exception:  # noqa: BLE001
+        raise FabricError(
+            "authoritative inputs could not be canonicalised") from None
