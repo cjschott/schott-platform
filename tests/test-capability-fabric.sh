@@ -340,7 +340,7 @@ check(inst.get("trust_inheritance") == "forbidden",
 host = schemas.get("capability-host", {})
 for field in ("capability_host_id", "node_identity_reference",
               "fabric_node_trust_record_id", "verified_resource_profile",
-              "location_class", "data_classification_ceiling",
+              "location_class", "data_classification",
               "availability_intent", "provenance"):
     check(field in (host.get("required_fields") or []),
           f"capability host requires {field}")

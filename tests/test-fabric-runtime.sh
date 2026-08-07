@@ -259,7 +259,7 @@ def host(**overrides):
         fabric_node_trust_record_id="TREC-000001",
         verified_resource_profile={"host_memory_mb": 65536, "accelerator_class": "discrete-gpu"},
         location_class="on-premises",
-        data_classification_ceiling="internal",
+        data_classification="internal",
         availability_intent="in-service",
         provenance={"class": "declared", "source": "operator"},
     )
@@ -299,6 +299,7 @@ def instance(**overrides):
         admitted_at=STAMP,
         admitted_until=LATER,
         provenance={"class": "declared", "source": "operator"},
+        lifecycle_state="admitted",
     )
     fields.update(overrides)
     return CapabilityInstance(**fields)
@@ -1343,7 +1344,7 @@ def accepted_records():
              capability_host_id="CHOST-0001", node_identity_reference="node/schai",
              fabric_node_trust_record_id="TAUTH-000001",
              verified_resource_profile={"memory_mb": 8192},
-             location_class="on-premises", data_classification_ceiling="internal",
+             location_class="on-premises", data_classification="internal",
              availability_intent="available", provenance=ORIGIN,
              evidence=fixture_evidence("capability-host"))),
         ("capability-advertisement", "capability-advertisements", "CADV-000001",
@@ -1366,6 +1367,7 @@ def accepted_records():
              effective_scope={"data_classification": "internal"},
              admitted_at=WHEN, admitted_until=UNTIL,
              advertisement_id="CADV-000001", provenance=ORIGIN,
+             lifecycle_state="admitted",
              evidence=fixture_evidence("capability-instance"))),
         ("capability-route", "capability-routes", "CROUTE-0001",
          "route_id", CapabilityRoute(
@@ -1589,7 +1591,7 @@ HOST = {
     "fabric_node_trust_record_id": "TAUTH-000001",
     "verified_resource_profile": {"memory_mb": 8192},
     "location_class": "on-premises",
-    "data_classification_ceiling": "internal",
+    "data_classification": "internal",
     "availability_intent": "available",
     "provenance": PROV,
 }
@@ -1620,6 +1622,7 @@ INSTANCE = {
     "admitted_until": LATER,
     "advertisement_id": "CADV-000001",
     "provenance": PROV,
+    "lifecycle_state": "admitted",
 }
 ROUTE = {
     "route_id": "CROUTE-0001",
@@ -2557,7 +2560,7 @@ def accepted(kind, evidence):
             capability_host_id="CHOST-0001", node_identity_reference="node/schai",
             fabric_node_trust_record_id="TAUTH-000001",
             verified_resource_profile={"memory_mb": 8192}, location_class="on-premises",
-            data_classification_ceiling="internal", availability_intent="available",
+            data_classification="internal", availability_intent="available",
             provenance=PROV),
         "capability-advertisement": dict(
             advertisement_id="CADV-000001", capability_host_id="CHOST-0001",
@@ -2574,7 +2577,7 @@ def accepted(kind, evidence):
             host_trust_record_id="TAUTH-000001",
             effective_scope={"data_classification": "internal"},
             admitted_at=WHEN, admitted_until=UNTIL, advertisement_id="CADV-000001",
-            provenance=PROV),
+            provenance=PROV, lifecycle_state="admitted"),
         "capability-route": dict(
             route_id="CROUTE-0001", route_version=1, capability_id="CAPDEF-0001",
             contract_id="CCON-0001", accepted_contract_versions=("1.0.0",),
@@ -4763,7 +4766,9 @@ assert_absent_in "${FABRIC}" \
 
 # --- Governed declaration, subject admission, advertisement, C4 part 1 -------
 ADMIT_OUTPUT="$(python3 - "${ROOT}" <<'ADMITPY' 2>&1 || true
+import dataclasses
 import hashlib
+import inspect
 import os
 import stat
 import sys
@@ -4971,7 +4976,7 @@ def subject(store, trust_store, request_id="req-host-1", **overrides):
                   verified_resource_profile=dict(PROFILE),
                   verification_reference="/approved/evidence/host-observed.txt",
                   location_class="on-premises",
-                  data_classification_ceiling="internal",
+                  data_classification="internal",
                   availability_intent="in-service", provenance=PROV)
     fields.update(overrides)
     return admit_subject(store, trust_store, **fields)
@@ -5538,7 +5543,7 @@ BASE_SUBJECT = dict(
     evaluated_at=STAMP, node_identity_reference="node/schai",
     verified_resource_profile=dict(PROFILE),
     verification_reference="/approved/evidence/host-observed.txt",
-    location_class="on-premises", data_classification_ceiling="internal",
+    location_class="on-premises", data_classification="internal",
     availability_intent="in-service", provenance=dict(PROV),
     name=None, description=None)
 
@@ -5719,7 +5724,7 @@ try:
                                             "architecture": "x86_64"}),
              ("verification_reference", "/approved/evidence/host-reobserved.txt"),
              ("location_class", "third-party-hosted"),
-             ("data_classification_ceiling", "confidential"),
+             ("data_classification", "confidential"),
              ("availability_intent", "drained"),
              ("provenance", dict(OTHER_PROV)),
              ("name", "schai"),
@@ -6363,7 +6368,8 @@ check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
 # record has been promoted to a decision.
 
 OPERATIONS = {}
-for _name in ("admit_instance", "create_route", "withdraw_subject"):
+for _name in ("admit_instance", "create_route", "withdraw_subject",
+              "refresh_subject", "withdraw_instance", "retire_instance"):
     _operation = getattr(admission_module, _name, None)
     check(callable(_operation), f"increment 7 exposes the governed operation {_name}")
     OPERATIONS[_name] = _operation
@@ -6418,32 +6424,46 @@ class DomainTrust:
                 self.calls.count("fabric-node"))
 
 
-ARTIFACT = "oci://registry.invalid/summarise"
 # Exact containment, never interpretation: the package may require only
 # dimensions the operator verified, at the values the operator verified.
 INSTANCE_PACKAGE = dict(BASE_PACKAGE,
                         resource_requirements={"architecture": "x86_64"})
+# The operator's own bound, in the released Trust scope vocabulary. Every
+# dimension is named, because the released scope rules deny a request that
+# cannot name all four.
 SCOPE = {"permitted_capabilities": ["coding-workload"],
          "permitted_operations": ["linux.hostname"],
-         "permitted_data_classifications": ["internal"]}
+         "permitted_data_classifications": ["internal"],
+         "permitted_targets": ["schmgmt.home.arpa"]}
+# What the intersection of both grants and that bound comes to.
+EFFECTIVE = {"permitted_capabilities": ("coding-workload",),
+             "permitted_operations": ("linux.hostname",),
+             "permitted_data_classifications": ("internal",),
+             "permitted_targets": ("schmgmt.home.arpa",)}
 BASE_INSTANCE = dict(
     actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
-    evaluated_at=STAMP, satisfied_contract_versions=("1.0.0",),
+    evaluated_at=LATER, satisfied_contract_versions=("1.0.0",),
     verified_resource_profile=dict(PROFILE),
     admission_decision_id="TDEC-000001",
-    effective_scope=dict(SCOPE), admitted_at=STAMP, admitted_until=YEAR,
+    admission_scope=dict(SCOPE), admitted_at=STAMP, admitted_until=YEAR,
     endpoint_reference=None, provenance=dict(PROV), supersedes=None, notes=None)
 BASE_ROUTE = dict(
     actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
     accepted_contract_versions=("1.0.0",), locality="operator-controlled-only",
     data_classification="internal", route_version=1, provenance=dict(PROV),
-    description=None, overlap_window=None, supersedes=None, notes=None)
+    description=None, overlap_starts_at=None, overlap_ends_at=None,
+supersedes=None, notes=None)
 BASE_WITHDRAWAL = dict(
     actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
     availability_intent="withheld", provenance=dict(PROV), notes=None)
 
 
-def seeded_fabric_trust(tmp, node="node/schai", artifact=ARTIFACT,
+# Which trust record decided which package subject, so a matrix can name the
+# grant belonging to the package it is actually admitting.
+PACKAGE_TRUST = {}
+
+
+def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
                         node_state=TrustState.TRUSTED.value,
                         package_state=TrustState.TRUSTED.value,
                         node_expiration=None, package_expiration=None,
@@ -6502,8 +6522,14 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact=ARTIFACT,
             expiration=expiration)
 
     host_trust = decide(node, node_type, node_state, node_expiration)
-    package_trust = decide(artifact, package_type, package_state, package_expiration)
-    return store, host_trust, package_trust
+    # A package is a subject under its own record identity, decided per
+    # version and per contract. The matrices declare four, so four are decided.
+    granted = {name: decide(name, package_type, package_state, package_expiration)
+               for name in ("CPKG-0001", "CPKG-0002", "CPKG-0003", "CPKG-0004")}
+    PACKAGE_TRUST.clear()
+    PACKAGE_TRUST.update({name: outcome.record.record_id
+                          for name, outcome in granted.items()})
+    return store, host_trust, granted[artifact]
 
 
 def fabric_ready(tmp, store, trust_store, host_trust, package_trust, **overrides):
@@ -6520,7 +6546,8 @@ def fabric_ready(tmp, store, trust_store, host_trust, package_trust, **overrides
     adv = register_advertisement(store, **dict(
         BASE_ADVERT, request_id="i7-adv", actor=adm.record_id,
         capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-        contract_id=con.record_id))
+        contract_id=con.record_id, observed_at=STAMP,
+        valid_until=YEAR))
     check(all(result.outcome == ACCEPTED for result in (cap, con, pkg, adm, adv)),
           "the increment 7 prerequisites are all accepted")
     base = dict(BASE_INSTANCE, capability_id=cap.record_id,
@@ -6680,7 +6707,7 @@ try:
             ("actor", "operator:other"),
             ("approving_authority", "operator:other"),
             ("recorded_at", LATER),
-            ("evaluated_at", LATER),
+            ("evaluated_at", LATER + timedelta(hours=1)),
             ("capability_id", "CAPDEF-9999"),
             ("capability_package_id", "CPKG-9999"),
             ("capability_host_id", "CHOST-9999"),
@@ -6690,7 +6717,7 @@ try:
             ("admission_decision_id", "TDEC-000002"),
             ("package_trust_record_id", "TREC-999999"),
             ("host_trust_record_id", "TREC-999998"),
-            ("effective_scope", {"permitted_capabilities": ["observation"]}),
+            ("admission_scope", dict(SCOPE, permitted_capabilities=["observation"])),
             ("admitted_at", LATER),
             ("admitted_until", YEAR + timedelta(days=1)),
             ("advertisement_id", "CADV-999999"),
@@ -6765,20 +6792,23 @@ try:
         alt_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-alt", actor=adm.record_id,
             capability_host_id=adm.record_id,
-            capability_package_id=alt_pkg.record_id, contract_id=con.record_id))
+            capability_package_id=alt_pkg.record_id, contract_id=con.record_id,
+            observed_at=STAMP, valid_until=YEAR))
         heavy_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-heavy", actor=adm.record_id,
             capability_host_id=adm.record_id,
-            capability_package_id=heavy_pkg.record_id, contract_id=con.record_id))
+            capability_package_id=heavy_pkg.record_id, contract_id=con.record_id,
+            observed_at=STAMP, valid_until=YEAR))
         other_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-other", actor=adm.record_id,
             capability_host_id=adm.record_id,
             capability_package_id=other_pkg.record_id,
-            contract_id=other_con.record_id))
+            contract_id=other_con.record_id, observed_at=STAMP, valid_until=YEAR))
         foreign_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-foreign", actor=second_host.record_id,
             capability_host_id=second_host.record_id,
-            capability_package_id=pkg.record_id, contract_id=con.record_id))
+            capability_package_id=pkg.record_id, contract_id=con.record_id,
+            observed_at=STAMP, valid_until=YEAR))
         stale_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-stale", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
@@ -6787,7 +6817,8 @@ try:
         future_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-future", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-            contract_id=con.record_id, observed_at=LATER, valid_until=YEAR))
+            contract_id=con.record_id, observed_at=YEAR,
+            valid_until=YEAR + timedelta(days=1)))
         check(all(result.outcome == ACCEPTED for result in (
                   other_cap, other_con, other_pkg, alt_pkg, heavy_pkg, second_host,
                   alt_adv, heavy_adv, other_adv, foreign_adv, stale_adv, future_adv)),
@@ -6804,7 +6835,7 @@ try:
              {"capability_host_id": "CHOST-9999"}),
             ("an absent advertisement", NOT_FOUND, "unresolved-reference",
              {"advertisement_id": "CADV-999999"}),
-            ("no advertisement at all", NOT_FOUND, "unresolved-reference",
+            ("no advertisement at all", INVALID, "malformed-operation-content",
              {"advertisement_id": None}),
             ("a contract of another capability", REFUSED,
              "contract-not-of-capability", {"contract_id": other_con.record_id}),
@@ -6818,7 +6849,8 @@ try:
              "advertisement-not-of-package", {"advertisement_id": "ALT"}),
             ("a package the verified host cannot satisfy", REFUSED,
              "resource-claim-not-verified",
-             {"capability_package_id": "HEAVY", "advertisement_id": "HEAVYADV"}),
+             {"capability_package_id": "HEAVY", "advertisement_id": "HEAVYADV",
+              "package_trust_record_id": "HEAVYTRUST"}),
             ("an undeclared contract version", REFUSED, "versions-not-declared",
              {"satisfied_contract_versions": ("2.0.0",)}),
             ("no contract version at all", REFUSED, "versions-not-declared",
@@ -6829,22 +6861,29 @@ try:
              {"advertisement_id": future_adv.record_id}),
             ("an admission window already elapsed", REFUSED,
              "admission-window-expired",
-             {"admitted_at": STAMP - timedelta(days=10),
-              "admitted_until": STAMP - timedelta(days=5)}),
+             {"admitted_at": STAMP,
+              "admitted_until": STAMP + timedelta(hours=1)}),
             ("an admission window that closes before it opens", REFUSED,
              "invalid-validity-window",
              {"admitted_until": STAMP - timedelta(days=1)}),
             ("an admission window of zero length", REFUSED,
              "invalid-validity-window", {"admitted_until": STAMP}),
-            ("an empty effective scope", REFUSED, "empty-effective-scope",
-             {"effective_scope": {}}),
+            ("an admission bound naming no dimension", INVALID,
+             "malformed-admission-scope", {"admission_scope": {}}),
+            ("an admission bound with an empty dimension", INVALID,
+             "malformed-admission-scope",
+             {"admission_scope": dict(SCOPE, permitted_operations=[])}),
+            ("an admission bound outside both grants", REFUSED,
+             "empty-effective-scope",
+             {"admission_scope": dict(SCOPE,
+                                      permitted_capabilities=["observation"])}),
             ("a resource profile the operator did not verify", REFUSED,
              "resource-claim-not-verified",
              {"verified_resource_profile": {"host_memory_mb": 4096}}),
-            ("a data classification above the host ceiling", REFUSED,
-             "data-classification-exceeds-ceiling",
-             {"effective_scope": dict(SCOPE,
-                                      permitted_data_classifications=["restricted"])}),
+            ("a data classification outside the declared vocabulary", INVALID,
+             "unknown-data-classification",
+             {"admission_scope": dict(SCOPE,
+                                      permitted_data_classifications=["secret"])}),
             ("no approving authority", INVALID, "missing-approving-authority",
              {"approving_authority": None}),
             ("no actor", INVALID, "missing-actor", {"actor": None}),
@@ -6853,13 +6892,14 @@ try:
             ("malformed operation content", INVALID,
              "malformed-operation-content", {"provenance": 7}),
             ("a scope that is not a mapping", INVALID,
-             "malformed-operation-content", {"effective_scope": 7}),
+             "malformed-admission-scope", {"admission_scope": 7}),
             ("a naive admission instant", INVALID, "timestamp-carries-no-offset",
              {"admitted_at": STAMP.replace(tzinfo=None)}),
         )
         FIXTURES = {"FOREIGN": foreign_adv.record_id, "OTHER": other_adv.record_id,
                     "ALT": alt_adv.record_id, "HEAVY": heavy_pkg.record_id,
-                    "HEAVYADV": heavy_adv.record_id}
+                    "HEAVYADV": heavy_adv.record_id,
+                    "HEAVYTRUST": PACKAGE_TRUST[heavy_pkg.record_id]}
         for index, (description, outcome, reason, overrides) in enumerate(PREREQUISITES):
             overrides = {key: FIXTURES.get(value, value) if isinstance(value, str)
                          else value for key, value in overrides.items()}
@@ -7137,8 +7177,10 @@ try:
         ROUTE_REFUSALS = (
             ("an unresolved candidate", NOT_FOUND, "unresolved-reference",
              {"candidate_instances": ("CINST-999999",)}),
-            ("a malformed candidate identity", NOT_FOUND, "unresolved-reference",
+            ("a malformed candidate identity", INVALID, "malformed-operation-content",
              {"candidate_instances": ("",)}),
+            ("a candidate that is not a released identity", INVALID,
+             "malformed-operation-content", {"candidate_instances": ("CINST-1",)}),
             ("a duplicated candidate", REFUSED, "duplicate-candidate",
              {"candidate_instances": ("CINST-000001", "CINST-000001")}),
             ("no candidate at all", REFUSED, "no-declared-candidate",
@@ -7149,12 +7191,15 @@ try:
              {"contract_id": "CCON-9999"}),
             ("a route version below one", REFUSED, "invalid-route-version",
              {"route_version": 0}),
-            ("a non-integer route version", REFUSED, "invalid-route-version",
+            ("a non-integer route version", INVALID, "invalid-route-version",
              {"route_version": "1"}),
             ("no accepted contract version", REFUSED, "versions-not-declared",
              {"accepted_contract_versions": ()}),
-            ("a malformed overlap window", INVALID, "malformed-operation-content",
-             {"overlap_window": 7}),
+            ("a half-declared overlap window", INVALID, "malformed-overlap-window",
+             {"overlap_starts_at": STAMP}),
+            ("an overlap window with nothing to overlap", REFUSED,
+             "overlap-window-without-supersession",
+             {"overlap_starts_at": STAMP, "overlap_ends_at": LATER}),
             ("an unresolved prior route", NOT_FOUND, "unresolved-reference",
              {"supersedes": "CROUTE-9999"}),
         )
@@ -7198,14 +7243,19 @@ try:
         check(forensic(fabric_root) == before,
               "a candidate of the wrong capability writes nothing")
 
-        # Supersession: a new version, the prior left exactly as written.
+        # Supersession: a new version, the prior left exactly as written. A
+        # declared overlap asserts that old and new coexist, so the cutover
+        # carries one prior candidate and introduces one that is new.
+        third, _ = call("admit_instance", store, trust_store,
+                        **dict(base, request_id="i7-r-inst-3"))
+        check(third is not None and third.record_id == "CINST-000003",
+              "a third binding exists for the declared overlap")
         prior = record_of(store, "capability-route", "CROUTE-0001")
         prior_forensic = forensic(fabric_root / "capability-routes")
         superseded, error = call("create_route", store, **dict(
             route_base, request_id="i7-route-v2", route_version=2,
-            candidate_instances=("CINST-000001",),
-            overlap_window={"starts_at": STAMP.isoformat(),
-                            "ends_at": LATER.isoformat()},
+            candidate_instances=("CINST-000001", "CINST-000003"),
+            overlap_starts_at=STAMP, overlap_ends_at=LATER,
             supersedes="CROUTE-0001"))
         check(error is None and superseded is not None
               and superseded.outcome == ACCEPTED
@@ -7358,7 +7408,8 @@ try:
         cap, con, pkg, adm, adv, base = fabric_ready(
             tmp, store, trust_store, host_trust, package_trust)
         admitted, _ = call("admit_instance", store, trust_store, **dict(
-            base, request_id="i7-life", admitted_until=LATER))
+            base, request_id="i7-life", evaluated_at=STAMP + timedelta(hours=1),
+            admitted_until=LATER))
         check(admitted is not None and admitted.outcome == ACCEPTED,
               "the lifecycle fixture admits an instance")
         settled = forensic(fabric_root)
@@ -7464,7 +7515,8 @@ try:
               "withdrawal is a decision and queries no trust")
         check(forensic(trust_root) == trust_before,
               "withdrawal writes nothing to the Trust Plane")
-        successor = record_of(store, "capability-host", "CHOST-0002")
+        successor_id = withdrawn.record_id
+        successor = record_of(store, "capability-host", successor_id)
         check(successor.get("availability_intent") == "withheld",
               "the withdrawal record declares the operator's availability intent")
         check(successor.get("supersedes") == adm.record_id,
@@ -7494,9 +7546,21 @@ try:
 
         # Retired stays retired: return and advertisement change nothing.
         settled = forensic(fabric_root)
-        returned = register_advertisement(store, **dict(
-            BASE_ADVERT, request_id="i7-w-return", actor=adm.record_id,
+        # A claim cites the declaration current for the machine, which the
+        # withdrawal moved. Retaining the claim is not authority to admit: the
+        # subject may still say what it holds while it is out of service.
+        stale_claim = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-w-stale", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id))
+        check(stale_claim.outcome == REFUSED
+              and stale_claim.reason == "host-record-superseded",
+              "a claim citing a superseded declaration is refused")
+        check(forensic(fabric_root) == settled,
+              "a claim citing a superseded declaration writes nothing")
+        returned = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-w-return", actor=successor_id,
+            capability_host_id=successor_id, capability_package_id=pkg.record_id,
             contract_id=con.record_id))
         check(returned.outcome == ACCEPTED,
               "a withdrawn host's return is still recorded as a claim")
@@ -7531,17 +7595,24 @@ try:
             ("no approving authority", INVALID, "missing-approving-authority",
              {"approving_authority": None}),
             ("no actor", INVALID, "missing-actor", {"actor": None}),
-            ("an empty availability intent", INVALID,
-             "malformed-operation-content", {"availability_intent": ""}),
-            ("the host withdrawing itself", REFUSED, "self-admission",
+            ("an availability intent outside the vocabulary", INVALID,
+             "unknown-availability-intent", {"availability_intent": ""}),
+            ("the intent already declared", REFUSED,
+             "availability-intent-unchanged", {"availability_intent": "withheld"}),
+            ("a return to service", REFUSED,
+             "return-to-service-requires-refresh",
+             {"availability_intent": "in-service"}),
+            ("the host withdrawing itself", REFUSED, "actor-is-the-subject",
              {"actor": "node/schai"}),
         )
         before = forensic(fabric_root)
         for index, (description, outcome, reason, overrides) in enumerate(
                 WITHDRAWAL_REFUSALS):
             allocated = list(store.allocations)
+            # The head moved when the withdrawal committed; a decision about
+            # a machine addresses the declaration that is current for it.
             fields = dict(BASE_WITHDRAWAL, request_id=f"i7-w-bad-{index}",
-                          capability_host_id=adm.record_id)
+                          capability_host_id=withdrawn.record_id)
             fields.update(overrides)
             result, error = call("withdraw_subject", store, **fields)
             check(error is None, f"a withdrawal with {description} raises nothing")
@@ -7556,10 +7627,927 @@ try:
             check(forensic(fabric_root) == before,
                   f"a withdrawal with {description} writes nothing")
 
-    # --- 9. Increment 7 stops where increment 8 begins -------------------
+    # --- 9. Digest routes are declared per operation ------------------------
+    # Increments 1 to 6 keep the accepted helper exactly; the operations added
+    # here take the narrower prepare-once route, which accepts less. A route
+    # is stated at every call site so a new operation cannot inherit one.
+    import ast as _ast
+    ADMISSION_TREE = _ast.parse(
+        (root / "tools" / "fabric" / "admission.py").read_text(encoding="utf-8"))
+    ROUTES = {}
+    DELEGATES = {}
+    for _node in _ast.walk(ADMISSION_TREE):
+        if not isinstance(_node, _ast.FunctionDef):
+            continue
+        for _call in _ast.walk(_node):
+            if not isinstance(_call, _ast.Call) or not isinstance(_call.func, _ast.Name):
+                continue
+            if _call.func.id == "_governed":
+                for _kw in _call.keywords:
+                    if _kw.arg == "digest_route":
+                        ROUTES[_node.name] = _kw.value.id
+            elif _call.func.id.startswith("_") and not _node.name.startswith("_"):
+                DELEGATES[_node.name] = _call.func.id
+    # An operation that reaches the boundary through a shared helper takes the
+    # route that helper declares, and is asserted under its own name.
+    for _name, _helper in DELEGATES.items():
+        if _name not in ROUTES and _helper in ROUTES:
+            ROUTES[_name] = ROUTES[_helper]
+    ROUTES = {name: route for name, route in ROUTES.items()
+              if not name.startswith("_")}
+    EXPECTED_ROUTES = {
+        "declare_capability": "LEGACY_DIGEST",
+        "declare_contract": "LEGACY_DIGEST",
+        "declare_package": "LEGACY_DIGEST",
+        "admit_subject": "LEGACY_DIGEST",
+        "register_advertisement": "LEGACY_DIGEST",
+        "admit_instance": "PREPARED_DIGEST",
+        "create_route": "PREPARED_DIGEST",
+        "withdraw_subject": "PREPARED_DIGEST",
+        "refresh_subject": "PREPARED_DIGEST",
+        "withdraw_instance": "PREPARED_DIGEST",
+        "retire_instance": "PREPARED_DIGEST",
+    }
+    check(len(ROUTES) == 11, f"eleven governed operations declare a digest route ({len(ROUTES)})")
+    for name, route in sorted(EXPECTED_ROUTES.items()):
+        check(ROUTES.get(name) == route,
+              f"{name} declares {route}")
+    check(sum(1 for r in ROUTES.values() if r == "LEGACY_DIGEST") == 5,
+          "exactly five operations take the accepted legacy route")
+    check(sum(1 for r in ROUTES.values() if r == "PREPARED_DIGEST") == 6,
+          "exactly six operations take the prepared route")
+    check(_ast.parse("digest_route").body and "digest_route" in
+          [a.arg for a in next(n for n in _ast.walk(ADMISSION_TREE)
+                               if isinstance(n, _ast.FunctionDef)
+                               and n.name == "_governed").args.kwonlyargs],
+          "_governed takes the digest route as a keyword with no default")
+    check(next(n for n in _ast.walk(ADMISSION_TREE) if isinstance(n, _ast.FunctionDef)
+               and n.name == "_governed").args.kw_defaults[-1] is None,
+          "the digest route has no default a new operation could inherit")
+
+    # --- 10. The accepted helper is unchanged, and both routes agree --------
+    from tools.fabric.request_identity import (  # noqa: E402
+        compute_request_digest as LEGACY_DIGEST_FN,
+        prepare_and_compute_request_digest as PREPARED_DIGEST_FN,
+    )
+    import tools.fabric.request_identity as identity_module  # noqa: E402
+
+    LEGACY_FIXTURES = (
+        ("declare-contract", {"capability_id": "CAPDEF-0001", "effect_class": "read-only"}),
+        ("declare-contract", {"value": 1}),
+        ("declare-contract", {"value": "1"}),
+        ("declare-contract", {"text": "value", "count": 7, "ratio": 1.5,
+                              "flag": True, "absent": None,
+                              "nested": {"inner": ["a", "b"]}}),
+        ("create-route", {"candidate_instances": ["CINST-000001", "CINST-000002"]}),
+        ("declare-capability", {"contract_ids": ["b", "a", "c"]}),
+        ("declare-package", {"satisfied_contract_versions": ["2.0.0", "1.0.0"]}),
+        ("declare-contract", {"failure_modes": [], "compatible_with": []}),
+        ("admit-subject", {"transport_metadata": {"peer": "10.0.0.1"},
+                           "node_identity_reference": "node/schai"}),
+    )
+    for operation, inputs in LEGACY_FIXTURES:
+        legacy = LEGACY_DIGEST_FN(operation, inputs)
+        check(PREPARED_DIGEST_FN(operation, inputs) == legacy,
+              f"both routes agree on the digest for {operation} {sorted(inputs)}")
+        check(legacy.startswith("sha256:") and len(legacy) == 71,
+              f"the accepted digest convention holds for {operation} {sorted(inputs)}")
+    check(LEGACY_DIGEST_FN("declare-capability", {"contract_ids": ["b", "a"]})
+          == LEGACY_DIGEST_FN("declare-capability", {"contract_ids": ["a", "b"]}),
+          "the accepted helper still ignores unordered input order")
+
+    # The prepared route accepts less, and says so rather than hashing it.
+    NARROWER = (
+        ({"contract_ids": [7]}, "a numeric unordered member"),
+        ({"contract_ids": [["a"]]}, "a container unordered member"),
+        ({"satisfied_contract_versions": [None]}, "an absent unordered member"),
+    )
+    for inputs, description in NARROWER:
+        accepted_legacy = True
+        try:
+            LEGACY_DIGEST_FN("declare-capability", inputs)
+        except FabricError:
+            accepted_legacy = False
+        check(accepted_legacy,
+              f"the accepted helper still accepts {description}")
+        refuses_prepared = False
+        try:
+            PREPARED_DIGEST_FN("declare-capability", inputs)
+        except FabricError:
+            refuses_prepared = True
+        check(refuses_prepared, f"the prepared route refuses {description}")
+
+    # --- 11. Caller content is visited once, and the bytes hashed are the
+    #         bytes validated -----------------------------------------------
+    class Counting(dict):
+        """A mapping that counts how often anything walks it."""
+
+        visits = 0
+
+        def items(self):
+            type(self).visits += 1
+            return super().items()
+
+        def __iter__(self):
+            type(self).visits += 1
+            return super().__iter__()
+
+    class OnceOnly(dict):
+        """Answers once, then refuses. A second walk would be a defect."""
+
+        visits = 0
+
+        def items(self):
+            type(self).visits += 1
+            if type(self).visits > 1:
+                raise RuntimeError("this container may be read exactly once")
+            return super().items()
+
+    class Shifting(dict):
+        """Yields one set of members, then another."""
+
+        visits = 0
+
+        def items(self):
+            type(self).visits += 1
+            payload = {"value": "first"} if type(self).visits == 1 else {"value": "second"}
+            return payload.items()
+
+    Counting.visits = 0
+    counted = PREPARED_DIGEST_FN("declare-contract", {"provenance": Counting(a="b")})
+    check(Counting.visits == 1,
+          f"the prepared route walks a caller's mapping exactly once ({Counting.visits})")
+    check(counted == PREPARED_DIGEST_FN("declare-contract", {"provenance": {"a": "b"}}),
+          "walking it once produces the digest of what it contained")
+
+    OnceOnly.visits = 0
+    once, once_error = attempted(
+        lambda: PREPARED_DIGEST_FN("declare-contract", {"provenance": OnceOnly(a="b")}))
+    check(once_error is None and once is not None,
+          "a container that may be read once is enough for the prepared route")
+    check(OnceOnly.visits == 1,
+          f"a read-once container is read exactly once ({OnceOnly.visits})")
+
+    Shifting.visits = 0
+    shifting = PREPARED_DIGEST_FN("declare-contract", {"provenance": Shifting()})
+    check(Shifting.visits == 1, "a shifting container is walked once")
+    check(shifting == PREPARED_DIGEST_FN("declare-contract",
+                                         {"provenance": {"value": "first"}}),
+          "the bytes hashed are the bytes that were validated")
+
+    class Exploding(dict):
+        def items(self):
+            raise RuntimeError("this container refuses to be read")
+
+    hostile, hostile_error = attempted(
+        lambda: PREPARED_DIGEST_FN("declare-contract", {"provenance": Exploding()}))
+    check(hostile_error is not None and isinstance(hostile_error, FabricError),
+          "a hostile container is named as uncanonicalisable, not propagated")
+    check("RuntimeError" not in str(hostile_error)
+          and "refuses to be read" not in str(hostile_error),
+          "the refusal carries nothing the hostile container said")
+
+    cyclic = {}
+    cyclic["self"] = cyclic
+    _, cyclic_error = attempted(
+        lambda: PREPARED_DIGEST_FN("declare-contract", {"provenance": cyclic}))
+    check(isinstance(cyclic_error, FabricError),
+          "a cyclic mapping is refused rather than recursed forever")
+
+    # --- 12. The prepared representation cannot be supplied or forged -------
+    check(not hasattr(identity_module, "PreparedRequestDigestInput"),
+          "no public prepared type crosses the module boundary")
+    check(not hasattr(identity_module, "prepare_request_digest_input"),
+          "no admission-facing preparation function returns a prepared object")
+    check(not hasattr(identity_module, "compute_prepared_request_digest"),
+          "no admission-facing function accepts a prepared object")
+    check("prepare_and_compute_request_digest" in dir(identity_module),
+          "the whole supported surface is one function taking authoritative inputs")
+    PREPARED_TYPE = identity_module._PreparedRequestDigestInput
+    check([f.name for f in dataclasses.fields(PREPARED_TYPE)]
+          == ["_token", "_canonical_bytes"],
+          "the prepared type carries bytes and a token, and no separate metadata")
+    check("canonical_bytes" not in inspect.signature(
+              identity_module.prepare_and_compute_request_digest).parameters,
+          "no supported parameter accepts canonical bytes")
+
+    forged, forged_error = attempted(
+        lambda: PREPARED_TYPE(object(), b"forged"))
+    check(isinstance(forged_error, FabricError),
+          "a prepared object built without the preparation token is refused")
+    MISUSE = (
+        (None, "nothing at all"),
+        ("not prepared", "a wrong object type"),
+        (PREPARED_TYPE(identity_module._PREPARATION, b"{}"), "genuine bytes"),
+    )
+
+    class Subclassed(PREPARED_TYPE):
+        pass
+
+    HASH_CALLS = []
+    RELEASED_HASH = identity_module._hash_prepared_request_digest
+
+    def counting_hash(prepared):
+        HASH_CALLS.append(1)
+        return RELEASED_HASH(prepared)
+
+    identity_module._hash_prepared_request_digest = counting_hash
+    try:
+        for candidate, description in MISUSE[:2]:
+            before_calls = len(HASH_CALLS)
+            _, misuse_error = attempted(lambda: RELEASED_HASH(candidate))
+            check(isinstance(misuse_error, FabricError),
+                  f"hashing {description} is refused as a fabric error")
+            check(len(HASH_CALLS) == before_calls,
+                  f"hashing {description} never reaches the released hash")
+        _, subclass_error = attempted(
+            lambda: RELEASED_HASH(Subclassed(identity_module._PREPARATION, b"{}")))
+        check(isinstance(subclass_error, FabricError),
+              "a subclass of the prepared type is refused by exact type")
+        genuine = RELEASED_HASH(MISUSE[2][0])
+        check(genuine == f"sha256:{hashlib.sha256(b'{}').hexdigest()}",
+              "a genuine prepared object hashes exactly its stored bytes")
+
+        # A malformed nested value enters no hashing function and no store.
+        with TemporaryDirectory() as tmp:
+            store = audited(tmp)
+            trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+            fabric_root = Path(tmp) / "fabric"
+            trust_root = Path(tmp) / "trust"
+            cap, con, pkg, adm, adv, base = fabric_ready(
+                tmp, store, trust_store, host_trust, package_trust)
+            accepted, _ = call("admit_instance", store, trust_store,
+                               **dict(base, request_id="i7-prepared"))
+            check(accepted is not None and accepted.outcome == ACCEPTED,
+                  "the prepared-path regression establishes an accepted request")
+            before = forensic(fabric_root)
+            trust_before = forensic(trust_root)
+            counters = sequences_of(fabric_root)
+            allocated = list(store.allocations)
+            written = list(store.writes)
+            reads = store.reads
+            queries = list(DOMAIN_TRUST.calls)
+            entries = store.entries
+            HASH_CALLS.clear()
+            REPLAY_CALLS = []
+            released_replay = admission_module.replay_lookup
+
+            def counting_replay(*args, **kwargs):
+                REPLAY_CALLS.append(1)
+                return released_replay(*args, **kwargs)
+
+            admission_module.replay_lookup = counting_replay
+            try:
+                malformed, malformed_error = call(
+                    "admit_instance", store, trust_store,
+                    **dict(base, request_id="i7-prepared",
+                           provenance={"nested": {"deep": {1, 2}}}))
+            finally:
+                admission_module.replay_lookup = released_replay
+            check(malformed_error is None,
+                  "a malformed nested value raises nothing out of the boundary")
+            check(malformed is not None and malformed.outcome == INVALID
+                  and malformed.reason == MALFORMED_CONTENT,
+                  "a malformed nested value is controlled malformed content")
+            check(malformed is not None and malformed.outcome != EXACT_REPLAY,
+                  "a malformed nested value is never an exact replay")
+            check(malformed is not None and malformed.outcome != CONFLICT,
+                  "a malformed nested value is never a conflict")
+            check(len(HASH_CALLS) == 0,
+                  f"malformed preparation enters the hashing function zero times "
+                  f"({len(HASH_CALLS)})")
+            check(len(REPLAY_CALLS) == 0,
+                  f"malformed preparation performs zero replay lookups "
+                  f"({len(REPLAY_CALLS)})")
+            check(store.entries == entries,
+                  "malformed preparation acquires no critical section")
+            check(store.reads == reads,
+                  "malformed preparation resolves no reference")
+            check(DOMAIN_TRUST.calls == queries,
+                  "malformed preparation queries no trust")
+            check(store.allocations == allocated and store.writes == written,
+                  "malformed preparation allocates and writes nothing")
+            check(sequences_of(fabric_root) == counters,
+                  "malformed preparation advances no sequence")
+            check(forensic(fabric_root) == before,
+                  "malformed preparation leaves the fabric byte-identical")
+            check(forensic(trust_root) == trust_before,
+                  "malformed preparation leaves the trust plane byte-identical")
+    finally:
+        identity_module._hash_prepared_request_digest = RELEASED_HASH
+    check(identity_module._hash_prepared_request_digest is RELEASED_HASH,
+          "the released hashing function is restored")
+
+    # --- 13. The host transition matrix, and Trust renewal ------------------
+    HOST_TRANSITIONS = (
+        ("in-service", "draining", "withdraw_subject", ACCEPTED, None, 0),
+        ("in-service", "withheld", "withdraw_subject", ACCEPTED, None, 0),
+        ("draining", "withheld", "withdraw_subject", ACCEPTED, None, 0),
+        ("in-service", "in-service", "withdraw_subject", REFUSED,
+         "availability-intent-unchanged", 0),
+        ("draining", "draining", "withdraw_subject", REFUSED,
+         "availability-intent-unchanged", 0),
+        ("withheld", "withheld", "withdraw_subject", REFUSED,
+         "availability-intent-unchanged", 0),
+        ("draining", "in-service", "withdraw_subject", REFUSED,
+         "return-to-service-requires-refresh", 0),
+        ("withheld", "in-service", "withdraw_subject", REFUSED,
+         "return-to-service-requires-refresh", 0),
+        ("withheld", "draining", "withdraw_subject", REFUSED,
+         "return-to-service-requires-refresh", 0),
+        ("draining", "in-service", "refresh_subject", ACCEPTED, None, 1),
+        ("withheld", "in-service", "refresh_subject", ACCEPTED, None, 1),
+        ("withheld", "draining", "refresh_subject", ACCEPTED, None, 1),
+        ("in-service", "in-service", "refresh_subject", REFUSED,
+         "refresh-changes-nothing", 0),
+        ("draining", "draining", "refresh_subject", REFUSED,
+         "refresh-changes-nothing", 0),
+        ("withheld", "withheld", "refresh_subject", REFUSED,
+         "refresh-changes-nothing", 0),
+    )
+    for index, (start, target, operation, outcome, reason, queries) in enumerate(
+            HOST_TRANSITIONS):
+        with TemporaryDirectory() as tmp:
+            store = audited(tmp)
+            trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+            fabric_root = Path(tmp) / "fabric"
+            trust_root = Path(tmp) / "trust"
+            head = admit_subject(store, trust_store, **dict(
+                BASE_SUBJECT, request_id=f"i7-t-host-{index}",
+                fabric_node_trust_record_id=host_trust.record.record_id))
+            if start != "in-service":
+                moved, _ = call("withdraw_subject", store, **dict(
+                    BASE_WITHDRAWAL, request_id=f"i7-t-move-{index}",
+                    capability_host_id=head.record_id, availability_intent=start))
+                check(moved is not None and moved.outcome == ACCEPTED,
+                      f"the host reaches {start} before the {start} to {target} row")
+                head = moved
+            before = forensic(fabric_root)
+            trust_before = forensic(trust_root)
+            allocated = list(store.allocations)
+            asked = list(DOMAIN_TRUST.calls)
+            if operation == "withdraw_subject":
+                result, error = call("withdraw_subject", store, **dict(
+                    BASE_WITHDRAWAL, request_id=f"i7-t-{index}",
+                    capability_host_id=head.record_id, availability_intent=target))
+            else:
+                fields = dict(
+                    actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+                    evaluated_at=STAMP, request_id=f"i7-t-{index}",
+                    capability_host_id=head.record_id,
+                    fabric_node_trust_record_id=host_trust.record.record_id,
+                    verified_resource_profile=dict(PROFILE),
+                    verification_reference=BASE_SUBJECT["verification_reference"],
+                    location_class="on-premises",
+                    data_classification="internal",
+                    availability_intent=target, provenance=dict(PROV), notes=None)
+                result, error = call("refresh_subject", store, trust_store, **fields)
+            label = f"{start} to {target} by {operation}"
+            check(error is None, f"the {label} row raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome, f"the {label} row returns {outcome}")
+            if reason is not None:
+                check(result.reason == reason, f"the {label} row is refused as {reason}")
+            expected_records = 1 if outcome == ACCEPTED else 0
+            check(len(store.allocations) == len(allocated) + expected_records,
+                  f"the {label} row writes {expected_records} host record")
+            check(len(DOMAIN_TRUST.calls) == len(asked) + queries,
+                  f"the {label} row makes {queries} trust query")
+            check(forensic(trust_root) == trust_before,
+                  f"the {label} row writes nothing to the Trust Plane")
+            if outcome != ACCEPTED:
+                check(forensic(fabric_root) == before,
+                      f"the {label} row leaves the fabric byte-identical")
+
+    # A refresh that renews only the trust record is authoritative, and the
+    # superseded declaration keeps its own reference for ever.
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        head = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id="i7-renew-host",
+            fabric_node_trust_record_id=host_trust.record.record_id))
+        renewed = create_decision(
+            trust_store, subject_id="node/schai", subject_type="fabric-node",
+            requested_state=TrustState.RESTRICTED.value,
+            actor_authority_id=[record for record in
+                                trust_store.all_records("authority")][0]["authority_id"],
+            decided_at=STAMP, reason="renewed for the fabric refresh regression",
+            evidence_references=(TrustEvidenceReference(
+                evidence_id="TEVID-000001", kind="fingerprint",
+                reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
+            verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+            verification_details=TrustVerificationDetails(
+                subject_property="ssh-host-key-fingerprint",
+                observed_value_reference="/approved/evidence/observed.txt",
+                comparison_source="printed-console-readout",
+                performed_by="operator-role-reference", performed_at=STAMP),
+            scope=TrustScope(
+                scope_id="TSCOPE-000001", subject_type="fabric-node",
+                permitted_capabilities=("coding-workload",),
+                permitted_operations=("linux.hostname",),
+                permitted_data_classifications=("internal",),
+                permitted_targets=("schmgmt.home.arpa",),
+                validity_start=STAMP, validity_end=YEAR),
+            supersedes=host_trust.decision.decision_id,
+            lineage_id=host_trust.lineage.lineage_id)
+        prior_host = record_of(store, "capability-host", head.record_id)
+        asked = list(DOMAIN_TRUST.calls)
+        refreshed, error = call(
+            "refresh_subject", store, trust_store, request_id="i7-renew",
+            actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
+            evaluated_at=STAMP, capability_host_id=head.record_id,
+            fabric_node_trust_record_id=renewed.record.record_id,
+            verified_resource_profile=dict(PROFILE),
+            verification_reference=BASE_SUBJECT["verification_reference"],
+            location_class="on-premises", data_classification="internal",
+            availability_intent="in-service", provenance=dict(PROV))
+        check(error is None and refreshed is not None
+              and refreshed.outcome == ACCEPTED,
+              "a refresh citing a renewed trust record is authoritative")
+        check(len(DOMAIN_TRUST.calls) == len(asked) + 1,
+              "a declaration refresh makes exactly one fresh trust query")
+        successor = record_of(store, "capability-host", refreshed.record_id)
+        check(successor.get("fabric_node_trust_record_id") == renewed.record.record_id,
+              "the current declaration cites the trust record it relied upon")
+        check(record_of(store, "capability-host", head.record_id) == prior_host,
+              "the superseded declaration keeps its historical trust reference")
+        check(successor.get("supersedes") == head.record_id,
+              "the refreshed declaration names the one it supersedes")
+
+    # A successor addresses the head, and a chain that forks or loops refuses.
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        head = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id="i7-chain-host",
+            fabric_node_trust_record_id=host_trust.record.record_id))
+        moved, _ = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-chain-1",
+            capability_host_id=head.record_id, availability_intent="draining"))
+        check(moved is not None and moved.outcome == ACCEPTED,
+              "the chain regression moves the host once")
+        before = forensic(fabric_root)
+        stale, error = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-chain-2",
+            capability_host_id=head.record_id, availability_intent="withheld"))
+        check(error is None and stale is not None and stale.outcome == REFUSED
+              and stale.reason == "host-predecessor-not-current",
+              "a successor of a superseded declaration is refused")
+        check(forensic(fabric_root) == before,
+              "a stale predecessor writes nothing")
+        absent, _ = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-chain-3",
+            capability_host_id="CHOST-9999", availability_intent="withheld"))
+        check(absent is not None and absent.outcome == NOT_FOUND,
+              "a successor of an absent declaration is not-found")
+
+    # --- 14. The instance lifecycle matrix ----------------------------------
+    LIFECYCLE_ROWS = (
+        ("admitted", "withdraw_instance", ACCEPTED, None, "withdrawn"),
+        ("admitted", "retire_instance", ACCEPTED, None, "retired"),
+        ("withdrawn", "retire_instance", ACCEPTED, None, "retired"),
+        ("withdrawn", "withdraw_instance", REFUSED,
+         "instance-lifecycle-transition-illegal", None),
+        ("retired", "withdraw_instance", REFUSED,
+         "instance-lifecycle-transition-illegal", None),
+        ("retired", "retire_instance", REFUSED,
+         "instance-lifecycle-transition-illegal", None),
+    )
+    for index, (start, operation, outcome, reason, produced) in enumerate(
+            LIFECYCLE_ROWS):
+        with TemporaryDirectory() as tmp:
+            store = audited(tmp)
+            trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+            fabric_root = Path(tmp) / "fabric"
+            trust_root = Path(tmp) / "trust"
+            cap, con, pkg, adm, adv, base = fabric_ready(
+                tmp, store, trust_store, host_trust, package_trust)
+            binding, _ = call("admit_instance", store, trust_store,
+                              **dict(base, request_id=f"i7-l-inst-{index}"))
+            check(binding is not None and binding.outcome == ACCEPTED,
+                  f"the {start} lifecycle row admits a binding")
+            head = binding.record_id
+            if start in ("withdrawn", "retired"):
+                first = "withdraw_instance" if start == "withdrawn" else "retire_instance"
+                moved, _ = call(first, store, request_id=f"i7-l-move-{index}",
+                                actor=OPERATOR, approving_authority=OPERATOR,
+                                recorded_at=STAMP, instance_id=head,
+                                provenance=dict(PROV))
+                check(moved is not None and moved.outcome == ACCEPTED,
+                      f"the binding reaches {start} before the {start} row")
+                head = moved.record_id
+            asked = list(DOMAIN_TRUST.calls)
+            before = forensic(fabric_root)
+            trust_before = forensic(trust_root)
+            allocated = list(store.allocations)
+            result, error = call(operation, store, request_id=f"i7-l-{index}",
+                                 actor=OPERATOR, approving_authority=OPERATOR,
+                                 recorded_at=STAMP, instance_id=head,
+                                 provenance=dict(PROV),
+                                 notes="ended by operator decision")
+            label = f"{start} by {operation}"
+            check(error is None, f"the {label} lifecycle row raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome, f"the {label} row returns {outcome}")
+            if reason is not None:
+                check(result.reason == reason, f"the {label} row is refused as {reason}")
+            check(DOMAIN_TRUST.calls == asked,
+                  f"the {label} row queries no trust")
+            check(forensic(trust_root) == trust_before,
+                  f"the {label} row writes nothing to the Trust Plane")
+            if outcome == ACCEPTED:
+                successor = record_of(store, "capability-instance", result.record_id)
+                prior = record_of(store, "capability-instance", head)
+                check(successor.get("lifecycle_state") == produced,
+                      f"the {label} row records the state it produced")
+                check(successor.get("supersedes") == head,
+                      f"the {label} row names the record it continues")
+                check((successor.get("evidence") or {}).get("reason_category")
+                      == ("withdrawal" if produced == "withdrawn" else "retirement"),
+                      f"the {label} row is recorded under its own category")
+                for field in ("capability_id", "capability_package_id",
+                              "capability_host_id", "contract_id",
+                              "admission_decision_id", "package_trust_record_id",
+                              "host_trust_record_id", "effective_scope",
+                              "advertisement_id"):
+                    check(successor.get(field) == prior.get(field),
+                          f"the {label} row carries {field} across unchanged")
+                check(record_of(store, "capability-instance", head) == prior,
+                      f"the {label} row leaves its predecessor byte-identical")
+            else:
+                check(len(store.allocations) == len(allocated),
+                      f"the {label} row allocates nothing")
+                check(forensic(fabric_root) == before,
+                      f"the {label} row leaves the fabric byte-identical")
+
+    # Retired stays retired, and a route names only a binding root.
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        binding, _ = call("admit_instance", store, trust_store,
+                          **dict(base, request_id="i7-retire-inst"))
+        retired, _ = call("retire_instance", store, request_id="i7-retire",
+                          actor=OPERATOR, approving_authority=OPERATOR,
+                          recorded_at=STAMP, instance_id=binding.record_id,
+                          provenance=dict(PROV))
+        check(retired is not None and retired.outcome == ACCEPTED,
+              "a binding is retired by decision")
+        settled = forensic(fabric_root)
+        returned = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id="i7-retire-adv", actor=adm.record_id,
+            capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id, observed_at=STAMP, valid_until=YEAR))
+        check(returned.outcome == ACCEPTED,
+              "a host whose binding is retired may still publish a claim")
+        check(record_of(store, "capability-instance", retired.record_id).get(
+                  "lifecycle_state") == "retired",
+              "a fresh advertisement does not reactivate a retired binding")
+        route_base = dict(BASE_ROUTE, capability_id=cap.record_id,
+                          contract_id=con.record_id,
+                          candidate_instances=(retired.record_id,))
+        refused_route, _ = call("create_route", store,
+                                **dict(route_base, request_id="i7-retire-route"))
+        check(refused_route is not None and refused_route.outcome == REFUSED
+              and refused_route.reason == "candidate-not-a-binding-root",
+              "a route may not name a lifecycle successor")
+        rooted, _ = call("create_route", store, **dict(
+            route_base, request_id="i7-root-route",
+            candidate_instances=(binding.record_id,)))
+        check(rooted is not None and rooted.outcome == ACCEPTED,
+              "a route may still name the root of a binding whose lifecycle ended")
+        check(record_of(store, "capability-instance", binding.record_id).get(
+                  "lifecycle_state") == "admitted",
+              "the root record itself is unchanged by the retirement that followed it")
+        check(record_of(store, "capability-instance", retired.record_id).get(
+                  "lifecycle_state") == "retired",
+              "the lifecycle head is what says the binding ended")
+        # Re-admission is a new decision producing a new binding.
+        readmitted, _ = call("admit_instance", store, trust_store, **dict(
+            base, request_id="i7-readmit-new", advertisement_id=returned.record_id))
+        check(readmitted is not None and readmitted.outcome == ACCEPTED
+              and readmitted.record_id != binding.record_id,
+              "re-admission is a new human decision creating a new binding")
+        check(record_of(store, "capability-instance", readmitted.record_id).get(
+                  "supersedes") is None,
+              "a re-admitted binding supersedes nothing; it is not a revival")
+
+    # --- 15. A claim cites the declaration current for its subject ----------
+    # Accepted increment 7 correction. An advertisement is published by a
+    # subject as it is now; citing a record the operator already replaced would
+    # attach a live claim to a stale identity. Claim retention is not authority
+    # to admit -- that is enforced separately at instance admission.
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        claim = dict(BASE_ADVERT, actor=adm.record_id,
+                     capability_host_id=adm.record_id,
+                     capability_package_id=pkg.record_id,
+                     contract_id=con.record_id, observed_at=STAMP,
+                     valid_until=YEAR)
+
+        # Ordering: structure, then identity, then reference, then currency.
+        STRUCTURAL = (
+            ("a malformed host identity", INVALID, "malformed-operation-content",
+             {"capability_host_id": "CHOST-1", "actor": "CHOST-1"}),
+            ("a host identity of the wrong record kind", INVALID,
+             "malformed-operation-content",
+             {"capability_host_id": "CINST-000001", "actor": "CINST-000001"}),
+            ("no host identity at all", INVALID, "malformed-operation-content",
+             {"capability_host_id": None, "actor": None}),
+        )
+        for index, (description, outcome, reason, overrides) in enumerate(STRUCTURAL):
+            before = forensic(fabric_root)
+            entries = store.entries
+            reads = store.reads
+            allocated = list(store.allocations)
+            result, error = attempted(lambda: register_advertisement(
+                store, **dict(claim, request_id=f"i7-adv-bad-{index}", **overrides)))
+            check(error is None, f"an advertisement with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == outcome and result.reason == reason,
+                  f"an advertisement with {description} is refused as {reason}")
+            check(store.entries == entries,
+                  f"an advertisement with {description} enters no critical section")
+            check(store.reads == reads,
+                  f"an advertisement with {description} resolves no reference")
+            check(store.allocations == allocated,
+                  f"an advertisement with {description} allocates nothing")
+            check(forensic(fabric_root) == before,
+                  f"an advertisement with {description} writes nothing")
+
+        absent, error = attempted(lambda: register_advertisement(
+            store, **dict(claim, request_id="i7-adv-absent",
+                          capability_host_id="CHOST-9999", actor="CHOST-9999")))
+        check(error is None and absent is not None and absent.outcome == NOT_FOUND
+              and absent.reason == "unresolved-reference",
+              "an advertisement citing a missing declaration is not-found")
+
+        # Now supersede the declaration and prove the stale citation refuses.
+        moved, _ = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-adv-move",
+            capability_host_id=adm.record_id, availability_intent="draining"))
+        check(moved is not None and moved.outcome == ACCEPTED,
+              "the advertisement regression supersedes the declaration once")
+        before = forensic(fabric_root)
+        trust_before = forensic(trust_root)
+        counters = sequences_of(fabric_root)
+        allocated = list(store.allocations)
+        written = list(store.writes)
+        queries = list(DOMAIN_TRUST.calls)
+        stale, error = attempted(lambda: register_advertisement(
+            store, **dict(claim, request_id="i7-adv-stale")))
+        check(error is None, "a stale citation raises nothing")
+        check(stale is not None and stale.outcome == REFUSED
+              and stale.reason == "host-record-superseded",
+              "a claim citing a superseded declaration is refused as host-record-superseded")
+        check(stale is not None and stale.record_id is None,
+              "a stale citation names no record")
+        check(store.allocations == allocated and store.writes == written,
+              "a stale citation allocates and writes nothing")
+        check(sequences_of(fabric_root) == counters,
+              "a stale citation advances no sequence")
+        check(DOMAIN_TRUST.calls == queries, "a stale citation queries no trust")
+        check(forensic(fabric_root) == before,
+              "a stale citation leaves the fabric byte-identical")
+        check(forensic(trust_root) == trust_before,
+              "a stale citation leaves the trust plane byte-identical")
+
+        # The head accepts, and a draining machine may still speak.
+        current = dict(claim, actor=moved.record_id,
+                       capability_host_id=moved.record_id)
+        accepted_claim = register_advertisement(
+            store, **dict(current, request_id="i7-adv-head"))
+        check(accepted_claim.outcome == ACCEPTED,
+              "a claim citing the current declaration is accepted")
+        check(record_of(store, "capability-host", moved.record_id).get(
+                  "availability_intent") == "draining",
+              "a draining machine may still publish what it holds")
+        replayed = register_advertisement(
+            store, **dict(current, request_id="i7-adv-head"))
+        check(replayed.outcome == EXACT_REPLAY
+              and replayed.record_id == accepted_claim.record_id,
+              "a byte-identical claim on the current declaration replays exactly")
+        conflicting = register_advertisement(store, **dict(
+            current, request_id="i7-adv-head", observed_at=STAMP + timedelta(hours=1)))
+        check(conflicting.outcome == CONFLICT
+              and conflicting.reason == CONFLICT_REASON,
+              "a changed claim under one request identity conflicts")
+        # Replay and conflict are classified before currency is consulted.
+        stale_replay = register_advertisement(
+            store, **dict(claim, request_id="i7-adv-stale"))
+        check(stale_replay.outcome == REFUSED
+              and stale_replay.reason == "host-record-superseded",
+              "a refused stale citation is evaluated afresh, never durably replayed")
+
+        # Claim retention is not authority to admit.
+        drained, _ = call("admit_instance", store, trust_store, **dict(
+            base, request_id="i7-adv-admit",
+            capability_host_id=moved.record_id,
+            advertisement_id=accepted_claim.record_id))
+        check(drained is not None and drained.outcome == REFUSED
+              and drained.reason == "host-not-in-service",
+              "a claim on a draining machine grants no authority to admit")
+
+    # --- 16. The schema and the runtime agree on every vocabulary ----------
+    import yaml as _schema_yaml
+    from tools.fabric.models import (  # noqa: E402
+        INSTANCE_LIFECYCLE_STATES, WORKLOAD_DATA_CLASSIFICATIONS,
+    )
+    SCHEMAS = {}
+    for _name in ("capability-host", "capability-route", "capability-instance",
+                  "capability-package"):
+        SCHEMAS[_name] = _schema_yaml.safe_load(
+            (root / "platform-model" / "schemas"
+             / f"{_name}.schema.yaml").read_text(encoding="utf-8"))
+    HOST_SCHEMA = SCHEMAS["capability-host"]
+    ROUTE_SCHEMA = SCHEMAS["capability-route"]
+    INSTANCE_SCHEMA = SCHEMAS["capability-instance"]
+    check(tuple(HOST_SCHEMA["enums"]["data_classification"])
+          == WORKLOAD_DATA_CLASSIFICATIONS,
+          "the host schema and the runtime agree on the workload vocabulary")
+    check(HOST_SCHEMA["enums"]["data_classification"]
+          == ROUTE_SCHEMA["enums"]["data_classification"],
+          "the host and route schemas declare the identical workload vocabulary")
+    check(tuple(HOST_SCHEMA["enums"]["availability_intent"])
+          == admission_module.AVAILABILITY_INTENTS,
+          "the host schema and the runtime agree on the availability vocabulary")
+    check(tuple(HOST_SCHEMA["enums"]["location_class"])
+          == admission_module.LOCATION_CLASSES,
+          "the host schema and the runtime agree on the location vocabulary")
+    check(tuple(ROUTE_SCHEMA["enums"]["locality"]) == admission_module.LOCALITIES,
+          "the route schema and the runtime agree on the locality vocabulary")
+    check(tuple(INSTANCE_SCHEMA["enums"]["lifecycle_state"])
+          == INSTANCE_LIFECYCLE_STATES,
+          "the instance schema and the runtime agree on the lifecycle vocabulary")
+    check(tuple(HOST_SCHEMA["authoritative_fields"])
+          == admission_module.AUTHORITATIVE_HOST_FIELDS,
+          "the host schema and the runtime agree on the authoritative fields")
+    # The two axes stay disjoint, and the withdrawn name stays withdrawn.
+    STORAGE_LABELS = ("authoritative", "reconstructable", "mixed")
+    for label in STORAGE_LABELS:
+        check(label not in HOST_SCHEMA["enums"]["data_classification"],
+              f"the storage recoverability label '{label}' is not a workload classification")
+    check("data_classification" in HOST_SCHEMA["required_fields"],
+          "the host schema requires data_classification")
+    check("data_classification_ceiling" not in HOST_SCHEMA["required_fields"],
+          "the withdrawn ceiling field name is gone from the host schema")
+    check("lifecycle_state" in INSTANCE_SCHEMA["required_fields"],
+          "the instance schema requires lifecycle_state")
+    check(INSTANCE_SCHEMA["lifecycle_terminal_states"] == ["retired"],
+          "the instance schema declares retirement terminal")
+    check(INSTANCE_SCHEMA["reactivation"] == "forbidden",
+          "the instance schema forbids reactivation")
+    check(SCHEMAS["capability-package"]["trust_subject_identity"]
+          == "capability_package_id",
+          "the package schema names the trust subject it is decided under")
+    check(HOST_SCHEMA["advertisement_must_cite"] == "current-head",
+          "the host schema requires a claim to cite the current declaration")
+
+    # --- 17. The overlap interval is audit evidence and nothing else -------
+    OVERLAP = ROUTE_SCHEMA["overlap_window_structure"]
+    for key, value in (("effect_on_eligibility", "none"),
+                       ("effect_on_selection", "none"),
+                       ("consulted_by", "audit-only"),
+                       ("activates_on_timestamp", "never"),
+                       ("permitted_only_with", "supersedes")):
+        check(OVERLAP[key] == value,
+              f"the route schema declares overlap {key} is {value}")
+    # Judged over identifiers rather than prose: a docstring may say that
+    # nothing schedules, and saying so must not be mistaken for doing it.
+    ADMISSION_NAMES = set()
+    for _n in _ast.walk(_ast.parse((root / "tools" / "fabric"
+                                    / "admission.py").read_text(encoding="utf-8"))):
+        if isinstance(_n, _ast.Name):
+            ADMISSION_NAMES.add(_n.id)
+        elif isinstance(_n, _ast.Attribute):
+            ADMISSION_NAMES.add(_n.attr)
+        elif isinstance(_n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+            ADMISSION_NAMES.add(_n.name)
+        elif isinstance(_n, _ast.arg):
+            ADMISSION_NAMES.add(_n.arg)
+        elif isinstance(_n, _ast.keyword) and _n.arg:
+            ADMISSION_NAMES.add(_n.arg)
+        elif isinstance(_n, (_ast.Import, _ast.ImportFrom)):
+            for _alias in _n.names:
+                ADMISSION_NAMES.add(_alias.asname or _alias.name)
+    check(not any(isinstance(_n, _ast.AsyncFunctionDef)
+                  for _n in _ast.walk(_ast.parse(
+                      (root / "tools" / "fabric"
+                       / "admission.py").read_text(encoding="utf-8")))),
+          "the admission controller defines nothing asynchronous")
+    for forbidden in ("sched", "scheduler", "Timer", "timer", "threading",
+                      "at_time", "activate", "activation", "cutover_at",
+                      "rollback", "background", "deadline", "asyncio", "sleep",
+                      "cron", "defer", "delay", "trigger"):
+        check(not any(forbidden in name for name in ADMISSION_NAMES),
+              f"the admission controller names no '{forbidden}' behaviour")
+    # The declared interval changes nothing about what is stored beyond itself.
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        first, _ = call("admit_instance", store, trust_store,
+                        **dict(base, request_id="i7-o-1"))
+        second, _ = call("admit_instance", store, trust_store,
+                         **dict(base, request_id="i7-o-2"))
+        route_base = dict(BASE_ROUTE, capability_id=cap.record_id,
+                          contract_id=con.record_id,
+                          candidate_instances=(first.record_id,))
+        original, _ = call("create_route", store,
+                           **dict(route_base, request_id="i7-o-route"))
+        check(original is not None and original.outcome == ACCEPTED,
+              "the overlap regression declares a route")
+        OVERLAP_REFUSALS = (
+            ("an identical candidate list", "overlap-window-without-cutover",
+             {"candidate_instances": (first.record_id,)}),
+            ("a list that drops every prior candidate",
+             "overlap-window-without-coexistence",
+             {"candidate_instances": (second.record_id,)}),
+            ("no prior route to overlap with", "overlap-window-without-supersession",
+             {"supersedes": None, "route_version": 1,
+              "candidate_instances": (first.record_id, second.record_id)}),
+            ("an interval that closes before it opens", "invalid-validity-window",
+             {"overlap_ends_at": STAMP - timedelta(hours=1)}),
+        )
+        for index, (description, reason, overrides) in enumerate(OVERLAP_REFUSALS):
+            before = forensic(fabric_root)
+            fields = dict(route_base, request_id=f"i7-o-bad-{index}", route_version=2,
+                          candidate_instances=(first.record_id, second.record_id),
+                          overlap_starts_at=STAMP, overlap_ends_at=LATER,
+                          supersedes=original.record_id)
+            fields.update(overrides)
+            result, error = call("create_route", store, **fields)
+            check(error is None, f"an overlap declared with {description} raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == REFUSED and result.reason == reason,
+                  f"an overlap declared with {description} is refused as {reason}")
+            check(forensic(fabric_root) == before,
+                  f"an overlap declared with {description} writes nothing")
+        naive, _ = call("create_route", store, **dict(
+            route_base, request_id="i7-o-naive", route_version=2,
+            candidate_instances=(first.record_id, second.record_id),
+            overlap_starts_at=STAMP.replace(tzinfo=None), overlap_ends_at=LATER,
+            supersedes=original.record_id))
+        check(naive is not None and naive.outcome == INVALID
+              and naive.reason == "timestamp-carries-no-offset",
+              "an overlap interval without an offset is refused")
+
+        accepted_overlap, _ = call("create_route", store, **dict(
+            route_base, request_id="i7-o-ok", route_version=2,
+            candidate_instances=(first.record_id, second.record_id),
+            overlap_starts_at=STAMP, overlap_ends_at=LATER,
+            supersedes=original.record_id))
+        check(accepted_overlap is not None and accepted_overlap.outcome == ACCEPTED,
+              "a declared overlap carrying one candidate and adding one is accepted")
+        stored_overlap = record_of(store, "capability-route",
+                                   accepted_overlap.record_id)
+        check(stored_overlap.get("overlap_window")
+              == {"starts_at": STAMP.isoformat(), "ends_at": LATER.isoformat()},
+              "the declared interval is stored exactly as two offset-carrying instants")
+        settled = forensic(fabric_root)
+        counts_before = store.counts()
+        # Both boundaries are in the past relative to nothing the fabric reads.
+        # Passing either instant activates nothing, because no operation
+        # observes them: the record is evidence, and evidence does not fire.
+        replayed_overlap, _ = call("create_route", store, **dict(
+            route_base, request_id="i7-o-ok", route_version=2,
+            candidate_instances=(first.record_id, second.record_id),
+            overlap_starts_at=STAMP, overlap_ends_at=LATER,
+            supersedes=original.record_id))
+        check(replayed_overlap is not None
+              and replayed_overlap.outcome == EXACT_REPLAY,
+              "a declared overlap replays exactly rather than reapplying")
+        check(forensic(fabric_root) == settled,
+              "nothing in the store changes when the declared interval is revisited")
+        check(store.counts() == counts_before,
+              "no record appears or disappears on account of a declared interval")
+        check(record_of(store, "capability-route", original.record_id).get(
+                  "candidate_instances") == [first.record_id],
+              "the superseded route keeps its own candidate list")
+        check("superseded_by" not in record_of(store, "capability-route",
+                                               original.record_id),
+              "the superseded route is not edited to point at its successor")
+
+    # --- 18. Increment 7 stops where increment 8 begins -------------------
     for later in ("evaluate_eligibility", "eligibility", "select", "selection",
                   "compute_eligibility", "inspect", "validate_store",
-                  "admit_route", "retire_instance", "health", "remediate"):
+                  "admit_route", "health", "remediate"):
         check(not hasattr(admission_module, later),
               f"admission exposes no '{later}' behaviour at increment 7")
     for absent in ("eligibility.py", "selection.py", "inspection.py", "cli.py",

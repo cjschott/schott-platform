@@ -1087,6 +1087,79 @@ for fabric_schema in capability-definition capability-contract capability-packag
   fi
 done
 
+# The fabric vocabularies are declared once and mirrored, never restated. A
+# controlled vocabulary lives in an `enums:` block on the schema that owns the
+# field, which is this repository's accepted mechanism -- the same one that
+# governs effect_class, location_class, availability_intent, and locality.
+FABRIC_ENUMS="$(python3 - "${ROOT}" <<'FABRICENUMPY' 2>&1 || true
+import sys
+from pathlib import Path
+
+import yaml
+
+root = Path(sys.argv[1])
+failures = 0
+
+
+def check(condition, message):
+    global failures
+    if condition:
+        print(f"PASS: {message}")
+    else:
+        failures += 1
+        print(f"FAIL: {message}")
+
+
+def schema(name):
+    return yaml.safe_load(
+        (root / "platform-model" / "schemas" / f"{name}.schema.yaml").read_text(
+            encoding="utf-8"))
+
+
+host = schema("capability-host")
+route = schema("capability-route")
+instance = schema("capability-instance")
+package = schema("capability-package")
+
+check(host["enums"]["data_classification"] == route["enums"]["data_classification"],
+      "the host and route schemas declare the identical workload classification vocabulary")
+check(host["enums"]["data_classification"] == ["internal"],
+      "the workload classification vocabulary declares exactly the value in use")
+for label in ("authoritative", "reconstructable", "mixed"):
+    check(label not in host["enums"]["data_classification"],
+          f"the storage recoverability label '{label}' is not a workload classification")
+check("data_classification" in host["required_fields"],
+      "the host schema requires data_classification")
+check("data_classification_ceiling" not in host["required_fields"],
+      "the host schema no longer names a classification ceiling")
+check("lifecycle_state" in instance["required_fields"],
+      "the instance schema requires lifecycle_state")
+check(instance["enums"]["lifecycle_state"] == ["admitted", "withdrawn", "retired"],
+      "the instance schema declares the three lifecycle states")
+check(instance["lifecycle_terminal_states"] == ["retired"],
+      "the instance schema declares retirement terminal")
+check(instance["reactivation"] == "forbidden",
+      "the instance schema forbids reactivation")
+check(package["trust_subject_identity"] == "capability_package_id",
+      "the package schema names the identity its trust is decided under")
+check(host["advertisement_must_cite"] == "current-head",
+      "the host schema requires a claim to cite the current declaration")
+check(route["overlap_window_structure"]["consulted_by"] == "audit-only",
+      "the route schema declares the overlap interval audit evidence only")
+check(route["overlap_window_structure"]["activates_on_timestamp"] == "never",
+      "the route schema declares that no overlap timestamp activates anything")
+
+print(f"__FAILURES__={failures}")
+FABRICENUMPY
+)"
+printf '%s\n' "${FABRIC_ENUMS}" | grep -v '^__FAILURES__=' || true
+FABRIC_ENUM_FAILURES="$(printf '%s\n' "${FABRIC_ENUMS}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+if [[ -z "${FABRIC_ENUM_FAILURES}" ]]; then
+  fail "the fabric vocabulary check did not report a result"
+else
+  FAILURES=$((FAILURES + FABRIC_ENUM_FAILURES))
+fi
+
 # No fabric runtime record may be committed. These are machine-generated and
 # belong in a store outside the repository, like every other runtime record.
 FABRIC_RECORDS="$(git -C "${ROOT}" ls-files \
