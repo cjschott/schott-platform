@@ -117,6 +117,29 @@ enums:
     - local-only
     - operator-controlled-only
     - any-trusted
+  # Must match capability-host.schema.yaml exactly. Compared by exact
+  # membership; there is no ordering and no ceiling.
+  data_classification:
+    - internal
+
+# A declared overlap window says that old and new coexisted. It is audit
+# evidence attached to an accepted declaration and nothing else: no timestamp
+# arriving activates, schedules, delays, rolls back, or rewrites anything, and
+# no eligibility or selection behaviour reads it in this release.
+overlap_window_structure:
+  keys: [starts_at, ends_at]
+  types: rfc3339-with-offset
+  boundaries: start-inclusive-end-exclusive
+  ordering: ends_at-after-starts_at
+  permitted_only_with: supersedes
+  requires_carried_candidate: true
+  requires_new_candidate: true
+  identical_candidate_lists: refuse
+  removing_every_prior_candidate: refuse
+  effect_on_eligibility: none
+  effect_on_selection: none
+  consulted_by: audit-only
+  activates_on_timestamp: never
 
 forbidden_fields:
   - weight

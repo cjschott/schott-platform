@@ -690,7 +690,7 @@ because the prose says "eight".
 | ELIG-6 fresh, registered advertisement in validity window | 5 | **C5** |
 | ELIG-7 admission exists, human-approved, unexpired | 6 | **C5** |
 | ELIG-8 non-empty effective scope permitting the request | 7 | **C5** |
-| ELIG-9 data classification within host ceiling | 8 | **C5** |
+| ELIG-9 data classification the host is declared to handle | 8 | **C5** |
 | ELIG-10 host not quarantined | — additional | **C5** |
 | ELIG-11 package not quarantined | — additional | **C5** |
 | ELIG-12 candidate not manually drained | — additional | **C5** |

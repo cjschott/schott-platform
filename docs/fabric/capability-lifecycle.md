@@ -55,11 +55,25 @@ may target.
 Admission requires **all eight** eligibility conditions to hold: package trust,
 host trust, contract version satisfaction, verified resource match, a fresh
 advertisement, an unexpired admission, a non-empty scope intersection, and a
-data classification within the host's ceiling.
+data classification the host is declared to handle.
 
 The effective scope is the **intersection** of package scope, host scope, and
-admission scope. An empty intersection is a valid outcome, and it means nothing
-is eligible.
+admission scope, taken across **all four** released dimensions —
+`permitted_capabilities`, `permitted_operations`,
+`permitted_data_classifications`, `permitted_targets`. It is **computed**, from
+the two grants the Trust Plane reported and the operator's own bound; it is
+never asserted by whoever asked. An empty dimension is a valid outcome, and it
+means nothing is eligible: the released scope rules deny any request that
+cannot name all four, so a grant leaving one open permits nothing.
+
+An **absent** grant bounds nothing and therefore permits nothing — absence is
+never permission. The package is decided under its **record identity**, which
+is per version by construction and is the only identity that knows which
+contract the trust was granted for; the host is decided under its
+`node_identity_reference`.
+
+Classifications are compared by **exact equality**. There is no ordering and no
+ceiling, because no accepted source declares one.
 
 ### Superseded
 
@@ -74,11 +88,40 @@ automatic capability approval ADR-0011 forbids.
   instance — not a package event. A package cannot promote itself.
 - Superseded records **remain readable**. Nothing is edited.
 
+A declared overlap window is **immutable audit evidence** on the route that
+declares it: two offset-carrying instants recording that old and new coexisted.
+**Nothing happens when either instant arrives.** It schedules nothing,
+activates nothing, delays nothing, rolls nothing back, rewrites no route, and
+selects no candidate; no eligibility or selection behaviour reads it. What it
+does enforce is the honesty of the declaration — it may be written only on a
+route that supersedes another, and only where the candidate lists actually show
+one carried over and one new. An identical list, or one dropping every prior
+candidate, is refused: there was no coexistence to record.
+
 ### Retired
 
 A decision withdraws the capability. Instances become ineligible, routes stop
 listing them, and every record stays exactly as written. Retirement deletes
 nothing: what was trusted last March remains answerable.
+
+An instance carries its stage on the record, as `lifecycle_state`:
+
+| State | Routable | Returns to `admitted` | Terminal |
+|---|---|---|---|
+| `admitted` | yes | — | no |
+| `withdrawn` | **no** | **never** | **no** — a later decision may retire it |
+| `retired` | **no** | **never** | **yes** |
+
+The legal transitions are `admitted → withdrawn`, `admitted → retired`, and
+`withdrawn → retired`. Every other pair is refused. A lifecycle decision writes
+a new record that supersedes the previous one and carries every binding fact
+across unchanged; no trust is consulted, because ending a binding is a decision
+about a record rather than a fresh admission of one.
+
+**Retirement is terminal.** No event, host return, fresh advertisement, route
+change, or trust decision reactivates a retired binding. Re-admission is a new
+human decision producing a **new** binding, evaluated against then-current
+evidence — reactivation does not exist.
 
 ## Three expiry clocks
 
