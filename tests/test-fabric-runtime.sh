@@ -8544,7 +8544,481 @@ try:
                                                original.record_id),
               "the superseded route is not edited to point at its successor")
 
-    # --- 18. Increment 7 stops where increment 8 begins -------------------
+    # --- 18. A corrupt chain is refused, not walked past --------------------
+    # The released write APIs cannot produce these states, and that is not the
+    # point: a store can be damaged out of band, carry a legacy record, or be
+    # tampered with, and C4 must refuse on what it reads rather than trust that
+    # C2 was run first. A successor whose declared predecessor is absent is not
+    # an authoritative head; a file that answers with another kind of record
+    # has not resolved the reference it was asked for.
+    def corrupt_store(tmp):
+        """A store whose host chain has been damaged after it was written."""
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        successor, _ = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-corrupt-move",
+            capability_host_id=adm.record_id, availability_intent="draining"))
+        check(successor is not None and successor.outcome == ACCEPTED,
+              "the corrupt-chain fixture supersedes the declaration once")
+        return (store, trust_store, host_trust, cap, con, pkg, adm, adv,
+                base, successor)
+
+    with TemporaryDirectory() as tmp:
+        (store, trust_store, host_trust, cap, con, pkg, adm, adv, base,
+         successor) = corrupt_store(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        # Out-of-band damage: the predecessor the successor names is gone.
+        (fabric_root / "capability-hosts" / f"{adm.record_id}.yaml").unlink()
+        check(not (fabric_root / "capability-hosts" / f"{adm.record_id}.yaml").exists(),
+              "the predecessor named by the stored successor is absent")
+
+        DANGLING = (
+            ("register_advertisement", lambda: register_advertisement(
+                store, **dict(BASE_ADVERT, request_id="i7-dangle-adv",
+                              actor=successor.record_id,
+                              capability_host_id=successor.record_id,
+                              capability_package_id=pkg.record_id,
+                              contract_id=con.record_id, observed_at=STAMP,
+                              valid_until=YEAR))),
+            ("admit_instance", lambda: OPERATIONS["admit_instance"](
+                store, trust_store, **dict(base, request_id="i7-dangle-inst",
+                                           capability_host_id=successor.record_id))),
+            ("withdraw_subject", lambda: OPERATIONS["withdraw_subject"](
+                store, **dict(BASE_WITHDRAWAL, request_id="i7-dangle-wd",
+                              capability_host_id=successor.record_id,
+                              availability_intent="withheld"))),
+            ("refresh_subject", lambda: OPERATIONS["refresh_subject"](
+                store, trust_store, request_id="i7-dangle-rf", actor=OPERATOR,
+                approving_authority=OPERATOR, recorded_at=STAMP,
+                evaluated_at=STAMP, capability_host_id=successor.record_id,
+                fabric_node_trust_record_id=host_trust.record.record_id,
+                verified_resource_profile=dict(PROFILE),
+                verification_reference="/approved/evidence/host-reobserved.txt",
+                location_class="on-premises", data_classification="internal",
+                availability_intent="in-service", provenance=dict(PROV))),
+        )
+        for name, operation in DANGLING:
+            before = forensic(fabric_root)
+            trust_before = forensic(trust_root)
+            counters = sequences_of(fabric_root)
+            allocated = list(store.allocations)
+            written = list(store.writes)
+            queries = list(DOMAIN_TRUST.calls)
+            result, error = attempted(operation)
+            check(error is None,
+                  f"{name} over a dangling predecessor raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == REFUSED
+                  and result.reason == "host-chain-incoherent",
+                  f"{name} over a dangling predecessor is refused as host-chain-incoherent")
+            check(result.outcome != ACCEPTED and result.record_id is None,
+                  f"{name} treats no successor of a broken chain as authoritative")
+            check(result.outcome not in (EXACT_REPLAY, CONFLICT),
+                  f"{name} over a dangling predecessor is neither replay nor conflict")
+            check(store.allocations == allocated,
+                  f"{name} over a dangling predecessor allocates nothing")
+            check(store.writes == written,
+                  f"{name} over a dangling predecessor writes nothing")
+            check(sequences_of(fabric_root) == counters,
+                  f"{name} over a dangling predecessor advances no sequence")
+            check(DOMAIN_TRUST.calls == queries,
+                  f"{name} over a dangling predecessor queries no trust")
+            check(forensic(fabric_root) == before,
+                  f"{name} over a dangling predecessor leaves the fabric byte-identical")
+            check(forensic(trust_root) == trust_before,
+                  f"{name} over a dangling predecessor leaves trust byte-identical")
+            repeated, repeat_error = attempted(operation)
+            check(repeat_error is None and repeated is not None
+                  and repeated.outcome == result.outcome
+                  and repeated.reason == result.reason,
+                  f"{name} over a dangling predecessor refuses identically twice")
+
+    # --- 19. A file that answers with another kind has not resolved ---------
+    with TemporaryDirectory() as tmp:
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        fabric_root = Path(tmp) / "fabric"
+        trust_root = Path(tmp) / "trust"
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        # The committed-test mechanism for on-disk corruption: a payload of one
+        # kind written where another kind belongs.
+        instance_payload = {
+            "schema_version": "schott-platform/v1",
+            "kind": "capability-instance",
+            "instance_id": "CINST-000009",
+            "capability_id": cap.record_id,
+            "capability_package_id": pkg.record_id,
+            "capability_host_id": adm.record_id,
+            "contract_id": con.record_id,
+            "satisfied_contract_versions": ["1.0.0"],
+            "verified_resource_profile": dict(PROFILE),
+            "admission_decision_id": "TDEC-000001",
+            "package_trust_record_id": "TREC-000001",
+            "host_trust_record_id": "TREC-000002",
+            "effective_scope": dict(SCOPE),
+            "admitted_at": STAMP.isoformat(),
+            "admitted_until": YEAR.isoformat(),
+            "lifecycle_state": "admitted",
+            "provenance": dict(PROV),
+        }
+        misfiled = fabric_root / "capability-hosts" / "CHOST-0009.yaml"
+        misfiled.write_text(_yaml.safe_dump(instance_payload), encoding="utf-8")
+        misfiled.chmod(0o600)
+        check(misfiled.exists(),
+              "a payload of the wrong kind is filed where a host record belongs")
+
+        WRONG_KIND = (
+            ("register_advertisement", lambda: register_advertisement(
+                store, **dict(BASE_ADVERT, request_id="i7-kind-adv",
+                              actor="CHOST-0009", capability_host_id="CHOST-0009",
+                              capability_package_id=pkg.record_id,
+                              contract_id=con.record_id, observed_at=STAMP,
+                              valid_until=YEAR))),
+            ("admit_instance", lambda: OPERATIONS["admit_instance"](
+                store, trust_store, **dict(base, request_id="i7-kind-inst",
+                                           capability_host_id="CHOST-0009"))),
+            ("withdraw_subject", lambda: OPERATIONS["withdraw_subject"](
+                store, **dict(BASE_WITHDRAWAL, request_id="i7-kind-wd",
+                              capability_host_id="CHOST-0009",
+                              availability_intent="withheld"))),
+            ("refresh_subject", lambda: OPERATIONS["refresh_subject"](
+                store, trust_store, request_id="i7-kind-rf", actor=OPERATOR,
+                approving_authority=OPERATOR, recorded_at=STAMP,
+                evaluated_at=STAMP, capability_host_id="CHOST-0009",
+                fabric_node_trust_record_id=host_trust.record.record_id,
+                verified_resource_profile=dict(PROFILE),
+                verification_reference="/approved/evidence/host-reobserved.txt",
+                location_class="on-premises", data_classification="internal",
+                availability_intent="in-service", provenance=dict(PROV))),
+        )
+        for name, operation in WRONG_KIND:
+            before = forensic(fabric_root)
+            trust_before = forensic(trust_root)
+            counters = sequences_of(fabric_root)
+            allocated = list(store.allocations)
+            written = list(store.writes)
+            queries = list(DOMAIN_TRUST.calls)
+            result, error = attempted(operation)
+            check(error is None,
+                  f"{name} over a wrong-kind stored record raises nothing")
+            if error is not None:
+                continue
+            check(result.outcome == NOT_FOUND
+                  and result.reason == "unresolved-reference",
+                  f"{name} over a wrong-kind stored record is refused as unresolved-reference")
+            check(result.record_id is None,
+                  f"{name} over a wrong-kind stored record names no record")
+            check(result.outcome not in (EXACT_REPLAY, CONFLICT),
+                  f"{name} over a wrong-kind stored record is neither replay nor conflict")
+            check(store.allocations == allocated and store.writes == written,
+                  f"{name} over a wrong-kind stored record allocates and writes nothing")
+            check(sequences_of(fabric_root) == counters,
+                  f"{name} over a wrong-kind stored record advances no sequence")
+            check(DOMAIN_TRUST.calls == queries,
+                  f"{name} over a wrong-kind stored record queries no trust")
+            check(forensic(fabric_root) == before,
+                  f"{name} over a wrong-kind stored record leaves the fabric byte-identical")
+            check(forensic(trust_root) == trust_before,
+                  f"{name} over a wrong-kind stored record leaves trust byte-identical")
+
+        # A stored identity that disagrees with its filename has not resolved
+        # the reference either: the record answering is not the one asked for.
+        mislabelled = fabric_root / "capability-hosts" / "CHOST-0008.yaml"
+        host_payload = record_of(store, "capability-host", adm.record_id)
+        mislabelled.write_text(_yaml.safe_dump(dict(host_payload)), encoding="utf-8")
+        mislabelled.chmod(0o600)
+        before = forensic(fabric_root)
+        mismatched, error = attempted(lambda: register_advertisement(
+            store, **dict(BASE_ADVERT, request_id="i7-kind-id", actor="CHOST-0008",
+                          capability_host_id="CHOST-0008",
+                          capability_package_id=pkg.record_id,
+                          contract_id=con.record_id, observed_at=STAMP,
+                          valid_until=YEAR)))
+        check(error is None and mismatched is not None
+              and mismatched.outcome == NOT_FOUND
+              and mismatched.reason == "unresolved-reference",
+              "a stored record whose identity disagrees with the name asked for has not resolved")
+        check(forensic(fabric_root) == before,
+              "a mismatched stored identity writes nothing")
+
+    # --- 20. A corrupt record inside the chain is not walked across ---------
+    # `_resolve` guards what a caller names. Chain traversal reaches records the
+    # caller never named, through `list_records`, so a payload that is not the
+    # kind it was filed as -- or that names an identity other than the one it
+    # lives under -- must stop the read there too. A head found by stepping
+    # across damage is not evidence that it is current.
+    def chained_store(tmp):
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        successor, _ = call("withdraw_subject", store, **dict(
+            BASE_WITHDRAWAL, request_id="i7-inner-move",
+            capability_host_id=adm.record_id, availability_intent="draining"))
+        check(successor is not None and successor.outcome == ACCEPTED,
+              "the inner-corruption fixture supersedes the declaration once")
+        return (store, trust_store, host_trust, cap, con, pkg, adm, adv, base,
+                successor)
+
+    def chain_operations(store, trust_store, host_trust, con, pkg, base,
+                         successor, tag):
+        return (
+            ("register_advertisement", lambda: register_advertisement(
+                store, **dict(BASE_ADVERT, request_id=f"i7-{tag}-adv",
+                              actor=successor.record_id,
+                              capability_host_id=successor.record_id,
+                              capability_package_id=pkg.record_id,
+                              contract_id=con.record_id, observed_at=STAMP,
+                              valid_until=YEAR))),
+            ("admit_instance", lambda: OPERATIONS["admit_instance"](
+                store, trust_store, **dict(base, request_id=f"i7-{tag}-inst",
+                                           capability_host_id=successor.record_id))),
+            ("withdraw_subject", lambda: OPERATIONS["withdraw_subject"](
+                store, **dict(BASE_WITHDRAWAL, request_id=f"i7-{tag}-wd",
+                              capability_host_id=successor.record_id,
+                              availability_intent="withheld"))),
+            ("refresh_subject", lambda: OPERATIONS["refresh_subject"](
+                store, trust_store, request_id=f"i7-{tag}-rf", actor=OPERATOR,
+                approving_authority=OPERATOR, recorded_at=STAMP,
+                evaluated_at=STAMP, capability_host_id=successor.record_id,
+                fabric_node_trust_record_id=host_trust.record.record_id,
+                verified_resource_profile=dict(PROFILE),
+                verification_reference="/approved/evidence/host-reobserved.txt",
+                location_class="on-premises", data_classification="internal",
+                availability_intent="in-service", provenance=dict(PROV))),
+        )
+
+    INNER_CORRUPTION = (
+        ("a predecessor payload of another kind", "innerkind",
+         lambda adm, cap, con, pkg: {
+             "schema_version": "schott-platform/v1",
+             "kind": "capability-instance",
+             "instance_id": "CINST-000009",
+             "capability_id": cap.record_id,
+             "capability_package_id": pkg.record_id,
+             # The field the traversal reads for a host identity, set to the
+             # predecessor's own name so a naive presence check is satisfied.
+             "capability_host_id": adm.record_id,
+             "contract_id": con.record_id,
+             "satisfied_contract_versions": ["1.0.0"],
+             "verified_resource_profile": dict(PROFILE),
+             "admission_decision_id": "TDEC-000001",
+             "package_trust_record_id": "TREC-000001",
+             "host_trust_record_id": "TREC-000002",
+             "effective_scope": dict(SCOPE),
+             "admitted_at": STAMP.isoformat(),
+             "admitted_until": YEAR.isoformat(),
+             "lifecycle_state": "admitted",
+             "provenance": dict(PROV)}),
+        ("a predecessor payload naming another identity", "inneridentity",
+         lambda adm, cap, con, pkg: {
+             "schema_version": "schott-platform/v1",
+             "kind": "capability-host",
+             "capability_host_id": "CHOST-0007",
+             "node_identity_reference": "node/schai",
+             "fabric_node_trust_record_id": "TREC-000001",
+             "verified_resource_profile": dict(PROFILE),
+             "location_class": "on-premises",
+             "data_classification": "internal",
+             "availability_intent": "in-service",
+             "provenance": dict(PROV)}),
+    )
+    for description, tag, payload_for in INNER_CORRUPTION:
+        with TemporaryDirectory() as tmp:
+            (store, trust_store, host_trust, cap, con, pkg, adm, adv, base,
+             successor) = chained_store(tmp)
+            fabric_root = Path(tmp) / "fabric"
+            trust_root = Path(tmp) / "trust"
+            corrupted = fabric_root / "capability-hosts" / f"{adm.record_id}.yaml"
+            corrupted.write_text(_yaml.safe_dump(payload_for(adm, cap, con, pkg)),
+                                 encoding="utf-8")
+            corrupted.chmod(0o600)
+            check(corrupted.exists(),
+                  f"the chain now carries {description}")
+            for name, operation in chain_operations(
+                    store, trust_store, host_trust, con, pkg, base, successor, tag):
+                before = forensic(fabric_root)
+                trust_before = forensic(trust_root)
+                counters = sequences_of(fabric_root)
+                allocated = list(store.allocations)
+                written = list(store.writes)
+                queries = list(DOMAIN_TRUST.calls)
+                result, error = attempted(operation)
+                label = f"{name} over {description}"
+                check(error is None, f"{label} raises nothing")
+                if error is not None:
+                    continue
+                check(result.outcome == REFUSED
+                      and result.reason == "host-chain-incoherent",
+                      f"{label} is refused as host-chain-incoherent")
+                check(result.outcome != ACCEPTED and result.record_id is None,
+                      f"{label} accepts no authoritative head")
+                check(result.outcome not in (EXACT_REPLAY, CONFLICT),
+                      f"{label} is neither replay nor conflict")
+                check(store.allocations == allocated,
+                      f"{label} allocates nothing")
+                check(store.writes == written, f"{label} writes nothing")
+                check(sequences_of(fabric_root) == counters,
+                      f"{label} advances no sequence")
+                check(DOMAIN_TRUST.calls == queries, f"{label} queries no trust")
+                check(forensic(fabric_root) == before,
+                      f"{label} leaves the fabric byte-identical")
+                check(forensic(trust_root) == trust_before,
+                      f"{label} leaves trust byte-identical")
+                repeated, repeat_error = attempted(operation)
+                check(repeat_error is None and repeated is not None
+                      and repeated.outcome == result.outcome
+                      and repeated.reason == result.reason,
+                      f"{label} refuses identically twice")
+
+    # --- 21. A corrupt binding chain is refused, not walked across ----------
+    # The same rule as the host chain, for the record class that carries a
+    # binding's history. `instance-chain-incoherent` is the authorised
+    # counterpart to `host-chain-incoherent`: it names a chain C4 cannot read,
+    # and it replaces none of the reasons that name a chain it can read and
+    # objects to -- forked, cyclic, not-current-head, already-superseded, or
+    # not-admitted.
+    def bound_store(tmp):
+        """A binding with one lifecycle version, ready to be damaged."""
+        store = audited(tmp)
+        trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+        cap, con, pkg, adm, adv, base = fabric_ready(
+            tmp, store, trust_store, host_trust, package_trust)
+        binding, _ = call("admit_instance", store, trust_store,
+                          **dict(base, request_id="i7-bind-root"))
+        check(binding is not None and binding.outcome == ACCEPTED,
+              "the binding-chain fixture admits a binding")
+        head, _ = call("withdraw_instance", store, request_id="i7-bind-wd",
+                       actor=OPERATOR, approving_authority=OPERATOR,
+                       recorded_at=STAMP, instance_id=binding.record_id,
+                       provenance=dict(PROV))
+        check(head is not None and head.outcome == ACCEPTED,
+              "the binding-chain fixture writes one lifecycle version")
+        return store, trust_store, base, binding, head
+
+    def binding_operations(store, trust_store, base, head, tag):
+        return (
+            ("admit_instance", lambda: OPERATIONS["admit_instance"](
+                store, trust_store, **dict(base, request_id=f"i7-{tag}-sup",
+                                           supersedes=head.record_id))),
+            ("withdraw_instance", lambda: OPERATIONS["withdraw_instance"](
+                store, request_id=f"i7-{tag}-wd", actor=OPERATOR,
+                approving_authority=OPERATOR, recorded_at=STAMP,
+                instance_id=head.record_id, provenance=dict(PROV))),
+            ("retire_instance", lambda: OPERATIONS["retire_instance"](
+                store, request_id=f"i7-{tag}-rt", actor=OPERATOR,
+                approving_authority=OPERATOR, recorded_at=STAMP,
+                instance_id=head.record_id, provenance=dict(PROV))),
+        )
+
+    BINDING_CORRUPTION = (
+        ("a missing binding predecessor", "bindgone", None),
+        ("a binding predecessor of another kind", "bindkind",
+         lambda binding: {
+             "schema_version": "schott-platform/v1",
+             "kind": "capability-host",
+             "capability_host_id": "CHOST-0007",
+             # The field the traversal reads for a binding identity, set to the
+             # predecessor's own name so a naive presence check is satisfied.
+             "instance_id": binding.record_id,
+             "node_identity_reference": "node/schai",
+             "fabric_node_trust_record_id": "TREC-000001",
+             "verified_resource_profile": dict(PROFILE),
+             "location_class": "on-premises",
+             "data_classification": "internal",
+             "availability_intent": "in-service",
+             "provenance": dict(PROV)}),
+        ("a binding predecessor naming another identity", "bindidentity",
+         lambda binding: {
+             "schema_version": "schott-platform/v1",
+             "kind": "capability-instance",
+             "instance_id": "CINST-000007",
+             "capability_id": "CAPDEF-0001",
+             "capability_package_id": "CPKG-0001",
+             "capability_host_id": "CHOST-0001",
+             "contract_id": "CCON-0001",
+             "satisfied_contract_versions": ["1.0.0"],
+             "verified_resource_profile": dict(PROFILE),
+             "admission_decision_id": "TDEC-000001",
+             "package_trust_record_id": "TREC-000001",
+             "host_trust_record_id": "TREC-000002",
+             "effective_scope": dict(SCOPE),
+             "admitted_at": STAMP.isoformat(),
+             "admitted_until": YEAR.isoformat(),
+             "lifecycle_state": "admitted",
+             "provenance": dict(PROV)}),
+    )
+    for description, tag, payload_for in BINDING_CORRUPTION:
+        with TemporaryDirectory() as tmp:
+            store, trust_store, base, binding, head = bound_store(tmp)
+            fabric_root = Path(tmp) / "fabric"
+            trust_root = Path(tmp) / "trust"
+            damaged = (fabric_root / "capability-instances"
+                       / f"{binding.record_id}.yaml")
+            if payload_for is None:
+                damaged.unlink()
+                check(not damaged.exists(),
+                      "the predecessor named by the stored lifecycle version is absent")
+            else:
+                damaged.write_text(_yaml.safe_dump(payload_for(binding)),
+                                   encoding="utf-8")
+                damaged.chmod(0o600)
+                check(damaged.exists(), f"the binding chain now carries {description}")
+            for name, operation in binding_operations(
+                    store, trust_store, base, head, tag):
+                before = forensic(fabric_root)
+                trust_before = forensic(trust_root)
+                counters = sequences_of(fabric_root)
+                allocated = list(store.allocations)
+                written = list(store.writes)
+                queries = list(DOMAIN_TRUST.calls)
+                result, error = attempted(operation)
+                label = f"{name} over {description}"
+                check(error is None, f"{label} raises nothing")
+                if error is not None:
+                    continue
+                check(result.outcome == REFUSED
+                      and result.reason == "instance-chain-incoherent",
+                      f"{label} is refused as instance-chain-incoherent")
+                check(result.outcome != ACCEPTED and result.record_id is None,
+                      f"{label} accepts no chain head or predecessor")
+                check(result.outcome not in (EXACT_REPLAY, CONFLICT),
+                      f"{label} is neither replay nor conflict")
+                check(store.allocations == allocated,
+                      f"{label} allocates nothing")
+                check(store.writes == written, f"{label} writes nothing")
+                check(sequences_of(fabric_root) == counters,
+                      f"{label} advances no sequence")
+                check(DOMAIN_TRUST.calls == queries, f"{label} queries no trust")
+                check(forensic(fabric_root) == before,
+                      f"{label} leaves the fabric byte-identical")
+                check(forensic(trust_root) == trust_before,
+                      f"{label} leaves trust byte-identical")
+                repeated, repeat_error = attempted(operation)
+                check(repeat_error is None and repeated is not None
+                      and repeated.outcome == result.outcome
+                      and repeated.reason == result.reason,
+                      f"{label} refuses identically twice")
+
+    # The authorised reason is CINST-specific and replaces nothing.
+    check(admission_module.REASON_INSTANCE_INCOHERENT == "instance-chain-incoherent",
+          "the runtime vocabulary names instance-chain-incoherent")
+    check(admission_module.REASON_INSTANCE_INCOHERENT
+          != admission_module.REASON_CHAIN_INCOHERENT,
+          "the binding chain and the host chain carry distinct reasons")
+    for kept in ("REASON_INSTANCE_FORKED", "REASON_INSTANCE_CYCLIC",
+                 "REASON_INSTANCE_NOT_HEAD", "REASON_SUPERSEDES_SUPERSEDED",
+                 "REASON_SUPERSEDES_NOT_ADMITTED"):
+        check(getattr(admission_module, kept)
+              != admission_module.REASON_INSTANCE_INCOHERENT,
+              f"instance-chain-incoherent does not replace {kept}")
+
+    # --- 22. Increment 7 stops where increment 8 begins -------------------
     for later in ("evaluate_eligibility", "eligibility", "select", "selection",
                   "compute_eligibility", "inspect", "validate_store",
                   "admit_route", "health", "remediate"):

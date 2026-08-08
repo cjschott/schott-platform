@@ -106,6 +106,11 @@ REASON_PREDECESSOR_NOT_CURRENT = "host-predecessor-not-current"
 REASON_CHAIN_FORKED = "host-chain-forked"
 REASON_CHAIN_CYCLIC = "host-chain-cyclic"
 REASON_CHAIN_INCOHERENT = "host-chain-incoherent"
+# The binding chain's counterpart. It names a chain C4 cannot read -- a
+# predecessor that is missing, filed as another kind, malformed, naming an
+# identity other than the one referenced, or otherwise unreadable -- and it
+# replaces none of the reasons that name a chain C4 *can* read and objects to.
+REASON_INSTANCE_INCOHERENT = "instance-chain-incoherent"
 REASON_INTENT_UNCHANGED = "availability-intent-unchanged"
 REASON_RETURN_NEEDS_REFRESH = "return-to-service-requires-refresh"
 REASON_REFRESH_NOTHING = "refresh-changes-nothing"
@@ -264,16 +269,31 @@ def _effect_class(value: Any) -> str:
 
 
 def _resolve(store, kind: str, identifier: Any) -> Mapping[str, Any]:
-    """The referenced record, or a deterministic not-found refusal."""
+    """The referenced record, or a deterministic not-found refusal.
+
+    **What answers must be what was asked for.** A store can be damaged out of
+    band, carry a legacy record, or be tampered with, so a payload found at the
+    expected name is not thereby the record it claims to be: one declaring
+    another kind, or another identity, has not resolved this reference. Reading
+    on would let a governed decision be made about a record nobody named, and
+    C2 reporting the damage later is no help to a write that already happened.
+    """
     if not isinstance(identifier, str) or not identifier.strip():
         _refuse(NOT_FOUND, REASON_UNRESOLVED)
     try:
-        return store.read_record(kind, identifier)
+        record = store.read_record(kind, identifier)
     except FabricError:
         _refuse(NOT_FOUND, REASON_UNRESOLVED)
     except Exception:  # noqa: BLE001
         # A reference that cannot be read is a reference that did not resolve.
         _refuse(NOT_FOUND, REASON_UNRESOLVED)
+    if not isinstance(record, Mapping):
+        _refuse(NOT_FOUND, REASON_UNRESOLVED)
+    if record.get("kind") != kind:
+        _refuse(NOT_FOUND, REASON_UNRESOLVED)
+    if record.get(ID_FIELD_FOR[kind]) != identifier:
+        _refuse(NOT_FOUND, REASON_UNRESOLVED)
+    return record
 
 
 def _stored_instant(value: Any) -> datetime | None:
@@ -451,18 +471,54 @@ def _within_window(scope: Mapping[str, Any], evaluated_at: datetime) -> None:
         _refuse(REFUSED, REASON_NO_SCOPE)
 
 
-def _successors(store, kind: str, field: str, forked: str) -> dict[str, str]:
+def _successors(store, kind: str, field: str, forked: str,
+                incoherent: str) -> dict[str, str]:
     """Who supersedes whom, for one record class.
 
     Immutability means nothing points forward, so the chain is read from what
     points back. Two records claiming one predecessor is a fork, reported
     rather than resolved: repairing it would pick a winner nobody chose.
+
+    **A successor whose declared predecessor is absent does not become the
+    head.** It makes the chain unreadable, and a record at the end of a broken
+    chain is not evidence that it is current -- it is evidence that something
+    is missing. The released write path cannot produce that state, which is not
+    the point: a damaged, tampered, or legacy store can hold it, and a governed
+    decision must refuse on what it reads rather than assume validation ran.
+
+    `incoherent` names that refusal, and every caller must name one: a
+    traversal that cannot say what an unreadable chain is called cannot refuse
+    on it, and a chain read without that check is not a chain that was read.
     """
+    records = list(store.list_records(kind))
+    present: set[str] = set()
+    for record in records:
+        identity = record.get(ID_FIELD_FOR[kind])
+        # Traversal reaches records nobody named, so the guard a named
+        # reference gets has to apply here too. A payload that is not the kind
+        # it was filed as, that does not name itself, or that cannot be found
+        # under the identity it declares is damage; a chain read across it
+        # would report a head that no readable record supports.
+        if record.get("kind") != kind:
+            _refuse(REFUSED, incoherent)
+        if not isinstance(identity, str) or not PATTERNS[kind].fullmatch(identity):
+            _refuse(REFUSED, incoherent)
+        try:
+            stored = store.read_record(kind, identity)
+        except Exception:  # noqa: BLE001
+            _refuse(REFUSED, incoherent)
+        if (not isinstance(stored, Mapping) or stored.get("kind") != kind
+                or stored.get(ID_FIELD_FOR[kind]) != identity):
+            _refuse(REFUSED, incoherent)
+        present.add(identity)
+
     links: dict[str, str] = {}
-    for record in store.list_records(kind):
+    for record in records:
         prior = record.get("supersedes")
         if not isinstance(prior, str):
             continue
+        if prior not in present:
+            _refuse(REFUSED, incoherent)
         if prior in links:
             _refuse(REFUSED, forked)
         links[prior] = record.get(ID_FIELD_FOR[kind])
@@ -945,7 +1001,7 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
         # resolved: choosing a head nobody wrote would be the guess this
         # refuses to make.
         links = _successors(store, "capability-host", "capability_host_id",
-                            REASON_CHAIN_FORKED)
+                            REASON_CHAIN_FORKED, REASON_CHAIN_INCOHERENT)
         if _head_of(links, capability_host_id, REASON_CHAIN_CYCLIC) != capability_host_id:
             _refuse(REFUSED, REASON_HOST_SUPERSEDED)
 
@@ -1078,7 +1134,7 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         #    an operator deliberately removed, and admitting onto it would
         #    contradict the decision rather than observe it.
         links = _successors(store, "capability-host", "capability_host_id",
-                            REASON_CHAIN_FORKED)
+                            REASON_CHAIN_FORKED, REASON_CHAIN_INCOHERENT)
         if _head_of(links, capability_host_id, REASON_CHAIN_CYCLIC) != capability_host_id:
             _refuse(REFUSED, REASON_HOST_SUPERSEDED)
         if host.get("availability_intent") != "in-service":
@@ -1126,7 +1182,8 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
                        for record in store.list_records("capability-instance")}
             prior = _resolve(store, "capability-instance", supersedes)
             instance_links = _successors(store, "capability-instance",
-                                         "instance_id", REASON_INSTANCE_FORKED)
+                                         "instance_id", REASON_INSTANCE_FORKED,
+                                         REASON_INSTANCE_INCOHERENT)
             if supersedes in instance_links:
                 _refuse(REFUSED, REASON_SUPERSEDES_SUPERSEDED)
             if prior.get("lifecycle_state") != "admitted":
@@ -1404,7 +1461,7 @@ def _host_predecessor(store, capability_host_id: str) -> Mapping[str, Any]:
     """The named host declaration, proved to be the current one."""
     prior = _resolve(store, "capability-host", capability_host_id)
     links = _successors(store, "capability-host", "capability_host_id",
-                        REASON_CHAIN_FORKED)
+                        REASON_CHAIN_FORKED, REASON_CHAIN_INCOHERENT)
     if _head_of(links, capability_host_id, REASON_CHAIN_CYCLIC) != capability_host_id:
         _refuse(REFUSED, REASON_PREDECESSOR_NOT_CURRENT)
     return prior
@@ -1628,7 +1685,7 @@ def _lifecycle_decision(store, *, operation: str, request_id: Any, actor: Any,
     def accept(identifier, digest):
         prior = _resolve(store, "capability-instance", instance_id)
         links = _successors(store, "capability-instance", "instance_id",
-                            REASON_INSTANCE_FORKED)
+                            REASON_INSTANCE_FORKED, REASON_INSTANCE_INCOHERENT)
         if _head_of(links, instance_id, REASON_INSTANCE_CYCLIC) != instance_id:
             _refuse(REFUSED, REASON_INSTANCE_NOT_HEAD)
         if prior.get("lifecycle_state") not in allowed_from:
