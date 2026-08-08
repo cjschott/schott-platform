@@ -262,8 +262,15 @@ An instance is eligible only when **all eight** conditions hold:
 5. A **fresh advertisement** exists — present and inside its validity window.
 6. An **admission decision** exists, is human-approved, and has not expired.
 7. The **effective scope** — the intersection of package scope, host scope, and
-   admission scope — is non-empty.
-8. The request's **data classification** does not exceed the host's ceiling.
+   admission scope — is non-empty **in every one of the four released
+   dimensions**. It is computed from the grants the Trust Plane reported and
+   the operator's own bound, never asserted by the requester; an absent grant
+   bounds nothing and so permits nothing. The package is decided under its
+   record identity, per version and per contract; the host under its declared
+   node identity.
+8. Every **data classification** the effective scope permits is exactly the
+   one the host is declared to handle. Membership, not rank: no accepted
+   source declares an ordering of classifications.
 
 Any one missing makes the instance **ineligible**. The default is ineligible;
 absence of a record is never permission.
@@ -419,7 +426,10 @@ approval it forbids.
 
 - Supersession is **declared**, on the record, never inferred from a version
   number or an installation event.
-- The old and new instances **may coexist** during a declared overlap.
+- The old and new instances **may coexist** during a declared overlap. The
+  declared window is **immutable audit evidence** on the route that carries it:
+  nothing activates, schedules, rolls back, reroutes, or selects when either
+  instant arrives, and no eligibility or selection behaviour reads it.
 - **Cutover is a route change** — a new route version listing the new
   instance — not a package event. A package cannot promote itself.
 - Superseded records **remain readable**. Nothing is edited.
@@ -486,8 +496,8 @@ any rule.** The workstation with the large consumer GPU, the reference host
 with the datacentre GPU, and the virtualisation host with the mid-range GPU are
 three `capability-host` records with different attribute values. A future cloud
 node is a fourth record with `accelerator_class: remote-service`,
-`location_class: third-party-hosted`, and a lower
-`data_classification_ceiling` — same shape, no special case, no new code.
+`location_class: third-party-hosted`, and its own `data_classification` —
+same shape, no special case, no new code.
 
 ### Effect classes, and the door held open for robotics
 

@@ -15,7 +15,7 @@ domain ADR-0011 reserved.
 | `fabric_node_trust_record_id` | Its standing in the Trust Plane |
 | `verified_resource_profile` | What the platform confirmed, not what the host claimed |
 | `location_class` | `on-premises`, `operator-controlled-remote`, `third-party-hosted` |
-| `data_classification_ceiling` | The highest classification this machine may ever see |
+| `data_classification` | The one workload classification this machine may handle |
 | `availability_intent` | `in-service`, `draining`, `withheld` — set by an operator |
 
 A host record says what the machine **is** and what it may ever **see**. It
@@ -57,7 +57,7 @@ fourth requires no code:
 | **MainPC** — RTX 5070 Ti | `discrete-gpu` | `on-premises` | Large consumer accelerator; high `accelerator_memory_mb` |
 | **schai** — Tesla P4 | `discrete-gpu` | `on-premises` | Datacentre accelerator, modest memory; the reference host |
 | **schoxmox1** — RTX 4060 | `discrete-gpu` | `on-premises` | Mid-range consumer accelerator on the virtualisation host |
-| **A future cloud node** | `remote-service` | `third-party-hosted` | Lower `data_classification_ceiling`; same shape, no special case |
+| **A future cloud node** | `remote-service` | `third-party-hosted` | A different `data_classification`; same shape, no special case |
 
 The three GPUs differ in memory and generation, and that difference is carried
 entirely by attribute values. A package that needs more accelerator memory than
@@ -66,8 +66,23 @@ product.
 
 **Cloud nodes are not a special case.** A third-party-hosted host is a record
 with `accelerator_class: remote-service`, a `location_class` that excludes it
-from `operator-controlled-only` routes, and a lower classification ceiling.
+from `operator-controlled-only` routes, and its own `data_classification`.
 Nothing in the core changes to admit one.
+
+## Workload classification is membership, not a scale
+
+`data_classification` names the **one** workload classification a machine may
+handle, and it is compared by **exact equality** against what an admission's
+effective scope permits. The field was called a *ceiling* until Increment 7,
+and the name was withdrawn because it implied a ranking no accepted source
+declares: there is no ordering, no rank, and nothing is "above" anything else.
+`internal` is the only declared value; adding another is a reviewed decision,
+never an inference from a new host.
+
+This axis is **not** the storage recoverability axis. `authoritative`,
+`reconstructable`, and `mixed` describe whether losing data is recoverable and
+drive backup policy. They share the key name elsewhere in the model and they
+are never compared with a workload classification.
 
 ## Drain and withdrawal
 
@@ -78,6 +93,40 @@ the fabric stops treating its instances as eligible.
 **Nothing sets it automatically.** No health signal, no failure count, and no
 timeout drains a node — that would be autonomous remediation, which this
 architecture forbids.
+
+### The record is superseded, never edited
+
+A host record is immutable, so a change of intent writes a **new** record that
+`supersedes` the previous one. Nothing points forward, so the **current
+declaration is the one no other record supersedes**; a chain that forks or
+loops is reported and never repaired. The chain's identity is
+`node_identity_reference` — reinstalling a machine makes a new subject and a
+new chain, not a successor.
+
+Two operations, and the difference is which way authority moves:
+
+| | **Withdrawal** | **Declaration refresh** |
+|---|---|---|
+| Direction | away from service, or deeper between non-serving states | back toward service, or re-declaring verified facts |
+| Trust | none consulted; the successor references the same record | **exactly one** fresh evaluation |
+| May change | `availability_intent` only | trust record, verified profile, verification reference, `location_class`, `data_classification`, `availability_intent` |
+
+A transition to the intent already declared writes **nothing**, and a refresh
+that changes no authoritative fact is refused: an immutable record declaring
+nothing new is duplication, and it would silently move the head.
+
+**Returning to service is a refresh, never a withdrawal.** Any increase in
+authority is made against standing evaluated now, not standing evaluated once.
+
+### What cites which record
+
+An **advertisement is a claim published by a subject as it is now**, so it must
+cite the **current** declaration; citing one the operator has already replaced
+is refused. An **instance** cites the declaration that was current when it was
+admitted, and that record stays readable for ever — that is history, not
+staleness. Retaining a claim is not authority to admit: a `draining` or
+`withheld` machine may still say what it holds, and nothing may be admitted
+onto it.
 
 ## What a node may never do
 

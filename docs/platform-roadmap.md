@@ -653,7 +653,7 @@ or earlier.
 | Model endpoint registry | an instance's `endpoint_reference`, behind the ADR-0003 gateway contract; no `model-endpoint` entity is added |
 | Resource metadata | a controlled resource-profile vocabulary, verified rather than advertised |
 | Health and availability states | `availability_intent` here; the health model itself is v0.9.6 |
-| Trust and privacy classifications | `location_class` and `data_classification_ceiling`, governed by the Trust Plane |
+| Trust and privacy classifications | `location_class` and `data_classification`, governed by the Trust Plane |
 | Deterministic, policy-aware placement | deterministic routing over a human-declared candidate order |
 | Preferred and fallback placement | the declared candidate order; fallback never leaves it |
 | Local-only enforcement | `locality: local-only`, which refuses rather than degrades |

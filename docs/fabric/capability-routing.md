@@ -30,7 +30,8 @@ An instance is eligible only when **all** hold:
 5. A **fresh advertisement** exists, inside its validity window.
 6. An **admission decision** exists, is human-approved, and has not expired.
 7. The **effective scope** intersection is non-empty.
-8. The request's **data classification** is within the host's ceiling.
+8. Every **data classification** the effective scope permits is exactly the
+   one the host is declared to handle — membership, never a rank.
 
 Any one missing makes the instance ineligible. **The default is ineligible.**
 

@@ -58,6 +58,11 @@ required_fields:
   - effective_scope
   - admitted_at
   - admitted_until
+  # Authoritative, never derived and never absent. Eligibility is computed;
+  # this is decided. A record leaving it to be inferred from an elapsed expiry,
+  # from a route no longer naming it, or from absence would answer a lifecycle
+  # question with a guess.
+  - lifecycle_state
   - provenance
 
 optional_fields:
@@ -87,7 +92,10 @@ eligibility_conditions:
   - id: ELIG-8
     condition: the effective scope intersection is non-empty and permits the request
   - id: ELIG-9
-    condition: the request data classification does not exceed the host classification ceiling
+    condition: >-
+      every classification the effective scope permits is exactly the
+      classification the host is declared to handle. Membership, not rank: no
+      accepted source declares an ordering of classifications
   # Quarantine and drain are separate conditions on purpose. One is a trust
   # judgement that something is suspect; the other is an operator deliberately
   # withdrawing a working node. Reporting either as the other destroys a
@@ -105,6 +113,67 @@ eligibility_conditions:
 
 # Three independent clocks. Any one lapsing is sufficient, and none renews
 # itself: an expiry that renews itself measures nothing.
+enums:
+  lifecycle_state:
+    - admitted
+    - withdrawn
+    - retired
+
+# A binding starts admitted. Neither of the others ever returns to it, and
+# retired is terminal: no event, host return, advertisement, route change, or
+# trust decision reactivates a retired binding. Recovery is a new decision
+# producing a new binding.
+lifecycle_initial_state: admitted
+lifecycle_terminal_states:
+  - retired
+lifecycle_non_routable_states:
+  - withdrawn
+  - retired
+lifecycle_transitions:
+  - {from: admitted,  to: withdrawn, operation: withdraw-instance, trust_queries: 0}
+  - {from: admitted,  to: retired,   operation: retire-instance,   trust_queries: 0}
+  - {from: withdrawn, to: retired,   operation: retire-instance,   trust_queries: 0}
+lifecycle_forbidden_transitions: all-others
+reactivation: forbidden
+
+# One logical binding is one chain of lifecycle versions. Its identity is the
+# record that began it, read from the evidence category each record already
+# carries -- a withdrawal or retirement continues a binding, a supersession
+# starts a new one -- so no field is added to say it twice.
+binding_identity: chain-root-instance-id
+lifecycle_head_resolution: unique-unsuperseded-record-in-chain
+lifecycle_forked: refuse
+lifecycle_cyclic: refuse
+routable_target_state: admitted
+
+# A lifecycle version carries every binding fact across byte-identically. Only
+# the state, the link to what it continues, provenance, notes, and evidence
+# differ, and no trust is consulted: ending a binding is a decision about a
+# record, not a fresh admission of one.
+lifecycle_carried_fields:
+  - capability_id
+  - capability_package_id
+  - capability_host_id
+  - contract_id
+  - satisfied_contract_versions
+  - verified_resource_profile
+  - admission_decision_id
+  - package_trust_record_id
+  - host_trust_record_id
+  - effective_scope
+  - admitted_at
+  - admitted_until
+  - advertisement_id
+  - endpoint_reference
+
+# Declared supersession keeps the capability and package identities: migration
+# destroys one binding and declares another for the same code, on a new
+# machine. A package change is not a supersession of the binding.
+supersession_preserves:
+  - capability_id
+  - contract_id
+  - capability_package_id
+
 expiry_clocks:
   - trust-expiry
   - advertisement-validity

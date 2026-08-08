@@ -34,6 +34,12 @@ supersession: new-record-only
 # each version is a separate subject with its own evidence and its own decision.
 trust_domain: capability-package
 approval: requires-new-decision-per-version
+# Which identity the Trust Plane decides about. The record is the subject: it
+# is per version by construction, it is immutable so it names exactly one
+# artefact for ever, and it is the only identity that knows which contract the
+# trust is granted for -- an artifact reference does not.
+trust_subject_identity: capability_package_id
+trust_subject_comparison: exact-equality
 
 # One package implements one capability definition against one contract. A
 # package spanning two capabilities could not be trusted for one and refused

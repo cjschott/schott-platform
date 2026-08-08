@@ -52,9 +52,10 @@ required_fields:
   # advertisement, where it is visibly a claim.
   - verified_resource_profile
   - location_class
-  # The highest classification of data this machine may ever see. Enforced at
-  # routing time; a request above the ceiling is refused, never downgraded.
-  - data_classification_ceiling
+  # The one workload data classification this machine may handle. Compared by
+  # exact membership, never by rank: no accepted source declares an ordering of
+  # classifications, so "ceiling" was withdrawn as a name that implied one.
+  - data_classification
   # Declared by an operator: in service, or deliberately withheld. This is how
   # a node is removed from service on purpose rather than by failing.
   - availability_intent
@@ -108,6 +109,51 @@ enums:
     - in-service
     - draining
     - withheld
+  # The workload data sensitivity axis. Must match capability-route.schema.yaml
+  # exactly. It is a DIFFERENT axis from the storage recoverability labels
+  # (authoritative, reconstructable, mixed) that share the key name elsewhere in
+  # the model, and the two are never compared. Adding a value is a reviewed
+  # decision, never an inference from a new host or service.
+  data_classification:
+    - internal
+
+# A machine is superseded, never edited. Nothing points forward, so the current
+# declaration is the one no other record supersedes; a chain that forks or
+# loops is reported and never repaired.
+supersession_chain_identity: node_identity_reference
+supersession_head_resolution: unique-unsuperseded-record-in-chain
+supersession_forked: refuse
+supersession_cyclic: refuse
+
+# What makes one declaration authoritatively different from another. A
+# successor differing only in provenance, notes, evidence, name, description,
+# or its allocated identity declares nothing new and is refused.
+authoritative_fields:
+  - fabric_node_trust_record_id
+  - verified_resource_profile
+  - verification_reference
+  - location_class
+  - data_classification
+  - availability_intent
+
+# Availability moves away from service by decision; it returns only through a
+# declaration refresh, which is evaluated against then-current trust. A
+# transition to the intent already declared writes nothing.
+availability_transitions:
+  - {from: in-service, to: draining,   operation: withdraw-subject, trust_queries: 0}
+  - {from: in-service, to: withheld,   operation: withdraw-subject, trust_queries: 0}
+  - {from: draining,   to: withheld,   operation: withdraw-subject, trust_queries: 0}
+  - {from: draining,   to: in-service, operation: refresh-subject,  trust_queries: 1}
+  - {from: withheld,   to: in-service, operation: refresh-subject,  trust_queries: 1}
+  - {from: withheld,   to: draining,   operation: refresh-subject,  trust_queries: 1}
+no_op_transition: refuse
+refresh_without_authoritative_change: refuse
+
+# An advertisement is a claim published by a subject as it is now, so it must
+# cite the current declaration. An instance cites the declaration that was
+# current when it was admitted, and that stays readable for ever.
+advertisement_must_cite: current-head
+instance_cites: declaration-current-at-admission
 
 # A host describes itself. It never establishes its own standing, and it holds
 # no credential material: the record proves a machine was verified, it is not a

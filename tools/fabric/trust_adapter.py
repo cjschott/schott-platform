@@ -1,0 +1,524 @@
+"""Trust standing for the Fabric, through released Trust Plane interfaces only.
+
+This adapter asks a question and reports the answer. It owns no verdict of its
+own, and it is the Fabric's **only** route to trust standing: a component that
+read trust records directly would be reimplementing evaluation, and two
+implementations of "is this subject trusted" is one too many.
+
+**It fails closed, always.** Absent, expired, revoked, malformed, unreadable,
+and unavailable all resolve to the same answer — `unverified` — because a
+system that distinguishes "no" from "could not tell" at the point of use will
+eventually treat the second as a "yes". The standing the Trust Plane reported
+is preserved alongside, so a caller can explain the refusal without acting on
+it.
+
+**It remembers nothing and asks once.** No stored verdict, no second attempt,
+no clock of its own: the evaluation instant arrives from the caller, because an
+adapter that read the time would answer a question nobody asked. Asking twice
+after a failure would turn an unavailable Trust Plane into a slow one.
+
+**A refusal says nothing it cannot say deterministically.** The reason is drawn
+from a small controlled vocabulary rather than passed through from an
+exception, so no address, path, or interpreter detail can reach a caller — or,
+later, an accepted record.
+
+This increment verifies. It admits nothing, computes no eligibility, chooses
+nothing, and writes nowhere.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from ..trust.identifiers import (
+    DECISION_ID, EVIDENCE_ID, LINEAGE_ID, RECORD_ID, SCOPE_ID,
+)
+from ..trust.models import TrustScope, TrustState
+from ..trust.query import get_current_trust, get_trust_record
+from .errors import FabricError
+from .models import deep_freeze
+
+VERIFIED = "verified"
+UNVERIFIED = "unverified"
+
+# Every standing the released Trust Plane vocabulary defines. A value outside
+# it is not interpreted and not downgraded: the response carrying it is
+# refused as unreadable, because guessing what an unknown standing meant is
+# how an unrecognised value becomes a permissive one.
+KNOWN_STANDINGS = frozenset(state.value for state in TrustState)
+
+# Standings a subject may actually be used in. Taken from the released
+# vocabulary rather than restated as a policy of the Fabric's own.
+USABLE_STANDINGS = frozenset({TrustState.TRUSTED.value, TrustState.RESTRICTED.value})
+
+# Only a usable standing can age out, and expiry is the one change time makes.
+# So a stored standing either survives unchanged or becomes expired -- every
+# other pairing is one the released contract cannot yield.
+EXPIRABLE_STANDINGS = frozenset({TrustState.TRUSTED.value, TrustState.RESTRICTED.value})
+
+# Controlled refusal vocabulary, for C4 and C5 to act on. Deterministic by
+# construction: nothing here is derived from an exception or an object.
+REASON_NO_STANDING = "no-trust-standing"
+REASON_EXPIRED = "trust-expired"
+REASON_REVOKED = "trust-revoked"
+REASON_NOT_USABLE = "trust-not-usable"
+REASON_UNREADABLE = "trust-unreadable"
+REASON_UNAVAILABLE = "trust-unavailable"
+REASON_SUBJECT_TYPE_MISMATCH = "trust-subject-type-mismatch"
+
+UNVERIFIED_REASONS = (
+    REASON_NO_STANDING,
+    REASON_EXPIRED,
+    REASON_REVOKED,
+    REASON_NOT_USABLE,
+    REASON_UNREADABLE,
+    REASON_UNAVAILABLE,
+    REASON_SUBJECT_TYPE_MISMATCH,
+)
+
+_REASON_FOR_STANDING = {
+    TrustState.UNKNOWN.value: REASON_NO_STANDING,
+    TrustState.EXPIRED.value: REASON_EXPIRED,
+    TrustState.REVOKED.value: REASON_REVOKED,
+}
+
+
+@dataclass(frozen=True)
+class TrustVerification:
+    """One read-only answer about one subject at one instant.
+
+    Carries the effective standing and the stored standing separately, the way
+    the Trust Plane reports them: they differ through expiry, and collapsing
+    them would describe a lapsed grant as live.
+    """
+
+    subject_id: str
+    status: str
+    standing: str
+    stored_standing: str
+    evaluated_at: str
+    lineage_id: str | None = None
+    record_id: str | None = None
+    decision_id: str | None = None
+    evidence_reference_ids: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    # The domain the subject was admitted under, from the trust record itself.
+    # A direct subject verification leaves it unknown: the released evaluation
+    # does not carry it, and inferring it from a scope would be a guess.
+    subject_type: str | None = None
+    # The bounded grant the verified record carries, deeply frozen, exactly as
+    # the Trust Plane reported it in the same answer the standing came from.
+    #
+    # **Absent is a legal verified result, not an error.** The released
+    # contract requires a scope only of a `Restricted` grant; a `Trusted` one
+    # may lawfully bound nothing. A caller must decide what an unbounded grant
+    # permits -- which, by the released scope rules, is nothing -- rather than
+    # read absence as permission.
+    scope: Mapping[str, Any] | None = None
+
+    @property
+    def verified(self) -> bool:
+        return self.status == VERIFIED
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "subject_id": self.subject_id,
+            "status": self.status,
+            "standing": self.standing,
+            "stored_standing": self.stored_standing,
+            "evaluated_at": self.evaluated_at,
+            "lineage_id": self.lineage_id,
+            "record_id": self.record_id,
+            "decision_id": self.decision_id,
+            "evidence_reference_ids": list(self.evidence_reference_ids),
+            "reasons": list(self.reasons),
+            "subject_type": self.subject_type,
+            "scope": dict(self.scope) if self.scope is not None else None,
+        }
+
+
+def _require_instant(evaluated_at: Any) -> datetime:
+    """The evaluation moment is supplied, and it is a moment."""
+    if not isinstance(evaluated_at, datetime):
+        raise FabricError("evaluated_at must be supplied as a datetime")
+    if evaluated_at.tzinfo is None or evaluated_at.tzinfo.utcoffset(evaluated_at) is None:
+        raise FabricError("evaluated_at must carry a timezone offset")
+    return evaluated_at
+
+
+def _require_subject(subject_id: Any) -> str:
+    if not isinstance(subject_id, str) or not subject_id.strip():
+        raise FabricError("a subject identity must be supplied explicitly")
+    return subject_id
+
+
+def _producible(stored: str, standing: str) -> bool:
+    """Whether the released expiry contract can yield this pair of standings."""
+    if standing == stored:
+        return True
+    return stored in EXPIRABLE_STANDINGS and standing == TrustState.EXPIRED.value
+
+
+def _references(value: Any) -> tuple[str, ...] | None:
+    """Evidence identities in order, or None when any is not a released one."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    for entry in value:
+        # fullmatch, not match: the released patterns anchor with `$`, which
+        # matches before a trailing newline, so an identity with one would
+        # otherwise pass as the identity without it.
+        if not isinstance(entry, str) or not EVIDENCE_ID.fullmatch(entry):
+            return None
+    return tuple(value)
+
+
+SCOPE_FIELDS = (
+    "scope_id", "subject_type", "permitted_capabilities", "permitted_operations",
+    "permitted_data_classifications", "permitted_targets",
+    "validity_start", "validity_end",
+)
+
+# Dimensions only. `scope_id`, `subject_type`, and the window are metadata a
+# caller reads; they are never members of a permission set.
+SCOPE_DIMENSIONS = tuple(TrustScope.DIMENSIONS)
+
+
+def _clean_scope(reported: Any, subject_type: str | None) -> Mapping[str, Any] | None:
+    """The verified record's grant, frozen, or nothing at all.
+
+    Absent means absent. Anything present but defective is refused outright
+    rather than narrowed: a grant that had to be repaired to be readable is
+    not the grant that was approved, and a partially-read one would bound less
+    than the operator wrote.
+    """
+    if reported is None:
+        return None
+    if not isinstance(reported, dict):
+        raise FabricError("the reported scope is not a mapping")
+    if set(reported) != set(SCOPE_FIELDS):
+        raise FabricError("the reported scope does not carry exactly the released fields")
+    if not _identity(reported.get("scope_id"), SCOPE_ID):
+        raise FabricError("the reported scope carries no released scope identity")
+    declared = _clean_subject_type(reported.get("subject_type"))
+    if declared is None or (subject_type is not None and declared != subject_type):
+        raise FabricError("the reported scope declares a different domain")
+
+    cleaned: dict[str, Any] = {"scope_id": reported["scope_id"],
+                               "subject_type": declared}
+    for dimension in SCOPE_DIMENSIONS:
+        members = reported[dimension]
+        if isinstance(members, str) or not isinstance(members, (list, tuple)):
+            raise FabricError("a reported scope dimension is not a sequence")
+        seen: list[str] = []
+        for member in members:
+            if type(member) is not str or not member.strip():
+                raise FabricError("a reported scope dimension carries a value that is not text")
+            if "*" in member or "?" in member:
+                raise FabricError("a reported scope dimension carries a wildcard")
+            if member in seen:
+                raise FabricError("a reported scope dimension repeats a value")
+            seen.append(member)
+        cleaned[dimension] = tuple(seen)
+
+    window: dict[str, datetime | None] = {}
+    for bound in ("validity_start", "validity_end"):
+        raw = reported[bound]
+        if raw is None:
+            window[bound] = None
+            continue
+        if not isinstance(raw, str):
+            raise FabricError("a reported scope boundary is not a readable instant")
+        try:
+            moment = datetime.fromisoformat(raw)
+        except ValueError:
+            raise FabricError("a reported scope boundary is not a readable instant") from None
+        if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+            raise FabricError("a reported scope boundary carries no offset")
+        window[bound] = moment
+    start, end = window["validity_start"], window["validity_end"]
+    if start is not None and end is not None and start >= end:
+        raise FabricError("a reported scope window closes before it opens")
+    cleaned["validity_start"] = start
+    cleaned["validity_end"] = end
+    return deep_freeze(cleaned)
+
+
+def _incoherent(reported: Any, subject: str, instant: datetime) -> bool:
+    """Whether the released response can be relied on at all.
+
+    A standing is only as good as the record it came from. A response that
+    reports somebody else's subject, a standing outside the released
+    vocabulary, a `usable` flag that is not a flag, or authoritative
+    identities that are partly missing is not a weaker answer -- it is not an
+    answer, and treating it as one would grant standing nothing actually says.
+    """
+    if not isinstance(reported, dict):
+        return True
+    if reported.get("subject_id") != subject:
+        return True
+
+    standing = reported.get("effective_state")
+    stored = reported.get("stored_state")
+    if standing not in KNOWN_STANDINGS or stored not in KNOWN_STANDINGS:
+        return True
+    if not _producible(stored, standing):
+        return True
+
+    usable = reported.get("usable")
+    if not isinstance(usable, bool):
+        return True
+    # The released flag is exactly membership of the usable set; a response
+    # where they disagree cannot be interpreted either way.
+    if usable != (standing in USABLE_STANDINGS):
+        return True
+
+    # Stated, not merely not-contradicted. A response that never says which
+    # moment it describes cannot be checked against the moment that was asked
+    # about, so an answer about any instant would pass as an answer about this
+    # one.
+    if reported.get("evaluated_at") != instant.isoformat():
+        return True
+
+    if _references(reported.get("evidence_reference_ids")) is None:
+        return True
+
+    reasons = reported.get("reasons")
+    if not isinstance(reasons, (list, tuple)):
+        return True
+    if any(not isinstance(entry, str) for entry in reasons):
+        return True
+
+    # An identity is either absent or a released identifier. Present but
+    # unrecognisable is neither absence nor a citation: 'arbitrary text' names
+    # nothing the Trust Plane could have allocated.
+    identities = []
+    # The released evaluation carries the bare lineage identity; the versioned
+    # form (TLIN-000001-v0001) names the lineage *record*, not the lineage.
+    for name, pattern in (("lineage_id", LINEAGE_ID),
+                          ("record_id", RECORD_ID),
+                          ("decision_id", DECISION_ID)):
+        value = reported.get(name)
+        if value is None:
+            identities.append(None)
+            continue
+        recognised = _identity(value, pattern)
+        if recognised is None:
+            return True
+        identities.append(recognised)
+    resolved = sum(1 for entry in identities if entry is not None)
+
+    if standing == TrustState.UNKNOWN.value:
+        # Absence cites nothing. A response naming a lineage, a record, or a
+        # decision is describing something that exists and could not be read,
+        # and calling that "no trust" would lose the difference. Absence also
+        # has nothing stored: an unknown effective standing over a stored
+        # grant is a record that failed to interpret, not a subject never found.
+        if stored != TrustState.UNKNOWN.value:
+            return True
+        return resolved != 0
+
+    # Every recognised standing rests on a record, so it cites all three.
+    # A verified subject is verified by something nameable; an expired or
+    # revoked one is refused on the strength of something equally nameable.
+    return resolved != len(identities)
+
+
+def _identity(value: Any, pattern) -> str | None:
+    """A released identifier, exactly as written, or nothing.
+
+    Matched against the released pattern rather than merely checked for
+    content, and never trimmed or reshaped: an identity that needed correcting
+    to match is not the identity that was reported.
+    """
+    return value if isinstance(value, str) and pattern.fullmatch(value) else None
+
+
+def _clean_subject_type(value: Any) -> str | None:
+    """A subject type exactly as stored, or nothing.
+
+    Text, non-empty, and already free of surrounding whitespace. A value that
+    had to be trimmed to be usable is not the value that was stored, and the
+    domain a subject was admitted under is not something to tidy up.
+    """
+    if not isinstance(value, str) or not value or value != value.strip():
+        return None
+    return value
+
+
+def _require_subject_type(value: Any) -> str:
+    """A domain requirement a caller supplies is exact, or it is refused."""
+    cleaned = _clean_subject_type(value)
+    if cleaned is None:
+        raise FabricError(
+            "an expected subject type must be supplied as exact text")
+    return cleaned
+
+
+def _with_subject_type(verification: TrustVerification,
+                       subject_type: str) -> TrustVerification:
+    """The same answer, carrying the domain its record declares.
+
+    Rebuilt rather than altered: the result is frozen, and a verification a
+    caller already holds must not change underneath them.
+    """
+    return TrustVerification(
+        subject_id=verification.subject_id, status=verification.status,
+        standing=verification.standing,
+        stored_standing=verification.stored_standing,
+        evaluated_at=verification.evaluated_at,
+        lineage_id=verification.lineage_id, record_id=verification.record_id,
+        decision_id=verification.decision_id,
+        evidence_reference_ids=verification.evidence_reference_ids,
+        reasons=verification.reasons, subject_type=subject_type,
+        scope=verification.scope)
+
+
+def _refused(verification: TrustVerification, reason: str,
+             subject_type: str | None = None) -> TrustVerification:
+    """The same answer, refused for a stated reason."""
+    return TrustVerification(
+        subject_id=verification.subject_id, status=UNVERIFIED,
+        standing=verification.standing,
+        stored_standing=verification.stored_standing,
+        evaluated_at=verification.evaluated_at,
+        lineage_id=verification.lineage_id, record_id=verification.record_id,
+        decision_id=verification.decision_id,
+        evidence_reference_ids=verification.evidence_reference_ids,
+        reasons=(reason,), subject_type=subject_type, scope=None)
+
+
+def _require_record_identity(record_id: Any) -> str:
+    """A trust record identity a caller supplies is a released identifier."""
+    if not isinstance(record_id, str) or not RECORD_ID.fullmatch(record_id):
+        raise FabricError(
+            "a trust record identity must be a released record identifier")
+    return record_id
+
+
+def _unverified(subject_id: str, evaluated_at: datetime, reason: str,
+                standing: str = TrustState.UNKNOWN.value,
+                stored_standing: str | None = None) -> TrustVerification:
+    return TrustVerification(
+        subject_id=subject_id, status=UNVERIFIED, standing=standing,
+        stored_standing=stored_standing if stored_standing is not None else standing,
+        evaluated_at=evaluated_at.isoformat(), reasons=(reason,))
+
+
+def verify_subject(store, subject_id: Any, *, evaluated_at: Any) -> TrustVerification:
+    """What the Trust Plane says about this subject at this instant.
+
+    Reads only. Asks the released query interface once and reports what came
+    back; anything it cannot resolve is `unverified`, never assumed.
+    """
+    subject = _require_subject(subject_id)
+    instant = _require_instant(evaluated_at)
+
+    try:
+        reported = get_current_trust(store, subject, evaluated_at=instant)
+    except Exception:  # noqa: BLE001
+        # Deliberately broad, and deliberately final. Anything the Trust Plane
+        # could not answer is unverified, and the exception itself is not
+        # reported: its text is not something a caller can depend on.
+        return _unverified(subject, instant, REASON_UNAVAILABLE)
+
+    if _incoherent(reported, subject, instant):
+        return _unverified(subject, instant, REASON_UNREADABLE)
+
+    standing = reported["effective_state"]
+    stored = reported["stored_state"]
+    usable = reported["usable"]
+
+    try:
+        # Structure only, and only when one is present. Whether an unbounded
+        # grant may be used is the caller's decision, not this adapter's.
+        scope = _clean_scope(reported.get("scope"), None)
+    except Exception:  # noqa: BLE001
+        return _unverified(subject, instant, REASON_UNREADABLE)
+
+    common = dict(
+        subject_id=subject,
+        standing=standing,
+        stored_standing=stored,
+        evaluated_at=instant.isoformat(),
+        lineage_id=_identity(reported.get("lineage_id"), LINEAGE_ID),
+        record_id=_identity(reported.get("record_id"), RECORD_ID),
+        decision_id=_identity(reported.get("decision_id"), DECISION_ID),
+        evidence_reference_ids=_references(reported.get("evidence_reference_ids")) or (),
+        scope=scope,
+    )
+
+    if usable:
+        return TrustVerification(status=VERIFIED, **common)
+
+    reason = _REASON_FOR_STANDING.get(standing, REASON_NOT_USABLE)
+    return TrustVerification(status=UNVERIFIED, reasons=(reason,), **common)
+
+
+def verify_trust_record(store, record_id: Any, *, evaluated_at: Any,
+                        expected_subject_type: Any = None) -> TrustVerification:
+    """The same answer, reached from a trust record identity.
+
+    Fabric records reference trust by record identity; the released query
+    interface answers by subject. This resolves one to the other and asks the
+    same question, so there is still only one route to standing.
+
+    It also answers two questions the evaluation cannot. The **domain** comes
+    from the record, because the evaluation does not carry it. And the
+    referenced record must still be the subject's **current** record: a subject
+    re-decided since the reference was written verifies through a newer record,
+    and admitting the old one on the strength of that would admit a reference
+    that no longer describes anything.
+
+    `expected_subject_type` is optional and compared exactly.
+    """
+    identifier = _require_record_identity(record_id)
+    instant = _require_instant(evaluated_at)
+    required = (None if expected_subject_type is None
+                else _require_subject_type(expected_subject_type))
+
+    try:
+        record = get_trust_record(store, identifier)
+    except Exception:  # noqa: BLE001
+        return _unverified(identifier, instant, REASON_UNAVAILABLE)
+
+    if not isinstance(record, dict):
+        return _unverified(identifier, instant, REASON_UNREADABLE)
+
+    # The record that came back must be the record that was asked for. A
+    # lookup that answers with a different record answers a different question.
+    stored_identity = record.get("record_id")
+    if (_identity(stored_identity, RECORD_ID) is None
+            or stored_identity != identifier):
+        return _unverified(identifier, instant, REASON_UNREADABLE)
+
+    subject = record.get("subject_id")
+    if not isinstance(subject, str) or not subject.strip():
+        return _unverified(identifier, instant, REASON_UNREADABLE)
+
+    subject_type = _clean_subject_type(record.get("subject_type"))
+    if subject_type is None:
+        return _unverified(identifier, instant, REASON_UNREADABLE)
+
+    verification = verify_subject(store, subject, evaluated_at=instant)
+
+    # An answer that cites a record must cite this one. An answer that cites
+    # none -- absent standing, an unavailable plane -- keeps its own reason
+    # rather than being reported as an obsolete reference.
+    if verification.record_id is not None:
+        if verification.record_id != identifier:
+            return _refused(verification, REASON_UNREADABLE, subject_type)
+    elif verification.status == VERIFIED:
+        return _refused(verification, REASON_UNREADABLE, subject_type)
+
+    if required is not None and subject_type != required:
+        return _refused(verification, REASON_SUBJECT_TYPE_MISMATCH, subject_type)
+
+    # A grant that declares a different domain than the record carrying it is
+    # not a weaker answer; it is an incoherent one.
+    if (verification.scope is not None
+            and verification.scope.get("subject_type") != subject_type):
+        return _refused(verification, REASON_UNREADABLE, subject_type)
+
+    return _with_subject_type(verification, subject_type)

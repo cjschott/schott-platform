@@ -26,6 +26,7 @@ set -Eeuo pipefail
 #   - tests/test-occurrence-timeline.sh    (builds temporary occurrence stores)
 #   - tests/test-remote-collectors.sh      (drives a fake transport; spawns the CLI)
 #   - tests/test-trust-runtime.sh          (builds synthetic trust stores; spawns the CLI)
+#   - tests/test-fabric-runtime.sh         (builds synthetic fabric records; spawns Python)
 #   - the three Docker Compose renders  (each spawns the compose binary)
 #
 # Quick mode still runs syntax checking, ShellCheck, both static suites, both
@@ -105,7 +106,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=24
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=33
+  TOTAL_STEPS=34
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -165,6 +166,11 @@ if (( QUICK == 0 )); then
   # synthetic stores in temp directories and spawns the CLI, so it sits with
   # the other subprocess-driving suites rather than in the quick path.
   run "Trust runtime" bash tests/test-trust-runtime.sh
+  # After the fabric architecture suite: ENG-0004 implements what ADR-0012
+  # specifies, so the runtime is validated downstream of the specification. It
+  # builds synthetic records in memory and spawns Python, so it sits with the
+  # other subprocess-driving suites rather than in the quick path.
+  run "Fabric runtime" bash tests/test-fabric-runtime.sh
 else
   skipped_note "Initial read-only collectors"
   skipped_note "Knowledge orchestrator"
@@ -173,6 +179,7 @@ else
   skipped_note "Occurrence timeline"
   skipped_note "Remote collectors"
   skipped_note "Trust runtime"
+  skipped_note "Fabric runtime"
 fi
 
 # Static and documentation only: the trust plane is architecture in this
@@ -322,6 +329,7 @@ if (( QUICK == 1 )); then
     - tests/test-occurrence-timeline.sh
     - tests/test-remote-collectors.sh
     - tests/test-trust-runtime.sh
+    - tests/test-fabric-runtime.sh
     - the three Docker Compose renders
 
   Run without --quick before pushing.
