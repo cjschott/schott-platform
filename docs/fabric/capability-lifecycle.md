@@ -62,9 +62,10 @@ admission scope, taken across **all four** released dimensions —
 `permitted_capabilities`, `permitted_operations`,
 `permitted_data_classifications`, `permitted_targets`. It is **computed**, from
 the two grants the Trust Plane reported and the operator's own bound; it is
-never asserted by whoever asked. An empty dimension is a valid outcome, and it
-means nothing is eligible: the released scope rules deny any request that
-cannot name all four, so a grant leaving one open permits nothing.
+never asserted by whoever asked. An empty dimension is a valid composition
+outcome, and it means nothing is eligible: if any released dimension is empty
+once package, host, and admission scope have been intersected, the effective
+scope authorises no binding.
 
 An **absent** grant bounds nothing and therefore permits nothing — absence is
 never permission. The package is decided under its **record identity**, which
