@@ -536,16 +536,26 @@ class CapabilitySelection(FabricRecord):
     """
 
     selection_id: str
-    route_id: str
-    route_version: int
     request_class: Mapping[str, Any]
     considered_candidates: tuple[str, ...]
     excluded_candidates: tuple[Any, ...]
-    selected_instance_id: str | None
     selection_reason: str
     selected_at: datetime
     provenance: Mapping[str, Any]
+    # Absent means the fabric refused. An absent optional serialises as absent
+    # rather than as a null, so the chosen instance has to read back from a
+    # record that simply does not mention one.
+    selected_instance_id: str | None = None
+    # Route provenance, together or not at all. A request class with no
+    # resolvable route is still a recorded outcome, and there is no route
+    # identity to name it with -- so both are absent, and neither is ever a
+    # placeholder. Which outcomes may omit them is judged where the outcome
+    # itself is known, in the evidence rules.
+    route_id: str | None = None
+    route_version: int | None = None
     refusal_reason: str | None = None
+    # The node that constituted "this host" when locality was evaluated.
+    local_node_identity: str | None = None
     notes: str | None = None
 
     # Evidence rides the accepted record; there is no ninth record type.
@@ -557,9 +567,19 @@ class CapabilitySelection(FabricRecord):
 
     def __post_init__(self) -> None:
         _require_identifier(self.selection_id, self.kind, "selection_id")
-        _require_identifier(self.route_id, "capability-route", "route_id")
-        if isinstance(self.route_version, bool) or not isinstance(self.route_version, int):
-            raise FabricError("route_version must be an integer")
+        # Together or not at all: a version without a route names no policy,
+        # and a route without the version that applied cannot be looked up as
+        # it stood.
+        if (self.route_id is None) != (self.route_version is None):
+            raise FabricError(
+                "route_id and route_version are recorded together or not at all")
+        if self.route_id is not None:
+            _require_identifier(self.route_id, "capability-route", "route_id")
+            if (isinstance(self.route_version, bool)
+                    or not isinstance(self.route_version, int)):
+                raise FabricError("route_version must be an integer")
+        if self.local_node_identity is not None:
+            _require_text(self.local_node_identity, "local_node_identity")
         _require_text(self.selection_reason, "selection_reason")
         _require_aware(self.selected_at, "selected_at")
         self._seal()

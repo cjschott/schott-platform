@@ -743,9 +743,22 @@ only.
   refusal, and no-candidate alike — enters `request_critical_section(request_id)`
   **exactly once**, before replay lookup, and holds it through allocation and the
   accepted write.
-- **Inspect first:** ADR-0012 "How routing occurs";
+- **Inspect first:** ADR-0012 "How routing occurs", including "What 'this host'
+  is, and who says so" and "Recording a request class no route governed";
   `docs/fabric/failure-behaviour.md`; specification §8 selection constraints;
   ELIG-13 and ELIG-14
+- **Evaluation context.** C6 receives `local_node_identity` — the node
+  performing the selection — as operator-supplied evaluation context, never as
+  request data. `local-only` qualifies a candidate only on exact equality with
+  its host's `node_identity_reference`; `operator-controlled-only` excludes
+  `third-party-hosted`; `any-trusted` excludes nothing. An absent or unusable
+  identity refuses a `local-only` request rather than degrading it. The context
+  is an authoritative input, so it participates in the request digest, and a
+  `local-only` decision records the identity that governed it.
+- **Route provenance.** `route_id` and `route_version` are written together or
+  not at all, and omitted only for the `no-candidate` outcome a request class
+  with no resolvable route produces. No placeholder route identity is ever
+  written.
 - **AC:** 20, 21, 22, 23, 24, 26, 27, 35 (repeat, on `CSEL`), 36, 38, 42 (selection half), 50, 51 (selection half), 53, 54, 57 (repeat, selection boundary), 59, 60, 63 (repeat, on `CSEL`), 65, 76 (repeat, on `CSEL`), 77 (repeat, on `CSEL`), 80 · **FC:** 7, 8, 9, 16 (selection recomputation), 18 (selection after host disappearance), 22, 23, 24, 26, 28
 - **Red:** assert identical inputs choose identically across repeated runs; the
   **first** candidate in human-declared order wins with no reordering by any

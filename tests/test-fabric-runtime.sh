@@ -502,6 +502,67 @@ for forbidden in ("write", "write_atomic", "allocate_id", "admit", "select",
     check(not hasattr(models_module, forbidden),
           f"the contract layer exposes no '{forbidden}' behaviour")
 
+
+# --- Route provenance is all-or-none ----------------------------------------
+# A request class with no resolvable route is still a recorded outcome, so the
+# record has to exist without naming a route it never had. The pair is written
+# together or not at all: a version without a route names no policy, and a
+# route without the version that applied cannot be looked up as it stood.
+NO_ROUTE = dict(
+    selection_id="CSEL-000100",
+    request_class={"data_classification": "internal"},
+    considered_candidates=(), excluded_candidates=(),
+    selected_instance_id=None,
+    selection_reason="no route resolved for the request class",
+    selected_at=STAMP, provenance={"class": "declared", "source": "core"})
+
+no_route = CapabilitySelection(**NO_ROUTE)
+ok("a selection with no route provenance is constructible")
+check(no_route.route_id is None and no_route.route_version is None,
+      "a no-route selection names neither a route nor a version")
+stored_no_route = no_route.to_dict()
+for absent in ("route_id", "route_version"):
+    check(absent not in stored_no_route,
+          f"a no-route selection serialises no {absent} at all")
+check(CapabilitySelection.from_dict(stored_no_route).to_dict() == stored_no_route,
+      "a no-route selection round-trips through the stored form")
+
+routed_selection = CapabilitySelection(**dict(
+    NO_ROUTE, selection_id="CSEL-000101", route_id="CROUTE-0001",
+    route_version=1, considered_candidates=("CINST-000001",),
+    selected_instance_id="CINST-000001"))
+check(routed_selection.route_id == "CROUTE-0001"
+      and routed_selection.route_version == 1,
+      "a selection a route governed carries both halves of its provenance")
+
+for half, description in (({"route_id": "CROUTE-0001"}, "a route with no version"),
+                          ({"route_version": 1}, "a version with no route")):
+    refuses(lambda half=half: CapabilitySelection(**dict(
+        NO_ROUTE, selection_id="CSEL-000102", **half)),
+        f"{description} is refused")
+
+# A placeholder is not an absence. Anything occupying the route identity must
+# be one, so a sentinel cannot stand where nothing belongs.
+for sentinel in ("", "CROUTE-0000-placeholder", "none", "CROUTE-000"):
+    refuses(lambda sentinel=sentinel: CapabilitySelection(**dict(
+        NO_ROUTE, selection_id="CSEL-000103", route_id=sentinel, route_version=1)),
+        "a sentinel route identity is refused")
+
+# The node that governed a local-only decision is recorded, so the decision can
+# be read back rather than re-derived from whichever node asks later.
+contextual = CapabilitySelection(**dict(
+    NO_ROUTE, selection_id="CSEL-000104", local_node_identity="node/schai"))
+check(contextual.local_node_identity == "node/schai",
+      "a selection may record the node identity that governed its locality")
+check(contextual.to_dict()["local_node_identity"] == "node/schai",
+      "the governing node identity survives serialisation")
+check("local_node_identity" not in stored_no_route,
+      "a selection that recorded no node identity serialises none")
+for unusable in ("", "   ", 7):
+    refuses(lambda unusable=unusable: CapabilitySelection(**dict(
+        NO_ROUTE, selection_id="CSEL-000105", local_node_identity=unusable)),
+        "an unusable local node identity is refused")
+
 print(f"__FAILURES__={failures}")
 FABRICPY
 )"
@@ -3428,6 +3489,66 @@ with TemporaryDirectory() as tmp:
     refuses_fabric(lambda: store.write("capability-advertisement",
                                        advertisement("node/schai")),
                    "a node identity reference is not the fabric evidence actor")
+
+
+# --- Which outcomes may omit route provenance -------------------------------
+# The model cannot know the outcome from the pair alone; these rules can,
+# because they already derive it. Every decision a route governed names it, and
+# the one decision no route governed must not invent an identity to fill the
+# space.
+PROVENANCE_BASE = dict(
+    selection_id="CSEL-000100",
+    request_class={"data_classification": "internal"},
+    considered_candidates=(), excluded_candidates=(),
+    selected_instance_id=None,
+    selection_reason="no route resolved for the request class",
+    selected_at=WHEN, provenance={"class": "declared", "source": "core"})
+PROVENANCE_EVIDENCE = dict(
+    actor="core", approving_authority=None, recorded_at=WHEN,
+    request_id="req-route-provenance", request_digest="sha256:" + "0" * 64,
+    causal_references=(), trust_evidence_references=())
+SELECTION_MODEL = RECORD_MODELS["capability-selection"]
+
+
+def provenance_case(category, **overrides):
+    return SELECTION_MODEL(**dict(
+        PROVENANCE_BASE, evidence=assemble_evidence(
+            "capability-selection",
+            **dict(PROVENANCE_EVIDENCE, reason_category=category)),
+        **overrides))
+
+
+validate_record_evidence("capability-selection", provenance_case("no-candidate"))
+ok("a no-candidate outcome may omit route provenance")
+
+validate_record_evidence("capability-selection", provenance_case(
+    "selection", selection_id="CSEL-000106", route_id="CROUTE-0001",
+    route_version=1, considered_candidates=("CINST-000001",),
+    selected_instance_id="CINST-000001"))
+ok("a selected outcome carrying route provenance is accepted")
+
+refuses_fabric(lambda: validate_record_evidence(
+    "capability-selection", provenance_case(
+        "selection", selection_id="CSEL-000107",
+        considered_candidates=("CINST-000001",),
+        selected_instance_id="CINST-000001")),
+    "a selected outcome may not omit the route that governed it")
+
+EXCLUDED = ({"instance_id": "CINST-000001",
+             "reason": "admission-window-expired"},)
+
+refuses_fabric(lambda: validate_record_evidence(
+    "capability-selection", provenance_case(
+        "selection-refusal", selection_id="CSEL-000108",
+        considered_candidates=("CINST-000001",), excluded_candidates=EXCLUDED,
+        refusal_reason="no eligible candidate")),
+    "a refusal over a resolved route's candidates may not omit route provenance")
+
+validate_record_evidence("capability-selection", provenance_case(
+    "selection-refusal", selection_id="CSEL-000109", route_id="CROUTE-0001",
+    route_version=1, considered_candidates=("CINST-000001",),
+    excluded_candidates=EXCLUDED, refusal_reason="no eligible candidate"))
+ok("a resolved-route refusal carrying route provenance is accepted")
 
 print(f"__FAILURES__={failures}")
 IDENTITYPY

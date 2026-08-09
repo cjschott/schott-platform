@@ -347,6 +347,53 @@ rather than leave the host**. Degrading to a remote instance because the local
 one is unavailable is precisely the silent redirection this rule exists to
 prevent.
 
+#### What "this host" is, and who says so
+
+`local-only` means *must execute on this host*, and a selection cannot answer
+that from the records alone: several distinct nodes are legitimately
+`on-premises`, so **a location class is not an identity**. Selection therefore
+receives a **`local_node_identity`** — the node performing the selection — as
+**operator-supplied evaluation context**, alongside the request class and the
+instant.
+
+It is **not request data.** A workload names a capability, a version range, a
+classification, and a locality; it does not get to say which node it is
+running on, because a request that could choose its own locality context could
+choose to be local anywhere.
+
+- **`local-only`** — a candidate qualifies only where its admitted host's
+  `node_identity_reference` is **exactly equal** to the supplied
+  `local_node_identity`. Nothing is inferred from a location class, a
+  hostname, an endpoint, or a resemblance between strings, and there is no
+  alias table. Where the identity is absent or unusable, selection **fails
+  closed**: a `local-only` request is refused rather than quietly evaluated as
+  though it were some other locality.
+- **`operator-controlled-only`** — excludes any candidate whose host is
+  `third-party-hosted`. Unchanged, and no new registry is introduced to say it.
+- **`any-trusted`** — adds no locality exclusion of its own.
+
+The context is an **authoritative input to the selection**, so it participates
+in the request digest like every other one: the same request evaluated on a
+different node is a different governed operation, not a replay of the first.
+A selection whose locality was `local-only` **records the identity that
+governed it**, so the decision can be reconstructed rather than re-derived from
+whatever node happens to be asking later.
+
+#### Recording a request class no route governed
+
+A request class with no resolvable route is refused, and the refusal is
+**written down** — silence is not an outcome. But there is no route to name,
+and a record citing an identity no route ever had would be worse than no
+record: it reads as authoritative.
+
+So `route_id` and `route_version` are recorded **together or not at all**, and
+absent **only** for that outcome. A selected instance always came from a route,
+and so did every candidate a route governed. No placeholder, sentinel, or
+zero-version stands in for a route that does not exist. The outcome vocabulary
+already keeps the two refusals apart: *no route* considered no candidate and is
+recorded as `no-candidate`, while *a route whose candidates were all excluded*
+names every one of them and is recorded as `selection-refusal`.
+
 ### How capability loss is handled
 
 Loss is any transition from eligible to ineligible: revocation, quarantine,
