@@ -247,6 +247,13 @@ def _require_selection_outcome(record, evidence: Mapping[str, Any]) -> None:
             f"a '{outcome}' selection must be recorded as "
             f"'{OUTCOME_CATEGORIES[outcome]}'")
 
+    # Route provenance is judged here because only here is the outcome known.
+    # Every decision a route governed names it; the one decision no route
+    # governed cannot, and must not invent an identity to fill the space.
+    if record.route_id is None and outcome != "no-candidate":
+        raise FabricError(
+            f"a '{outcome}' selection must name the route that governed it")
+
     # Every candidate that was considered and not chosen needs its exclusion
     # reason: a record naming only the winner documents the outcome and hides
     # the decision.

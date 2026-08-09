@@ -76,6 +76,22 @@ A `local-only` request that cannot run locally is refused. It does not fall
 back to a remote instance, however trusted that instance is. The whole point of
 the marking is that leaving the host is the thing being prevented.
 
+Which candidate is local is decided by exact identity: the node performing the
+selection is supplied to it as `local_node_identity`, and a candidate qualifies
+only where its host's `node_identity_reference` equals it. A location class is
+not an identity, so `on-premises` never stands in for *local*. When the
+identity is missing or unusable the request is **refused** — failing closed,
+rather than falling through to a locality nobody asked for.
+
+## A request class with no route is still recorded
+
+No route resolving is an outcome, and it is written down like any other. The
+record names no route, because there is none to name: `route_id` and
+`route_version` are absent together rather than filled with a placeholder that
+would cite a policy that never existed. It stays distinguishable from a route
+whose candidates were all excluded — that one names every candidate and its
+exclusion reason.
+
 ## What the fabric never does when it cannot reach the core
 
 Hosts do **not** continue autonomously. A fabric that keeps operating without

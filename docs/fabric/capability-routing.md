@@ -72,15 +72,25 @@ and that trade was made deliberately.
 
 ## Locality is enforced, not advisory
 
-| Value | Meaning |
-|---|---|
-| `local-only` | Must execute on this host. **Refuses rather than leaving it.** |
-| `operator-controlled-only` | May execute on any operator-controlled host; never third-party-hosted. |
-| `any-trusted` | May execute on any eligible instance in the route. |
+| Value | Meaning | How a candidate is judged |
+|---|---|---|
+| `local-only` | Must execute on this host. **Refuses rather than leaving it.** | Its host's `node_identity_reference` is **exactly** the supplied `local_node_identity` |
+| `operator-controlled-only` | May execute on any operator-controlled host; never third-party-hosted. | Its host's `location_class` is not `third-party-hosted` |
+| `any-trusted` | May execute on any eligible instance in the route. | No locality exclusion |
 
 A `local-only` request that cannot run locally is **refused**. Degrading to a
 remote instance because the local one is unavailable is exactly the silent
 redirection this rule exists to prevent.
+
+**"This host" is supplied, not deduced.** Selection receives a
+`local_node_identity` — the node performing it — as operator-supplied
+evaluation context, not as request data: a workload does not get to say which
+node it is running on. A **location class is not an identity**; several
+distinct nodes are legitimately `on-premises`, so `on-premises` never means
+*local*. Nothing is inferred from a hostname, an endpoint, or a resemblance
+between strings, and there is no alias table. Where the identity is absent or
+unusable, a `local-only` request is **refused** rather than evaluated as though
+it were some other locality.
 
 ## Version negotiation
 

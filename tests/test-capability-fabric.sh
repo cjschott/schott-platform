@@ -457,12 +457,29 @@ for field in ("weight", "load_factor", "latency_score", "priority_score",
 
 # --- Selection: why did this run there --------------------------------------
 selection = schemas.get("capability-selection", {})
-for field in ("selection_id", "route_id", "route_version", "request_class",
+for field in ("selection_id", "request_class",
               "considered_candidates", "excluded_candidates",
               "selected_instance_id", "selection_reason", "selected_at",
               "provenance"):
     check(field in (selection.get("required_fields") or []),
           f"selection requires {field}")
+# Route provenance is required of every decision a route governed and absent
+# from the one decision no route governed. A request class with no resolvable
+# route is still recorded; there is simply no route identity to name, and a
+# placeholder would cite a policy that never existed.
+for field in ("route_id", "route_version"):
+    check(field in (selection.get("conditionally_required_fields") or []),
+          f"selection records {field} conditionally")
+    check(field not in (selection.get("required_fields") or []),
+          f"selection does not require {field} unconditionally")
+check(selection.get("route_provenance") == "all-or-none",
+      "a selection records route identity and version together or not at all")
+check(selection.get("route_provenance_absent_only_for") == "no-candidate",
+      "only the no-candidate outcome may omit route provenance")
+check(selection.get("route_identity_placeholder") == "forbidden",
+      "a selection never invents a route identity")
+check("local_node_identity" in (selection.get("optional_fields") or []),
+      "a selection may record the node that governed a local-only decision")
 check(selection.get("records_exclusion_reason") is True,
       "a selection records why each candidate was excluded")
 # A selection points at the policy that governed it; it does not carry a copy.

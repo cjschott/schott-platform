@@ -45,10 +45,6 @@ duplicates_route_policy: false
 
 required_fields:
   - selection_id
-  - route_id
-  # The route version that applied at the moment of selection, so a later route
-  # edit cannot change the explanation of a past choice.
-  - route_version
   - request_class
   - considered_candidates
   - excluded_candidates
@@ -59,9 +55,33 @@ required_fields:
   - selected_at
   - provenance
 
+# Route provenance is required of every decision a route governed, and absent
+# from the one decision no route governed. A request class with no resolvable
+# route is still a durable outcome -- silence is not an outcome -- but there is
+# no route identity to name, and inventing one would cite a record that does
+# not exist.
+conditionally_required_fields:
+  - route_id
+  # The route version that applied at the moment of selection, so a later route
+  # edit cannot change the explanation of a past choice.
+  - route_version
+
 optional_fields:
   - refusal_reason
+  # The Fabric node that constituted "this host" when locality was evaluated.
+  # Recorded so a `local-only` decision can be reconstructed: the same request
+  # evaluated on a different node is a different decision, and a record that
+  # did not say which node governed it could not tell them apart.
+  - local_node_identity
   - notes
+
+# All-or-none. A record naming a route version without a route, or a route
+# without the version that applied, describes a policy nobody can look up.
+route_provenance: all-or-none
+# Absent only for the outcome that had no route. A selected instance always
+# came from a route, and so did every candidate any route governed.
+route_provenance_absent_only_for: no-candidate
+route_identity_placeholder: forbidden
 
 # A refusal is written down. Silence is not an outcome.
 records_refusal: true

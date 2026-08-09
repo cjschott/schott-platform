@@ -303,7 +303,9 @@ capability execution, health evaluation, or remediation.
 - **Responsibility:** resolve a route and select the first eligible candidate in
   human-declared order; record the outcome.
 - **Inputs:** request class; route; candidate instances; eligibility from C5; an
-  optional health removal set.
+  optional health removal set; **`local_node_identity`** — the node performing
+  the selection, supplied as operator evaluation context rather than as request
+  data, and required to evaluate `local-only`.
 - **Outputs:** a Fabric identity or a `capability-selection` record — **never an
   invocation, and never a capability result.**
 - **State ownership:** authoritative for selection and refusal records.
@@ -675,7 +677,7 @@ refusal), `invalid` (malformed input), `not-found` (unresolved reference),
 | 7 | Create/supersede route | Declare ordered candidates | request class, ordered candidates, version | route identity, version, ordered list | operator | candidates resolve | record written | invalid, not-found, conflict | **W** | see §6 identity | evidence on `CROUTE` |
 | 8 | Withdraw / retire / supersede | End eligibility by decision | target id, reason, approver | resulting identity, reason | operator | target resolves | record written; **nothing edited** | not-found, invalid | **W** | see §6 identity | evidence on the superseding record |
 | 9 | Compute eligibility | Explain eligibility at an instant | instance id, request classification, instant | eligible flag, per-condition results, unmet reasons | read | store readable | deterministic verdict | unavailable → ineligible | **R** | pure; repeatable | none required |
-| 10 | Select | Choose deterministically | request class, instant, optional health removals | route + version, every candidate, per-candidate exclusion reason, chosen identity **or** refusal reason | read + `CSEL` write | route resolves | first eligible in declared order | refused (no route / none eligible / `local-only`) | **R + `CSEL`** | re-running writes a **new** `CSEL`; the choice is identical for identical inputs | **`CSEL` always, selection or refusal** |
+| 10 | Select | Choose deterministically | request class, instant, `local_node_identity`, optional health removals | route + version, every candidate, per-candidate exclusion reason, chosen identity **or** refusal reason | read + `CSEL` write | route resolves | first eligible in declared order | refused (no route / none eligible / `local-only`) | **R + `CSEL`** | re-running writes a **new** `CSEL`; the choice is identical for identical inputs | **`CSEL` always, selection or refusal** |
 | 11 | Inspect | Read records | store root, filters | matching records, deterministic order | read | — | report | not-found, invalid | **R only** | pure | none |
 | 12 | Validate | Report structural problems | store root | findings in deterministic order, counts | read | — | report; **repairs nothing** | invalid | **R only** | repeated validation returns identical output | none |
 
@@ -795,7 +797,7 @@ operator action required to progress.
 | 21 | Store root inside a git repository | ✔ | ✔ | ✖ | ✔ | ✔ | Refused, per the released store contract |
 | 22 | No route for a request class | ✔ | ✔ | ✖ | — | ✔ | Refuse; **`CSEL` written** recording the no-candidate outcome |
 | 23 | No eligible candidate | ✔ | ✔ | ✖ | — | ✔ | Refuse naming **every** candidate and its exclusion; **`CSEL` written** |
-| 24 | `local-only` unsatisfiable | ✔ | ✔ | ✖ | — | ✔ | **Refuse rather than degrade** to a remote instance |
+| 24 | `local-only` unsatisfiable, or `local_node_identity` absent/unusable | ✔ | ✔ | ✖ | — | ✔ | **Refuse rather than degrade** to a remote instance or another locality |
 | 25 | Explicit recovery after failure | — | ✔ | ✖ | ✔ | ✔ | **A decision, not an event.** New records by new decisions |
 | 26 | `side-effecting` contract routed or selected | ✔ | ✔ | ✖ | — | ✔ | **Unroutable.** Refused; **no route may override**; refusal recorded in `CSEL` |
 | 27 | Empty contract version intersection | ✔ | ✔ | ✖ | — | ✔ | Refuse. **No upgrade, downgrade, nearest match, or best-effort** |
@@ -976,7 +978,11 @@ ninth, so evidence lives on the record whose existence it justifies.
 
 `CSEL-000000` additionally carries: outcome (`selected`, `refused`, or
 `no-candidate`), route and route version, **every** candidate considered, and
-the exclusion reason for each.
+the exclusion reason for each. Route and route version are recorded **together
+or not at all**, and absent only for the `no-candidate` outcome a request class
+with no resolvable route produces — never as a placeholder. A decision whose
+locality was `local-only` also carries the `local_node_identity` that governed
+it, so which node it was decided for is readable from the record.
 
 For a capability advertisement, the evidence actor is the exact
 store-allocated `capability_host_id` of the already-admitted subject
@@ -1138,8 +1144,11 @@ result is claimed here; nothing has been implemented or executed.**
     runs, then it refuses, names **every** candidate with its exclusion reason,
     and writes a refusal record.
 23. **`local-only` refuses.** Given a `local-only` request with no eligible
-    local instance, when selection runs, then it refuses and **does not** select
-    a remote instance.
+    instance whose host identity is exactly the supplied `local_node_identity`,
+    when selection runs, then it refuses and **does not** select a remote
+    instance. A location class is never read as an identity, and an absent or
+    unusable `local_node_identity` refuses rather than degrading to another
+    locality.
 24. **Health removes only.** Given a health removal set, when selection runs,
     then removed candidates are excluded and health **never adds or reorders**.
 25. **Operates without Health Runtime.** Given no Health Runtime present, when
@@ -1219,7 +1228,8 @@ result is claimed here; nothing has been implemented or executed.**
     created.
 50. **No route.** Given a request class with no resolvable route, when selection
     runs, then it refuses, and the refusal is recorded — distinguishably from
-    the no-eligible-candidate outcome.
+    the no-eligible-candidate outcome, carrying **no route identity or version**
+    rather than a placeholder for a route that does not exist.
 51. **Host disappearance changes nothing authoritative.** Given an admitted
     instance whose host has disappeared, when eligibility and selection run,
     then the instance is excluded as a derived outcome only, **no authoritative
