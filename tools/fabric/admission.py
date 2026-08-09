@@ -91,6 +91,10 @@ REASON_ADVERT_PACKAGE = "advertisement-not-of-package"
 REASON_ADVERT_STALE = "advertisement-not-fresh"
 REASON_ADMISSION_EXPIRED = "admission-window-expired"
 REASON_EMPTY_SCOPE = "empty-effective-scope"
+# Separate from an empty intersection on purpose: nothing overlapped at all is
+# a different fact from an overlap that does not cover this binding, and an
+# operator reading one as the other looks in the wrong place.
+REASON_CAPABILITY_SCOPE = "capability-not-permitted-by-scope"
 # "Exceeds" would assert a ranking of classifications that no accepted source
 # declares. Membership is the whole of the comparison.
 REASON_CLASSIFICATION = "data-classification-not-permitted-by-host"
@@ -406,8 +410,8 @@ def _exact_strings(value: Any, repeated: str = REASON_CONTENT) -> tuple[str, ...
 def _admission_scope(value: Any) -> dict[str, tuple[str, ...]]:
     """The operator's own bound, in exactly the released scope vocabulary.
 
-    Every dimension, every one non-empty. The released scope rules deny a
-    request that cannot name all four, so a bound leaving one open bounds
+    Every dimension, every one non-empty. A dimension the composition leaves
+    empty makes the composed scope unusable, so a bound leaving one open bounds
     nothing that could ever be authorised.
     """
     if not isinstance(value, Mapping):
@@ -1226,9 +1230,19 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         if not isinstance(requirements, Mapping) or not _contained(requirements, verified):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
 
-        # 10. The intersection, computed here. Then the classification the
-        #     machine is declared to handle, compared by membership only.
+        # 10. The intersection, computed here. Then what it actually covers.
+        #     Composing three grants proves they overlap; it proves nothing
+        #     about what they overlap on, so the binding's own capability must
+        #     be named in the composed dimension. The identity compared is the
+        #     canonical `CAPDEF-0000` this fabric allocated -- there is no
+        #     alias field and no mapping from a descriptive token, because a
+        #     grant that had to be interpreted to match is not the grant that
+        #     was approved. Refused here, before anything is allocated.
         effective = _effective_scope(package_standing.scope, host_standing.scope, bound)
+        if capability_id not in effective["permitted_capabilities"]:
+            _refuse(REFUSED, REASON_CAPABILITY_SCOPE)
+        # Then the classification the machine is declared to handle, compared
+        # by membership only.
         declared_class = host.get("data_classification")
         for classification in effective[SCOPE_CLASSIFICATIONS]:
             if classification != declared_class:
