@@ -170,6 +170,16 @@ history reference, a written reason, and an expiration where the grant is
 time-bounded. Lineage behaviour follows ADR-0011: one lineage per subject, new
 lineage only after revocation or rejection.
 
+**Authoring fabric-domain grants.** A grant in the `capability-package` or
+`fabric-node` domain that is meant to authorise a fabric capability writes that
+capability's canonical `CAPDEF-0000` identity into `permitted_capabilities`.
+The Fabric allocates that identity when the capability is declared, and
+admission refuses a binding whose capability is not contained in the composed
+scope — so a grant naming the capability any other way authorises nothing. This
+applies to those two domains only. `permitted_operations` for remote targets
+still comes from `allowed_operation_ids`, and the remote-collection operation
+catalog, its target declarations, and their scope comparisons are unchanged.
+
 ## Rollback
 
 Immutable records are never deleted, so **rollback is configuration rollback,
