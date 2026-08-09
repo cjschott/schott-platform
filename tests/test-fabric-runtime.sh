@@ -1944,7 +1944,7 @@ for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
     check(not hasattr(validator_module, later),
           f"the validator exposes no '{later}' behaviour at increment 3")
 
-for absent in ("inspection.py", "cli.py", "eligibility.py", "selection.py",
+for absent in ("inspection.py", "cli.py", "selection.py",
                "trust.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 3 creates no {absent}")
@@ -2801,7 +2801,7 @@ for later in ("admit", "evaluate_eligibility", "compute_eligibility", "select",
           f"request identity exposes no '{later}' behaviour at increment 4")
     check(not hasattr(evidence_module, later),
           f"evidence exposes no '{later}' behaviour at increment 4")
-for absent in ("eligibility.py", "selection.py", "inspection.py",
+for absent in ("selection.py", "inspection.py",
                "cli.py", "trust.py", "health.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 4 creates no {absent}")
@@ -3916,7 +3916,7 @@ for writer in ("write", "write_record", "create_decision", "declare_root_authori
                "record_decision", "revoke", "grant"):
     check(not hasattr(adapter_module, writer),
           f"the trust adapter writes no trust or fabric state: no '{writer}'")
-for absent in ("eligibility.py", "selection.py", "inspection.py",
+for absent in ("selection.py", "inspection.py",
                "cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 5 creates no {absent}")
@@ -5413,7 +5413,7 @@ for later in ("supersede_route", "evaluate_eligibility",
               "remediate", "retry", "refresh"):
     check(not hasattr(admission_module, later),
           f"admission exposes no '{later}' behaviour at increment 6")
-for absent in ("eligibility.py", "selection.py", "inspection.py", "cli.py", "health.py"):
+for absent in ("selection.py", "inspection.py", "cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 6 creates no {absent}")
 
@@ -6350,10 +6350,12 @@ check(admission_module.verify_trust_record is RELEASED_TRUST_VERIFY,
 # --- The correction adds no module, and increment 7 has not begun -----------
 RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
                     "identifiers.py", "models.py", "request_identity.py",
-                    "store.py", "trust_adapter.py", "validator.py"}
+                    "store.py", "trust_adapter.py", "validator.py",
+                    # Increment 8 adds exactly one module, and it is C5's.
+                    "eligibility.py"}
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
-      "the correction adds no fabric module and increment 7 has not begun")
+      "the fabric package holds the released modules and C5, and nothing else")
 
 # =======================================================================
 # Increment 7 — instance admission, lifecycle transitions, route governance
@@ -9024,7 +9026,7 @@ try:
                   "admit_route", "health", "remediate"):
         check(not hasattr(admission_module, later),
               f"admission exposes no '{later}' behaviour at increment 7")
-    for absent in ("eligibility.py", "selection.py", "inspection.py", "cli.py",
+    for absent in ("selection.py", "inspection.py", "cli.py",
                    "health.py"):
         check(not (root / "tools" / "fabric" / absent).exists(),
               f"increment 7 creates no {absent}")
@@ -9033,6 +9035,729 @@ finally:
 
 check(admission_module.verify_trust_record is RELEASED_TRUST_VERIFY_7,
       "the released C3 adapter is restored after the increment 7 regression")
+
+# =======================================================================
+# Increment 8 — eligibility evaluator (C5)
+# =======================================================================
+# C5 explains, at one supplied instant, whether one already-governed binding
+# is eligible. It is pure: it reads records and asks C3 once per domain, and
+# it writes nothing, allocates nothing, and stores no verdict -- eligibility
+# is derived, and a derived answer that gets written back becomes a decision
+# nobody made.
+#
+# Every one of the twelve conditions the schema enumerates is checked
+# individually, because prose that says "eight" is how an enumerated check
+# quietly disappears. ELIG-13 and ELIG-14 are C6's, in increment 9, and are
+# absent here on purpose: route membership and effect-class routability are
+# selection constraints, and C5 selects nothing.
+
+RELEASED_TRUST_VERIFY_8 = trust_adapter.verify_trust_record
+
+# The import that must fail before increment 8 exists.
+import tools.fabric.eligibility as eligibility_module  # noqa: E402
+from tools.fabric.eligibility import (  # noqa: E402
+    CONDITION_IDS, INDETERMINATE, MET, UNMET, evaluate_eligibility,
+)
+from tools.fabric.models import RECORD_MODELS  # noqa: E402
+
+SOON = STAMP + timedelta(days=2)
+STALE_AT = STAMP + timedelta(days=3)
+BEFORE = STAMP - timedelta(hours=1)
+
+# The one classification the fixtures use, and one the host never declares.
+FOREIGN_CLASS = "operator-restricted"
+
+
+def verdict_for(store, trust_store, instance_id, request, instant):
+    """One evaluation, reporting anything that escapes it as a failure.
+
+    C5 is specified total, so an exception is itself a defect: an evaluator
+    that raises has answered neither "eligible" nor "ineligible", and a caller
+    that must catch to learn the verdict has no verdict.
+    """
+    try:
+        return evaluate_eligibility(store, trust_store, instance_id=instance_id,
+                                    request=request, evaluated_at=instant), None
+    except BaseException as error:  # noqa: BLE001
+        return None, error
+
+
+def unmet_of(verdict):
+    return () if verdict is None else tuple(verdict.unmet)
+
+
+def reason_for(verdict, condition_id):
+    """The reason C5 gave for one condition, or None."""
+    if verdict is None:
+        return None
+    for result in verdict.conditions:
+        if result.condition_id == condition_id:
+            return result.reason
+    return None
+
+
+def status_of(verdict, condition_id):
+    if verdict is None:
+        return None
+    for result in verdict.conditions:
+        if result.condition_id == condition_id:
+            return result.status
+    return None
+
+
+class DomainVerify:
+    """The released C3 adapter, with one domain's answer substituted.
+
+    Delegates every other domain rather than answering it, so a test that
+    fails one half of trust still proves the other half was really verified.
+    """
+
+    def __init__(self, domain=None, verification=None):
+        self.domain = domain
+        self.verification = verification
+        self.calls = []
+
+    def __call__(self, store, record_id, *, evaluated_at, expected_subject_type=None):
+        self.calls.append(expected_subject_type)
+        if self.domain is not None and expected_subject_type == self.domain:
+            return self.verification
+        return RELEASED_TRUST_VERIFY_8(store, record_id, evaluated_at=evaluated_at,
+                                       expected_subject_type=expected_subject_type)
+
+
+def standing_of(subject_id, standing, reason, subject_type):
+    """A refused C3 answer naming one standing and one controlled reason."""
+    return trust_adapter.TrustVerification(
+        subject_id=subject_id, status=trust_adapter.UNVERIFIED, standing=standing,
+        stored_standing=standing, evaluated_at=LATER.isoformat(),
+        lineage_id="TLIN-000001", record_id="TREC-000001-v0001",
+        decision_id="TDEC-000001", reasons=(reason,), subject_type=subject_type)
+
+
+class UnreadableStore(FabricStore):
+    """The real store, refusing every record read.
+
+    A store that cannot be read is not a store that says "eligible": the
+    accepted failure behaviour is ineligible with the reason named.
+    """
+
+    def read_record(self, kind, identifier):
+        raise FabricError("the record could not be read")
+
+
+def i8_world(tmp, *, contract=None, package=None, advert=None, instance=None):
+    """Capability, contract, package, admitted host, claim, and one binding.
+
+    Built through the released operations only. An instance assembled by
+    writing records directly would prove eligibility against a store no
+    governed path could produce.
+    """
+    store = opened(tmp)
+    trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+    cap = declare_capability(store, **dict(BASE_CAPABILITY, request_id="i8-cap"))
+    interface = dict(BASE_CONTRACT, request_id="i8-con",
+                     capability_id=cap.record_id)
+    interface.update(contract or {})
+    con = declare_contract(store, **interface)
+    artefact = dict(INSTANCE_PACKAGE, request_id="i8-pkg",
+                    capability_id=cap.record_id, contract_id=con.record_id)
+    artefact.update(package or {})
+    pkg = declare_package(store, **artefact)
+    adm = admit_subject(store, trust_store, **dict(
+        BASE_SUBJECT, request_id="i8-host",
+        fabric_node_trust_record_id=host_trust.record.record_id))
+    claim = dict(BASE_ADVERT, request_id="i8-adv", actor=adm.record_id,
+                 capability_host_id=adm.record_id,
+                 capability_package_id=pkg.record_id,
+                 contract_id=con.record_id, observed_at=STAMP, valid_until=YEAR)
+    claim.update(advert or {})
+    adv = register_advertisement(store, **claim)
+    binding = dict(BASE_INSTANCE, request_id="i8-inst",
+                   capability_id=cap.record_id,
+                   capability_package_id=pkg.record_id,
+                   capability_host_id=adm.record_id, contract_id=con.record_id,
+                   advertisement_id=adv.record_id,
+                   package_trust_record_id=package_trust.record.record_id,
+                   host_trust_record_id=host_trust.record.record_id)
+    binding.update(instance or {})
+    inst = admission_module.admit_instance(store, trust_store, **binding)
+    check(all(result.outcome == ACCEPTED
+              for result in (cap, con, pkg, adm, adv, inst)),
+          "the increment 8 world is admitted through the released operations")
+    request = {"capability_id": cap.record_id, "contract_id": con.record_id,
+               "accepted_contract_versions": ("1.0.0",),
+               "data_classification": "internal"}
+    return store, trust_store, request, cap, con, pkg, adm, adv, inst
+
+
+def variant_instance(store, source_id, identifier, **changes):
+    """A second stored binding differing from an accepted one in named fields.
+
+    The released admission path refuses these states, which is the point: a
+    store can still hold one after damage or a legacy write, and a derived
+    verdict has to refuse on what it reads rather than assume validation ran.
+    """
+    payload = dict(store.read_record("capability-instance", source_id))
+    payload["instance_id"] = identifier
+    for name, value in changes.items():
+        if value is None and name in payload:
+            del payload[name]
+        else:
+            payload[name] = value
+    store.write_atomic(store.path_for("capability-instance", identifier), payload)
+    return identifier
+
+
+# --- 1. The evaluator exists, and it is the only thing that arrived ---------
+check(callable(getattr(eligibility_module, "evaluate_eligibility", None)),
+      "increment 8 exposes the C5 evaluator")
+check(tuple(CONDITION_IDS) == tuple(f"ELIG-{number}" for number in range(1, 13)),
+      "C5 enumerates exactly ELIG-1 through ELIG-12, in schema order")
+for later in ("ELIG-13", "ELIG-14"):
+    check(later not in tuple(CONDITION_IDS),
+          f"{later} stays out of C5 and belongs to C6 at increment 9")
+
+for later in ("select", "select_candidate", "resolve_route", "rank", "order",
+              "choose", "score", "weight", "health", "remediate", "invoke",
+              "load_capability", "persist", "store_verdict", "allocate_id",
+              "write", "write_record", "write_atomic", "commit"):
+    check(not hasattr(eligibility_module, later),
+          f"the eligibility evaluator exposes no '{later}' behaviour at increment 8")
+
+for absent in ("selection.py", "inspection.py", "cli.py", "health.py",
+               "trust.py", "ledger.py"):
+    check(not (root / "tools" / "fabric" / absent).exists(),
+          f"increment 8 creates no {absent}")
+check(len(RECORD_MODELS) == 8,
+      "increment 8 introduces no ninth persistent record type")
+
+ELIGIBILITY_SOURCE = (root / "tools" / "fabric" / "eligibility.py").read_text(
+    encoding="utf-8")
+for token, description in (
+        ("random", "randomness"),
+        ("datetime.now", "a clock of its own"),
+        ("utcnow", "a clock of its own"),
+        ("time.time", "a clock of its own"),
+        ("socket", "a network path"),
+        ("urllib", "a network path"),
+        ("requests", "a network path"),
+        ("subprocess", "a subprocess"),
+        ("os.environ", "an environment dependency"),
+        ("getenv", "an environment dependency"),
+        ("lru_cache", "a cached verdict"),
+        ("ELIG-13", "an increment 9 condition"),
+        ("ELIG-14", "an increment 9 condition"),
+        ("side-effecting", "an effect-class routing rule"),
+        ("route", "route membership"),
+        ("CSEL", "a selection record")):
+    check(token not in ELIGIBILITY_SOURCE,
+          f"the eligibility evaluator contains no {description} ('{token}')")
+
+# --- 2. A fully eligible binding ------------------------------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(tmp)
+    counting = DomainVerify()
+    eligibility_module.verify_trust_record = counting
+    try:
+        verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                     request, LATER)
+    finally:
+        eligibility_module.verify_trust_record = RELEASED_TRUST_VERIFY_8
+    check(error is None, f"a fully eligible binding evaluates without raising ({error})")
+    check(verdict is not None and verdict.eligible,
+          "a binding meeting all twelve conditions is eligible")
+    check(unmet_of(verdict) == (), "an eligible verdict names no unmet condition")
+    check(verdict is not None and verdict.reasons == (),
+          "an eligible verdict carries no reason")
+    check(verdict is not None
+          and tuple(result.status for result in verdict.conditions)
+          == tuple(MET for _ in CONDITION_IDS),
+          "every one of the twelve conditions is reported met individually")
+    check(verdict is not None
+          and tuple(result.condition_id for result in verdict.conditions)
+          == tuple(CONDITION_IDS),
+          "the per-condition results are reported in schema order")
+    check(verdict is not None and verdict.instance_id == inst.record_id,
+          "the verdict names the binding it was asked about")
+    check(verdict is not None and verdict.evaluated_at == LATER.isoformat(),
+          "the verdict carries the supplied instant and introduces no other time")
+    check(sorted(counting.calls) == ["capability-package", "fabric-node"],
+          "C5 reaches trust twice, once per domain, through C3 only")
+
+# --- 3. Each of ELIG-1 … ELIG-12 failing in isolation ----------------------
+# Trust standing, twice, in two domains. Quarantine is reported as quarantine
+# and drain as drain: one is a judgement that something is suspect, the other
+# an operator withdrawing a working node, and reporting either as the other
+# destroys the distinction an operator needs during an incident.
+for domain, subject, condition, standing, reason, description in (
+        ("capability-package", "CPKG-0001", "ELIG-1", TrustState.REVOKED.value,
+         "trust-revoked", "revoked package trust"),
+        ("fabric-node", "node/schai", "ELIG-2", TrustState.REVOKED.value,
+         "trust-revoked", "revoked host trust"),
+        ("capability-package", "CPKG-0001", "ELIG-1", TrustState.EXPIRED.value,
+         "trust-expired", "expired package trust"),
+        ("fabric-node", "node/schai", "ELIG-2", TrustState.EXPIRED.value,
+         "trust-expired", "expired host trust"),
+        ("capability-package", "CPKG-0001", "ELIG-1", TrustState.UNKNOWN.value,
+         "trust-unavailable", "an unavailable trust plane, for the package"),
+        ("fabric-node", "node/schai", "ELIG-2", TrustState.UNKNOWN.value,
+         "trust-unavailable", "an unavailable trust plane, for the host")):
+    with TemporaryDirectory() as tmp:
+        store, trust_store, request, *_, inst = i8_world(tmp)
+        substitute = DomainVerify(
+            domain, standing_of(subject, standing, reason, domain))
+        eligibility_module.verify_trust_record = substitute
+        try:
+            verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                         request, LATER)
+        finally:
+            eligibility_module.verify_trust_record = RELEASED_TRUST_VERIFY_8
+        check(error is None, f"{description} evaluates without raising ({error})")
+        check(verdict is not None and not verdict.eligible,
+              f"{description} makes the binding ineligible")
+        check(unmet_of(verdict) == (condition,),
+              f"{description} names {condition} and nothing else")
+        check(reason_for(verdict, condition) == reason,
+              f"{description} is reported as '{reason}'")
+        check(status_of(verdict, "ELIG-10") == MET
+              and status_of(verdict, "ELIG-11") == MET,
+              f"{description} is not reported as quarantine")
+        check(status_of(verdict, "ELIG-12") == MET,
+              f"{description} is not reported as a drain")
+
+# Quarantine, both subjects. A quarantined subject is also not trusted or
+# restricted, so ELIG-1 or ELIG-2 fails with it -- that is what the enumerated
+# condition says -- but the quarantine is named in its own right.
+for domain, subject, quarantine, trust_condition, description in (
+        ("capability-package", "CPKG-0001", "ELIG-11", "ELIG-1",
+         "a quarantined package"),
+        ("fabric-node", "node/schai", "ELIG-10", "ELIG-2",
+         "a quarantined host")):
+    with TemporaryDirectory() as tmp:
+        store, trust_store, request, *_, inst = i8_world(tmp)
+        substitute = DomainVerify(domain, standing_of(
+            subject, TrustState.QUARANTINED.value, "trust-not-usable", domain))
+        eligibility_module.verify_trust_record = substitute
+        try:
+            verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                         request, LATER)
+        finally:
+            eligibility_module.verify_trust_record = RELEASED_TRUST_VERIFY_8
+        check(error is None, f"{description} evaluates without raising ({error})")
+        check(verdict is not None and not verdict.eligible,
+              f"{description} makes the binding ineligible")
+        check(quarantine in unmet_of(verdict),
+              f"{description} names {quarantine} in its own right")
+        check(reason_for(verdict, quarantine)
+              == ("package-quarantined" if quarantine == "ELIG-11"
+                  else "host-quarantined"),
+              f"{description} is reported as quarantine, not as a drain")
+        check(status_of(verdict, trust_condition) == UNMET,
+              f"{description} is also not trusted or restricted")
+        check(status_of(verdict, "ELIG-12") == MET,
+              f"{description} is not reported as a drain")
+
+# ELIG-3: the contract offers versions the request does not accept, while the
+# package satisfies one that it does. Declared compatibility only -- no
+# arithmetic, no nearest match, and no meaning read from any version number.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(
+        tmp,
+        package={"satisfied_contract_versions": ("1.0.0", "2.0.0")},
+        advert={"satisfied_contract_versions": ("1.0.0", "2.0.0")})
+    asked = dict(request, accepted_contract_versions=("2.0.0",))
+    verdict, error = verdict_for(store, trust_store, inst.record_id, asked, LATER)
+    check(error is None, f"an unaccepted contract version evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-3",),
+          "a contract compatible with no accepted version fails ELIG-3 alone")
+    check(reason_for(verdict, "ELIG-3") == "contract-version-not-accepted",
+          "the unmet contract condition names the version intersection")
+    check(status_of(verdict, "ELIG-4") == MET,
+          "the package half of the version decision is judged separately")
+
+# ELIG-4: the contract declares compatibility with the accepted version and
+# the package does not satisfy it. Empty intersection refuses; it never
+# upgrades, downgrades, or substitutes a near neighbour.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(
+        tmp, contract={"compatible_with": ("2.0.0",)})
+    asked = dict(request, accepted_contract_versions=("2.0.0",))
+    verdict, error = verdict_for(store, trust_store, inst.record_id, asked, LATER)
+    check(error is None, f"an unsatisfied package version evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-4",),
+          "a package satisfying no accepted version fails ELIG-4 alone")
+    check(reason_for(verdict, "ELIG-4") == "package-version-not-accepted",
+          "the unmet package condition names the version intersection")
+    check(status_of(verdict, "ELIG-3") == MET,
+          "declared contract compatibility is honoured when it is declared")
+
+# ELIG-5: the machine is re-declared with a profile that no longer satisfies
+# what the package requires. Containment, never an ordering of two numbers.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(tmp)
+    refreshed = admission_module.refresh_subject(
+        store, trust_store, request_id="i8-refresh", actor=OPERATOR,
+        approving_authority=OPERATOR, recorded_at=STAMP, evaluated_at=LATER,
+        capability_host_id=adm.record_id,
+        fabric_node_trust_record_id=store.read_record(
+            "capability-host", adm.record_id)["fabric_node_trust_record_id"],
+        verified_resource_profile={"host_memory_mb": 8192, "host_cpu_cores": 8},
+        verification_reference="/approved/evidence/host-reobserved.txt",
+        location_class="on-premises", data_classification="internal",
+        availability_intent="in-service", provenance=dict(PROV), notes=None)
+    check(refreshed.outcome == ACCEPTED,
+          "the machine is re-declared with a narrower verified profile")
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"an unsatisfied resource requirement evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-5",),
+          "a verified profile that no longer satisfies the package fails ELIG-5 alone")
+    check(reason_for(verdict, "ELIG-5")
+          == "resource-profile-does-not-satisfy-requirements",
+          "the unmet resource condition names the containment failure")
+    check(status_of(verdict, "ELIG-12") == MET,
+          "a re-declared machine that stays in service is not reported drained")
+
+# ELIG-6: the claim lapses while the binding's own window is still open. An
+# expiry that removes eligibility changes no authoritative record.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, request, *_, inst = i8_world(
+        tmp, advert={"valid_until": SOON})
+    before = forensic(fabric_root)
+    verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                 request, STALE_AT)
+    check(error is None, f"a lapsed advertisement evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-6",),
+          "an advertisement outside its validity window fails ELIG-6 alone")
+    check(reason_for(verdict, "ELIG-6") == "advertisement-not-fresh",
+          "the unmet advertisement condition names staleness")
+    check(status_of(verdict, "ELIG-7") == MET,
+          "an advertisement lapse is not reported as an admission lapse")
+    check(forensic(fabric_root) == before,
+          "expiry removes eligibility and changes no authoritative record")
+
+# ELIG-7, three ways: absent, expired, and not yet open. Trust alone never
+# admits, and an expired admission asserts nothing about trust.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(
+        tmp, instance={"admitted_until": SOON})
+    verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                 request, STALE_AT)
+    check(error is None, f"a lapsed admission evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-7",),
+          "an admission past its expiry fails ELIG-7 alone")
+    check(reason_for(verdict, "ELIG-7") == "admission-window-expired",
+          "the unmet admission condition names the elapsed window")
+    check(status_of(verdict, "ELIG-1") == MET and status_of(verdict, "ELIG-2") == MET,
+          "an expired admission asserts nothing about package or host trust")
+    # A fresh claim never revives a lapsed binding.
+    later_advert = register_advertisement(store, **dict(
+        BASE_ADVERT, request_id="i8-adv-fresh", actor=adm.record_id,
+        capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+        contract_id=con.record_id, observed_at=STAMP, valid_until=YEAR))
+    check(later_advert.outcome == ACCEPTED, "a fresh advertisement is registered")
+    again, error = verdict_for(store, trust_store, inst.record_id,
+                               request, STALE_AT)
+    check(error is None, f"the fresh claim evaluates cleanly ({error})")
+    check(unmet_of(again) == ("ELIG-7",),
+          "a fresh advertisement never revives a lapsed admission")
+
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, BEFORE)
+    check(error is None, f"an instant before admission evaluates cleanly ({error})")
+    check("ELIG-7" in unmet_of(verdict),
+          "a binding is not eligible before its own admission began")
+    check(reason_for(verdict, "ELIG-7") == "admission-window-not-open",
+          "an unopened window is distinguished from an elapsed one")
+
+    absent = variant_instance(store, inst.record_id, "CINST-000900",
+                              admission_decision_id="")
+    verdict, error = verdict_for(store, trust_store, absent, request, LATER)
+    check(error is None, f"an absent admission decision evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-7",),
+          "a binding naming no admission decision fails ELIG-7 alone")
+    check(reason_for(verdict, "ELIG-7") == "admission-decision-absent",
+          "the absent admission is named as the unmet condition")
+
+    unapproved = variant_instance(store, inst.record_id, "CINST-000901",
+                                  evidence=dict(store.read_record(
+                                      "capability-instance", inst.record_id)
+                                      ["evidence"], approving_authority=None))
+    verdict, error = verdict_for(store, trust_store, unapproved, request, LATER)
+    check(error is None, f"an unapproved admission evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-7",),
+          "a binding carrying no approving authority fails ELIG-7 alone")
+    check(reason_for(verdict, "ELIG-7") == "admission-not-human-approved",
+          "trust alone never admits: the missing human approval is named")
+
+# ELIG-6, absent rather than stale: a binding naming no advertisement at all.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    unclaimed = variant_instance(store, inst.record_id, "CINST-000902",
+                                 advertisement_id=None)
+    verdict, error = verdict_for(store, trust_store, unclaimed, request, LATER)
+    check(error is None, f"a binding with no advertisement evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-6",),
+          "a binding naming no advertisement fails ELIG-6 alone")
+    check(reason_for(verdict, "ELIG-6") == "advertisement-absent",
+          "the absent advertisement is named rather than called stale")
+
+# ELIG-8 and ELIG-9, the scope conditions. An empty intersection is a valid
+# outcome, and it means nothing is eligible -- reported as the empty
+# intersection, not as a generic scope failure.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    stored_scope = dict(store.read_record("capability-instance",
+                                          inst.record_id)["effective_scope"])
+
+    emptied = variant_instance(store, inst.record_id, "CINST-000903",
+                               effective_scope=dict(stored_scope,
+                                                    permitted_targets=[]))
+    verdict, error = verdict_for(store, trust_store, emptied, request, LATER)
+    check(error is None, f"an empty scope dimension evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-8",),
+          "an empty effective intersection fails ELIG-8 alone")
+    check(reason_for(verdict, "ELIG-8") == "empty-effective-scope",
+          "the empty intersection is named, not a generic scope refusal")
+
+    refusing = variant_instance(
+        store, inst.record_id, "CINST-000904",
+        effective_scope=dict(stored_scope,
+                             permitted_data_classifications=[FOREIGN_CLASS]))
+    verdict, error = verdict_for(store, trust_store, refusing, request, LATER)
+    check(error is None, f"a scope refusing the request evaluates cleanly ({error})")
+    check("ELIG-8" in unmet_of(verdict),
+          "a non-empty scope that does not permit the request fails ELIG-8")
+    check(reason_for(verdict, "ELIG-8") == "effective-scope-does-not-permit-request",
+          "a scope that refuses the request is distinguished from an empty one")
+
+    mixed = variant_instance(
+        store, inst.record_id, "CINST-000905",
+        effective_scope=dict(stored_scope,
+                             permitted_data_classifications=["internal",
+                                                             FOREIGN_CLASS]))
+    verdict, error = verdict_for(store, trust_store, mixed, request, LATER)
+    check(error is None, f"a classification the host never declared evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-9",),
+          "a permitted classification the host does not handle fails ELIG-9 alone")
+    check(reason_for(verdict, "ELIG-9") == "data-classification-not-declared-by-host",
+          "the unmet classification condition names the host declaration")
+    check(status_of(verdict, "ELIG-8") == MET,
+          "membership, not rank: the request's own classification is still permitted")
+
+# ELIG-12: an operator withdraws a working machine. Authoritative admission is
+# untouched; the binding is ineligible as a derived outcome only.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(tmp)
+    withdrawn = admission_module.withdraw_subject(
+        store, request_id="i8-drain", actor=OPERATOR,
+        approving_authority=OPERATOR, recorded_at=STAMP,
+        capability_host_id=adm.record_id, availability_intent="withheld",
+        provenance=dict(PROV), notes=None)
+    check(withdrawn.outcome == ACCEPTED, "the machine is withdrawn by decision")
+    admitted_before = store.read_record("capability-instance", inst.record_id)
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a drained machine evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-12",),
+          "a manually drained candidate fails ELIG-12 alone")
+    check(reason_for(verdict, "ELIG-12") == "candidate-manually-drained",
+          "a drain is reported as a drain, never as quarantine")
+    check(status_of(verdict, "ELIG-10") == MET,
+          "a withdrawn machine is not reported quarantined")
+    check(store.read_record("capability-instance", inst.record_id)
+          == admitted_before,
+          "withdrawal ends eligibility and edits no admission record")
+
+# --- 4. Several conditions failing at once ---------------------------------
+# Every unmet condition is reported, in schema order, so an operator sees the
+# whole picture rather than whichever check happened to run first.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(
+        tmp, advert={"valid_until": SOON})
+    withdrawn = admission_module.withdraw_subject(
+        store, request_id="i8-multi-drain", actor=OPERATOR,
+        approving_authority=OPERATOR, recorded_at=STAMP,
+        capability_host_id=adm.record_id, availability_intent="withheld",
+        provenance=dict(PROV), notes=None)
+    check(withdrawn.outcome == ACCEPTED, "the machine is withdrawn for the matrix")
+    substitute = DomainVerify("capability-package", standing_of(
+        "CPKG-0001", TrustState.REVOKED.value, "trust-revoked",
+        "capability-package"))
+    eligibility_module.verify_trust_record = substitute
+    try:
+        verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                     request, STALE_AT)
+        again, _ = verdict_for(store, trust_store, inst.record_id,
+                               request, STALE_AT)
+    finally:
+        eligibility_module.verify_trust_record = RELEASED_TRUST_VERIFY_8
+    check(error is None, f"three simultaneous failures evaluate cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-1", "ELIG-6", "ELIG-12"),
+          "every unmet condition is reported, in schema order")
+    check(verdict is not None
+          and verdict.reasons == ("trust-revoked", "advertisement-not-fresh",
+                                  "candidate-manually-drained"),
+          "the reasons follow the same order as the conditions that produced them")
+    check(again is not None and verdict is not None
+          and again.to_dict() == verdict.to_dict(),
+          "repeating the identical evaluation produces the identical verdict")
+
+# --- 5. Lifecycle boundaries ----------------------------------------------
+# Withdrawal and retirement are decisions recorded as new records. The binding
+# a route still names resolves to its own head, so a verdict read from the
+# record a route was written against is not a verdict about a stale one.
+for operation, state, description in (
+        ("withdraw_instance", "withdrawn", "a withdrawn binding"),
+        ("retire_instance", "retired", "a retired binding")):
+    with TemporaryDirectory() as tmp:
+        store, trust_store, request, *_, inst = i8_world(tmp)
+        ended = OPERATIONS[operation](
+            store, request_id=f"i8-{state}", actor=OPERATOR,
+            approving_authority=OPERATOR, recorded_at=STAMP,
+            instance_id=inst.record_id, provenance=dict(PROV), notes=None)
+        check(ended.outcome == ACCEPTED, f"{description} is ended by decision")
+        verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                     request, LATER)
+        check(error is None, f"{description} evaluates cleanly ({error})")
+        check(verdict is not None and not verdict.eligible,
+              f"{description} is not eligible")
+        check(verdict is not None and "instance-not-admitted" in verdict.reasons,
+              f"{description} names the lifecycle decision that ended it")
+        check(unmet_of(verdict) == (),
+              f"{description} is refused by its lifecycle, not by a trust or scope check")
+
+# --- 6. Host disappearance is derived, and changes nothing -----------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(tmp)
+    store.path_for("capability-host", adm.record_id).unlink()
+    before = forensic(fabric_root)
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a disappeared host evaluates cleanly ({error})")
+    check(verdict is not None and not verdict.eligible,
+          "a binding whose host has disappeared is ineligible")
+    check(reason_for(verdict, "ELIG-5") == "host-not-resolvable",
+          "the absent host is named rather than guessed at")
+    check(status_of(verdict, "ELIG-12") == INDETERMINATE,
+          "a condition that could not be read is indeterminate, never met")
+    check(forensic(fabric_root) == before,
+          "host disappearance changes no authoritative record")
+
+# --- 7. Malformed input is refused, never interpreted ----------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    for asked, reason, description in (
+            (dict(request, unexpected="value"), "malformed-request-classification",
+             "an unknown request field"),
+            ({key: value for key, value in request.items() if key != "contract_id"},
+             "malformed-request-classification", "a request missing a field"),
+            (dict(request, accepted_contract_versions=()),
+             "malformed-request-classification", "an empty accepted version set"),
+            (dict(request, accepted_contract_versions="1.0.0"),
+             "malformed-request-classification", "a version set that is text"),
+            (dict(request, accepted_contract_versions=(1,)),
+             "malformed-request-classification", "a version that is not text"),
+            (dict(request, data_classification="unheard-of"),
+             "malformed-request-classification", "an unknown data classification"),
+            (dict(request, capability_id="CAPDEF-9"),
+             "malformed-request-classification", "a malformed capability identity"),
+            ("a request", "malformed-request-classification",
+             "a request that is not a mapping")):
+        verdict, error = verdict_for(store, trust_store, inst.record_id, asked, LATER)
+        check(error is None, f"{description} evaluates without raising ({error})")
+        check(verdict is not None and not verdict.eligible,
+              f"{description} is ineligible")
+        check(verdict is not None and verdict.reasons == (reason,),
+              f"{description} is reported as '{reason}'")
+        check(verdict is not None
+              and tuple(result.status for result in verdict.conditions)
+              == tuple(INDETERMINATE for _ in CONDITION_IDS),
+              f"{description} leaves every condition indeterminate, never met")
+
+    for instant, description in (
+            (LATER.replace(tzinfo=None), "an instant carrying no offset"),
+            ("2026-08-03T09:00:00-05:00", "an instant supplied as text"),
+            (None, "an absent instant")):
+        verdict, error = verdict_for(store, trust_store, inst.record_id,
+                                     request, instant)
+        check(error is None, f"{description} evaluates without raising ({error})")
+        check(verdict is not None and not verdict.eligible,
+              f"{description} is ineligible")
+        check(verdict is not None
+              and verdict.reasons == ("evaluation-instant-carries-no-offset",),
+              f"{description} names the unusable instant")
+
+    for identifier, reason, description in (
+            ("CINST-999999", "instance-not-found", "an absent binding"),
+            ("CINST-99", "malformed-instance-identity", "a malformed identity"),
+            (None, "malformed-instance-identity", "an absent identity"),
+            ("../escape", "malformed-instance-identity", "a traversing identity")):
+        verdict, error = verdict_for(store, trust_store, identifier, request, LATER)
+        check(error is None, f"{description} evaluates without raising ({error})")
+        check(verdict is not None and not verdict.eligible,
+              f"{description} is ineligible")
+        check(verdict is not None and verdict.reasons == (reason,),
+              f"{description} is reported as '{reason}'")
+
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    unreadable = UnreadableStore(Path(tmp) / "fabric", expected_uid=UID,
+                                 expected_gid=GID)
+    verdict, error = verdict_for(unreadable, trust_store, inst.record_id,
+                                 request, LATER)
+    check(error is None, f"an unreadable store evaluates without raising ({error})")
+    check(verdict is not None and not verdict.eligible,
+          "an unreadable store yields ineligible, never a cached or assumed verdict")
+    check(verdict is not None and "store-unreadable" in verdict.reasons,
+          "an unreadable store is named as the reason")
+
+# --- 8. Purity: nothing is written, allocated, or remembered ---------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    trust_root = Path(tmp) / "trust"
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    counting = DomainVerify()
+    eligibility_module.verify_trust_record = counting
+    try:
+        before_fabric = forensic(fabric_root)
+        before_trust = forensic(trust_root)
+        verdicts = [evaluate_eligibility(store, trust_store,
+                                         instance_id=inst.record_id,
+                                         request=request, evaluated_at=LATER)
+                    for _ in range(4)]
+        after_fabric = forensic(fabric_root)
+        after_trust = forensic(trust_root)
+    finally:
+        eligibility_module.verify_trust_record = RELEASED_TRUST_VERIFY_8
+    check(after_fabric == before_fabric,
+          "evaluating eligibility writes no fabric record, sequence, or temporary")
+    check(after_trust == before_trust,
+          "evaluating eligibility writes nothing into the trust store")
+    check(sorted(p.name for p in fabric_root.rglob("*.tmp")) == [],
+          "evaluating eligibility leaves no temporary artefact")
+    check(len({str(verdict.to_dict()) for verdict in verdicts}) == 1,
+          "four identical evaluations produce one identical answer")
+    check(len(counting.calls) == 8,
+          "trust is asked afresh every evaluation; no verdict is cached")
+    check(all(verdict.evaluated_at == LATER.isoformat() for verdict in verdicts),
+          "the verdict carries only the instant it was given")
+    rendered = str(verdicts[0].to_dict())
+    for token, leak in ((" 0x", "an object address"), (str(tmp), "a filesystem path"),
+                        ("Traceback", "a traceback"), ("object at", "an object repr")):
+        check(token not in rendered, f"a verdict leaks no {leak}")
+    check(dataclasses.is_dataclass(verdicts[0]),
+          "the verdict is a declared shape rather than an open mapping")
+    editable = True
+    try:
+        verdicts[0].eligible = True
+    except Exception:  # noqa: BLE001
+        editable = False
+    check(not editable, "a verdict cannot be edited after it is returned")
+
+check(eligibility_module.verify_trust_record is RELEASED_TRUST_VERIFY_8,
+      "the released C3 adapter is restored after the increment 8 regression")
 
 print(f"__FAILURES__={failures}")
 ADMITPY
