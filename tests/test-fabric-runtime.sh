@@ -9756,6 +9756,288 @@ with TemporaryDirectory() as tmp:
         editable = False
     check(not editable, "a verdict cannot be edited after it is returned")
 
+
+# --- 9. One binding is one chain, and a supersession is not part of it -----
+# A lifecycle decision continues a binding; a declared supersession starts a
+# new one. Reading across that boundary would answer about a different binding
+# than the one that was asked about, and during a declared overlap the old
+# binding is still serving -- so the answer would be wrong exactly when it
+# matters.
+I8_ID_FIELD = {"capability-instance": "instance_id",
+               "capability-host": "capability_host_id"}
+
+
+def copied(store, record_kind, source, identifier, **changes):
+    """One record written straight to the store, from an accepted one.
+
+    The released path refuses most of these states, which is the point: a
+    damaged, tampered, or legacy store can still hold one, and a derived
+    verdict has to refuse on what it reads rather than assume validation ran.
+
+    The record class is a positional named `record_kind`, so a test may change
+    the stored `kind` field itself without colliding with it.
+    """
+    payload = dict(store.read_record(record_kind, source))
+    payload[I8_ID_FIELD[record_kind]] = identifier
+    for name, value in changes.items():
+        if value is None and name in payload:
+            del payload[name]
+        else:
+            payload[name] = value
+    store.write_atomic(store.path_for(record_kind, identifier), payload)
+    return identifier
+
+
+def migrated_world(tmp):
+    """Binding A, then binding B declared as superseding it."""
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(tmp)
+    claim = register_advertisement(store, **dict(
+        BASE_ADVERT, request_id="i8-adv-migrate", actor=adm.record_id,
+        capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
+        contract_id=con.record_id, observed_at=STAMP, valid_until=YEAR))
+    binding = dict(BASE_INSTANCE, request_id="i8-migrate",
+                   capability_id=cap.record_id,
+                   capability_package_id=pkg.record_id,
+                   capability_host_id=adm.record_id, contract_id=con.record_id,
+                   advertisement_id=claim.record_id,
+                   package_trust_record_id=PACKAGE_TRUST["CPKG-0001"],
+                   host_trust_record_id=store.read_record(
+                       "capability-host",
+                       adm.record_id)["fabric_node_trust_record_id"],
+                   supersedes=inst.record_id)
+    migrated = admission_module.admit_instance(store, trust_store, **binding)
+    check(claim.outcome == ACCEPTED and migrated.outcome == ACCEPTED,
+          "a declared supersession is admitted through the released path")
+    stored = store.read_record("capability-instance", migrated.record_id)
+    check((stored.get("evidence") or {}).get("reason_category") == "supersession",
+          "the superseding record is categorised as a supersession, not a lifecycle version")
+    check(stored.get("supersedes") == inst.record_id,
+          "the superseding record declares the binding it replaces")
+    return store, trust_store, request, inst.record_id, migrated.record_id
+
+
+for ending, description in (("withdraw_instance", "withdrawn"),
+                            ("retire_instance", "retired")):
+    with TemporaryDirectory() as tmp:
+        store, trust_store, request, first, second = migrated_world(tmp)
+
+        before_a, error = verdict_for(store, trust_store, first, request, LATER)
+        before_b, other = verdict_for(store, trust_store, second, request, LATER)
+        check(error is None and other is None,
+              f"both bindings evaluate cleanly before {description} ({error} {other})")
+        check(before_a is not None and before_a.eligible,
+              "the superseded binding stays eligible during the declared overlap")
+        check(before_b is not None and before_b.eligible,
+              "the new binding is eligible during the declared overlap")
+        check(before_a is not None and before_a.instance_id == first
+              and before_b is not None and before_b.instance_id == second,
+              "each verdict names the binding it was asked about")
+
+        ended = OPERATIONS[ending](
+            store, request_id=f"i8-end-{description}", actor=OPERATOR,
+            approving_authority=OPERATOR, recorded_at=STAMP,
+            instance_id=second, provenance=dict(PROV), notes=None)
+        check(ended.outcome == ACCEPTED,
+              f"the new binding is {description} by decision")
+
+        after_a, error = verdict_for(store, trust_store, first, request, LATER)
+        after_b, other = verdict_for(store, trust_store, second, request, LATER)
+        check(error is None and other is None,
+              f"both bindings evaluate cleanly after {description} ({error} {other})")
+        check(after_b is not None and not after_b.eligible,
+              f"the {description} binding is ineligible")
+        check(after_b is not None and "instance-not-admitted" in after_b.reasons,
+              f"the {description} binding names the lifecycle decision that ended it")
+        check(after_a is not None and after_a.eligible,
+              f"the superseded binding is unaffected by the new binding being {description}")
+        check(after_a is not None and after_a.reasons == (),
+              "a verdict about one binding is never derived from another's lifecycle")
+        check(store.read_record("capability-instance", first)["lifecycle_state"]
+              == "admitted",
+              "the superseded binding's own authoritative state is untouched")
+
+# A lifecycle version of the binding itself is still followed. The boundary
+# excludes supersessions, not withdrawals -- otherwise ending a binding would
+# stop being observable at all.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    ended = OPERATIONS["withdraw_instance"](
+        store, request_id="i8-continue", actor=OPERATOR,
+        approving_authority=OPERATOR, recorded_at=STAMP,
+        instance_id=inst.record_id, provenance=dict(PROV), notes=None)
+    check(ended.outcome == ACCEPTED, "the binding is withdrawn by decision")
+    stored = store.read_record("capability-instance", ended.record_id)
+    check((stored.get("evidence") or {}).get("reason_category") == "withdrawal",
+          "a withdrawal is categorised as a lifecycle version of the same binding")
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a continued binding evaluates cleanly ({error})")
+    check(verdict is not None and not verdict.eligible
+          and "instance-not-admitted" in verdict.reasons,
+          "a lifecycle continuation is followed and ends eligibility")
+
+# --- 10. Validated-read parity on both traversed chains --------------------
+# The same standard C4 holds a governed decision to. A chain that cannot be
+# read is not a chain that was read, and a derived verdict must refuse on it
+# rather than assume validation ran. Nothing here is repaired, skipped, or
+# guessed at.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    host_id = store.read_record("capability-instance",
+                                inst.record_id)["capability_host_id"]
+    evidence = store.read_record("capability-instance",
+                                 inst.record_id)["evidence"]
+
+    # A record filed as one kind and declaring another.
+    copied(store, "capability-instance", inst.record_id, "CINST-000910",
+           kind="capability-host")
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a wrong-kind instance record evaluates cleanly ({error})")
+    check(verdict is not None and not verdict.eligible,
+          "a record declaring a different kind makes the binding chain unreadable")
+    check(verdict is not None and verdict.reasons == ("instance-chain-unreadable",),
+          "the unreadable binding chain is named, and the record is not skipped")
+    check(verdict is not None
+          and tuple(result.status for result in verdict.conditions)
+          == tuple(INDETERMINATE for _ in CONDITION_IDS),
+          "an unreadable binding chain leaves every condition indeterminate")
+
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    host_id = store.read_record("capability-instance",
+                                inst.record_id)["capability_host_id"]
+    copied(store, "capability-host", host_id, "CHOST-0009",
+           kind="capability-instance")
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a wrong-kind host record evaluates cleanly ({error})")
+    check(verdict is not None and not verdict.eligible,
+          "a record declaring a different kind makes the machine chain unreadable")
+    check(reason_for(verdict, "ELIG-5") == "host-chain-unreadable",
+          "the unreadable machine chain is named")
+    check(status_of(verdict, "ELIG-12") == INDETERMINATE,
+          "a drain cannot be judged through an unreadable machine chain")
+
+# A successor whose declared predecessor is absent. It does not become the
+# head, and it does not vanish: a record at the end of a broken chain is
+# evidence that something is missing, not evidence that it is current.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    evidence = store.read_record("capability-instance",
+                                 inst.record_id)["evidence"]
+    copied(store, "capability-instance", inst.record_id, "CINST-000911",
+           supersedes="CINST-000899",
+           evidence=dict(evidence, reason_category="withdrawal"))
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"an orphaned binding successor evaluates cleanly ({error})")
+    check(verdict is not None and verdict.reasons == ("instance-chain-unreadable",),
+          "a successor naming an absent predecessor makes the binding chain unreadable")
+
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    host_id = store.read_record("capability-instance",
+                                inst.record_id)["capability_host_id"]
+    copied(store, "capability-host", host_id, "CHOST-0008",
+           supersedes="CHOST-0007")
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"an orphaned host successor evaluates cleanly ({error})")
+    check(reason_for(verdict, "ELIG-5") == "host-chain-unreadable",
+          "a host successor naming an absent predecessor makes that chain unreadable")
+
+# Two records claiming one predecessor is a fork, reported rather than
+# resolved: choosing a winner nobody chose would be a repair.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    evidence = store.read_record("capability-instance",
+                                 inst.record_id)["evidence"]
+    lifecycle = dict(evidence, reason_category="withdrawal")
+    copied(store, "capability-instance", inst.record_id, "CINST-000912",
+           supersedes=inst.record_id, evidence=lifecycle)
+    copied(store, "capability-instance", inst.record_id, "CINST-000913",
+           supersedes=inst.record_id, evidence=lifecycle)
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a forked binding chain evaluates cleanly ({error})")
+    check(verdict is not None and verdict.reasons == ("instance-chain-unreadable",),
+          "two binding successors claiming one predecessor is refused, not resolved")
+
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    host_id = store.read_record("capability-instance",
+                                inst.record_id)["capability_host_id"]
+    copied(store, "capability-host", host_id, "CHOST-0006", supersedes=host_id)
+    copied(store, "capability-host", host_id, "CHOST-0007", supersedes=host_id)
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a forked host chain evaluates cleanly ({error})")
+    check(reason_for(verdict, "ELIG-5") == "host-chain-unreadable",
+          "two host successors claiming one predecessor is refused, not resolved")
+
+# A cycle is walked once and refused. Nothing here loops.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    evidence = store.read_record("capability-instance",
+                                 inst.record_id)["evidence"]
+    lifecycle = dict(evidence, reason_category="withdrawal")
+    copied(store, "capability-instance", inst.record_id, "CINST-000914",
+           supersedes="CINST-000915", evidence=lifecycle)
+    copied(store, "capability-instance", inst.record_id, "CINST-000915",
+           supersedes="CINST-000914", evidence=lifecycle)
+    verdict, error = verdict_for(store, trust_store, "CINST-000914", request, LATER)
+    check(error is None, f"a cyclic binding chain evaluates cleanly ({error})")
+    check(verdict is not None and verdict.reasons == ("instance-chain-unreadable",),
+          "a cyclic binding chain is refused rather than walked forever")
+
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, *_, inst = i8_world(tmp)
+    host_id = store.read_record("capability-instance",
+                                inst.record_id)["capability_host_id"]
+    copied(store, "capability-host", host_id, "CHOST-0006", supersedes="CHOST-0007")
+    copied(store, "capability-host", host_id, "CHOST-0007", supersedes="CHOST-0006")
+    cyclic = copied(store, "capability-instance", inst.record_id, "CINST-000916",
+                    capability_host_id="CHOST-0006")
+    verdict, error = verdict_for(store, trust_store, cyclic, request, LATER)
+    check(error is None, f"a cyclic host chain evaluates cleanly ({error})")
+    check(reason_for(verdict, "ELIG-5") == "host-chain-unreadable",
+          "a cyclic host chain is refused rather than walked forever")
+
+# --- 11. A drain is still observed through the machine's own chain ---------
+# The binding boundary applies to bindings. A machine chain is one machine
+# re-declared, so every host successor still continues it.
+with TemporaryDirectory() as tmp:
+    store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(tmp)
+    drained = admission_module.withdraw_subject(
+        store, request_id="i8-drain-parity", actor=OPERATOR,
+        approving_authority=OPERATOR, recorded_at=STAMP,
+        capability_host_id=adm.record_id, availability_intent="draining",
+        provenance=dict(PROV), notes=None)
+    check(drained.outcome == ACCEPTED, "the machine is set draining by decision")
+    check(store.read_record("capability-host",
+                            drained.record_id)["availability_intent"] == "draining",
+          "the superseding machine record carries the drained intent")
+    verdict, error = verdict_for(store, trust_store, inst.record_id, request, LATER)
+    check(error is None, f"a draining machine evaluates cleanly ({error})")
+    check(unmet_of(verdict) == ("ELIG-12",),
+          "a draining machine still fails ELIG-12 alone through its own chain")
+    check(reason_for(verdict, "ELIG-12") == "candidate-manually-drained",
+          "the drain is still reported as a drain")
+
+# --- 12. The correction introduces no side effect -------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    trust_root = Path(tmp) / "trust"
+    store, trust_store, request, first, second = migrated_world(tmp)
+    before_fabric = forensic(fabric_root)
+    before_trust = forensic(trust_root)
+    answers = [evaluate_eligibility(store, trust_store, instance_id=identity,
+                                    request=request, evaluated_at=LATER)
+               for identity in (first, second, first, second)]
+    check(forensic(fabric_root) == before_fabric,
+          "resolving a binding chain writes no fabric record, sequence, or temporary")
+    check(forensic(trust_root) == before_trust,
+          "resolving a binding chain writes nothing into the trust store")
+    check(sorted(p.name for p in fabric_root.rglob("*.tmp")) == [],
+          "resolving a binding chain leaves no temporary artefact")
+    check(answers[0].to_dict() == answers[2].to_dict()
+          and answers[1].to_dict() == answers[3].to_dict(),
+          "chain resolution is deterministic across repetition")
+
 check(eligibility_module.verify_trust_record is RELEASED_TRUST_VERIFY_8,
       "the released C3 adapter is restored after the increment 8 regression")
 

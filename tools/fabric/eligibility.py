@@ -119,6 +119,13 @@ _ABSENT = {"capability-instance": REASON_INSTANCE_NOT_FOUND,
 _CHAIN_DEFECT = {"capability-instance": REASON_INSTANCE_CHAIN,
                  "capability-host": REASON_HOST_CHAIN}
 
+# Which successors continue the binding they name. A withdrawal or a
+# retirement is another lifecycle version of the same binding; a declared
+# supersession destroys one binding and declares another, so it begins a chain
+# rather than extending one. The accepted `capability-instance` schema reads
+# that difference from the evidence category each record already carries.
+LIFECYCLE_CATEGORIES = ("withdrawal", "retirement")
+
 
 @dataclass(frozen=True)
 class ConditionResult:
@@ -260,6 +267,23 @@ def _request(value: Any) -> dict[str, Any] | None:
             "accepted": frozenset(versions), "data_classification": classification}
 
 
+def _continues(kind: str, record: Mapping[str, Any]) -> bool:
+    """Whether this successor is another version of the same thing.
+
+    A machine chain is one machine re-declared, so every host successor
+    continues it. A binding chain is not: reading across a declared
+    supersession would answer about a different binding than the one asked
+    about, and during a declared overlap the superseded binding is still
+    serving — so the answer would be wrong exactly when it matters.
+    """
+    if kind != "capability-instance":
+        return True
+    evidence = record.get("evidence")
+    category = (evidence.get("reason_category")
+                if isinstance(evidence, Mapping) else None)
+    return category in LIFECYCLE_CATEGORIES
+
+
 def _chain_head(store, kind: str, identifier: str):
     """The unsuperseded record ending this chain, or a named defect.
 
@@ -269,8 +293,13 @@ def _chain_head(store, kind: str, identifier: str):
     declaration; reading the record that was named rather than the record that
     is current would answer with history.
 
-    A fork or a cycle is reported, never resolved. Choosing a winner nobody
-    chose is a repair, and this component repairs nothing.
+    **A chain that cannot be read is not a chain that was read.** A payload
+    that is not the kind it was filed as, an identity nothing could have
+    allocated, a successor whose declared predecessor is absent, two records
+    claiming one predecessor, and a cycle are each refused. None is repaired,
+    skipped, or guessed at: a record at the end of a broken chain is evidence
+    that something is missing, not evidence that it is current, and choosing a
+    winner nobody chose would be a repair.
     """
     try:
         records = list(store.list_records(kind))
@@ -278,21 +307,30 @@ def _chain_head(store, kind: str, identifier: str):
         return None, REASON_STORE_UNREADABLE
 
     field = ID_FIELDS[kind]
+    filed: list[tuple[str, Mapping[str, Any]]] = []
     present: set[str] = set()
-    links: dict[str, str] = {}
     for record in records:
-        if not isinstance(record, Mapping):
+        if not isinstance(record, Mapping) or record.get("kind") != kind:
             return None, _CHAIN_DEFECT[kind]
         identity = _identity(record.get(field), kind)
         if identity is None:
             return None, _CHAIN_DEFECT[kind]
+        filed.append((identity, record))
         present.add(identity)
+
+    claimed: set[str] = set()
+    links: dict[str, str] = {}
+    for identity, record in filed:
         prior = record.get("supersedes")
         if not isinstance(prior, str):
             continue
-        if prior in links:
+        if prior not in present or prior in claimed:
             return None, _CHAIN_DEFECT[kind]
-        links[prior] = identity
+        claimed.add(prior)
+        # Claimed either way: a second claimant is a fork whatever it declares
+        # itself to be. Only a continuation extends the chain being walked.
+        if _continues(kind, record):
+            links[prior] = identity
 
     if identifier not in present:
         return None, _ABSENT[kind]
@@ -309,7 +347,8 @@ def _chain_head(store, kind: str, identifier: str):
         stored = store.read_record(kind, current)
     except Exception:  # noqa: BLE001
         return None, REASON_STORE_UNREADABLE
-    if not isinstance(stored, Mapping):
+    if (not isinstance(stored, Mapping) or stored.get("kind") != kind
+            or stored.get(field) != current):
         return None, _CHAIN_DEFECT[kind]
     return stored, None
 
