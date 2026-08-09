@@ -6431,14 +6431,18 @@ class DomainTrust:
 INSTANCE_PACKAGE = dict(BASE_PACKAGE,
                         resource_requirements={"architecture": "x86_64"})
 # The operator's own bound, in the released Trust scope vocabulary. Every
-# dimension is named, because the released scope rules deny a request that
-# cannot name all four.
-SCOPE = {"permitted_capabilities": ["coding-workload"],
+# dimension is named: every released dimension must survive composition
+# non-empty, and one the composition leaves empty bounds nothing.
+#
+# The capability dimension names the canonical `CAPDEF-0000` identity the
+# Fabric allocated, per the accepted architecture. A descriptive workload token
+# would name nothing the Fabric could match, and there is no alias mapping.
+SCOPE = {"permitted_capabilities": ["CAPDEF-0001"],
          "permitted_operations": ["linux.hostname"],
          "permitted_data_classifications": ["internal"],
          "permitted_targets": ["schmgmt.home.arpa"]}
 # What the intersection of both grants and that bound comes to.
-EFFECTIVE = {"permitted_capabilities": ("coding-workload",),
+EFFECTIVE = {"permitted_capabilities": ("CAPDEF-0001",),
              "permitted_operations": ("linux.hostname",),
              "permitted_data_classifications": ("internal",),
              "permitted_targets": ("schmgmt.home.arpa",)}
@@ -6470,7 +6474,8 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
                         package_state=TrustState.TRUSTED.value,
                         node_expiration=None, package_expiration=None,
                         node_type="fabric-node",
-                        package_type="capability-package"):
+                        package_type="capability-package",
+                        capabilities=("CAPDEF-0001",)):
     """A trust store holding two separately decided subjects.
 
     Trusting a package trusts no machine and trusting a machine trusts no
@@ -6516,7 +6521,7 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
                 performed_by="operator-role-reference", performed_at=STAMP),
             scope=TrustScope(
                 scope_id="TSCOPE-000001", subject_type=subject_type,
-                permitted_capabilities=("coding-workload",),
+                permitted_capabilities=tuple(capabilities),
                 permitted_operations=("linux.hostname",),
                 permitted_data_classifications=("internal",),
                 permitted_targets=("schmgmt.home.arpa",),
@@ -8048,7 +8053,7 @@ try:
                 performed_by="operator-role-reference", performed_at=STAMP),
             scope=TrustScope(
                 scope_id="TSCOPE-000001", subject_type="fabric-node",
-                permitted_capabilities=("coding-workload",),
+                permitted_capabilities=("CAPDEF-0001",),
                 permitted_operations=("linux.hostname",),
                 permitted_data_classifications=("internal",),
                 permitted_targets=("schmgmt.home.arpa",),
@@ -10041,6 +10046,193 @@ with TemporaryDirectory() as tmp:
 check(eligibility_module.verify_trust_record is RELEASED_TRUST_VERIFY_8,
       "the released C3 adapter is restored after the increment 8 regression")
 
+
+# =======================================================================
+# C4 capability anchor — the composed scope must name what is being bound
+# =======================================================================
+# Composing three grants proves they overlap; it proves nothing about *what*
+# they overlap on. Until the binding's own capability is checked against the
+# composed capability dimension, a grant covering one workload admits a binding
+# for another, and every component downstream believes the operator authorised
+# it.
+#
+# The identity compared is the canonical `CAPDEF-0000` the Fabric allocated.
+# There is no alias field, no name mapping, and no fallback: a grant naming a
+# capability some other way authorises nothing, which is the refusal an
+# operator can act on rather than a guess nobody reviewed.
+
+CAPABILITY_SCOPE_REASON = "capability-not-permitted-by-scope"
+check(getattr(admission_module, "REASON_CAPABILITY_SCOPE", None)
+      == CAPABILITY_SCOPE_REASON,
+      "the runtime vocabulary names capability-not-permitted-by-scope")
+check(CAPABILITY_SCOPE_REASON != admission_module.REASON_EMPTY_SCOPE,
+      "a capability outside the composed scope is not reported as an empty one")
+check(CAPABILITY_SCOPE_REASON != admission_module.REASON_CLASSIFICATION,
+      "the capability dimension carries its own reason, not the classification one")
+
+
+def anchored(tmp, *, granted=("CAPDEF-0001",), bound=("CAPDEF-0001",),
+             request_id="c4-anchor"):
+    """One admission attempt with the capability dimension under test.
+
+    Both grants and the operator's own bound are authored independently, so a
+    test can compose a scope that is non-empty in every dimension and still
+    does not name the binding being admitted.
+    """
+    store = opened(tmp)
+    trust_store, host_trust, package_trust = seeded_fabric_trust(
+        tmp, capabilities=granted)
+    cap, con, pkg, adm, adv, base = fabric_ready(
+        tmp, store, trust_store, host_trust, package_trust)
+    attempt = dict(base, request_id=request_id,
+                   admission_scope=dict(SCOPE, permitted_capabilities=list(bound)))
+    return store, trust_store, cap, adm, attempt
+
+
+# --- 1. The canonical identity, permitted, is admitted --------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, cap, adm, attempt = anchored(tmp)
+    check(cap.record_id == "CAPDEF-0001",
+          "the fabric allocated the capability identity the grants name")
+    accepted, error = call("admit_instance", store, trust_store, **attempt)
+    check(error is None, f"a permitted capability admits without raising ({error})")
+    check(accepted.outcome == ACCEPTED,
+          "a binding whose capability the composed scope names is admitted")
+    stored = record_of(store, "capability-instance", accepted.record_id)
+    check(stored.get("capability_id") == cap.record_id,
+          "the admitted binding carries the capability that was authorised")
+    check(tuple((stored.get("effective_scope") or {}).get(
+              "permitted_capabilities") or ()) == ("CAPDEF-0001",),
+          "the composed capability dimension is the canonical identity")
+
+# --- 2. Composed, non-empty, and not this binding's capability -------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    trust_root = Path(tmp) / "trust"
+    store, trust_store, cap, adm, attempt = anchored(
+        tmp, granted=("CAPDEF-0001", "CAPDEF-0002"), bound=("CAPDEF-0002",))
+    before = forensic(fabric_root)
+    before_trust = forensic(trust_root)
+    before_sequences = sequences_of(fabric_root)
+    refused, error = call("admit_instance", store, trust_store, **attempt)
+    check(error is None, f"an unauthorised capability refuses without raising ({error})")
+    check(refused.outcome == REFUSED,
+          "a binding the composed scope does not name is refused")
+    check(refused.reason == CAPABILITY_SCOPE_REASON,
+          "the refusal names the capability dimension that did not permit it")
+    check(refused.record_id is None, "a refused binding allocates no identity")
+    check(forensic(fabric_root) == before,
+          "a refused binding writes no fabric record, sequence, or temporary")
+    check(sequences_of(fabric_root) == before_sequences,
+          "a refused binding advances no identifier sequence")
+    check(forensic(trust_root) == before_trust,
+          "a refused binding writes nothing into the trust store")
+    check(sorted(p.name for p in fabric_root.rglob("*.tmp")) == [],
+          "a refused binding leaves no temporary artefact")
+    check(store.list_records("capability-instance") == [],
+          "no instance record exists after the refusal")
+    check(store.list_records("capability-route") == [],
+          "a refused binding mutates no route")
+    # The same request, refused identically: a rejected admission records
+    # nothing, so repeating it is evaluated afresh against current state.
+    again, other = call("admit_instance", store, trust_store, **attempt)
+    check(other is None, f"the repeated attempt does not raise ({other})")
+    check(again.outcome == refused.outcome and again.reason == refused.reason,
+          "the refusal is deterministic across repetition")
+    check(forensic(fabric_root) == before,
+          "repeating a refused admission still writes nothing")
+
+# --- 3. A descriptive token is not the identity ---------------------------
+# `coding-workload` reads like an authorisation and matches nothing. Mapping it
+# onto a capability would be a heuristic nobody reviewed.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, cap, adm, attempt = anchored(
+        tmp, granted=("coding-workload",), bound=("coding-workload",))
+    before = forensic(fabric_root)
+    refused, error = call("admit_instance", store, trust_store, **attempt)
+    check(error is None, f"a descriptive token refuses without raising ({error})")
+    check(refused.outcome == REFUSED,
+          "a grant naming a workload token authorises no fabric binding")
+    check(refused.reason == CAPABILITY_SCOPE_REASON,
+          "a descriptive token is refused as an unnamed capability, not repaired")
+    check(refused.record_id is None,
+          "a descriptive token allocates nothing")
+    check(forensic(fabric_root) == before,
+          "a descriptive token writes nothing")
+    rendered = str(refused.to_dict())
+    check("coding-workload" not in rendered,
+          "the refusal does not echo the rejected scope value")
+
+# --- 4. Several permitted identities, exact membership --------------------
+# The binding admitted is not the first entry in the composed dimension, so a
+# check that compared only the first would pass here and be wrong.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    trust_store, host_trust, package_trust = seeded_fabric_trust(
+        tmp, capabilities=("CAPDEF-0001", "CAPDEF-0002"))
+    first = declare_capability(store, **dict(BASE_CAPABILITY, request_id="c4-cap-a"))
+    second = declare_capability(store, **dict(BASE_CAPABILITY, request_id="c4-cap-b",
+                                              name="transcribe speech"))
+    check((first.record_id, second.record_id) == ("CAPDEF-0001", "CAPDEF-0002"),
+          "two capabilities are declared, in allocation order")
+    con = declare_contract(store, **dict(BASE_CONTRACT, request_id="c4-con",
+                                         capability_id=second.record_id))
+    pkg = declare_package(store, **dict(INSTANCE_PACKAGE, request_id="c4-pkg",
+                                        capability_id=second.record_id,
+                                        contract_id=con.record_id))
+    subject_admitted = admit_subject(store, trust_store, **dict(
+        BASE_SUBJECT, request_id="c4-host",
+        fabric_node_trust_record_id=host_trust.record.record_id))
+    advert = register_advertisement(store, **dict(
+        BASE_ADVERT, request_id="c4-adv", actor=subject_admitted.record_id,
+        capability_host_id=subject_admitted.record_id,
+        capability_package_id=pkg.record_id, contract_id=con.record_id,
+        observed_at=STAMP, valid_until=YEAR))
+    accepted, error = call(
+        "admit_instance", store, trust_store, **dict(
+            BASE_INSTANCE, request_id="c4-second", capability_id=second.record_id,
+            capability_package_id=pkg.record_id,
+            capability_host_id=subject_admitted.record_id,
+            contract_id=con.record_id, advertisement_id=advert.record_id,
+            package_trust_record_id=package_trust.record.record_id,
+            host_trust_record_id=host_trust.record.record_id,
+            admission_scope=dict(SCOPE, permitted_capabilities=["CAPDEF-0001",
+                                                                "CAPDEF-0002"])))
+    check(error is None, f"the second permitted capability admits cleanly ({error})")
+    check(accepted.outcome == ACCEPTED,
+          "membership, not position: a capability named anywhere in the dimension is admitted")
+    stored = record_of(store, "capability-instance", accepted.record_id)
+    check(stored.get("capability_id") == "CAPDEF-0002",
+          "the admitted binding is the capability that was asked for")
+    check(tuple((stored.get("effective_scope") or {}).get(
+              "permitted_capabilities") or ()) == ("CAPDEF-0001", "CAPDEF-0002"),
+          "both permitted identities survive composition")
+
+# --- 5. An empty dimension stays its own outcome --------------------------
+# Two different failures an operator has to tell apart: nothing overlapped at
+# all, versus an overlap that does not cover this binding.
+with TemporaryDirectory() as tmp:
+    store, trust_store, cap, adm, attempt = anchored(
+        tmp, granted=("CAPDEF-0001",), bound=("observation",))
+    refused, error = call("admit_instance", store, trust_store, **attempt)
+    check(error is None, f"an empty capability intersection refuses cleanly ({error})")
+    check(refused.outcome == REFUSED,
+          "a capability dimension that composes to nothing is refused")
+    check(refused.reason == admission_module.REASON_EMPTY_SCOPE,
+          "an empty intersection keeps its own reason")
+    check(refused.reason != CAPABILITY_SCOPE_REASON,
+          "an empty intersection is distinguishable from an unnamed capability")
+
+# --- 6. The anchor runs before anything is allocated ----------------------
+# Ordering is the whole point: a refusal after allocation would leave the
+# sequence advanced for a binding that does not exist.
+ANCHOR_SOURCE = (root / "tools" / "fabric" / "admission.py").read_text(encoding="utf-8")
+anchor_at = ANCHOR_SOURCE.find("REASON_CAPABILITY_SCOPE)")
+composed_at = ANCHOR_SOURCE.find("effective = _effective_scope(")
+commit_at = ANCHOR_SOURCE.find("kind, allocated = _commit(store, \"capability-instance\"")
+check(-1 < composed_at < anchor_at < commit_at,
+      "the capability anchor is checked after composition and before allocation")
 print(f"__FAILURES__={failures}")
 ADMITPY
 )"
