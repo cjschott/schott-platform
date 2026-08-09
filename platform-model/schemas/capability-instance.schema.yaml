@@ -89,8 +89,16 @@ eligibility_conditions:
     condition: a fresh advertisement exists, is registered, and is inside its validity window
   - id: ELIG-7
     condition: the admission decision exists, was human-approved, and has not expired
+  # Stated so it is answerable from what a request actually carries. The
+  # intersection must survive composition in every released dimension, and the
+  # one dimension a request names is compared. `permitted_capabilities` is
+  # anchored to the binding by admission, not re-derived here; a request
+  # carries no operation and no target, so neither is compared -- inventing a
+  # value to compare would assert something no record says.
   - id: ELIG-8
-    condition: the effective scope intersection is non-empty and permits the request
+    condition: >-
+      the effective scope intersection is non-empty in every released dimension
+      and contains the data classification the request declares
   - id: ELIG-9
     condition: >-
       every classification the effective scope permits is exactly the

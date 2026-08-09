@@ -286,6 +286,37 @@ observation workloads, yields an instance that may do neither — the
 intersection is empty, so nothing is eligible. That is the correct and
 deliberately inconvenient answer.
 
+#### What each dimension bounds, in the Fabric
+
+All four dimensions are composed the same way and each must survive composition
+non-empty. They are not all *comparable* to a fabric request, because a request
+class names a capability, a contract version range, a data classification, and
+a locality — and nothing else.
+
+- **`permitted_capabilities`.** In the `capability-package` and `fabric-node`
+  domains, an entry authorising a fabric capability is written as the canonical
+  `CAPDEF-0000` identity the Fabric already allocated when the capability was
+  declared. There is no second namespace and no alias field: a grant naming a
+  capability some other way would need a mapping nobody reviewed, and a
+  heuristic match on a human-written name is the kind of guess this
+  architecture exists to prevent. **Admission is where this is enforced** — a
+  binding whose capability is not contained in the composed
+  `permitted_capabilities` is refused, so eligibility never re-derives it and
+  no instance exists outside what the grants actually authorise.
+- **`permitted_operations` and `permitted_targets`.** Real dimensions, composed
+  and required non-empty, and **not compared against a fabric request**. The
+  request class carries no operation and no target, and inventing values to
+  compare would assert something no record says. Giving the Fabric operation or
+  target semantics is a separate decision, not an implementation detail.
+- **`permitted_data_classifications`.** Composed, required non-empty, and
+  **compared per request** by exact membership, because the request class does
+  carry a data classification. Membership, not rank.
+
+This describes the fabric domains. It changes nothing for any other trust
+domain or activity model: the released four-dimension scope evaluation stands
+exactly as ADR-0011 defines it, and remote collection continues to compare
+operations and targets as it always has.
+
 **No self-admission.** A host cannot admit itself, widen its own scope, trust
 another host, or accept work the core did not route to it.
 
