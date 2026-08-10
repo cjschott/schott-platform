@@ -255,11 +255,29 @@ class FabricStore(ImmutableStore):
         caller reads the decision that was made rather than a store that had
         not made it yet.
 
-        One lock file, not one per request identity. A per-request name would
-        be an unbounded set of files derived from caller-supplied text, and
-        the guarded path is what keeps a link or an escape out. Contention is
-        brief -- the section spans a lookup, an allocation, and one atomic
-        write -- so a single lock costs less than the names it avoids.
+        **The section is store-global.** Every governed write request for one
+        Fabric store serialises through this single C1-owned lock, whatever
+        request identity it carries. `request_id` is **never used to derive the
+        lock file's identity** -- it is passed only so contention can be
+        reported against the request that waited. A per-request name would be
+        an unbounded set of files derived from caller-supplied text, and the
+        request identity is opaque: nothing here parses it. Contention is brief
+        -- the section spans a lookup, an allocation, and one atomic write --
+        so a single lock costs less than the names it avoids.
+
+        Distinct request identities stay logically independent under this lock:
+        they allocate their own identities, neither is treated as a replay of
+        the other, and neither overwrites the other. What they do not get is
+        simultaneous entry, which nothing in the accepted contract requires.
+
+        **The section is not reentrant.** It is an `fcntl.flock` on a fresh
+        descriptor, so a second acquisition on the same thread blocks against
+        the first and hangs the store for every later caller. The authorised
+        acquisition owners are the **C4 and C6 operation boundaries**, and each
+        enters **at most once per governed operation**: the replay helper in
+        `request_identity.py` assumes the boundary already holds it and never
+        enters, and no governed operation invokes another. A caller holding
+        this section must not invoke another governed operation.
 
         The non-blocking attempt first is what makes contention observable:
         the seam fires only when someone is actually held, so a test waits on

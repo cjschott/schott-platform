@@ -96,6 +96,15 @@ the accepted write, so the second caller reads the decision that was made rather
 than a store that had not made it yet. Without that, both would observe *not
 found* and both would commit — one identity, two records.
 
+**Request identity is scoped per governed request; serialisation is scoped per
+store.** The two are not the same boundary. A request identity says which
+decision this is, so retries and conflicts are judged against it. The window
+above is held by **one lock belonging to the store**, so governed writes take it
+in turn whatever identity they carry — it is a correctness and atomicity
+boundary, not a lock per request identity. Distinct identities stay independent
+in what they produce: separate records, separate allocated identities, neither a
+replay of the other.
+
 Serialisation is the store's, not the caller's. Nothing retries, backs off, or
 resubmits on the caller's behalf: an operation that is refused stays refused,
 and going forward means another governed decision with its own request identity.
