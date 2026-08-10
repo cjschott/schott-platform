@@ -2005,7 +2005,7 @@ for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
     check(not hasattr(validator_module, later),
           f"the validator exposes no '{later}' behaviour at increment 3")
 
-for absent in ("inspection.py", "cli.py", "selection.py",
+for absent in ("inspection.py", "cli.py",
                "trust.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 3 creates no {absent}")
@@ -2862,7 +2862,7 @@ for later in ("admit", "evaluate_eligibility", "compute_eligibility", "select",
           f"request identity exposes no '{later}' behaviour at increment 4")
     check(not hasattr(evidence_module, later),
           f"evidence exposes no '{later}' behaviour at increment 4")
-for absent in ("selection.py", "inspection.py",
+for absent in ("inspection.py",
                "cli.py", "trust.py", "health.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 4 creates no {absent}")
@@ -4037,7 +4037,7 @@ for writer in ("write", "write_record", "create_decision", "declare_root_authori
                "record_decision", "revoke", "grant"):
     check(not hasattr(adapter_module, writer),
           f"the trust adapter writes no trust or fabric state: no '{writer}'")
-for absent in ("selection.py", "inspection.py",
+for absent in ("inspection.py",
                "cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 5 creates no {absent}")
@@ -5534,7 +5534,7 @@ for later in ("supersede_route", "evaluate_eligibility",
               "remediate", "retry", "refresh"):
     check(not hasattr(admission_module, later),
           f"admission exposes no '{later}' behaviour at increment 6")
-for absent in ("selection.py", "inspection.py", "cli.py", "health.py"):
+for absent in ("inspection.py", "cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 6 creates no {absent}")
 
@@ -6472,8 +6472,9 @@ check(admission_module.verify_trust_record is RELEASED_TRUST_VERIFY,
 RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
                     "identifiers.py", "models.py", "request_identity.py",
                     "store.py", "trust_adapter.py", "validator.py",
-                    # Increment 8 adds exactly one module, and it is C5's.
-                    "eligibility.py"}
+                    # Increment 8 adds exactly one module, and it is C5's;
+                    # increment 9 adds exactly one more, and it is C6's.
+                    "eligibility.py", "selection.py"}
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
       "the fabric package holds the released modules and C5, and nothing else")
@@ -6588,6 +6589,9 @@ BASE_WITHDRAWAL = dict(
 # Which trust record decided which package subject, so a matrix can name the
 # grant belonging to the package it is actually admitting.
 PACKAGE_TRUST = {}
+# Which trust record decided which fabric node, so a selection test can admit a
+# second machine under an identity of its own.
+NODE_TRUST = {}
 
 
 def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
@@ -6596,7 +6600,7 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
                         node_expiration=None, package_expiration=None,
                         node_type="fabric-node",
                         package_type="capability-package",
-                        capabilities=("CAPDEF-0001",)):
+                        capabilities=("CAPDEF-0001",), nodes=()):
     """A trust store holding two separately decided subjects.
 
     Trusting a package trusts no machine and trusting a machine trusts no
@@ -6650,6 +6654,13 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
             expiration=expiration)
 
     host_trust = decide(node, node_type, node_state, node_expiration)
+    # Selection has to tell one machine from another, so a test may decide
+    # further nodes. Each is its own subject, decided in its own domain.
+    NODE_TRUST.clear()
+    NODE_TRUST[node] = host_trust.record.record_id
+    for extra in nodes:
+        NODE_TRUST[extra] = decide(
+            extra, node_type, node_state, node_expiration).record.record_id
     # A package is a subject under its own record identity, decided per
     # version and per contract. The matrices declare four, so four are decided.
     granted = {name: decide(name, package_type, package_state, package_expiration)
@@ -9152,7 +9163,7 @@ try:
                   "admit_route", "health", "remediate"):
         check(not hasattr(admission_module, later),
               f"admission exposes no '{later}' behaviour at increment 7")
-    for absent in ("selection.py", "inspection.py", "cli.py",
+    for absent in ("inspection.py", "cli.py",
                    "health.py"):
         check(not (root / "tools" / "fabric" / absent).exists(),
               f"increment 7 creates no {absent}")
@@ -9350,7 +9361,7 @@ for later in ("select", "select_candidate", "resolve_route", "rank", "order",
     check(not hasattr(eligibility_module, later),
           f"the eligibility evaluator exposes no '{later}' behaviour at increment 8")
 
-for absent in ("selection.py", "inspection.py", "cli.py", "health.py",
+for absent in ("inspection.py", "cli.py", "health.py",
                "trust.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 8 creates no {absent}")
@@ -10354,6 +10365,554 @@ composed_at = ANCHOR_SOURCE.find("effective = _effective_scope(")
 commit_at = ANCHOR_SOURCE.find("kind, allocated = _commit(store, \"capability-instance\"")
 check(-1 < composed_at < anchor_at < commit_at,
       "the capability anchor is checked after composition and before allocation")
+
+# =======================================================================
+# Increment 9 — deterministic selection (C6)
+# =======================================================================
+# C6 answers "which one, and why not the others" and writes that down. It
+# chooses the first eligible candidate in the order a human declared, and it
+# records every candidate it considered with the reason each was excluded --
+# a record naming only the winner documents the outcome while hiding the
+# decision.
+#
+# It selects; it never runs anything. Eligibility stays C5's, so no condition
+# is re-derived here. What C6 owns is route membership, whether the contract's
+# effect class may be routed at all, and the locality the route declares --
+# and `local-only` is answered from an operator-supplied node identity, never
+# from a location class, because several machines are legitimately on-premises.
+
+import tools.fabric.selection as selection_module  # noqa: E402
+from tools.fabric.selection import (  # noqa: E402
+    CONDITION_EFFECT_CLASS, CONDITION_LOCALITY, CONDITION_ROUTE,
+    REASON_HEALTH_REMOVED, REASON_LOCALITY, REASON_NO_ROUTE,
+    REASON_NOT_FIRST, REASON_NOT_ROUTABLE, REASON_ROUTE_AMBIGUOUS,
+    select_candidate,
+)
+
+SELECTION_SOURCE = (root / "tools" / "fabric" / "selection.py").read_text(
+    encoding="utf-8")
+SELECTION_MODEL = RECORD_MODELS["capability-selection"]
+
+# The two conditions the accepted schema assigns to C6, named as the schema
+# names them rather than by their position in a list.
+check(CONDITION_ROUTE == "ELIG-13",
+      "C6 owns ELIG-13, the route membership condition")
+check(CONDITION_EFFECT_CLASS == "ELIG-14",
+      "C6 owns ELIG-14, the effect-class condition")
+check(CONDITION_LOCALITY not in ("ELIG-13", "ELIG-14"),
+      "locality is the route's own policy, not one of the enumerated conditions")
+
+REMOTE_NODE = "node/schoxmox1"
+LOCAL_NODE = "node/schai"
+
+
+def c6_world(tmp, *, locality="any-trusted", second_host=False,
+             second_location="on-premises", effect_class="read-only",
+             candidates=None, versions=("1.0.0",)):
+    """A capability, a contract, a package, admitted hosts, and one route.
+
+    Built entirely through the released governed operations: a selection made
+    over a store no admission path could produce would prove nothing about the
+    selection.
+    """
+    store = opened(tmp)
+    trust_store, host_trust, package_trust = seeded_fabric_trust(
+        tmp, nodes=(REMOTE_NODE,))
+    cap = declare_capability(store, **dict(BASE_CAPABILITY, request_id="c6-cap",
+                                           effect_class=effect_class))
+    con = declare_contract(store, **dict(BASE_CONTRACT, request_id="c6-con",
+                                         capability_id=cap.record_id,
+                                         effect_class=effect_class))
+    pkg = declare_package(store, **dict(INSTANCE_PACKAGE, request_id="c6-pkg",
+                                        capability_id=cap.record_id,
+                                        contract_id=con.record_id))
+    hosts = []
+    for index, (node, location) in enumerate(
+            ((LOCAL_NODE, "on-premises"),) +
+            (((REMOTE_NODE, second_location),) if second_host else ())):
+        admitted = admit_subject(store, trust_store, **dict(
+            BASE_SUBJECT, request_id=f"c6-host-{index}",
+            node_identity_reference=node, location_class=location,
+            fabric_node_trust_record_id=NODE_TRUST[node]))
+        check(admitted.outcome == ACCEPTED, f"the c6 host {index} is admitted")
+        hosts.append(admitted.record_id)
+
+    instances = []
+    for index, host_id in enumerate(hosts):
+        advert = register_advertisement(store, **dict(
+            BASE_ADVERT, request_id=f"c6-adv-{index}", actor=host_id,
+            capability_host_id=host_id, capability_package_id=pkg.record_id,
+            contract_id=con.record_id, observed_at=STAMP, valid_until=YEAR))
+        binding = admission_module.admit_instance(store, trust_store, **dict(
+            BASE_INSTANCE, request_id=f"c6-inst-{index}",
+            capability_id=cap.record_id, capability_package_id=pkg.record_id,
+            capability_host_id=host_id, contract_id=con.record_id,
+            advertisement_id=advert.record_id,
+            package_trust_record_id=package_trust.record.record_id,
+            host_trust_record_id=NODE_TRUST[
+                LOCAL_NODE if index == 0 else REMOTE_NODE]))
+        check(binding.outcome == ACCEPTED, f"the c6 binding {index} is admitted")
+        instances.append(binding.record_id)
+
+    declared = list(instances) if candidates is None else list(candidates)
+    route = admission_module.create_route(store, **dict(
+        BASE_ROUTE, request_id="c6-route", capability_id=cap.record_id,
+        contract_id=con.record_id, candidate_instances=tuple(declared),
+        locality=locality, accepted_contract_versions=versions))
+    check(route.outcome == ACCEPTED, f"the c6 route is declared ({route.reason})")
+    asked = dict(capability_id=cap.record_id, contract_id=con.record_id,
+                 accepted_contract_versions=versions,
+                 data_classification="internal", locality=locality)
+    return store, trust_store, asked, instances, hosts, route
+
+
+def chosen(store, trust_store, asked, *, request_id="c6-select",
+           local_node_identity=LOCAL_NODE, health_removals=(), **overrides):
+    """One governed selection, reporting anything that escapes it."""
+    call_args = dict(
+        actor="core", recorded_at=STAMP, evaluated_at=LATER,
+        provenance=dict(PROV), local_node_identity=local_node_identity,
+        health_removals=health_removals, **asked)
+    call_args.update(overrides)
+    try:
+        return select_candidate(store, trust_store, request_id=request_id,
+                                **call_args), None
+    except BaseException as error:  # noqa: BLE001
+        return None, error
+
+
+def written(store, identifier):
+    return record_of(store, "capability-selection", identifier)
+
+
+def excluded_of(record):
+    """(instance_id, reasons) per excluded candidate, in recorded order."""
+    return tuple((entry.get("instance_id"), tuple(entry.get("reasons") or ()))
+                 for entry in (record.get("excluded_candidates") or ()))
+
+
+# --- A. A request class no route governs ------------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    unrouted = dict(asked, capability_id="CAPDEF-0009")
+    before = forensic(fabric_root)
+    result, error = chosen(store, trust_store, unrouted, request_id="c6-no-route")
+    check(error is None, f"a request class with no route selects cleanly ({error})")
+    check(result.outcome == ACCEPTED,
+          "a request class with no route still produces a governed outcome")
+    record = written(store, result.record_id)
+    check(record.get("kind") == "capability-selection",
+          "the no-route outcome is recorded as a selection record")
+    check("route_id" not in record and "route_version" not in record,
+          "a no-route decision names neither a route nor a version")
+    check(tuple(record.get("considered_candidates") or ()) == (),
+          "a no-route decision considered no candidate")
+    check(tuple(record.get("excluded_candidates") or ()) == (),
+          "a no-route decision excluded no candidate")
+    check("selected_instance_id" not in record,
+          "a no-route decision selected nothing")
+    check(record.get("refusal_reason") == REASON_NO_ROUTE,
+          "the no-route decision names why it refused")
+    check((record.get("evidence") or {}).get("reason_category") == "no-candidate",
+          "the no-route decision is recorded as a no-candidate outcome")
+    check((record.get("evidence") or {}).get("request_id") == "c6-no-route",
+          "the no-route decision carries the request identity that produced it")
+    for fabricated in ("CROUTE-0000", "CROUTE-0001"):
+        check(fabricated not in str(record),
+              f"the no-route decision invents no route identity ({fabricated})")
+    after = forensic(fabric_root)
+    created = sorted(path for path in set(after) - set(before)
+                     if not path.endswith(".seq"))
+    check(created == ["capability-selections/" + result.record_id + ".yaml"],
+          f"a no-route decision creates only its selection record ({created})")
+    check(all(after[path] == before[path] for path in before
+              if path.endswith(".yaml")),
+          "a no-route decision changes no existing record")
+
+# --- B/F. One winner, whatever order the store enumerates -------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True)
+    first, second = instances
+    result, error = chosen(store, trust_store, asked, request_id="c6-winner")
+    check(error is None, f"a route with several candidates selects cleanly ({error})")
+    check(result.outcome == ACCEPTED, "a selection over eligible candidates is accepted")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == first,
+          "the first candidate in declared order wins")
+    check(tuple(record.get("considered_candidates") or ()) == tuple(instances),
+          "every declared candidate is recorded, in declared order")
+    check(record.get("route_id") == route.record_id and record.get("route_version") == 1,
+          "a decision a route governed names the route and the version that applied")
+    check((record.get("evidence") or {}).get("reason_category") == "selection",
+          "a selected outcome is recorded as a selection")
+    check(excluded_of(record) == ((second, (REASON_NOT_FIRST,)),),
+          "a candidate that lost on order is recorded with why it lost")
+
+# The same logical route, declared in the other order, chooses the other one:
+# order is the decision, and nothing else reorders it.
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True, candidates=None)
+    reversed_route = admission_module.create_route(store, **dict(
+        BASE_ROUTE, request_id="c6-route-reversed",
+        capability_id=asked["capability_id"], contract_id=asked["contract_id"],
+        candidate_instances=tuple(reversed(instances)),
+        locality=asked["locality"],
+        accepted_contract_versions=asked["accepted_contract_versions"],
+        route_version=2, supersedes=route.record_id))
+    check(reversed_route.outcome == ACCEPTED,
+          f"the route is superseded with the candidates reversed ({reversed_route.reason})")
+    result, error = chosen(store, trust_store, asked, request_id="c6-reversed")
+    check(error is None, f"the superseding route selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == instances[1],
+          "the first candidate of the current route version wins")
+    check(record.get("route_version") == 2,
+          "the current route version governs, and is the one recorded")
+
+# --- C. Eligibility is C5's, and its verdict is what gets recorded ----------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True)
+    first, second = instances
+    ended = admission_module.withdraw_instance(
+        store, request_id="c6-withdraw", actor=OPERATOR,
+        approving_authority=OPERATOR, recorded_at=STAMP,
+        instance_id=first, provenance=dict(PROV), notes=None)
+    check(ended.outcome == ACCEPTED, "the first candidate is withdrawn by decision")
+    result, error = chosen(store, trust_store, asked, request_id="c6-filtered")
+    check(error is None, f"a mixed candidate set selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == second,
+          "an ineligible candidate cannot win, and the next declared one does")
+    check(excluded_of(record)[0] == (first, ("instance-not-admitted",)),
+          "the exclusion carries C5's own reason, unchanged")
+    check(tuple(record.get("considered_candidates") or ()) == tuple(instances),
+          "the ineligible candidate is still recorded as considered")
+
+# --- D. A route whose candidates all fail ----------------------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True)
+    for index, identifier in enumerate(instances):
+        ended = admission_module.withdraw_instance(
+            store, request_id=f"c6-withdraw-all-{index}", actor=OPERATOR,
+            approving_authority=OPERATOR, recorded_at=STAMP,
+            instance_id=identifier, provenance=dict(PROV), notes=None)
+        check(ended.outcome == ACCEPTED, f"candidate {index} is withdrawn")
+    result, error = chosen(store, trust_store, asked, request_id="c6-none-eligible")
+    check(error is None, f"a route with no eligible candidate selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check("selected_instance_id" not in record, "nothing is selected")
+    check(record.get("route_id") == route.record_id and record.get("route_version") == 1,
+          "a refusal over a resolved route still names the route that governed it")
+    check(tuple(record.get("considered_candidates") or ()) == tuple(instances),
+          "every candidate is named")
+    check(tuple(entry[0] for entry in excluded_of(record)) == tuple(instances),
+          "every candidate carries its exclusion, in declared order")
+    check(all(entry[1] == ("instance-not-admitted",) for entry in excluded_of(record)),
+          "each exclusion carries the reason C5 gave")
+    check((record.get("evidence") or {}).get("reason_category") == "selection-refusal",
+          "a resolved route with nothing eligible is a refusal, not a no-candidate")
+
+# --- E. Candidates alike in every respect still order by declaration -------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True, second_location="on-premises")
+    result, error = chosen(store, trust_store, asked, request_id="c6-tie")
+    check(error is None, f"indistinguishable candidates select cleanly ({error})")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == instances[0],
+          "candidates alike on every criterion are separated by declared order alone")
+
+# --- G. ELIG-13, the route decides who is a candidate -----------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True, candidates=None)
+    only_first = admission_module.create_route(store, **dict(
+        BASE_ROUTE, request_id="c6-route-one",
+        capability_id=asked["capability_id"], contract_id=asked["contract_id"],
+        candidate_instances=(instances[0],), locality=asked["locality"],
+        accepted_contract_versions=asked["accepted_contract_versions"],
+        route_version=2, supersedes=route.record_id))
+    check(only_first.outcome == ACCEPTED,
+          f"a route naming one of the two bindings is declared ({only_first.reason})")
+    result, error = chosen(store, trust_store, asked, request_id="c6-elig13")
+    check(error is None, f"a narrowed route selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check(tuple(record.get("considered_candidates") or ()) == (instances[0],),
+          "ELIG-13: only the candidates the route permits are considered")
+    check(instances[1] not in str(record),
+          "ELIG-13: an admitted binding the route omits is not selectable")
+    check(record.get("selected_instance_id") == instances[0],
+          "the permitted candidate is chosen")
+
+# --- H. ELIG-14, a side-effecting contract is unroutable -------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, effect_class="side-effecting")
+    result, error = chosen(store, trust_store, asked, request_id="c6-elig14")
+    check(error is None, f"an unroutable contract selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check("selected_instance_id" not in record,
+          "ELIG-14: nothing is selected for a side-effecting contract")
+    check(record.get("route_id") == route.record_id,
+          "the unroutable refusal still names the route it refused over")
+    check(all(REASON_NOT_ROUTABLE in entry[1] for entry in excluded_of(record)),
+          "ELIG-14: every candidate is excluded as unroutable")
+    check((record.get("evidence") or {}).get("reason_category") == "selection-refusal",
+          "an unroutable contract refuses rather than reporting no candidate")
+
+# A route cannot lift the prohibition, whatever locality it declares.
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, effect_class="side-effecting", locality="any-trusted")
+    result, _ = chosen(store, trust_store, asked, request_id="c6-elig14-override")
+    record = written(store, result.record_id)
+    check("selected_instance_id" not in record,
+          "ELIG-14: no route may override unroutability")
+
+# --- I/J/K. local-only is answered from an identity, never a location ------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, locality="local-only", second_host=True)
+    result, error = chosen(store, trust_store, asked, request_id="c6-local-hit",
+                           local_node_identity=LOCAL_NODE)
+    check(error is None, f"a local-only route selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == instances[0],
+          "local-only: the candidate whose host identity matches exactly is chosen")
+    check(record.get("local_node_identity") == LOCAL_NODE,
+          "a local-only decision records the node identity that governed it")
+    check(excluded_of(record)[0] == (instances[1], (REASON_LOCALITY,)),
+          "local-only: a candidate on another node is excluded as non-local")
+
+    # The other machine is on-premises too, and that is not what local means.
+    remote_host = record_of(store, "capability-host", hosts[1])
+    check(remote_host.get("location_class") == "on-premises",
+          "the excluded candidate's host is on-premises")
+    check(remote_host.get("node_identity_reference") == REMOTE_NODE,
+          "the excluded candidate's host is a different node")
+
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, locality="local-only", second_host=True)
+    result, error = chosen(store, trust_store, asked, request_id="c6-local-miss",
+                           local_node_identity=REMOTE_NODE)
+    check(error is None, f"a local-only route on another node selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == instances[1],
+          "local-only: the node performing the selection decides which candidate is local")
+
+for absent, description in ((None, "no local node identity"),
+                            ("", "an empty local node identity"),
+                            ("   ", "a blank local node identity")):
+    with TemporaryDirectory() as tmp:
+        store, trust_store, asked, instances, hosts, route = c6_world(
+            tmp, locality="local-only", second_host=True)
+        result, error = chosen(store, trust_store, asked,
+                               request_id="c6-local-absent",
+                               local_node_identity=absent)
+        check(error is None, f"{description} selects cleanly ({error})")
+        record = written(store, result.record_id)
+        check("selected_instance_id" not in record,
+              f"local-only with {description} selects nothing")
+        check(all(REASON_LOCALITY in entry[1] for entry in excluded_of(record)),
+              f"local-only with {description} excludes every candidate")
+        check("local_node_identity" not in record,
+              f"{description} is recorded as no identity, not as a placeholder")
+
+# --- L. operator-controlled-only excludes the third-party-hosted -----------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, locality="operator-controlled-only", second_host=True,
+        second_location="third-party-hosted")
+    result, error = chosen(store, trust_store, asked, request_id="c6-operator")
+    check(error is None, f"an operator-controlled route selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == instances[0],
+          "an operator-controlled host is not excluded by locality")
+    check(excluded_of(record)[0] == (instances[1], (REASON_LOCALITY,)),
+          "a third-party-hosted candidate is excluded by locality")
+    check("local_node_identity" not in record,
+          "a locality that consults no node identity records none")
+
+# --- M. any-trusted adds nothing ------------------------------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, locality="any-trusted", second_host=True,
+        second_location="third-party-hosted")
+    result, error = chosen(store, trust_store, asked, request_id="c6-any")
+    check(error is None, f"an any-trusted route selects cleanly ({error})")
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == instances[0],
+          "any-trusted selects the first eligible candidate in declared order")
+    check(excluded_of(record) == ((instances[1], (REASON_NOT_FIRST,)),),
+          "any-trusted excludes no candidate on locality")
+
+# --- N/O. Replay, and the context that governed it -------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, locality="local-only", second_host=True)
+    first, error = chosen(store, trust_store, asked, request_id="c6-replay",
+                          local_node_identity=LOCAL_NODE)
+    check(error is None and first.outcome == ACCEPTED,
+          f"the first governed selection is accepted ({error})")
+    before = forensic(fabric_root)
+    again, error = chosen(store, trust_store, asked, request_id="c6-replay",
+                          local_node_identity=LOCAL_NODE)
+    check(error is None, f"the exact replay evaluates cleanly ({error})")
+    check(again.outcome == EXACT_REPLAY,
+          "the same governed selection replays rather than deciding again")
+    check(again.record_id == first.record_id,
+          "the replay returns the original selection identity")
+    check(forensic(fabric_root) == before,
+          "an exact replay writes nothing")
+
+    conflicting, error = chosen(store, trust_store, asked, request_id="c6-replay",
+                                local_node_identity=REMOTE_NODE)
+    check(error is None, f"the conflicting context evaluates cleanly ({error})")
+    check(conflicting.outcome == CONFLICT,
+          "a different local node context is not the same governed selection")
+    check(conflicting.reason == "request_identity_conflict",
+          "the conflicting context is named as a request identity conflict")
+    check(forensic(fabric_root) == before,
+          "a conflicting context writes no second decision")
+
+# --- P. Every decision reconstructs from what was written ------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, locality="local-only", second_host=True)
+    selected, _ = chosen(store, trust_store, asked, request_id="c6-recon-selected")
+    reread = FabricStore.open_for_read(Path(tmp) / "fabric", expected_uid=UID,
+                                       expected_gid=GID)
+    stored = reread.read_record("capability-selection", selected.record_id)
+    for field in ("route_id", "route_version", "request_class",
+                  "considered_candidates", "excluded_candidates",
+                  "selected_instance_id", "selection_reason", "selected_at",
+                  "provenance", "local_node_identity", "evidence"):
+        check(field in stored,
+              f"a reconstructed local-only selection carries {field}")
+    check(stored["request_class"]["locality"] == "local-only",
+          "the request class it decided is readable from the record")
+    check(SELECTION_MODEL.from_dict(stored).to_dict() == stored,
+          "an accepted selection round-trips through the released model")
+
+# --- Q/S. Only CSEL is written, and health is not consulted ---------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    trust_root = Path(tmp) / "trust"
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True)
+    before = forensic(fabric_root)
+    before_trust = forensic(trust_root)
+    result, _ = chosen(store, trust_store, asked, request_id="c6-sole-write")
+    after = forensic(fabric_root)
+    created = sorted(path for path in set(after) - set(before)
+                     if not path.endswith(".seq"))
+    check(created == ["capability-selections/" + result.record_id + ".yaml"],
+          f"a selection creates only its selection record ({created})")
+    for kind in ("capability-instance", "capability-route", "capability-host",
+                 "capability-definition", "capability-package",
+                 "capability-contract", "capability-advertisement"):
+        check(all(after[path] == before[path] for path in before
+                  if kind.split("-")[-1] + "s" in path),
+              f"a selection changes no {kind} record")
+    check(forensic(trust_root) == before_trust,
+          "a selection writes nothing into the trust store")
+    check(sorted(p.name for p in fabric_root.rglob("*.tmp")) == [],
+          "a selection leaves no temporary artefact")
+
+# Health removes and does nothing else. Absent input removes nothing.
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True)
+    result, _ = chosen(store, trust_store, asked, request_id="c6-health-absent",
+                       health_removals=())
+    record = written(store, result.record_id)
+    check(record.get("selected_instance_id") == instances[0],
+          "absent health input removes nothing")
+    removed, _ = chosen(store, trust_store, asked, request_id="c6-health-removed",
+                        health_removals=(instances[0],))
+    record = written(store, removed.record_id)
+    check(record.get("selected_instance_id") == instances[1],
+          "a removed candidate cannot win")
+    check(excluded_of(record)[0] == (instances[0], (REASON_HEALTH_REMOVED,)),
+          "the removal is recorded as the reason it was excluded")
+    check(tuple(record.get("considered_candidates") or ()) == tuple(instances),
+          "health removes candidates without reordering or adding any")
+
+for forbidden in ("health_score", "healthy", "unhealthy", "heartbeat",
+                  "tools.health", "capability-health"):
+    check(forbidden not in SELECTION_SOURCE,
+          f"the selection engine invents no health behaviour ('{forbidden}')")
+
+# --- R. Unreadable governed input fails closed ----------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    before = forensic(fabric_root)
+    for bad, description in (
+            (dict(asked, capability_id="CAPDEF-9"), "a malformed capability identity"),
+            (dict(asked, accepted_contract_versions=()), "an empty version set"),
+            (dict(asked, data_classification="unheard-of"), "an unknown classification"),
+            (dict(asked, locality="anywhere"), "an unknown locality")):
+        result, error = chosen(store, trust_store, bad,
+                               request_id=f"c6-bad-{description[:8]}")
+        check(error is None, f"{description} evaluates without raising ({error})")
+        check(result.outcome in (INVALID, REFUSED),
+              f"{description} is refused")
+        check(result.record_id is None, f"{description} writes no record")
+    check(forensic(fabric_root) == before,
+          "a refused governed selection writes nothing at all")
+
+
+# --- Two routes for one class is refused, never resolved -------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    rival = admission_module.create_route(store, **dict(
+        BASE_ROUTE, request_id="c6-route-rival",
+        capability_id=asked["capability_id"], contract_id=asked["contract_id"],
+        candidate_instances=(instances[0],), locality=asked["locality"],
+        accepted_contract_versions=asked["accepted_contract_versions"]))
+    check(rival.outcome == ACCEPTED,
+          f"a second route for the same class is declarable ({rival.reason})")
+    before = forensic(fabric_root)
+    result, error = chosen(store, trust_store, asked, request_id="c6-ambiguous")
+    check(error is None, f"two competing routes evaluate cleanly ({error})")
+    check(result.outcome == REFUSED,
+          "two unsuperseded routes for one request class are refused")
+    check(result.reason == REASON_ROUTE_AMBIGUOUS,
+          "the ambiguity is named rather than resolved by picking one")
+    check(result.record_id is None,
+          "an ambiguous route universe writes no decision")
+    check(forensic(fabric_root) == before,
+          "an ambiguous route universe writes nothing at all")
+
+# --- The selection engine claims nothing beyond choosing -------------------
+for later in ("invoke", "execute", "run", "load_capability", "dispatch",
+              "schedule", "place", "balance", "weight", "score", "rank",
+              "remediate", "repair", "retry", "admit", "withdraw"):
+    check(not hasattr(selection_module, later),
+          f"the selection engine exposes no '{later}' behaviour at increment 9")
+for token, description in (("random", "chance"), ("shuffle", "reordering"),
+                           ("datetime.now", "a clock of its own"),
+                           ("utcnow", "a clock of its own"),
+                           ("socket", "a network path"),
+                           ("subprocess", "a child process"),
+                           ("importlib", "dynamic loading"),
+                           ("eval(", "evaluation"), ("exec(", "execution")):
+    check(token not in SELECTION_SOURCE,
+          f"the selection engine contains no {description} ('{token}')")
+check(len(RECORD_MODELS) == 8,
+      "increment 9 introduces no ninth persistent record type")
+for absent in ("inspection.py", "cli.py", "health.py"):
+    check(not (root / "tools" / "fabric" / absent).exists(),
+          f"increment 9 creates no {absent}")
 print(f"__FAILURES__={failures}")
 ADMITPY
 )"
