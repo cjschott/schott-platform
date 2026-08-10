@@ -61,13 +61,12 @@ done
 # --- The architecture stays separable from later releases --------------------
 # v0.9.2 specified the Trust Plane and built nothing; v0.9.3 implements it.
 # These assertions now guard the next boundary rather than the last one.
-for forbidden_dir in tools/capability tools/enrollment; do
-  if [[ -e "${ROOT}/${forbidden_dir}" ]]; then
-    fail "no implementation belongs in this sprint: ${forbidden_dir} exists"
-  else
-    pass "no implementation directory: ${forbidden_dir}"
-  fi
-done
+forbidden_dir="tools/enrollment"
+if [[ -e "${ROOT}/${forbidden_dir}" ]]; then
+  fail "no implementation belongs in this sprint: ${forbidden_dir} exists"
+else
+  pass "no implementation directory: ${forbidden_dir}"
+fi
 
 if compgen -G "${ROOT}/platform-model/trust/TRUST-*" >/dev/null 2>&1; then
   fail "no trust runtime records belong in the repository"
@@ -223,7 +222,7 @@ done
 for banned in "enrollment workflow" "approval engine" "revocation executor"; do
   pass "architecture sprint asserts absence of: ${banned}"
 done
-for impl in tools/capability tools/enrollment \
+for impl in tools/enrollment \
             tools/approval tools/revocation; do
   if [[ -e "${ROOT}/${impl}" ]]; then
     fail "no runtime implementation belongs in this sprint: ${impl}"
@@ -315,13 +314,56 @@ fi
 
 # The architecture and its implementation are separate releases, and both now
 # exist. The Fabric followed the same sequence: ADR-0012 specified it and
-# ENG-0004 implements it, so `tools/fabric` is expected. Capability execution
-# is ENG-0005 and remains gated.
-if [[ -d "${ROOT}/tools/capability" ]]; then
-  fail "capability execution remains gated; no implementation belongs here"
-else
-  pass "capability execution remains gated with no implementation"
-fi
+# ENG-0004 implements it, so `tools/fabric` is expected. ENG-0005 Track A
+# implements the Capability Runtime's persistence foundation, so
+# `tools/capability` is expected too -- and it must still execute nothing.
+assert_capability_runtime_does_not_execute() {
+  # The package now exists by authorisation, so its absence can no longer stand
+  # in for "capability execution does not exist". Assert the invariant itself,
+  # against the same production surfaces the permanent backstop in
+  # tests/test-capability-runtime.sh scans for. Weakening this to "the package
+  # may exist" would discard the invariant rather than advance it.
+  local report
+  report="$(python3 - "${ROOT}" <<'CAPSCAN'
+import ast, pathlib, sys
+package = pathlib.Path(sys.argv[1]) / "tools" / "capability"
+FORBIDDEN_IMPORTS = {"subprocess", "multiprocessing", "importlib", "runpy",
+                     "ctypes", "socket", "http", "urllib", "requests",
+                     "asyncio", "docker", "podman", "pty", "shlex"}
+FORBIDDEN_ATTRS = {"system", "popen", "fork", "forkpty", "spawn", "posix_spawn",
+                   "posix_spawnp", "execl", "execle", "execlp", "execlpe",
+                   "execv", "execve", "execvp", "execvpe", "startfile"}
+FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__"}
+findings = []
+for path in sorted(package.rglob("*.py")) if package.is_dir() else []:
+    if "__pycache__" in path.parts:
+        continue
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in FORBIDDEN_IMPORTS:
+                    findings.append(f"{path.name}:{node.lineno} imports {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.split(".")[0] in FORBIDDEN_IMPORTS:
+                findings.append(f"{path.name}:{node.lineno} imports from {node.module}")
+        elif isinstance(node, ast.Call):
+            target = node.func
+            if isinstance(target, ast.Attribute) and target.attr in FORBIDDEN_ATTRS:
+                findings.append(f"{path.name}:{node.lineno} calls .{target.attr}()")
+            if isinstance(target, ast.Name) and target.id in FORBIDDEN_NAMES:
+                findings.append(f"{path.name}:{node.lineno} calls {target.id}()")
+print("\n".join(findings) if findings else "CLEAN")
+CAPSCAN
+)"
+  if [[ "${report}" == "CLEAN" ]]; then
+    pass "capability execution remains gated: the runtime package executes nothing"
+  else
+    while IFS= read -r line; do
+      fail "capability execution appeared in the runtime package: ${line}"
+    done <<< "${report}"
+  fi
+}
+assert_capability_runtime_does_not_execute
 
 # --- CI and local validation wiring -----------------------------------------
 assert_contains ".github/workflows/ci.yml" 'bash tests/test-trust-plane\.sh' \

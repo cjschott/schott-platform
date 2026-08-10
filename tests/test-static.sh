@@ -1391,7 +1391,7 @@ assert_contains "${CI_WF}" 'bash -n tests/\*\.sh' "ci syntax-checks every test f
 # runtime, so `tools/fabric` is now permitted -- and nothing else is. Each name
 # is a different way the same line gets crossed, so each is checked rather than
 # inferred from one.
-for fabric_pkg in tools/capability tools/scheduler tools/placement \
+for fabric_pkg in tools/scheduler tools/placement \
                   tools/clustering tools/routing tools/health tools/discovery \
                   tools/lease tools/admission tools/capability_fabric; do
   if [[ -d "${ROOT}/${fabric_pkg}" ]]; then
@@ -1905,13 +1905,12 @@ done
 # v0.9.3 is the release that implements it, so the runtime is now expected --
 # and the Fabric, enrollment, and capability packages remain forbidden. The
 # boundary moved by one release; it did not dissolve.
-for trust_impl in tools/capability tools/enrollment; do
-  if [[ -e "${ROOT}/${trust_impl}" ]]; then
-    fail "no trust implementation belongs in the architecture sprint: ${trust_impl}"
-  else
-    pass "no trust implementation directory: ${trust_impl}"
-  fi
-done
+trust_impl="tools/enrollment"
+if [[ -e "${ROOT}/${trust_impl}" ]]; then
+  fail "no trust implementation belongs in the architecture sprint: ${trust_impl}"
+else
+  pass "no trust implementation directory: ${trust_impl}"
+fi
 
 # ---------------------------------------------------------------------------
 # v0.9.3 trust plane runtime
@@ -1929,13 +1928,12 @@ done
 
 # The trust runtime did not smuggle the Fabric in. `tools/fabric` arrives with
 # ENG-0004 and its own accepted plan; these names still may not.
-for still_forbidden in tools/capability tools/enrollment; do
-  if [[ -e "${ROOT}/${still_forbidden}" ]]; then
-    fail "v0.9.3 implements trust only: ${still_forbidden} must not exist"
-  else
-    pass "no premature implementation: ${still_forbidden}"
-  fi
-done
+still_forbidden="tools/enrollment"
+if [[ -e "${ROOT}/${still_forbidden}" ]]; then
+  fail "v0.9.3 implements trust only: ${still_forbidden} must not exist"
+else
+  pass "no premature implementation: ${still_forbidden}"
+fi
 
 # ---------------------------------------------------------------------------
 # v0.9.4 trust mechanism migration
@@ -1947,7 +1945,7 @@ assert_file "docs/trust/trust-migration.md"
 
 # That sprint unified trust; it did not begin placement. `tools/fabric` arrives
 # with ENG-0004; placement and clustering still may not.
-for still_forbidden in tools/capability tools/clustering tools/scheduler; do
+for still_forbidden in tools/clustering tools/scheduler; do
   if [[ -e "${ROOT}/${still_forbidden}" ]]; then
     fail "v0.9.4 migrates trust only: ${still_forbidden} must not exist"
   else

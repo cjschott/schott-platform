@@ -105,7 +105,7 @@ assert_absent_in "tools/trust" \
 # --- Placement stays out -----------------------------------------------------
 # That sprint unified trust. `tools/fabric` arrives with ENG-0004; capability
 # execution, clustering, and scheduling still may not.
-for forbidden in tools/capability tools/clustering tools/scheduler; do
+for forbidden in tools/clustering tools/scheduler; do
   if [[ -e "${ROOT}/${forbidden}" ]]; then
     fail "v0.9.4 migrates trust only: ${forbidden} must not exist"
   else

@@ -177,6 +177,12 @@ jobs:
       - name: Fabric runtime tests
         run: bash tests/test-fabric-runtime.sh
 
+      # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
+      # the permanent backstop asserting the package executes nothing. Builds
+      # temporary stores only. No network, no Docker, no capability execution.
+      - name: Capability runtime tests
+        run: bash tests/test-capability-runtime.sh
+
       # Drives the trust gateway directly. Asserts one decision point and that
       # every migrated allow and deny is unchanged from v0.9.3.
       - name: Trust migration tests

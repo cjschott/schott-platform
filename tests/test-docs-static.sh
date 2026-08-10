@@ -800,15 +800,56 @@ assert_contains "${ROADMAP}" 'governed core' \
   "roadmap defines Kyri as the governed core and its contracts"
 
 # The roadmap reserved v0.9.5; ENG-0004 implements the Fabric runtime, so
-# `tools/fabric` is expected. Capability execution is ENG-0005 and stays out.
-refute_contains_docs() {
-  if [[ -d "${ROOT}/tools/capability" ]]; then
-    fail "capability execution is ENG-0005; no implementation belongs here"
+# `tools/fabric` is expected. ENG-0005 Track A implements the Capability
+# Runtime's persistence foundation, so `tools/capability` is expected too --
+# and capability execution itself stays out.
+assert_capability_runtime_does_not_execute() {
+  # The package now exists by authorisation, so its absence can no longer stand
+  # in for "capability execution does not exist". Assert the invariant itself,
+  # against the same production surfaces the permanent backstop in
+  # tests/test-capability-runtime.sh scans for. Weakening this to "the package
+  # may exist" would discard the invariant rather than advance it.
+  local report
+  report="$(python3 - "${ROOT}" <<'CAPSCAN'
+import ast, pathlib, sys
+package = pathlib.Path(sys.argv[1]) / "tools" / "capability"
+FORBIDDEN_IMPORTS = {"subprocess", "multiprocessing", "importlib", "runpy",
+                     "ctypes", "socket", "http", "urllib", "requests",
+                     "asyncio", "docker", "podman", "pty", "shlex"}
+FORBIDDEN_ATTRS = {"system", "popen", "fork", "forkpty", "spawn", "posix_spawn",
+                   "posix_spawnp", "execl", "execle", "execlp", "execlpe",
+                   "execv", "execve", "execvp", "execvpe", "startfile"}
+FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__"}
+findings = []
+for path in sorted(package.rglob("*.py")) if package.is_dir() else []:
+    if "__pycache__" in path.parts:
+        continue
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in FORBIDDEN_IMPORTS:
+                    findings.append(f"{path.name}:{node.lineno} imports {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.split(".")[0] in FORBIDDEN_IMPORTS:
+                findings.append(f"{path.name}:{node.lineno} imports from {node.module}")
+        elif isinstance(node, ast.Call):
+            target = node.func
+            if isinstance(target, ast.Attribute) and target.attr in FORBIDDEN_ATTRS:
+                findings.append(f"{path.name}:{node.lineno} calls .{target.attr}()")
+            if isinstance(target, ast.Name) and target.id in FORBIDDEN_NAMES:
+                findings.append(f"{path.name}:{node.lineno} calls {target.id}()")
+print("\n".join(findings) if findings else "CLEAN")
+CAPSCAN
+)"
+  if [[ "${report}" == "CLEAN" ]]; then
+    pass "capability execution remains gated: the runtime package executes nothing"
   else
-    pass "capability execution remains unimplemented"
+    while IFS= read -r line; do
+      fail "capability execution appeared in the runtime package: ${line}"
+    done <<< "${report}"
   fi
 }
-refute_contains_docs
+assert_capability_runtime_does_not_execute
 
 # --- v0.9.0 remote read-only collection --------------------------------------
 ADR10="docs/decisions/ADR-0010-remote-read-only-collection.md"
@@ -1111,7 +1152,7 @@ done
 
 # ADR-0013 architecture defines nothing that runs. `tools/fabric` is released
 # by ENG-0004; the health-runtime names stay forbidden.
-for premature in tools/health tools/capability tools/monitor \
+for premature in tools/health tools/monitor \
                  tools/heartbeat tools/probe tools/telemetry; do
   if [[ -e "${ROOT}/${premature}" ]]; then
     fail "v0.9.6 is architecture only; ${premature} must not exist"
