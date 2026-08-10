@@ -2005,8 +2005,7 @@ for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
     check(not hasattr(validator_module, later),
           f"the validator exposes no '{later}' behaviour at increment 3")
 
-for absent in ("cli.py",
-               "trust.py"):
+for absent in ("trust.py",):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 3 creates no {absent}")
 
@@ -2862,7 +2861,7 @@ for later in ("admit", "evaluate_eligibility", "compute_eligibility", "select",
           f"request identity exposes no '{later}' behaviour at increment 4")
     check(not hasattr(evidence_module, later),
           f"evidence exposes no '{later}' behaviour at increment 4")
-for absent in ("cli.py", "trust.py", "health.py", "ledger.py"):
+for absent in ("trust.py", "health.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 4 creates no {absent}")
 check(len(RECORD_MODELS) == 8,
@@ -4036,7 +4035,7 @@ for writer in ("write", "write_record", "create_decision", "declare_root_authori
                "record_decision", "revoke", "grant"):
     check(not hasattr(adapter_module, writer),
           f"the trust adapter writes no trust or fabric state: no '{writer}'")
-for absent in ("cli.py", "health.py"):
+for absent in ("health.py",):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 5 creates no {absent}")
 
@@ -5532,7 +5531,7 @@ for later in ("supersede_route", "evaluate_eligibility",
               "remediate", "retry", "refresh"):
     check(not hasattr(admission_module, later),
           f"admission exposes no '{later}' behaviour at increment 6")
-for absent in ("cli.py", "health.py"):
+for absent in ("health.py",):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 6 creates no {absent}")
 
@@ -6470,8 +6469,9 @@ check(admission_module.verify_trust_record is RELEASED_TRUST_VERIFY,
 RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
                     "identifiers.py", "models.py", "request_identity.py",
                     "store.py", "trust_adapter.py", "validator.py",
-                    # One module per increment: C5's, then C6's, then C8's.
-                    "eligibility.py", "selection.py", "inspection.py"}
+                    # One module per increment: C5's, C6's, C8's, then the
+                    # interface the twelve operations are reached through.
+                    "eligibility.py", "selection.py", "inspection.py", "cli.py"}
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
       "the fabric package holds the released modules and C5, and nothing else")
@@ -9160,8 +9160,7 @@ try:
                   "admit_route", "health", "remediate"):
         check(not hasattr(admission_module, later),
               f"admission exposes no '{later}' behaviour at increment 7")
-    for absent in ("cli.py",
-                   "health.py"):
+    for absent in ("health.py",):
         check(not (root / "tools" / "fabric" / absent).exists(),
               f"increment 7 creates no {absent}")
 finally:
@@ -9358,7 +9357,7 @@ for later in ("select", "select_candidate", "resolve_route", "rank", "order",
     check(not hasattr(eligibility_module, later),
           f"the eligibility evaluator exposes no '{later}' behaviour at increment 8")
 
-for absent in ("cli.py", "health.py",
+for absent in ("health.py",
                "trust.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 8 creates no {absent}")
@@ -10907,7 +10906,7 @@ for token, description in (("random", "chance"), ("shuffle", "reordering"),
           f"the selection engine contains no {description} ('{token}')")
 check(len(RECORD_MODELS) == 8,
       "increment 9 introduces no ninth persistent record type")
-for absent in ("cli.py", "health.py"):
+for absent in ("health.py",):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 9 creates no {absent}")
 
@@ -11302,10 +11301,545 @@ for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
               "select", "admit", "allocate"):
     check(not hasattr(inspection_module, later),
           f"the inspection surface exposes no '{later}' behaviour at increment 10")
-check(not (root / "tools" / "fabric" / "cli.py").exists(),
-      "increment 10 creates no cli.py; the interface is increment 11")
+check((root / "tools" / "fabric" / "cli.py").exists(),
+      "the interface arrives at increment 11, after C8")
 check(len(RECORD_MODELS) == 8,
       "increment 10 introduces no ninth persistent record type")
+
+# =======================================================================
+# Increment 11 — interface integration
+# =======================================================================
+# The twelve §8 operations, reachable. The interface parses, resolves nothing,
+# decides nothing, and hands the governed inputs to the component that owns
+# them -- a second policy engine at the edge is how the boundary moves onto
+# whoever typed the command.
+#
+# What it refuses is the point. There is no default store root, no environment
+# identity, no implicit current user, and no way to pass an approving authority
+# as an argument: write commands read their decision body from a file inside an
+# approved directory, checked after full resolution. Time is explicit, so a
+# result is reproducible rather than a race against the clock.
+#
+# Exit codes follow the released trust interface: 0 succeeded, 1 the governed
+# layer said no, 2 the invocation was unusable.
+
+import io  # noqa: E402
+import json as _json  # noqa: E402
+from contextlib import redirect_stderr, redirect_stdout  # noqa: E402
+
+import tools.fabric.cli as cli_module  # noqa: E402
+from tools.fabric.cli import EXIT_DENIED, EXIT_SUCCESS, EXIT_USAGE, main  # noqa: E402
+
+CLI_SOURCE = (root / "tools" / "fabric" / "cli.py").read_text(encoding="utf-8")
+
+# Every §8 operation, and the command that reaches it. Operation 8 is one
+# operation with four released spellings; each delegates to its own function
+# rather than branching on a flag.
+SECTION_8 = {
+    1: ("declare-capability",), 2: ("declare-contract",), 3: ("declare-package",),
+    4: ("admit-subject",), 5: ("register-advertisement",), 6: ("admit-instance",),
+    7: ("create-route",),
+    8: ("withdraw-subject", "refresh-subject", "withdraw-instance",
+        "retire-instance"),
+    9: ("compute-eligibility",), 10: ("select",), 11: ("inspect",),
+    12: ("validate",),
+}
+ALL_COMMANDS = tuple(name for names in SECTION_8.values() for name in names)
+
+
+def run(argv):
+    """One invocation, captured. Nothing here reaches a real shell."""
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(list(argv))
+    except SystemExit as exit_code:  # argparse refuses an unusable invocation
+        code = exit_code.code
+    except BaseException as error:  # noqa: BLE001
+        return None, out.getvalue(), err.getvalue(), error
+    return code, out.getvalue(), err.getvalue(), None
+
+
+def payload_of(text):
+    try:
+        return _json.loads(text)
+    except ValueError:
+        return None
+
+
+def approved(tmp, name, body):
+    """One decision body, in the approved directory, as a file."""
+    directory = Path(tmp) / "approved"
+    directory.mkdir(exist_ok=True)
+    directory.joinpath(name).write_text(_json.dumps(body, default=str),
+                                        encoding="utf-8")
+    return str(directory)
+
+
+def store_flags(tmp):
+    return ["--store-root", str(Path(tmp) / "fabric"),
+            "--expected-uid", str(UID), "--expected-gid", str(GID)]
+
+
+def trust_flags(tmp):
+    return ["--trust-store-root", str(Path(tmp) / "trust")]
+
+
+check(sorted(ALL_COMMANDS) == sorted(set(ALL_COMMANDS)),
+      "every §8 operation names a distinct command")
+check(len(SECTION_8) == 12, "the interface covers all twelve §8 operations")
+
+# --- A. No default store root ---------------------------------------------
+with TemporaryDirectory() as tmp:
+    before = forensic(Path(tmp))
+    for command in ALL_COMMANDS:
+        code, out, err, error = run([command])
+        check(error is None, f"{command} without a store root raises nothing ({error})")
+        check(code == EXIT_USAGE,
+              f"{command} without a store root is an unusable invocation")
+    check(forensic(Path(tmp)) == before,
+          "an invocation with no store root creates nothing")
+    check("--store-root" in CLI_SOURCE and "default=" not in CLI_SOURCE.split(
+        "--store-root")[1].split("\n")[0],
+        "the store root flag carries no default")
+
+# --- B/C/D. The twelve operations, end to end, with no Health Runtime ------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    trust_store, host_trust, package_trust = seeded_fabric_trust(tmp)
+    opened(tmp)  # the store exists before the interface is asked to use it
+    reached = {}
+
+    def invoke(command, body=None, *, extra=(), name="input.json"):
+        argv = [command, *store_flags(tmp)]
+        if body is not None:
+            argv += ["--input-file", name,
+                     "--approved-directory", approved(tmp, name, body)]
+        argv += list(extra)
+        code, out, err, error = run(argv)
+        check(error is None, f"{command} raises nothing ({error})")
+        reached[command] = True
+        return code, payload_of(out), err
+
+    def instants(body):
+        return dict(body, recorded_at=STAMP.isoformat())
+
+    code, result, _ = invoke("declare-capability", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-cap",
+        name="summarise text", description="Reduce a document.",
+        effect_class="read-only", contract_ids=[], provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 1 declares a capability through the interface")
+    capability_id = result.get("record_id")
+    check(capability_id == "CAPDEF-0001",
+          "the interface reports the identity the fabric allocated")
+
+    code, result, _ = invoke("declare-contract", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-con",
+        capability_id=capability_id, contract_version="1.0.0",
+        effect_class="read-only", determinism_class="deterministic",
+        request_shape={"text": "string"}, response_shape={"summary": "string"},
+        failure_modes=["unavailable"], resource_requirements={"host_memory_mb": 512},
+        compatible_with=[], provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 2 declares a contract through the interface")
+    contract_id = result.get("record_id")
+
+    code, result, _ = invoke("declare-package", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-pkg",
+        capability_id=capability_id, contract_id=contract_id,
+        satisfied_contract_versions=["1.0.0"], package_version="1.0.0",
+        artifact_reference="oci://registry.invalid/summarise",
+        resource_requirements={"architecture": "x86_64"},
+        trust_domain="capability-package", provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 3 declares a package through the interface")
+    package_id = result.get("record_id")
+
+    code, result, _ = invoke("admit-subject", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-host",
+        evaluated_at=STAMP.isoformat(), node_identity_reference="node/schai",
+        fabric_node_trust_record_id=NODE_TRUST["node/schai"],
+        verified_resource_profile=dict(PROFILE),
+        verification_reference="/approved/evidence/host-observed.txt",
+        location_class="on-premises", data_classification="internal",
+        availability_intent="in-service", provenance=dict(PROV))),
+        extra=trust_flags(tmp))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 4 admits a subject through the interface")
+    host_id = result.get("record_id")
+
+    code, result, _ = invoke("register-advertisement", instants(dict(
+        actor=host_id, request_id="cli-adv", capability_host_id=host_id,
+        capability_package_id=package_id, contract_id=contract_id,
+        satisfied_contract_versions=["1.0.0"],
+        advertised_resource_profile={"host_memory_mb": 8192},
+        observed_at=STAMP.isoformat(), valid_until=YEAR.isoformat(),
+        provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 5 registers an advertisement through the interface")
+    advertisement_id = result.get("record_id")
+
+    code, result, _ = invoke("admit-instance", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-inst",
+        evaluated_at=LATER.isoformat(), capability_id=capability_id,
+        capability_package_id=package_id, capability_host_id=host_id,
+        contract_id=contract_id, satisfied_contract_versions=["1.0.0"],
+        verified_resource_profile=dict(PROFILE),
+        admission_decision_id="TDEC-000001",
+        package_trust_record_id=PACKAGE_TRUST["CPKG-0001"],
+        host_trust_record_id=NODE_TRUST["node/schai"],
+        admission_scope=dict(SCOPE), admitted_at=STAMP.isoformat(),
+        admitted_until=YEAR.isoformat(), advertisement_id=advertisement_id,
+        provenance=dict(PROV))), extra=trust_flags(tmp))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 6 admits an instance through the interface")
+    instance_id = result.get("record_id")
+
+    code, result, _ = invoke("create-route", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-route",
+        capability_id=capability_id, contract_id=contract_id,
+        accepted_contract_versions=["1.0.0"], locality="any-trusted",
+        candidate_instances=[instance_id], data_classification="internal",
+        route_version=1, provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 7 declares a route through the interface")
+
+    # Operation 9 is read-only and takes its request as flags: nothing here
+    # carries an approving authority.
+    code, out, err, error = run(["compute-eligibility", *store_flags(tmp),
+                                 *trust_flags(tmp), "--instance-id", instance_id,
+                                 "--capability-id", capability_id,
+                                 "--contract-id", contract_id,
+                                 "--accepted-version", "1.0.0",
+                                 "--data-classification", "internal",
+                                 "--evaluated-at", LATER.isoformat()])
+    reached["compute-eligibility"] = True
+    check(error is None, f"operation 9 raises nothing ({error})")
+    verdict = payload_of(out)
+    check(code == EXIT_SUCCESS and verdict.get("eligible") is True,
+          "operation 9 computes eligibility through the interface")
+    check(tuple(entry["condition_id"] for entry in verdict["conditions"])
+          == tuple(f"ELIG-{n}" for n in range(1, 13)),
+          "the eligibility verdict reports every condition, in schema order")
+
+    code, result, _ = invoke("select", instants(dict(
+        actor="core", request_id="cli-select", evaluated_at=LATER.isoformat(),
+        capability_id=capability_id, contract_id=contract_id,
+        accepted_contract_versions=["1.0.0"], data_classification="internal",
+        locality="any-trusted", local_node_identity="node/schai",
+        health_removals=[], provenance=dict(PROV))), extra=trust_flags(tmp))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 10 selects through the interface")
+    selection_id = result.get("record_id")
+
+    code, out, err, error = run(["inspect", *store_flags(tmp),
+                                 "--kind", "capability-selection"])
+    reached["inspect"] = True
+    check(error is None, f"operation 11 raises nothing ({error})")
+    report = payload_of(out)
+    check(code == EXIT_SUCCESS and report.get("status") == "reported",
+          "operation 11 inspects through the interface")
+    check([record["selection_id"] for record in report["records"]] == [selection_id],
+          "the interface reports the record C8 read, unaltered")
+
+    code, out, err, error = run(["validate", *store_flags(tmp)])
+    reached["validate"] = True
+    check(error is None, f"operation 12 raises nothing ({error})")
+    findings = payload_of(out)
+    check(code == EXIT_SUCCESS and findings.get("findings") == [],
+          "operation 12 validates through the interface")
+    check(findings.get("counts", {}).get("capability-selection") == 1,
+          "the interface reports C8's counts unaltered")
+
+    # Operation 8, all four released spellings.
+    code, result, _ = invoke("withdraw-instance", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-wdi",
+        instance_id=instance_id, provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 8 withdraws an instance through the interface")
+    withdrawn_instance = result.get("record_id")
+    code, result, _ = invoke("retire-instance", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-rti",
+        instance_id=withdrawn_instance, provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 8 retires an instance through the interface")
+    code, result, _ = invoke("withdraw-subject", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-wds",
+        capability_host_id=host_id, availability_intent="withheld",
+        provenance=dict(PROV))))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 8 withdraws a subject through the interface")
+    withdrawn_host = result.get("record_id")
+    code, result, _ = invoke("refresh-subject", instants(dict(
+        actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-rfs",
+        evaluated_at=LATER.isoformat(), capability_host_id=withdrawn_host,
+        fabric_node_trust_record_id=NODE_TRUST["node/schai"],
+        verified_resource_profile=dict(PROFILE),
+        verification_reference="/approved/evidence/host-reobserved.txt",
+        location_class="on-premises", data_classification="internal",
+        availability_intent="in-service", provenance=dict(PROV))),
+        extra=trust_flags(tmp))
+    check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
+          "operation 8 returns a subject to service through the interface")
+
+    check(sorted(reached) == sorted(ALL_COMMANDS),
+          f"every §8 operation was reached through the interface ({sorted(set(ALL_COMMANDS) - set(reached))})")
+    # AC 25: none of that required a Health Runtime.
+    check(not (root / "tools" / "health").exists(),
+          "every operation ran with no Health Runtime present")
+
+# --- E/F. Replay, and a conflicting reuse ---------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    opened(tmp)
+    body = dict(actor=OPERATOR, approving_authority=OPERATOR,
+                request_id="cli-replay", recorded_at=STAMP.isoformat(),
+                name="summarise text", description="Reduce a document.",
+                effect_class="read-only", contract_ids=[], provenance=dict(PROV))
+    first = run(["declare-capability", *store_flags(tmp), "--input-file", "a.json",
+                 "--approved-directory", approved(tmp, "a.json", body)])
+    check(first[0] == EXIT_SUCCESS, "the first governed request through the interface is accepted")
+    original = payload_of(first[1])
+
+    before = forensic(fabric_root)
+    again = run(["declare-capability", *store_flags(tmp), "--input-file", "a.json",
+                 "--approved-directory", approved(tmp, "a.json", body)])
+    replayed = payload_of(again[1])
+    check(again[0] == EXIT_SUCCESS, "an exact replay through the interface succeeds")
+    check(replayed.get("outcome") == EXACT_REPLAY,
+          "an exact replay is reported as a replay, not a second decision")
+    check(replayed.get("record_id") == original.get("record_id"),
+          "the replay returns the original record identity")
+    check(forensic(fabric_root) == before, "an exact replay writes nothing")
+
+    clashing = dict(body, description="Something else entirely.")
+    conflict = run(["declare-capability", *store_flags(tmp), "--input-file", "b.json",
+                    "--approved-directory", approved(tmp, "b.json", clashing)])
+    reported = payload_of(conflict[1])
+    check(conflict[0] == EXIT_DENIED,
+          "a conflicting reuse of a request identity is denied")
+    check(reported.get("outcome") == CONFLICT
+          and reported.get("reason") == "request_identity_conflict",
+          "the conflict is reported as a request identity conflict")
+    check(reported.get("record_id") is None, "a conflict allocates no identity")
+    check(forensic(fabric_root) == before, "a conflict writes nothing")
+    check("request_id" not in CLI_SOURCE.split("def _generate")[0].split("uuid")[0]
+          or "uuid" not in CLI_SOURCE,
+          "the interface never generates a request identity of its own")
+
+# --- G. Governed refusal stays structured ---------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    opened(tmp)
+    before = forensic(fabric_root)
+    refused = run(["declare-contract", *store_flags(tmp), "--input-file", "c.json",
+                   "--approved-directory", approved(tmp, "c.json", dict(
+                       actor=OPERATOR, approving_authority=OPERATOR,
+                       request_id="cli-missing", recorded_at=STAMP.isoformat(),
+                       capability_id="CAPDEF-0009", contract_version="1.0.0",
+                       effect_class="read-only", determinism_class="deterministic",
+                       request_shape={}, response_shape={}, failure_modes=[],
+                       resource_requirements={}, compatible_with=[],
+                       provenance=dict(PROV)))])
+    body = payload_of(refused[1])
+    check(refused[0] == EXIT_DENIED, "a governed refusal exits as denied")
+    check(body is not None and body.get("outcome") == NOT_FOUND,
+          "a governed refusal is still structured output")
+    check(body.get("reason") == "unresolved-reference",
+          "the governed reason reaches the caller unchanged")
+    check("Traceback" not in refused[1] + refused[2],
+          "a governed refusal shows no traceback")
+    check(forensic(fabric_root) == before, "a governed refusal writes nothing")
+
+# --- H. Selection outcomes through the interface --------------------------
+with TemporaryDirectory() as tmp:
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp, second_host=True)
+    def selected_through(request_id, **overrides):
+        body = dict(actor="core", request_id=request_id,
+                    recorded_at=STAMP.isoformat(), evaluated_at=LATER.isoformat(),
+                    accepted_contract_versions=list(asked["accepted_contract_versions"]),
+                    capability_id=asked["capability_id"],
+                    contract_id=asked["contract_id"],
+                    data_classification=asked["data_classification"],
+                    locality=asked["locality"], local_node_identity=LOCAL_NODE,
+                    health_removals=[], provenance=dict(PROV))
+        body.update(overrides)
+        name = f"{request_id}.json"
+        return run(["select", *store_flags(tmp), *trust_flags(tmp),
+                    "--input-file", name,
+                    "--approved-directory", approved(tmp, name, body)])
+
+    code, out, _, _ = selected_through("cli-sel-ok")
+    chose = payload_of(out)
+    check(code == EXIT_SUCCESS and chose.get("outcome") == ACCEPTED,
+          "a selection through the interface succeeds")
+    stored = record_of(store, "capability-selection", chose["record_id"])
+    check(stored.get("selected_instance_id") == instances[0],
+          "the interface records the same choice the runtime would")
+
+    code, out, _, _ = selected_through("cli-sel-none", capability_id="CAPDEF-0009")
+    none_found = payload_of(out)
+    check(code == EXIT_SUCCESS and none_found.get("outcome") == ACCEPTED,
+          "a no-route decision is a governed outcome, recorded and reported")
+    stored = record_of(store, "capability-selection", none_found["record_id"])
+    check("route_id" not in stored,
+          "the interface does not invent route provenance for a no-route decision")
+
+    for index, identifier in enumerate(instances):
+        admission_module.withdraw_instance(
+            store, request_id=f"cli-end-{index}", actor=OPERATOR,
+            approving_authority=OPERATOR, recorded_at=STAMP,
+            instance_id=identifier, provenance=dict(PROV), notes=None)
+    code, out, _, _ = selected_through("cli-sel-refused")
+    refusal = payload_of(out)
+    stored = record_of(store, "capability-selection", refusal["record_id"])
+    check(stored.get("selected_instance_id") is None
+          and stored.get("route_id") == route.record_id,
+          "a selection refusal keeps its route provenance through the interface")
+
+# --- I. Approved-directory containment ------------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    opened(tmp)
+    outside = Path(tmp) / "outside"
+    outside.mkdir()
+    outside.joinpath("escape.json").write_text("{}", encoding="utf-8")
+    directory = approved(tmp, "kept.json", {"actor": OPERATOR})
+    Path(directory).joinpath("link.json").symlink_to(outside / "escape.json")
+    before = forensic(Path(tmp))
+    for name, description in (("../outside/escape.json", "a traversing input path"),
+                              ("link.json", "a symlinked input file"),
+                              ("/etc/hostname", "an absolute input path"),
+                              ("missing.json", "an input file that is not there")):
+        code, out, err, error = run(["declare-capability", *store_flags(tmp),
+                                     "--input-file", name,
+                                     "--approved-directory", directory])
+        check(error is None, f"{description} raises nothing ({error})")
+        check(code == EXIT_USAGE, f"{description} is refused as unusable")
+        check("Traceback" not in out + err, f"{description} shows no traceback")
+    check(forensic(Path(tmp)) == before,
+          "every containment refusal leaves the filesystem unchanged")
+
+# --- J/K. Malformed input and unknown commands ----------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    opened(tmp)
+    directory = Path(tmp) / "approved"
+    directory.mkdir(exist_ok=True)
+    directory.joinpath("broken.json").write_text("{not json", encoding="utf-8")
+    before = forensic(fabric_root)
+    code, out, err, error = run(["declare-capability", *store_flags(tmp),
+                                 "--input-file", "broken.json",
+                                 "--approved-directory", str(directory)])
+    check(error is None, f"malformed input raises nothing ({error})")
+    check(code == EXIT_USAGE, "a decision body that is not readable is unusable")
+    check(forensic(fabric_root) == before,
+          "a malformed decision body invokes no governed operation")
+    for argv, description in ((["not-a-command"], "an unknown command"),
+                              ([], "no command at all"),
+                              (["inspect", *store_flags(tmp), "--nonsense"],
+                               "an unknown flag")):
+        code, out, err, error = run(argv)
+        check(error is None, f"{description} raises nothing ({error})")
+        check(code == EXIT_USAGE, f"{description} is an unusable invocation")
+    check(forensic(fabric_root) == before,
+          "an unusable invocation touches nothing")
+
+# --- L/M. Explicit time and explicit authority ----------------------------
+for token, description in (("datetime.now", "a clock of its own"),
+                           ("utcnow", "a clock of its own"),
+                           ("time.time", "a clock of its own"),
+                           ("uuid", "an identity of its own"),
+                           ("random", "chance"),
+                           ("os.environ", "an environment-derived value"),
+                           ("getenv", "an environment-derived value"),
+                           ("expanduser", "a home-directory default"),
+                           ("subprocess", "a child process"),
+                           ("os.system", "a shell"),
+                           ("shell=True", "a shell"),
+                           ("importlib", "a dynamic import"),
+                           ("eval(", "evaluation"),
+                           ("exec(", "execution"),
+                           ("socket", "a network path"),
+                           ("urllib", "a network path"),
+                           ("requests", "a network path")):
+    check(token not in CLI_SOURCE,
+          f"the interface contains no {description} ('{token}')")
+for verb in ("invoke", "execute", "run_capability", "dispatch", "load",
+             "activate", "repair", "remediate", "retry", "recover"):
+    check(not hasattr(cli_module, verb),
+          f"the interface exposes no '{verb}' verb at increment 11")
+
+# --- N. FC 25: recovery is a new decision, never an event -----------------
+# Nothing here recovers. A refused request leaves no record, and the way
+# forward is another governed decision that produces its own.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    opened(tmp)
+    body = dict(actor=OPERATOR, approving_authority=OPERATOR,
+                request_id="cli-fc25", recorded_at=STAMP.isoformat(),
+                capability_id="CAPDEF-0009", contract_version="1.0.0",
+                effect_class="read-only", determinism_class="deterministic",
+                request_shape={}, response_shape={}, failure_modes=[],
+                resource_requirements={}, compatible_with=[], provenance=dict(PROV))
+    failed = run(["declare-contract", *store_flags(tmp), "--input-file", "f.json",
+                  "--approved-directory", approved(tmp, "f.json", body)])
+    check(failed[0] == EXIT_DENIED, "the first attempt is refused")
+    after_failure = forensic(fabric_root)
+    check(payload_of(failed[1]).get("record_id") is None,
+          "a refused operation leaves no partial record to recover")
+
+    # The prerequisite is declared, and the operator decides again -- with its
+    # own request identity, producing its own record.
+    made = run(["declare-capability", *store_flags(tmp), "--input-file", "g.json",
+                "--approved-directory", approved(tmp, "g.json", dict(
+                    actor=OPERATOR, approving_authority=OPERATOR,
+                    request_id="cli-fc25-cap", recorded_at=STAMP.isoformat(),
+                    name="summarise text", description="Reduce a document.",
+                    effect_class="read-only", contract_ids=[],
+                    provenance=dict(PROV)))])
+    check(made[0] == EXIT_SUCCESS, "the missing prerequisite is declared by decision")
+    recovered = run(["declare-contract", *store_flags(tmp), "--input-file", "h.json",
+                     "--approved-directory", approved(tmp, "h.json", dict(
+                         body, request_id="cli-fc25-again",
+                         capability_id=payload_of(made[1])["record_id"]))])
+    check(recovered[0] == EXIT_SUCCESS,
+          "recovery is a new governed decision, and it succeeds on its own terms")
+    check(payload_of(recovered[1])["record_id"] == "CCON-0001",
+          "the new decision produces a new record")
+    check(set(forensic(fabric_root)) > set(after_failure),
+          "recovery added records rather than repairing anything")
+    check(all(forensic(fabric_root)[path] == after_failure[path]
+              for path in after_failure if path.endswith(".yaml")),
+          "no record written before the failure was altered by recovering")
+
+# --- O/P. Deterministic output, and no interface persistence --------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    trust_root = Path(tmp) / "trust"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    before = forensic(fabric_root)
+    before_trust = forensic(trust_root)
+    before_sequences = sequences_of(fabric_root)
+    first = run(["validate", *store_flags(tmp)])
+    second = run(["validate", *store_flags(tmp)])
+    check(first[0] == second[0] and first[1] == second[1] and first[2] == second[2],
+          "repeating a validation returns byte-identical output")
+    looked_once = run(["inspect", *store_flags(tmp)])
+    looked_twice = run(["inspect", *store_flags(tmp)])
+    check(looked_once[1] == looked_twice[1],
+          "repeating an inspection returns byte-identical output")
+    check(looked_once[2] == "" and first[2] == "",
+          "a successful read writes nothing to stderr")
+    check(payload_of(looked_once[1]) is not None,
+          "stdout carries machine-readable output alone")
+    check(forensic(fabric_root) == before and forensic(trust_root) == before_trust,
+          "reading through the interface changes neither store")
+    check(sequences_of(fabric_root) == before_sequences,
+          "reading through the interface moves no identifier")
+    check(sorted(p.name for p in fabric_root.rglob("*.tmp")) == [],
+          "the interface leaves no temporary artefact")
 print(f"__FAILURES__={failures}")
 ADMITPY
 )"
