@@ -2005,7 +2005,7 @@ for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
     check(not hasattr(validator_module, later),
           f"the validator exposes no '{later}' behaviour at increment 3")
 
-for absent in ("inspection.py", "cli.py",
+for absent in ("cli.py",
                "trust.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 3 creates no {absent}")
@@ -2862,8 +2862,7 @@ for later in ("admit", "evaluate_eligibility", "compute_eligibility", "select",
           f"request identity exposes no '{later}' behaviour at increment 4")
     check(not hasattr(evidence_module, later),
           f"evidence exposes no '{later}' behaviour at increment 4")
-for absent in ("inspection.py",
-               "cli.py", "trust.py", "health.py", "ledger.py"):
+for absent in ("cli.py", "trust.py", "health.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 4 creates no {absent}")
 check(len(RECORD_MODELS) == 8,
@@ -4037,8 +4036,7 @@ for writer in ("write", "write_record", "create_decision", "declare_root_authori
                "record_decision", "revoke", "grant"):
     check(not hasattr(adapter_module, writer),
           f"the trust adapter writes no trust or fabric state: no '{writer}'")
-for absent in ("inspection.py",
-               "cli.py", "health.py"):
+for absent in ("cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 5 creates no {absent}")
 
@@ -5534,7 +5532,7 @@ for later in ("supersede_route", "evaluate_eligibility",
               "remediate", "retry", "refresh"):
     check(not hasattr(admission_module, later),
           f"admission exposes no '{later}' behaviour at increment 6")
-for absent in ("inspection.py", "cli.py", "health.py"):
+for absent in ("cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 6 creates no {absent}")
 
@@ -6472,9 +6470,8 @@ check(admission_module.verify_trust_record is RELEASED_TRUST_VERIFY,
 RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
                     "identifiers.py", "models.py", "request_identity.py",
                     "store.py", "trust_adapter.py", "validator.py",
-                    # Increment 8 adds exactly one module, and it is C5's;
-                    # increment 9 adds exactly one more, and it is C6's.
-                    "eligibility.py", "selection.py"}
+                    # One module per increment: C5's, then C6's, then C8's.
+                    "eligibility.py", "selection.py", "inspection.py"}
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
       "the fabric package holds the released modules and C5, and nothing else")
@@ -9163,7 +9160,7 @@ try:
                   "admit_route", "health", "remediate"):
         check(not hasattr(admission_module, later),
               f"admission exposes no '{later}' behaviour at increment 7")
-    for absent in ("inspection.py", "cli.py",
+    for absent in ("cli.py",
                    "health.py"):
         check(not (root / "tools" / "fabric" / absent).exists(),
               f"increment 7 creates no {absent}")
@@ -9361,7 +9358,7 @@ for later in ("select", "select_candidate", "resolve_route", "rank", "order",
     check(not hasattr(eligibility_module, later),
           f"the eligibility evaluator exposes no '{later}' behaviour at increment 8")
 
-for absent in ("inspection.py", "cli.py", "health.py",
+for absent in ("cli.py", "health.py",
                "trust.py", "ledger.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 8 creates no {absent}")
@@ -10855,12 +10852,12 @@ with TemporaryDirectory() as tmp:
     fabric_root = Path(tmp) / "fabric"
     store, trust_store, asked, instances, hosts, route = c6_world(tmp)
     before = forensic(fabric_root)
-    for bad, description in (
+    for malformed, description in (
             (dict(asked, capability_id="CAPDEF-9"), "a malformed capability identity"),
             (dict(asked, accepted_contract_versions=()), "an empty version set"),
             (dict(asked, data_classification="unheard-of"), "an unknown classification"),
             (dict(asked, locality="anywhere"), "an unknown locality")):
-        result, error = chosen(store, trust_store, bad,
+        result, error = chosen(store, trust_store, malformed,
                                request_id=f"c6-bad-{description[:8]}")
         check(error is None, f"{description} evaluates without raising ({error})")
         check(result.outcome in (INVALID, REFUSED),
@@ -10910,9 +10907,405 @@ for token, description in (("random", "chance"), ("shuffle", "reordering"),
           f"the selection engine contains no {description} ('{token}')")
 check(len(RECORD_MODELS) == 8,
       "increment 9 introduces no ninth persistent record type")
-for absent in ("inspection.py", "cli.py", "health.py"):
+for absent in ("cli.py", "health.py"):
     check(not (root / "tools" / "fabric" / absent).exists(),
           f"increment 9 creates no {absent}")
+
+# =======================================================================
+# Increment 10 — inspection and validation surface (C8)
+# =======================================================================
+# C8 looks and reports. It opens a store for read, exposes what C2 found, and
+# adds the deterministic handling C2 has no way to reach: a root that is not
+# there, one that cannot be opened, a filter that names nothing.
+#
+# **Not one byte, under any input.** An absent store is reported as absent
+# rather than built and then described; a malformed record is described rather
+# than mended; temp residue is named as the evidence of an interrupted write
+# and left exactly where it was found. Inspection that repairs what it
+# discovers destroys the only account of what happened.
+#
+# It replaces nothing. C2 still owns the findings; C8 exposes them.
+
+import tools.fabric.inspection as inspection_module  # noqa: E402
+from tools.fabric.inspection import (  # noqa: E402
+    KIND_ORDER, REASON_ABSENT, REASON_MALFORMED_IDENTITY, REASON_NOT_FOUND,
+    REASON_UNKNOWN_KIND, REASON_UNREADABLE, STATUS_ABSENT, STATUS_INVALID,
+    STATUS_NOT_FOUND, STATUS_REPORTED, STATUS_UNREADABLE,
+    inspect_records, validate_store,
+)
+
+INSPECTION_SOURCE = (root / "tools" / "fabric" / "inspection.py").read_text(
+    encoding="utf-8")
+ID_FIELDS_FOR_C8 = {
+    "capability-definition": "capability_id",
+    "capability-contract": "contract_id",
+    "capability-package": "capability_package_id",
+    "capability-host": "capability_host_id",
+    "capability-advertisement": "advertisement_id",
+    "capability-instance": "instance_id",
+    "capability-route": "route_id",
+    "capability-selection": "selection_id",
+}
+
+
+def c8_world(tmp):
+    """A store with one of everything, built through the released path."""
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, second_host=True)
+    selected, _ = chosen(store, trust_store, asked, request_id="c8-selected")
+    check(selected.outcome == ACCEPTED, "the c8 world records a selection")
+    return store, trust_store, asked, instances, route, selected
+
+
+def looked(root_path, **overrides):
+    """One inspection, reporting anything that escapes it."""
+    arguments = dict(expected_uid=UID, expected_gid=GID)
+    arguments.update(overrides)
+    try:
+        return inspect_records(root_path, **arguments), None
+    except BaseException as error:  # noqa: BLE001
+        return None, error
+
+
+def checked(root_path, **overrides):
+    """One validation, reporting anything that escapes it."""
+    arguments = dict(expected_uid=UID, expected_gid=GID)
+    arguments.update(overrides)
+    try:
+        return validate_store(root_path, **arguments), None
+    except BaseException as error:  # noqa: BLE001
+        return None, error
+
+
+check(tuple(KIND_ORDER) == tuple(RECORD_MODELS),
+      "C8 walks the eight accepted kinds in the order the model declares them")
+
+# --- A. Reading a valid store changes nothing (AC 28, 47) ------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    trust_root = Path(tmp) / "trust"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    before = forensic(fabric_root)
+    before_trust = forensic(trust_root)
+    before_sequences = sequences_of(fabric_root)
+
+    first_look, error = looked(fabric_root)
+    second_look, other = looked(fabric_root)
+    check(error is None and other is None,
+          f"inspecting a valid store raises nothing ({error} {other})")
+    check(first_look.status == STATUS_REPORTED,
+          "a readable store is reported")
+    check(first_look.to_dict() == second_look.to_dict(),
+          "inspecting the same store twice returns the identical report")
+
+    first_check, error = checked(fabric_root)
+    second_check, other = checked(fabric_root)
+    check(error is None and other is None,
+          f"validating a valid store raises nothing ({error} {other})")
+    check(first_check.status == STATUS_REPORTED, "a readable store validates")
+    check(first_check.to_dict() == second_check.to_dict(),
+          "validating the same store twice returns the identical report")
+
+    check(forensic(fabric_root) == before,
+          "inspection and validation leave every path, mode, size, time and digest identical")
+    check(forensic(trust_root) == before_trust,
+          "inspection and validation write nothing into the trust store")
+    check(sequences_of(fabric_root) == before_sequences,
+          "inspection and validation move no identifier")
+    check(sorted(p.name for p in fabric_root.rglob("*.tmp")) == [],
+          "inspection and validation leave no temporary artefact")
+
+    # Every accepted kind is counted, and the records are the ones stored.
+    check(tuple(first_check.counts) == tuple(RECORD_MODELS),
+          "validation counts every accepted kind, in the declared order")
+    check(first_check.counts["capability-selection"] == 1,
+          "the recorded selection is counted")
+    check(first_check.findings == (),
+          "a store built through the released path has nothing wrong with it")
+
+# --- B. Records come back in a canonical order, whatever the store enumerates
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    report, error = looked(fabric_root)
+    check(error is None, f"inspecting records raises nothing ({error})")
+    kinds = tuple(record["kind"] for record in report.records)
+    ordered = tuple(sorted(set(kinds), key=tuple(RECORD_MODELS).index))
+    check(tuple(sorted(set(kinds), key=kinds.index)) == ordered,
+          "records are grouped by kind in the declared order")
+    for kind in ordered:
+        identities = [record[ID_FIELDS_FOR_C8[kind]] for record in report.records
+                      if record["kind"] == kind]
+        check(identities == sorted(identities),
+              f"{kind} records are returned in identifier order")
+
+    # The same store read again, and a second reader, agree exactly.
+    again, _ = looked(fabric_root)
+    check([record for record in report.records]
+          == [record for record in again.records],
+          "repeated inspection returns the identical records in the identical order")
+
+# --- C. One record, by kind and identity ----------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    report, error = looked(fabric_root, kind="capability-selection",
+                           identifier=selected.record_id)
+    check(error is None, f"inspecting one record raises nothing ({error})")
+    check(report.status == STATUS_REPORTED, "a stored record is reported")
+    check(len(report.records) == 1, "exactly the record asked for is returned")
+    stored = record_of(store, "capability-selection", selected.record_id)
+    check(dict(report.records[0]) == stored,
+          "the record is reported exactly as it is stored")
+
+    by_kind, _ = looked(fabric_root, kind="capability-instance")
+    check({record["instance_id"] for record in by_kind.records} == set(instances),
+          "filtering by kind returns that kind and nothing else")
+
+# --- D. Nothing there, and nothing invented -------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    before = forensic(fabric_root)
+    missing, error = looked(fabric_root, kind="capability-selection",
+                            identifier="CSEL-999999")
+    check(error is None, f"an absent record raises nothing ({error})")
+    check(missing.status == STATUS_NOT_FOUND, "an absent record is reported not-found")
+    check(missing.reason == REASON_NOT_FOUND, "the not-found reason is named")
+    check(missing.records == (), "an absent record returns no record")
+    check(forensic(fabric_root) == before, "a not-found inspection writes nothing")
+
+    for bad_kind in ("capability-health", "", 7):
+        refused, error = looked(fabric_root, kind=bad_kind)
+        check(error is None, f"an unsupported kind raises nothing ({error})")
+        check(refused.status == STATUS_INVALID,
+              "an unsupported record kind is refused")
+        check(refused.reason == REASON_UNKNOWN_KIND,
+              "the unsupported kind is named as unknown")
+        check(refused.records == (),
+              "an unsupported kind returns no records rather than all of them")
+    for bad_id in ("CSEL-99", "not-an-identity", 7):
+        refused, error = looked(fabric_root, kind="capability-selection",
+                                identifier=bad_id)
+        check(error is None, f"a malformed identity raises nothing ({error})")
+        check(refused.status == STATUS_INVALID, "a malformed identity is refused")
+        check(refused.reason == REASON_MALFORMED_IDENTITY,
+              "the malformed identity is named")
+    check(forensic(fabric_root) == before,
+          "every refused query leaves the store exactly as it was")
+
+# --- E. An absent root is reported, never built (AC 29, FC 1) -------------
+with TemporaryDirectory() as tmp:
+    parent = Path(tmp)
+    absent = parent / "not-a-store"
+    before_parent = forensic(parent)
+    for report, error, label in ((*looked(absent), "inspection"),
+                                 (*checked(absent), "validation")):
+        check(error is None, f"{label} of an absent root raises nothing ({error})")
+        check(report.status == STATUS_ABSENT,
+              f"{label} reports an absent root as absent")
+        check(report.reason == REASON_ABSENT, f"{label} names the absent root")
+    check(not absent.exists(), "an absent store root is not created by looking at it")
+    check(forensic(parent) == before_parent,
+          "the parent of an absent store root is byte-unchanged")
+
+# --- F. Empty is not absent (AC 30, FC 2) ---------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store = opened(tmp)
+    before = forensic(fabric_root)
+    report, error = checked(fabric_root)
+    check(error is None, f"validating an empty store raises nothing ({error})")
+    check(report.status == STATUS_REPORTED,
+          "an empty store is reported, not called absent")
+    check(report.status != STATUS_ABSENT,
+          "empty is distinguishable from absent")
+    check(sum(report.counts.values()) == 0, "an empty store counts no records")
+    check(report.findings == (), "an empty store is not a problem")
+    looked_report, error = looked(fabric_root)
+    check(error is None and looked_report.records == (),
+          "an empty store yields no records")
+    check(forensic(fabric_root) == before,
+          "looking at an empty store creates no directory and changes nothing")
+
+# --- G. A malformed record is described, never mended (FC 3, AC 44) -------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    broken = store.path_for("capability-selection", "CSEL-000900")
+    store.write_atomic(broken, {"schema_version": "schott-platform/v1",
+                                "kind": "capability-selection"})
+    before = forensic(fabric_root)
+    report, error = checked(fabric_root)
+    check(error is None, f"a malformed record raises nothing ({error})")
+    check(report.status == STATUS_REPORTED,
+          "a store containing a malformed record is still reported")
+    check(any("CSEL-000900" in finding for finding in report.findings),
+          "the malformed record is named in the findings")
+    check(forensic(fabric_root) == before,
+          "the malformed record is described and left exactly as found")
+    again, _ = checked(fabric_root)
+    check(again.to_dict() == report.to_dict(),
+          "the finding is identical when validation runs again")
+
+# --- H. A reference nothing declares is a finding, not a repair -----------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    payload = dict(record_of(store, "capability-instance", instances[0]))
+    payload["instance_id"] = "CINST-000900"
+    payload["supersedes"] = "CINST-000899"
+    store.write_atomic(store.path_for("capability-instance", "CINST-000900"), payload)
+    before = forensic(fabric_root)
+    report, error = checked(fabric_root)
+    check(error is None, f"a dangling predecessor raises nothing ({error})")
+    check(any("CINST-000899" in finding and "supersedes" in finding
+              for finding in report.findings),
+          "a predecessor no stored record declares is reported")
+    check(forensic(fabric_root) == before,
+          "the dangling reference is reported and nothing is backfilled")
+
+# A record filed under a name that is not its own identity is reported too.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    payload = dict(record_of(store, "capability-instance", instances[0]))
+    store.write_atomic(store.path_for("capability-instance", "CINST-000901"), payload)
+    before = forensic(fabric_root)
+    report, error = checked(fabric_root)
+    check(error is None, f"a misfiled record raises nothing ({error})")
+    check(any("CINST-000901" in finding and "filename" in finding
+              for finding in report.findings),
+          "a record whose filename is not its identity is reported")
+    check(forensic(fabric_root) == before, "the misfiled record is left where it is")
+
+# --- I. Temp residue is debris, and debris is evidence (AC 33, FC 12) -----
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    residue = store.path_for("capability-selection", "CSEL-000902").with_name(
+        ".CSEL-000902.tmp")
+    store.write_atomic(residue.with_name("CSEL-000902.yaml"), {"kind": "x"})
+    debris = residue.parent / "CSEL-000903.tmp"
+    debris.write_text("partial", encoding="utf-8")
+    before = forensic(fabric_root)
+    report, error = checked(fabric_root)
+    check(error is None, f"temp residue raises nothing ({error})")
+    check(any("CSEL-000903.tmp" in finding and "partial write" in finding
+              for finding in report.findings),
+          "temp residue is reported as an interrupted write")
+    check(debris.exists(), "temp residue is not removed by reporting it")
+    check(forensic(fabric_root) == before,
+          "reporting debris changes nothing at all")
+
+# --- J. A root that cannot be opened is refused, not created --------------
+with TemporaryDirectory() as tmp:
+    parent = Path(tmp)
+    linked = parent / "linked-store"
+    linked.symlink_to(parent / "elsewhere")
+    before = forensic(parent)
+    for report, error, label in ((*looked(linked), "inspection"),
+                                 (*checked(linked), "validation")):
+        check(error is None, f"{label} of a linked root raises nothing ({error})")
+        check(report.status in (STATUS_UNREADABLE, STATUS_ABSENT),
+              f"{label} refuses a store root it cannot open")
+        check(report.reason in (REASON_UNREADABLE, REASON_ABSENT),
+              f"{label} names why the root could not be read")
+    check(forensic(parent) == before,
+          "a refused root leaves its parent byte-unchanged")
+
+for empty_root in (None, "", "   "):
+    report, error = checked(empty_root)
+    check(error is None, f"an unusable root raises nothing ({error})")
+    check(report.status == STATUS_INVALID, "an unusable store root is refused")
+
+# --- K. A durable decision reads back exactly as it was written -----------
+# C8 reports persisted truth. It never re-decides and presents the answer as
+# though it were the original.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, route, selected = c8_world(tmp)
+    refused, _ = chosen(store, trust_store, dict(asked, capability_id="CAPDEF-0009"),
+                        request_id="c8-no-route")
+    check(refused.outcome == ACCEPTED, "the c8 world records a no-route decision")
+
+    report, error = looked(fabric_root, kind="capability-selection")
+    check(error is None, f"inspecting selections raises nothing ({error})")
+    reported = {record["selection_id"]: record for record in report.records}
+    check(set(reported) == {selected.record_id, refused.record_id},
+          "every durable decision is reported")
+
+    chose = reported[selected.record_id]
+    stored = record_of(store, "capability-selection", selected.record_id)
+    for field in ("selection_id", "route_id", "route_version", "request_class",
+                  "considered_candidates", "excluded_candidates",
+                  "selected_instance_id", "selection_reason", "selected_at",
+                  "provenance", "evidence"):
+        check(dict(chose).get(field) == stored.get(field),
+              f"the reported selection carries the persisted {field}")
+
+    none_found = reported[refused.record_id]
+    check("route_id" not in none_found and "route_version" not in none_found,
+          "a reported no-route decision names no route provenance")
+    check("selected_instance_id" not in none_found,
+          "a reported no-route decision selected nothing")
+    check(none_found["evidence"]["reason_category"] == "no-candidate",
+          "a reported no-route decision keeps its own outcome category")
+
+# A refusal over a resolved route, and a local-only decision, read back whole.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(
+        tmp, locality="local-only", second_host=True)
+    decided, _ = chosen(store, trust_store, asked, request_id="c8-local")
+    for index, identifier in enumerate(instances):
+        admission_module.withdraw_instance(
+            store, request_id=f"c8-end-{index}", actor=OPERATOR,
+            approving_authority=OPERATOR, recorded_at=STAMP,
+            instance_id=identifier, provenance=dict(PROV), notes=None)
+    turned_down, _ = chosen(store, trust_store, asked, request_id="c8-refused")
+    report, error = looked(fabric_root, kind="capability-selection")
+    check(error is None, f"inspecting mixed decisions raises nothing ({error})")
+    reported = {record["selection_id"]: record for record in report.records}
+
+    local = reported[decided.record_id]
+    check(local.get("local_node_identity") == LOCAL_NODE,
+          "the node identity that governed a local-only decision is reported")
+    refusal = reported[turned_down.record_id]
+    check(refusal.get("route_id") == route.record_id
+          and refusal.get("route_version") == 1,
+          "a reported refusal carries the route provenance it was decided under")
+    check(refusal["evidence"]["reason_category"] == "selection-refusal",
+          "a reported refusal keeps its own outcome category")
+    check(tuple(entry["instance_id"] for entry in refusal["excluded_candidates"])
+          == tuple(instances),
+          "every persisted exclusion is reported, in the order it was written")
+
+# --- L. Inspection decides nothing and reaches nothing --------------------
+for forbidden in ("evaluate_eligibility", "select_candidate", "admit_instance",
+                  "create_route", "withdraw", "retire", "create_decision",
+                  "tools.health", "tools.capability", "health_score",
+                  "importlib", "subprocess", "eval(", "exec("):
+    check(forbidden not in INSPECTION_SOURCE,
+          f"the inspection surface reaches no {forbidden}")
+for mutation in ("store.write", "allocate_id", "write_atomic", "write_record",
+                 "mkdir", "makedirs", "unlink", "rmtree", "chmod", "chown",
+                 "rename", "replace(", "touch("):
+    check(mutation not in INSPECTION_SOURCE,
+          f"the inspection surface contains no {mutation}")
+for token in ("random", "uuid", "datetime.now", "utcnow", "time.time",
+              "os.environ", "getenv"):
+    check(token not in INSPECTION_SOURCE,
+          f"the inspection surface contains no {token}")
+for later in ("repair", "fix", "clean", "normalise", "normalize", "rebuild",
+              "recompute", "backfill", "remediate", "invoke", "execute",
+              "select", "admit", "allocate"):
+    check(not hasattr(inspection_module, later),
+          f"the inspection surface exposes no '{later}' behaviour at increment 10")
+check(not (root / "tools" / "fabric" / "cli.py").exists(),
+      "increment 10 creates no cli.py; the interface is increment 11")
+check(len(RECORD_MODELS) == 8,
+      "increment 10 introduces no ninth persistent record type")
 print(f"__FAILURES__={failures}")
 ADMITPY
 )"
