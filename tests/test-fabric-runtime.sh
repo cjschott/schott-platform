@@ -945,6 +945,7 @@ def refuses(callable_, message):
 from tools.fabric.errors import FabricError  # noqa: E402
 # The import that must fail before increment 2 exists.
 from tools.fabric.store import FabricStore  # noqa: E402
+from tools.common.immutable_store import ImmutableStore  # noqa: E402
 
 UID = os.geteuid()
 GID = os.getegid()
@@ -1210,7 +1211,9 @@ with TemporaryDirectory() as tmp:
 #   FabricStore._test_sync_point(phase, request_id)  -- no-op; writes nothing
 #   ImmutableStore.request_critical_section(id)      -- no-op; yields immediately
 #
-# Increment 12 gives the second one a real lock. Increment 2 must not.
+# Increment 12 gave C1's Fabric store a real lock in its override. The common
+# store keeps the no-op, so the no-op is asserted where it still lives; what
+# the Fabric override does instead is asserted with the Increment 12 sections.
 import inspect  # noqa: E402
 
 
@@ -1264,31 +1267,36 @@ with TemporaryDirectory() as tmp:
         check(section_params == ["request_id"],
               f"request_critical_section takes (request_id) (got {section_params})")
 
-        before_section = tree_snapshot(fabric_root)
-        with store.request_critical_section("request-0001") as yielded:
-            check(yielded is None, "request_critical_section yields nothing")
-            check(tree_snapshot(fabric_root) == before_section,
-                  "entering the critical section creates nothing")
-        check(tree_snapshot(fabric_root) == before_section,
-              "leaving the critical section creates nothing")
+        # The common store, which no override has touched: still a no-op, and
+        # asserted on its own root so the Fabric store's lock cannot mask it.
+        with TemporaryDirectory() as plain_tmp:
+            plain = ImmutableStore(Path(plain_tmp) / "plain")
+            plain_root = Path(plain_tmp) / "plain"
+            before_section = tree_snapshot(plain_root)
+            with plain.request_critical_section("request-0001") as yielded:
+                check(yielded is None, "request_critical_section yields nothing")
+                check(tree_snapshot(plain_root) == before_section,
+                      "entering the critical section creates nothing")
+            check(tree_snapshot(plain_root) == before_section,
+                  "leaving the critical section creates nothing")
 
-        # Increment 12 introduces the lock artefact. Increment 2 must not.
-        check(not (fabric_root / "sequences" / "request_identity.lock").exists(),
-              "no request lock artefact exists at increment 2")
+            # The common store acquires nothing, so it holds no artefact.
+            check(not (plain_root / "sequences" / "request_identity.lock").exists(),
+                  "the common store's critical section creates no lock artefact")
 
-        # A no-op yields immediately; a real lock would deadlock on re-entry.
-        # Bounded and daemonised so a regression fails rather than hangs.
-        entered = threading.Event()
+            # A no-op yields immediately. Bounded and daemonised so a
+            # regression fails rather than hangs.
+            entered = threading.Event()
 
-        def nested_entry():
-            with store.request_critical_section("request-0001"):
-                with store.request_critical_section("request-0001"):
-                    entered.set()
+            def nested_entry():
+                with plain.request_critical_section("request-0001"):
+                    with plain.request_critical_section("request-0001"):
+                        entered.set()
 
-        nested_thread = threading.Thread(target=nested_entry, daemon=True)
-        nested_thread.start()
-        check(entered.wait(timeout=5),
-              "the critical section is a no-op and does not block on re-entry")
+            nested_thread = threading.Thread(target=nested_entry, daemon=True)
+            nested_thread.start()
+            check(entered.wait(timeout=5),
+                  "the common store's critical section does not block on re-entry")
 
         # The seam composes with the ordinary store lifecycle.
         with store.request_critical_section("request-0002"):
@@ -1299,7 +1307,7 @@ with TemporaryDirectory() as tmp:
     else:
         bad("request_critical_section takes (request_id)")
         bad("request_critical_section yields nothing")
-        bad("the critical section is a no-op and does not block on re-entry")
+        bad("the common store's critical section does not block on re-entry")
 
     # Neither seam smuggles in later-increment behaviour.
     for later in ("acquire", "release", "lock", "replay_lookup", "admit",
@@ -11840,6 +11848,347 @@ with TemporaryDirectory() as tmp:
           "reading through the interface moves no identifier")
     check(sorted(p.name for p in fabric_root.rglob("*.tmp")) == [],
           "the interface leaves no temporary artefact")
+
+# =======================================================================
+# Increment 12 — failure injection, concurrency, regression, closure
+# =======================================================================
+# Two callers, one request identity. Until C1's critical section actually
+# serialises, both observe "not found" on replay lookup and both commit, so one
+# request identity yields two accepted records -- or, worse, two records for
+# contradictory digests. That is the whole of this increment's Red.
+#
+# Blocking is never inferred from elapsed time or from an event that failed to
+# arrive. The store names a seam, `_test_sync_point`, and a coordinator waits
+# for a positive event: either the second caller reaches the replay-miss hook
+# (pre-fix) or it reports contention (post-fix). Any timeout is a failure of
+# the test, never evidence of blocking and never a pass.
+
+import threading as _threading  # noqa: E402
+
+RACE_TIMEOUT = 20  # seconds; a wait that expires is a failure, never a pass
+
+
+class RacingStore(WatchedStore):
+    """The real store, announcing the phases a coordinating test waits on."""
+
+    def __init__(self, *args, **kwargs):
+        self.observed = []
+        self.gates = {}
+        self.seen = {}
+        self._notice = _threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def _test_sync_point(self, phase, request_id):
+        with self._notice:
+            self.observed.append((phase, request_id))
+            event = self.seen.setdefault(phase, _threading.Event())
+            event.set()
+        gate = self.gates.get(phase)
+        if gate is not None:
+            # A positive wait: the coordinator releases it, or the test fails.
+            if not gate.wait(RACE_TIMEOUT):
+                raise AssertionError(f"{phase} was never released")
+
+    def reached(self, phase):
+        with self._notice:
+            return self.seen.setdefault(phase, _threading.Event())
+
+
+def raced(tmp, *, second_body, request_id="c12-race"):
+    """Two callers, one request identity, deterministically interleaved.
+
+    A is held at the replay-miss hook. B starts and is waited on for whichever
+    positive event the implementation actually produces. Then A is released.
+    """
+    store = RacingStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    hold = _threading.Event()
+    store.gates["after_replay_miss"] = hold
+    results = {}
+
+    first_body = dict(BASE_CAPABILITY, request_id=request_id)
+
+    def run(name, body, gated):
+        target = store if gated else RacingStore(
+            Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+        try:
+            results[name] = declare_capability(target, **body)
+        except BaseException as error:  # noqa: BLE001
+            results[name] = error
+
+    # A enters first and stops at the replay miss.
+    first = _threading.Thread(target=run, args=("a", first_body, True))
+    first.start()
+    check(store.reached("after_replay_miss").wait(RACE_TIMEOUT),
+          "the first caller reaches the replay-miss seam")
+
+    # B enters on its own handle, so the lock -- not the object -- is what
+    # serialises them.
+    partner = RacingStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    partner.gates["after_replay_miss"] = _threading.Event()
+    partner.gates["after_replay_miss"].set()
+
+    def run_second():
+        try:
+            results["b"] = declare_capability(partner, **second_body)
+        except BaseException as error:  # noqa: BLE001
+            results["b"] = error
+
+    second = _threading.Thread(target=run_second)
+    second.start()
+    # Whichever the implementation produces: a replay miss (pre-fix) or
+    # contention (post-fix). Never a timeout.
+    # Whichever fires first, bounded well inside the first caller's hold so a
+    # slow event can never be mistaken for a released gate.
+    deadline = RACE_TIMEOUT / 4
+    waited = 0.0
+    while waited < deadline:
+        if (partner.reached("lock_contended").is_set()
+                or partner.reached("after_replay_miss").is_set()):
+            break
+        _threading.Event().wait(0.02)
+        waited += 0.02
+    signalled = (partner.reached("lock_contended").is_set()
+                 or partner.reached("after_replay_miss").is_set())
+    check(signalled, "the second caller produces a positive event, not a timeout")
+    contended = partner.reached("lock_contended").is_set()
+
+    hold.set()
+    first.join(RACE_TIMEOUT)
+    second.join(RACE_TIMEOUT)
+    check(not first.is_alive() and not second.is_alive(),
+          "both callers finish; neither deadlocks")
+    return store, results, contended
+
+
+def only(results, outcome):
+    """The single result carrying this outcome, or None. Never raises, so a
+    wrong outcome is reported as a failed check rather than a traceback."""
+    matching = [r for r in results.values()
+                if getattr(r, "outcome", None) == outcome]
+    return matching[0] if len(matching) == 1 else None
+
+
+# --- A. Concurrent exact reuse of one request identity (FC 8) --------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    opened(tmp)
+    store, results, contended = raced(
+        tmp, second_body=dict(BASE_CAPABILITY, request_id="c12-race"),
+        request_id="c12-race")
+    check(contended, "the second caller reports contention rather than a replay miss")
+    outcomes = sorted(getattr(result, "outcome", repr(result))
+                      for result in results.values())
+    check(outcomes == [ACCEPTED, EXACT_REPLAY],
+          f"one request identity yields one accepted record and one replay ({outcomes})")
+    accepted = only(results, ACCEPTED)
+    replayed = only(results, EXACT_REPLAY)
+    check(accepted is not None and replayed is not None
+          and replayed.record_id == accepted.record_id,
+          "the replay returns the original record identity")
+    stored = store.list_records("capability-definition")
+    check(len(stored) == 1,
+          f"exactly one capability record exists ({len(stored)})")
+
+# --- B. Concurrent conflicting reuse (FC 9) -------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    opened(tmp)
+    store, results, contended = raced(
+        tmp, second_body=dict(BASE_CAPABILITY, request_id="c12-race",
+                              description="A different ability entirely."),
+        request_id="c12-race")
+    check(contended, "the conflicting caller reports contention")
+    outcomes = sorted(getattr(result, "outcome", repr(result))
+                      for result in results.values())
+    check(outcomes == [ACCEPTED, CONFLICT],
+          f"conflicting reuse yields one accepted record and one conflict ({outcomes})")
+    conflict = only(results, CONFLICT)
+    check(conflict is not None and conflict.reason == "request_identity_conflict",
+          "the losing caller is refused as a request identity conflict")
+    check(conflict is not None and conflict.record_id is None,
+          "the conflicting caller allocates nothing")
+    check(len(store.list_records("capability-definition")) == 1,
+          "no second record is written for a contradictory digest")
+
+# --- C. Independent request identities stay independent -------------------
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    first = declare_capability(store, **dict(BASE_CAPABILITY, request_id="c12-one"))
+    second = declare_capability(store, **dict(BASE_CAPABILITY, request_id="c12-two"))
+    check(first.outcome == ACCEPTED and second.outcome == ACCEPTED,
+          "two independent request identities both succeed")
+    check(first.record_id != second.record_id,
+          "identical content under distinct request identities creates distinct records")
+    check(len(store.list_records("capability-definition")) == 2,
+          "both records exist")
+
+# --- D. One ordinary caller completes without a second acquisition --------
+with TemporaryDirectory() as tmp:
+    store = RacingStore(Path(tmp) / "fabric", expected_uid=UID, expected_gid=GID)
+    finished = _threading.Event()
+
+    def single():
+        declare_capability(store, **dict(BASE_CAPABILITY, request_id="c12-single"))
+        finished.set()
+
+    worker = _threading.Thread(target=single)
+    worker.start()
+    check(finished.wait(RACE_TIMEOUT),
+          "an ordinary single caller completes without self-deadlock")
+    worker.join(RACE_TIMEOUT)
+    check([phase for phase, _ in store.observed] == ["after_replay_miss"],
+          f"one caller acquires once and reports no contention ({store.observed})")
+
+# --- E. An exception inside the section releases it ------------------------
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    refused = declare_capability(store, **dict(BASE_CAPABILITY,
+                                               request_id="c12-refused",
+                                               effect_class="unheard-of"))
+    check(refused.outcome in (INVALID, REFUSED),
+          "a refused operation leaves the critical section")
+    after = declare_capability(store, **dict(BASE_CAPABILITY, request_id="c12-after"))
+    check(after.outcome == ACCEPTED,
+          "a later operation acquires the section the refusal released")
+
+# --- F. AC 34 / FC 13 regression: allocation stays unique and monotonic ---
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    allocated = [declare_capability(store, **dict(BASE_CAPABILITY,
+                                                  request_id=f"c12-seq-{n}")).record_id
+                 for n in range(4)]
+    check(allocated == sorted(allocated) and len(set(allocated)) == 4,
+          f"identifiers are unique and monotonic ({allocated})")
+
+# --- G. AC 62 / AC 87: eight accepted types, and nothing else -------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp, second_host=True)
+    chosen(store, trust_store, asked, request_id="c12-exercised")
+    present = {path.parent.name for path in fabric_root.rglob("*.yaml")}
+    expected = {store.record_dirs[kind] for kind in RECORD_MODELS}
+    check(present <= expected,
+          "every persistent record sits in one of the eight accepted kinds "
+          f"({sorted(present - expected)})")
+    for forbidden in ("audit", "audits", "ledger", "ledgers", "requests",
+                      "replay", "index"):
+        check(not (fabric_root / forbidden).exists(),
+              f"no {forbidden} namespace exists in the store")
+    kinds = {record_of(store, kind, path.stem).get("kind")
+             for kind in RECORD_MODELS
+             for path in (fabric_root / store.record_dirs[kind]).glob("*.yaml")}
+    check(kinds <= set(RECORD_MODELS),
+          "every stored record declares one of the eight accepted kinds "
+          f"({sorted(kinds - set(RECORD_MODELS))})")
+
+# --- H. The lock is C1's artifact, not a Fabric record --------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store = opened(tmp)
+    declare_capability(store, **dict(BASE_CAPABILITY, request_id="c12-lock"))
+    artifacts = sorted(path.name for path in (fabric_root / "sequences").iterdir())
+    check(any(name.endswith(".lock") for name in artifacts),
+          f"the serialisation artifact lives under sequences ({artifacts})")
+    for kind in RECORD_MODELS:
+        check(not any(path.suffix == ".lock"
+                      for path in (fabric_root / store.record_dirs[kind]).iterdir()),
+              f"no lock artifact is filed as a {kind} record")
+    report = validate_store(fabric_root, expected_uid=UID, expected_gid=GID)
+    check(report.findings == (),
+          f"the lock artifact is not a validation finding ({report.findings})")
+    check(sum(report.counts.values()) == 1,
+          "the lock artifact is not counted as a record")
+
+# --- I. AC 74: an interrupted supersession is bounded ---------------------
+# The new binding exists, no route names it, the cutover is uncommitted, the
+# old route still serves, and the accepted CINST replays under its own
+# request identity. Completion is another operator decision.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp, second_host=True)
+    claim = register_advertisement(store, **dict(
+        BASE_ADVERT, request_id="c12-adv", actor=hosts[0],
+        capability_host_id=hosts[0],
+        capability_package_id=record_of(store, "capability-instance",
+                                        instances[0])["capability_package_id"],
+        contract_id=asked["contract_id"], observed_at=STAMP, valid_until=YEAR))
+    migrated = admission_module.admit_instance(store, trust_store, **dict(
+        BASE_INSTANCE, request_id="c12-migrate",
+        capability_id=asked["capability_id"],
+        capability_package_id=record_of(store, "capability-instance",
+                                        instances[0])["capability_package_id"],
+        capability_host_id=hosts[0], contract_id=asked["contract_id"],
+        advertisement_id=claim.record_id,
+        package_trust_record_id=PACKAGE_TRUST["CPKG-0001"],
+        host_trust_record_id=NODE_TRUST[LOCAL_NODE],
+        supersedes=instances[0]))
+    check(migrated.outcome == ACCEPTED, "the new binding is admitted")
+    # The interruption: the CROUTE version that would cut over is never issued.
+    check(record_of(store, "capability-instance", migrated.record_id) != {},
+          "AC 74: the new instance exists")
+    routes = store.list_records("capability-route")
+    check(all(migrated.record_id not in tuple(entry.get("candidate_instances") or ())
+              for entry in routes),
+          "AC 74: no route names the new instance")
+    check(len(routes) == 1 and routes[0]["route_id"] == route.record_id,
+          "AC 74: the cutover is not committed and the old route still serves")
+    selected, _ = chosen(store, trust_store, asked, request_id="c12-after-migrate")
+    stored = record_of(store, "capability-selection", selected.record_id)
+    check(stored.get("selected_instance_id") != migrated.record_id,
+          "AC 74: nothing selects the uncommitted instance")
+    replayed = admission_module.admit_instance(store, trust_store, **dict(
+        BASE_INSTANCE, request_id="c12-migrate",
+        capability_id=asked["capability_id"],
+        capability_package_id=record_of(store, "capability-instance",
+                                        instances[0])["capability_package_id"],
+        capability_host_id=hosts[0], contract_id=asked["contract_id"],
+        advertisement_id=claim.record_id,
+        package_trust_record_id=PACKAGE_TRUST["CPKG-0001"],
+        host_trust_record_id=NODE_TRUST[LOCAL_NODE],
+        supersedes=instances[0]))
+    check(replayed.outcome == EXACT_REPLAY
+          and replayed.record_id == migrated.record_id,
+          "AC 74: the accepted CINST remains exactly replayable under its own request identity")
+    completion = admission_module.create_route(store, **dict(
+        BASE_ROUTE, request_id="c12-cutover", capability_id=asked["capability_id"],
+        contract_id=asked["contract_id"],
+        candidate_instances=(migrated.record_id,), locality=asked["locality"],
+        accepted_contract_versions=asked["accepted_contract_versions"],
+        route_version=2, supersedes=route.record_id))
+    check(completion.outcome == ACCEPTED,
+          "AC 74: completion is an explicit operator decision producing a new route version")
+
+# --- J. FC 12 regression: residue is debris, and stays ---------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store = opened(tmp)
+    declare_capability(store, **dict(BASE_CAPABILITY, request_id="c12-residue"))
+    debris = fabric_root / store.record_dirs["capability-definition"] / "CAPDEF-0009.tmp"
+    debris.write_text("partial", encoding="utf-8")
+    report = validate_store(fabric_root, expected_uid=UID, expected_gid=GID)
+    check(any("CAPDEF-0009.tmp" in finding and "partial write" in finding
+              for finding in report.findings),
+          "FC 12: an interrupted write is reported as debris")
+    check(debris.exists(), "FC 12: debris is not cleaned automatically")
+
+# --- K. FC 25 regression: recovery is a new decision -----------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store = opened(tmp)
+    failed = declare_contract(store, **dict(BASE_CONTRACT, request_id="c12-fc25",
+                                            capability_id="CAPDEF-0009"))
+    check(failed.outcome == NOT_FOUND, "FC 25: the first attempt fails")
+    check(failed.record_id is None, "FC 25: a failed attempt leaves no record")
+    after_failure = forensic(fabric_root)
+    made = declare_capability(store, **dict(BASE_CAPABILITY, request_id="c12-fc25-cap"))
+    recovered = declare_contract(store, **dict(BASE_CONTRACT,
+                                               request_id="c12-fc25-again",
+                                               capability_id=made.record_id))
+    check(recovered.outcome == ACCEPTED,
+          "FC 25: recovery is an explicit new decision and it succeeds")
+    check(all(forensic(fabric_root)[path] == after_failure[path]
+              for path in after_failure if path.endswith(".yaml")),
+          "FC 25: no record written before the failure was edited by recovering")
 print(f"__FAILURES__={failures}")
 ADMITPY
 )"

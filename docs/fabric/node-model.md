@@ -118,6 +118,20 @@ nothing new is duplication, and it would silently move the head.
 **Returning to service is a refresh, never a withdrawal.** Any increase in
 authority is made against standing evaluated now, not standing evaluated once.
 
+### An interrupted move stays interrupted
+
+Moving a binding between machines is several governed decisions, not one. If the
+operator stops partway — the new instance admitted, no route naming it yet — the
+fabric leaves it exactly there. The new binding exists and nothing selects it,
+because selection reads declared routes and no route declares it. The old route
+keeps serving, because nothing withdrew it.
+
+**No timeout finishes the move, and no cleanup undoes it.** The accepted record
+remains exactly replayable under its own request identity, and completing the
+cutover is another operator decision producing a new route version. A fabric
+that finished the job by itself would be making a placement decision nobody
+recorded.
+
 ### What cites which record
 
 An **advertisement is a claim published by a subject as it is now**, so it must

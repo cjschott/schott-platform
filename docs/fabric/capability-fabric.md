@@ -77,6 +77,29 @@ Consumers name a **capability and an accepted contract version range**. They
 never name a host, an instance, or a package — which is why moving work between
 machines is invisible to them.
 
+## One decision per request identity
+
+Every governed operation carries a **request identity** the caller supplies and
+a **request digest** the fabric derives from the decision it was asked to make.
+Together they answer the question a retry actually asks: *did this already
+happen?*
+
+- **Same identity, same digest** — the original record is returned. Retrying is
+  free, and it writes nothing.
+- **Same identity, different digest** — refused as a request identity conflict.
+  Two different decisions may not wear one name.
+- **New identity** — a new decision, evaluated on its own terms.
+
+**Two callers presenting one identity at the same moment get one record.** The
+store serialises the window that spans replay lookup, identifier allocation, and
+the accepted write, so the second caller reads the decision that was made rather
+than a store that had not made it yet. Without that, both would observe *not
+found* and both would commit — one identity, two records.
+
+Serialisation is the store's, not the caller's. Nothing retries, backs off, or
+resubmits on the caller's behalf: an operation that is refused stays refused,
+and going forward means another governed decision with its own request identity.
+
 ## No new trust domain
 
 ADR-0011 declared fifteen trust domains and reserved two for exactly this
@@ -96,9 +119,9 @@ trusted.
 Writing this specification opened neither gate.
 
 **Gate 1 — Fabric Runtime entry.** Opened by the Operator Root ceremony, which
-established the external root out of band. **Implementation of the fabric
-remains blocked** only until ENG-0001 and ENG-0002 are independently released
-and merged.
+established the external root out of band, and satisfied once ENG-0001 and
+ENG-0002 were independently released and merged. Implementation proceeded from
+there.
 
 **Gate 2 — TrustGateway production cutover.** Still closed, and still requiring
 its full set: production trust store validated, initial migrated subjects

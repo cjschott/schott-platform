@@ -28,12 +28,15 @@ nothing, and repairs nothing.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
-from ..common.immutable_store import DIR_MODE, ImmutableStore, StoreError
+from ..common.immutable_store import (DIR_MODE, FILE_MODE, ImmutableStore,
+                                      StoreError)
 from .errors import FabricError
 from .evidence import validate_record_evidence
 from .identifiers import ID_FIELDS, PATTERNS, PREFIXES
@@ -185,6 +188,22 @@ class FabricStore(ImmutableStore):
             directory.chmod(DIR_MODE)
             self._require_ownership(directory, f"record directory '{name}'")
 
+        # The request identity lock belongs to the store's layout, not to any
+        # operation. Created lazily it would mean the first governed refusal on
+        # a fresh store adds a file and moves a directory's timestamp -- a
+        # refusal that changed the store, which is exactly what a refusal must
+        # never do. Created here, every later entry disturbs nothing at all.
+        os.close(self._open_request_lock())
+
+    def _open_request_lock(self) -> int:
+        """The one lock file, guarded and opened. Never read, never written."""
+        sequences = self._guard_path(self.root / "sequences", "sequence directory")
+        lock_path = self._guard_path(sequences / "request_identity.lock",
+                                     "request identity lock")
+        handle = os.open(lock_path, os.O_RDWR | os.O_CREAT, FILE_MODE)
+        self._require_ownership(lock_path, "request identity lock")
+        return handle
+
     @classmethod
     def open_for_read(cls, root: Path | str, *, expected_uid: int, expected_gid: int,
                       allow_repository_root: bool = False) -> "FabricStore":
@@ -221,10 +240,47 @@ class FabricStore(ImmutableStore):
         event that failed to arrive, proves nothing -- so the seam is named and
         does nothing rather than being simulated from outside.
 
-        This writes nothing, holds nothing, and returns nothing. The phases it
-        will carry, and the serialisation an override will add, belong to a
-        later increment; naming the seam here is all this increment does.
+        This writes nothing, holds nothing, and returns nothing. A coordinating
+        test overrides it; production never notices it is there.
         """
+
+    @contextmanager
+    def request_critical_section(self, request_id: str) -> Iterator[None]:
+        """Serialise replay lookup, allocation, and the accepted write.
+
+        Without this, two callers presenting one request identity both observe
+        "not found" on replay lookup and both commit, so one request identity
+        yields two records -- or two records for contradictory digests. The
+        section closes that window: whoever holds it decides, and the other
+        caller reads the decision that was made rather than a store that had
+        not made it yet.
+
+        One lock file, not one per request identity. A per-request name would
+        be an unbounded set of files derived from caller-supplied text, and
+        the guarded path is what keeps a link or an escape out. Contention is
+        brief -- the section spans a lookup, an allocation, and one atomic
+        write -- so a single lock costs less than the names it avoids.
+
+        The non-blocking attempt first is what makes contention observable:
+        the seam fires only when someone is actually held, so a test waits on
+        a positive event rather than on elapsed time. The blocking acquisition
+        that follows is the one that matters.
+        """
+        handle = self._open_request_lock()
+        try:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                self._test_sync_point("lock_contended", request_id)
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                # Released on the way out however this section ends: a refusal
+                # and a traceback both leave the next caller able to proceed.
+                fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            os.close(handle)
 
     # --- guarded inherited surface ------------------------------------------
 
