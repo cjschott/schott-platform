@@ -127,15 +127,17 @@ SCANPY
 
 assert_no_execution_surface
 
-# The authorised A1 production surface, and nothing beyond it.
+# The authorised production surface, and nothing beyond it: A1's store
+# modules plus A2's pure identity and binding layer.
 assert_file "${CAPABILITY}/__init__.py"
 assert_file "${CAPABILITY}/errors.py"
 assert_file "${CAPABILITY}/identifiers.py"
 assert_file "${CAPABILITY}/store.py"
+assert_file "${CAPABILITY}/invocation_identity.py"
 
 if [[ -d "${ROOT}/${CAPABILITY}" ]]; then
   UNEXPECTED="$(find "${ROOT}/${CAPABILITY}" -maxdepth 1 -name '*.py' -printf '%f\n' 2>/dev/null \
-    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py' || true)"
+    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py' || true)"
   if [[ -z "${UNEXPECTED}" ]]; then
     pass "increment A1 adds no module beyond its authorised surface"
   else
@@ -577,6 +579,288 @@ with TemporaryDirectory() as tmp:
     refuses(lambda: reader.read_record(INVOCATION, "CINV-000001"),
             "reading from an absent store is refused")
 
+
+# ===========================================================================
+# A2 — invocation identity and canonical payload binding
+# ===========================================================================
+# A Fabric selection governs a request class, not bytes. Two different payloads
+# of one class produce identical governance, so a valid selection for one
+# payload would otherwise buy execution of another. Binding closes that.
+#
+# This layer is pure. It reads no Fabric record, opens no store, enters no
+# critical section, writes nothing, reads no clock, and consults no ambient
+# state. Everything it needs is passed to it.
+
+import hashlib as _hashlib  # noqa: E402
+
+from tools.capability.invocation_identity import (  # noqa: E402
+    CONFLICT, CONSUMED, DISTINCT, INVOCATION_ID_MAX_LENGTH, bind,
+    canonical_bytes, compare_binding, payload_digest, validate_invocation_id)
+
+BINDING = dict(invocation_id="inv-alpha", selection_id="CSEL-000001",
+               instance_id="CINST-000001", capability_package_id="CPKG-0001",
+               actor="operator:cschott")
+
+
+def refuses_capability(action, message):
+    """A refusal must be the runtime's own, not an incidental exception."""
+    try:
+        action()
+    except CapabilityError:
+        ok(message)
+    except Exception as error:  # noqa: BLE001
+        bad(f"{message} (raised {type(error).__name__}: {error})")
+    else:
+        bad(f"{message} (was accepted instead of refused)")
+
+
+# --- invocation identity: opaque, caller-supplied, never parsed -------------
+for value, description in (("inv-alpha", "an ordinary identity"),
+                           ("a", "a single character"),
+                           ("x" * INVOCATION_ID_MAX_LENGTH, "an identity at the limit"),
+                           ("CINV-000001", "an identity that looks like a record id"),
+                           ("~!@#$%^&*()_+", "printable punctuation"),
+                           ("0123456789", "digits")):
+    check(validate_invocation_id(value) == value,
+          f"{description} is returned unchanged")
+
+for value, description in ((None, "an absent identity"),
+                           ("", "an empty identity"),
+                           ("x" * (INVOCATION_ID_MAX_LENGTH + 1), "an over-long identity"),
+                           ("has space", "an identity carrying a space"),
+                           ("tab\there", "an identity carrying a tab"),
+                           ("line\nbreak", "an identity carrying a newline"),
+                           ("null\0byte", "an identity carrying a null byte"),
+                           ("café", "an identity carrying non-ASCII"),
+                           ("del\x7f", "an identity carrying a control character"),
+                           (123, "a non-string identity"),
+                           (b"bytes", "a bytes identity")):
+    refuses_capability(lambda v=value: validate_invocation_id(v),
+                       f"{description} is refused")
+
+# It is never parsed: nothing about its shape carries meaning.
+check(validate_invocation_id("CINV-999999") == "CINV-999999",
+      "an identity is never parsed for structure")
+source = (root / "tools" / "capability" / "invocation_identity.py").read_text(encoding="utf-8")
+for token in ("startswith", "re.match", "re.compile", "split(", "int("):
+    check(token not in source,
+          f"the identity layer does not parse identities ({token})")
+
+# --- canonical payload: accepted types -------------------------------------
+for payload, expected, description in (
+        ({}, b"{}", "an empty object"),
+        ([], b"[]", "an empty array"),
+        ("", b'""', "an empty string"),
+        (None, b"null", "null"),
+        (True, b"true", "true"),
+        (False, b"false", "false"),
+        (0, b"0", "zero"),
+        (-1, b"-1", "a negative integer"),
+        ({"a": 1, "b": 2}, b'{"a":1,"b":2}', "two sorted keys"),
+        ({"b": 2, "a": 1}, b'{"a":1,"b":2}', "two keys sorted regardless of insertion"),
+        ({"Z": 1, "a": 2}, b'{"Z":1,"a":2}', "keys ordered by code point, not case"),
+        ({"a": {"y": 2, "x": 1}, "b": [1, 2, 3]},
+         b'{"a":{"x":1,"y":2},"b":[1,2,3]}', "nested keys sorted, array order kept"),
+        ({"café": "naïve"}, '{"café":"naïve"}'.encode("utf-8"),
+         "non-ASCII emitted literally rather than escaped"),
+        ({"k": [True, False, None, 0, -1]}, b'{"k":[true,false,null,0,-1]}',
+         "mixed scalars")):
+    check(canonical_bytes(payload) == expected,
+          f"{description} canonicalises exactly ({canonical_bytes(payload)!r})")
+
+check(b" " not in canonical_bytes({"a": 1, "b": [1, 2]}),
+      "the canonical form carries no insignificant whitespace")
+check(not canonical_bytes({"a": 1}).endswith(b"\n"),
+      "the canonical form carries no trailing newline")
+
+# A boolean is not an integer, however Python models it.
+check(canonical_bytes(True) != canonical_bytes(1),
+      "true and 1 are distinct")
+check(canonical_bytes(False) != canonical_bytes(0),
+      "false and 0 are distinct")
+check(canonical_bytes({"a": True}) != canonical_bytes({"a": 1}),
+      "a boolean member is distinct from an integer member")
+
+# --- canonical payload: ambiguity refused -----------------------------------
+class _Custom:
+    pass
+
+
+for payload, description in (
+        (1.0, "a float"),
+        (0.1, "a fractional float"),
+        (float("nan"), "NaN"),
+        (float("inf"), "positive infinity"),
+        (float("-inf"), "negative infinity"),
+        ({1: "a"}, "a non-string mapping key"),
+        ({None: "a"}, "a null mapping key"),
+        ({(1, 2): "a"}, "a tuple mapping key"),
+        ({"a": (1, 2)}, "a tuple value"),
+        ({"a": {1, 2}}, "a set value"),
+        ({"a": frozenset({1})}, "a frozenset value"),
+        ({"a": b"bytes"}, "a bytes value"),
+        ({"a": bytearray(b"x")}, "a bytearray value"),
+        ({"a": _Custom()}, "a custom object"),
+        ({"a": complex(1, 2)}, "a complex number"),
+        (_Custom(), "a custom object at the root"),
+        ({"a": [1, 2.5]}, "a float nested in an array"),
+        ({"a": {"b": {"c": 1.5}}}, "a float nested deeply")):
+    refuses_capability(lambda p=payload: canonical_bytes(p),
+                       f"{description} is refused rather than approximated")
+
+# --- digest: known-answer vectors, computed independently -------------------
+for payload, expected, description in (
+        ({}, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+         "an empty object"),
+        ([], "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+         "an empty array"),
+        (None, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+         "null"),
+        (True, "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+         "true"),
+        (0, "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+         "zero"),
+        ({"b": 2, "a": 1},
+         "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777",
+         "two keys"),
+        ({"a": {"y": 2, "x": 1}, "b": [1, 2, 3]},
+         "e1ca855256d6ce15c2d389babfb8f209659a9cf625428bb2eeb07b06d5fa80ea",
+         "a nested object"),
+        ({"café": "naïve"},
+         "8d9bcca95360c226e5d7f0039e45a492b075f4180982edfef731a03e92e4c626",
+         "a non-ASCII object")):
+    check(payload_digest(payload) == f"sha256:{expected}",
+          f"the digest of {description} matches its known answer")
+
+check(payload_digest({}).startswith("sha256:"),
+      "a digest carries the released sha256 prefix")
+check(len(payload_digest({})) == len("sha256:") + 64,
+      "a digest carries sixty-four hexadecimal characters")
+
+# --- binding: the payload alone is not enough -------------------------------
+base = bind(payload={"text": "summarise"}, **BINDING)
+check(base.startswith("sha256:"), "a binding is a sha256 digest")
+check(base == bind(payload={"text": "summarise"}, **BINDING),
+      "the same payload and the same binding produce the same digest")
+check(base != payload_digest({"text": "summarise"}),
+      "a binding is not merely the payload's own digest")
+
+for field in ("invocation_id", "selection_id", "instance_id",
+              "capability_package_id", "actor"):
+    altered = dict(BINDING)
+    altered[field] = altered[field] + "-other"
+    check(bind(payload={"text": "summarise"}, **altered) != base,
+          f"changing {field} changes the binding")
+
+check(bind(payload={"text": "translate"}, **BINDING) != base,
+      "changing the payload changes the binding")
+check(bind(payload={"text": "summarise", "extra": None}, **BINDING) != base,
+      "adding a payload key changes the binding")
+
+# Domain separation: moving text between fields must not collide.
+left = bind(payload={}, invocation_id="ab", selection_id="c",
+            instance_id="d", capability_package_id="e", actor="f")
+right = bind(payload={}, invocation_id="a", selection_id="bc",
+             instance_id="d", capability_package_id="e", actor="f")
+check(left != right,
+      "text moved between binding fields does not collide")
+
+# Every binding field is validated, and none is optional.
+for field in ("selection_id", "instance_id", "capability_package_id", "actor"):
+    for value, description in ((None, "absent"), ("", "empty"),
+                               ("has space", "carrying a space"),
+                               (123, "not a string")):
+        altered = dict(BINDING)
+        altered[field] = value
+        refuses_capability(lambda a=altered: bind(payload={}, **a),
+                           f"a {description} {field} is refused")
+
+# --- duplicate and conflicting identity, as a pure comparison ---------------
+check(compare_binding(base, base) == CONSUMED,
+      "an identity presented again with the same binding is consumed")
+check(compare_binding(base, bind(payload={"text": "translate"}, **BINDING)) == CONFLICT,
+      "an identity presented again with a different binding conflicts")
+check(CONSUMED == "invocation_identity_consumed",
+      f"the consumed outcome is named as accepted ({CONSUMED})")
+check(CONFLICT == "invocation_identity_conflict",
+      f"the conflicting outcome is named as accepted ({CONFLICT})")
+check(compare_binding(None, base) == DISTINCT,
+      "an identity never seen before is distinct")
+for bad_digest in ("", "sha256:short", "deadbeef", "SHA256:" + "a" * 64,
+                   "sha256:" + "g" * 64, 123):
+    refuses_capability(lambda d=bad_digest: compare_binding(d, base),
+                       f"a malformed stored digest is refused ({bad_digest!r})")
+
+# --- purity: no state, no store, no clock, no Fabric ------------------------
+for token, description in (
+        ("import os", "the operating system"),
+        ("open(", "the filesystem"),
+        ("Path(", "a filesystem path"),
+        ("datetime", "a clock"),
+        ("time.", "a clock"),
+        ("random", "a random source"),
+        ("environ", "the environment"),
+        ("tools.fabric", "the fabric"),
+        ("tools.trust", "trust"),
+        ("health", "health"),
+        ("critical_section", "a critical section"),
+        ("CapabilityStore", "the store")):
+    check(token not in source,
+          f"the identity layer reaches {description} by no mechanism")
+
+# Determinism across processes: the canonical form must not depend on a hash
+# seed, so the digest is recomputed in a fresh interpreter with a different one.
+import subprocess as _subprocess  # noqa: E402  (test harness only, never production)
+probe = (
+    "import sys; sys.path.insert(0, %r)\n"
+    "from tools.capability.invocation_identity import payload_digest\n"
+    "print(payload_digest({'b': 2, 'a': 1, 'z': {'q': 1, 'p': 2}}))\n"
+) % str(root)
+seeded = _subprocess.run([sys.executable, "-c", probe], capture_output=True,
+                         text=True, env={**os.environ, "PYTHONHASHSEED": "12345"})
+check(seeded.stdout.strip() == payload_digest({"b": 2, "a": 1, "z": {"q": 1, "p": 2}}),
+      "the digest is identical under a different interpreter hash seed")
+
+# --- generated determinism sweep --------------------------------------------
+# Many logical payloads, each built in several insertion orders. Deterministic
+# generation, so a failure is reproducible rather than a lucky seed.
+def shapes():
+    keys = ["a", "b", "Z", "café", "", "0", "z" * 8]
+    values = [None, True, False, 0, -1, 42, "", "text", "naïve", [], {},
+              [1, 2, 3], ["a", None, True], {"n": 1}]
+    for depth in range(3):
+        for index, value in enumerate(values):
+            body = {keys[i % len(keys)]: values[(i + index) % len(values)]
+                    for i in range(1 + index % 5)}
+            for _ in range(depth):
+                body = {"nested": body, "sibling": value}
+            yield body
+
+
+generated = 0
+mismatches = 0
+canonical_seen = {}
+collisions = 0
+for shape in shapes():
+    generated += 1
+    forward = canonical_bytes(shape)
+    reversed_build = canonical_bytes(
+        {key: shape[key] for key in reversed(list(shape))})
+    if forward != reversed_build:
+        mismatches += 1
+    if payload_digest(shape) != f"sha256:{_hashlib.sha256(forward).hexdigest()}":
+        mismatches += 1
+    previous = canonical_seen.setdefault(forward, shape)
+    if previous is not shape and previous != shape:
+        collisions += 1
+
+check(generated >= 40, f"the determinism sweep covered enough shapes ({generated})")
+check(mismatches == 0,
+      f"every generated payload canonicalises identically in any order ({mismatches})")
+check(collisions == 0,
+      f"no two distinct logical payloads share canonical bytes ({collisions})")
+print(f"PASS: determinism sweep — {generated} generated payloads, "
+      f"{mismatches} mismatches, {collisions} canonical collisions")
 print(f"__FAILURES__={failures}")
 STOREPY
 )"
