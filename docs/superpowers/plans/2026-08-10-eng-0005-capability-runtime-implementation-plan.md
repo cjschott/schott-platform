@@ -168,19 +168,30 @@ nothing but its discipline.
 **Objective.** Turn a governed package into verified bytes, or refuse.
 
 - **Created:** `tools/capability/package_resolution.py`
-- **Inspect first:** `tools/common/containment.py`,
-  `tools/integrity/snapshot_manager.py` (the released `sha256:` convention)
+- **Prerequisite:** the descriptor-safe trusted-source primitive in
+  `tools/common/` (Deferred E). A4 does not open source files itself.
+- **Inspect first:** `tools/common/containment.py`, the trusted-source
+  primitive, `tools/integrity/snapshot_manager.py` (the released `sha256:`
+  convention)
 - **Red:** only `file:<relative-path>` resolves; free text, `oci://`, `https://`,
   and every other scheme **refuse**; traversal, absolute escape, symlink escape,
   sibling-prefix, and the approved directory itself refuse through the shared
-  primitive; a `CPKG` with **no `manifest_reference` refuses**; a manifest
-  without a `sha256` digest refuses; a digest mismatch refuses as
-  **substitution detected**; the artefact is opened **once** and the digest
-  computed **from that descriptor**; staging is content-addressed by the
-  verified digest, mode `0700`, created atomically, and a colliding stage with
-  different bytes refuses; **`package_version` is never treated as a digest**;
-  an optional `signature_reference` is never read as evidence of verification;
-  nothing is executed, imported, or loaded — only read and hashed.
+  primitive; the source trust contract of specification §7 is enforced —
+  explicit trusted UID with no default, no group- or world-writable component,
+  no symlinked component, link count exactly one; a `CPKG` with **no
+  `manifest_reference` refuses**; the manifest is **executable manifest schema
+  version 1**, closed, and an unknown field, a wrong `schema_version`, an
+  uppercase digest, or an identity disagreeing with the verified evidence each
+  refuses; a manifest over **64 KiB** and an artefact over **256 MiB** refuse
+  **while reading**, never after buffering, and never partially staged; a
+  digest mismatch refuses as **substitution detected**; the artefact is opened
+  **once** and both the digest and the staged copy come **from that
+  descriptor**; staging is content-addressed by the verified digest, directory
+  mode `0700` and file mode `0400`, created atomically, re-verified after
+  publication, and a colliding stage with different bytes refuses;
+  **`package_version` is never treated as a digest**; an optional
+  `signature_reference` is never read as evidence of verification; nothing is
+  executed, imported, or loaded — only read and hashed.
 - **Observable Red reason:** `ModuleNotFoundError`.
 - **Green:** grammar, containment, manifest validation, verification, staging.
 - **Excluded:** mounting, launching, adapters.

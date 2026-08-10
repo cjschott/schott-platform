@@ -198,6 +198,44 @@ own `CSEL`.
   outside the root, symlink escape, the root itself, and sibling-prefix
   collisions are refused exactly as they are everywhere else.
 
+### The approved artefact root is trusted, and that is a claim about deployment
+
+**The approved artefact root is part of the trusted computing base**, and this
+specification says so rather than implying it. The manifest that attests an
+artefact lives in the same directory as the artefact. Anyone who can write that
+directory can replace both consistently, and verification would pass. Digest
+checking there proves the two agree with each other — not that either is the
+package that was admitted.
+
+So the trust is placed where it actually sits: **in the operator's control of
+the directory**, enforced by ownership and mode rather than assumed.
+
+**MUST** — the root, every directory component on the resolved path, the
+manifest, and the artefact MUST each:
+
+- be a real directory or regular file, never a symbolic link;
+- be owned by an **explicitly supplied trusted source UID**;
+- be neither group-writable nor world-writable.
+
+Group and other MAY retain read and execute where operation requires it. Write
+they may not.
+
+**MUST** — the trusted source UID MUST be supplied explicitly, as configuration
+or input. It MUST NOT be inferred from the running process, the file's own
+owner, the environment, or a home directory. **Absent, the runtime refuses**;
+there is no default, because a default owner is whoever happens to be running.
+
+**MUST** — the manifest and the artefact MUST each have a link count of exactly
+one. A second hard link is a second name for the same bytes, outside the
+directory whose permissions were just checked, and this contract does not try
+to find every alias — it refuses the condition that makes aliases possible.
+
+**MUST** — both files MUST be read through a **descriptor-safe open**: opened
+without following a final symlink, validated by `fstat` on the descriptor
+rather than by a second look at the path, and read only from that descriptor.
+Validating a path and then opening it is a race with whoever can write the
+directory.
+
 **MUST NOT**
 
 - MUST NOT execute a free-text reference.
@@ -245,7 +283,7 @@ Execution is fail-closed. **No unverifiable artefact executes.**
   execute, and MUST obtain it from the admitted `CPKG` — specifically from
   `manifest_reference`, resolved under the same grammar and containment as the
   artefact.
-- The manifest MUST declare a `sha256:<hex>` digest of the artefact bytes.
+- The manifest MUST be **executable manifest schema version 1** (below).
 - Verification MUST happen **after** resolution and **immediately before**
   handing the artefact to an adapter.
 - The runtime MUST resist substitution between verification and use by
@@ -264,6 +302,68 @@ Execution is fail-closed. **No unverifiable artefact executes.**
   optional; execution does not.
 - MUST NOT infer integrity from successful past execution, from trust standing,
   or from the artefact being where it was expected.
+
+### Executable manifest, schema version 1
+
+**UTF-8 JSON, one top-level object, closed schema — an unknown field refuses.**
+A closed schema because a manifest that tolerates fields nobody reviewed is a
+manifest whose meaning grows without anyone deciding it did.
+
+```json
+{
+  "schema_version": 1,
+  "capability_package_id": "CPKG-...",
+  "contract_id": "CCON-...",
+  "capability_id": "CAPDEF-...",
+  "artifact_reference": "file:relative/path",
+  "artifact_sha256": "sha256:<64 lowercase hexadecimal characters>"
+}
+```
+
+| Field | Rule |
+|---|---|
+| `schema_version` | JSON integer equal to `1`. A boolean is not an integer here. Any other value refuses |
+| `capability_package_id` | exactly the package identity the Fabric evidence verified |
+| `contract_id` | exactly the contract identity the Fabric evidence verified |
+| `capability_id` | exactly the capability identity the Fabric evidence verified |
+| `artifact_reference` | exactly the `artifact_reference` the verified package carries, and itself satisfying `file:<relative-path>` |
+| `artifact_sha256` | `sha256:` followed by exactly 64 **lowercase** hexadecimal characters. Uppercase refuses, another algorithm refuses, surrounding whitespace refuses |
+
+**No optional fields. No signature field, no command, no argv, no environment,
+no adapter, no image, no endpoint, no secret** — schema version 1 describes
+which bytes are the package, and nothing about how they run.
+
+**The manifest is not an independent root of trust, and MUST NOT be described
+as one.** It is bound to the governed package by identity, and it is protected
+by the directory it lives in. The integrity claim this architecture actually
+supports, stated exactly:
+
+> the bytes staged match the bytes identified by a manifest stored inside an
+> operator-controlled trusted artefact repository, and that manifest is
+> coherently bound to the governed package identities
+
+That is stronger than path presence alone and weaker than immutable digest
+evidence carried by the governed record itself. **Deferred F** (§28) is where
+the stronger form is evaluated.
+
+### Bounds
+
+**MUST** — a manifest requiring more than **65,536 bytes** refuses. An artefact
+requiring more than **268,435,456 bytes** (256 MiB) refuses.
+
+**MUST** — both bounds are enforced **while reading**, never after buffering.
+An oversized artefact MUST NOT be truncated and accepted, and MUST NOT be
+partially staged: refusal leaves no staged object. A larger artefact needs an
+explicit architecture change, not a larger constant chosen under pressure.
+
+### Verified bytes are the only bytes
+
+**MUST** — the artefact is opened **once**, its digest computed from that
+descriptor, and the staged copy written from that **same** descriptor. The
+source pathname MUST NOT be reopened to obtain artefact bytes after the open.
+Staging is content-addressed by the verified digest, published atomically, and
+re-verified after publication. **The source path is discovery input; the staged
+object is what any future adapter may receive.**
 
 ## 9. Adapter contract
 
@@ -668,7 +768,13 @@ policy, schema, or record-kind change · Deferred A (route-declaration
 uniqueness) · Deferred B (shared validated-read resolver) · `side-effecting`
 enablement · a generic arbitrary-code sandbox · **every concrete adapter, until
 one is authorised under §9** · remote execution · a broad secret-management
-platform ·
+platform · **Deferred F — governed package-content integrity**, which evaluates
+moving the artefact digest into immutable governed package evidence, or an
+equivalent cryptographically governed package-authenticity mechanism (a digest
+carried directly by `CPKG`, a governed manifest digest, signed package
+metadata, or another immutable content binding). Until then the trusted
+artefact repository of §7 carries that weight, and historical nonconforming
+packages remain Fabric-valid and non-executable ·
 scheduler, placement, clustering, and leases (ENG-0007/0008).
 
 ## 29. Acceptance criteria
