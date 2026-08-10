@@ -58,6 +58,24 @@ FORBIDDEN_IMPORTS = {
     "socket", "http", "urllib", "requests", "asyncio", "docker", "podman",
     "pty", "shlex",
 }
+# Fabric is consumed, never commanded. A3 introduced read-only evidence
+# access, so "no Fabric import" advanced to an allow-list: exactly the
+# read-only inspection surface, and nothing that decides, mutates, or
+# allocates. An allow-list rather than a blacklist, so a new Fabric module
+# is forbidden by default instead of forbidden only once someone remembers
+# to name it.
+ALLOWED_FABRIC_IMPORTS = {"tools.fabric.inspection", "..fabric.inspection"}
+# Named individually because each is a different way the same line gets
+# crossed. These are the released decision and mutation surfaces.
+FORBIDDEN_FABRIC_SYMBOLS = (
+    "admission", "selection", "eligibility", "trust_adapter",
+    "select_candidate", "evaluate_eligibility", "admit_instance",
+    "admit_subject", "declare_capability", "declare_contract",
+    "declare_package", "register_advertisement", "create_route",
+    "withdraw_subject", "refresh_subject", "withdraw_instance",
+    "retire_instance", "request_critical_section", "allocate_id",
+    "write_atomic", "write_record", "FabricStore",
+)
 # Attribute calls on os and friends that spawn or replace a process.
 FORBIDDEN_ATTRS = {
     "system", "popen", "fork", "forkpty", "spawn", "spawnl", "spawnle",
@@ -68,7 +86,8 @@ FORBIDDEN_ATTRS = {
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__"}
 # Words that would name an execution seam even without a call.
 FORBIDDEN_TEXT = ("adapter_registry", "register_adapter", "ADAPTERS = ",
-                  "docker run", "podman run", "/bin/sh", "/bin/bash")
+                  "docker run", "podman run", "/bin/sh", "/bin/bash",
+                  "request_critical_section")
 
 findings = []
 
@@ -97,9 +116,18 @@ for path in sorted(package.rglob("*.py")):
             for alias in node.names:
                 if alias.name.split(".")[0] in FORBIDDEN_IMPORTS:
                     findings.append(f"{name}:{node.lineno} imports {alias.name}")
+                if "fabric" in alias.name and alias.name not in ALLOWED_FABRIC_IMPORTS:
+                    findings.append(f"{name}:{node.lineno} imports {alias.name}")
         elif isinstance(node, ast.ImportFrom):
             if node.module and node.module.split(".")[0] in FORBIDDEN_IMPORTS:
                 findings.append(f"{name}:{node.lineno} imports from {node.module}")
+            spelled = "." * node.level + (node.module or "")
+            if "fabric" in spelled and spelled not in ALLOWED_FABRIC_IMPORTS:
+                findings.append(f"{name}:{node.lineno} imports from {spelled}")
+            for alias in node.names:
+                if alias.name in FORBIDDEN_FABRIC_SYMBOLS:
+                    findings.append(
+                        f"{name}:{node.lineno} imports the decision surface {alias.name}")
         elif isinstance(node, ast.Call):
             target = node.func
             if isinstance(target, ast.Attribute) and target.attr in FORBIDDEN_ATTRS:
@@ -134,10 +162,11 @@ assert_file "${CAPABILITY}/errors.py"
 assert_file "${CAPABILITY}/identifiers.py"
 assert_file "${CAPABILITY}/store.py"
 assert_file "${CAPABILITY}/invocation_identity.py"
+assert_file "${CAPABILITY}/fabric_evidence.py"
 
 if [[ -d "${ROOT}/${CAPABILITY}" ]]; then
   UNEXPECTED="$(find "${ROOT}/${CAPABILITY}" -maxdepth 1 -name '*.py' -printf '%f\n' 2>/dev/null \
-    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py' || true)"
+    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py|fabric_evidence\.py' || true)"
   if [[ -z "${UNEXPECTED}" ]]; then
     pass "increment A1 adds no module beyond its authorised surface"
   else
@@ -861,6 +890,394 @@ check(collisions == 0,
       f"no two distinct logical payloads share canonical bytes ({collisions})")
 print(f"PASS: determinism sweep — {generated} generated payloads, "
       f"{mismatches} mismatches, {collisions} canonical collisions")
+
+# ===========================================================================
+# A3 — Fabric evidence reader and execution-precondition evaluator
+# ===========================================================================
+# The authority bridge, and it only ever crosses in one direction. Fabric has
+# already decided what may run and where; this verifies that the invocation a
+# caller claims corresponds to that decision, as recorded, and refuses when it
+# does not. It never searches for an alternative that would work.
+#
+# It reads through C8's inspection surface and nothing else, so admission,
+# selection, eligibility, and the trust adapter are not merely unused -- they
+# are unreachable.
+
+from datetime import datetime as _datetime, timedelta as _timedelta, timezone as _timezone  # noqa: E402
+
+from tools.capability.fabric_evidence import (  # noqa: E402
+    REASON_CAPABILITY_ABSENT, REASON_CONTRACT_ABSENT, REASON_EFFECT_CLASS,
+    REASON_INCOHERENT, REASON_INSTANCE_ABSENT, REASON_INSTANCE_MISMATCH,
+    REASON_NOT_ADMITTED, REASON_PACKAGE_ABSENT, REASON_PACKAGE_MISMATCH,
+    REASON_SELECTION_ABSENT, REASON_SELECTION_REFUSED, REASON_SUPERSEDED,
+    REASON_UNREADABLE, REASON_WINDOW, verify_selected_evidence)
+from tools.fabric.store import FabricStore as _FabricStore  # noqa: E402
+
+_NOW = _datetime(2026, 8, 10, 12, 0, 0, tzinfo=_timezone(_timedelta(hours=-5)))
+_OPENED = _NOW - _timedelta(days=1)
+_EXPIRES = _NOW + _timedelta(days=30)
+
+
+def _chain(tmp, **overrides):
+    """One authoritative, already-selected Fabric chain, written as records."""
+    fabric_root = Path(tmp) / "fabric"
+    store = _FabricStore(fabric_root, expected_uid=UID, expected_gid=GID)
+    records = {
+        "capability-definition": {
+            "capability_id": "CAPDEF-0001", "name": "summarise",
+            "description": "Condense a document.", "effect_class": "read-only",
+            "contract_ids": ["CCON-0001"], "kind": "capability-definition"},
+        "capability-contract": {
+            "contract_id": "CCON-0001", "capability_id": "CAPDEF-0001",
+            "contract_version": "1.0.0", "effect_class": "read-only",
+            "determinism_class": "deterministic", "kind": "capability-contract"},
+        "capability-package": {
+            "capability_package_id": "CPKG-0001", "capability_id": "CAPDEF-0001",
+            "contract_id": "CCON-0001", "package_version": "1.0.0",
+            "artifact_reference": "file:summarise.py",
+            "manifest_reference": "file:summarise.manifest.json",
+            "kind": "capability-package"},
+        "capability-instance": {
+            "instance_id": "CINST-000001", "capability_id": "CAPDEF-0001",
+            "capability_package_id": "CPKG-0001", "contract_id": "CCON-0001",
+            "capability_host_id": "CHOST-0001", "lifecycle_state": "admitted",
+            "admitted_at": _OPENED.isoformat(), "admitted_until": _EXPIRES.isoformat(),
+            "admission_decision_id": "CINST-000000", "kind": "capability-instance"},
+        "capability-selection": {
+            "selection_id": "CSEL-000001", "selected_instance_id": "CINST-000001",
+            "selection_reason": "first-eligible-in-declared-order",
+            "selected_at": _NOW.isoformat(), "route_id": "CROUTE-0001",
+            "route_version": 1, "kind": "capability-selection"},
+    }
+    for kind, changes in overrides.items():
+        if changes is None:
+            records.pop(kind, None)
+        else:
+            records[kind].update(changes)
+    for kind, record in records.items():
+        identity = record[
+            {"capability-definition": "capability_id",
+             "capability-contract": "contract_id",
+             "capability-package": "capability_package_id",
+             "capability-instance": "instance_id",
+             "capability-selection": "selection_id"}[kind]]
+        store.write_atomic(store.path_for(kind, identity), record)
+    return fabric_root
+
+
+def _verify(fabric_root, **overrides):
+    asked = dict(selection_id="CSEL-000001", instance_id="CINST-000001",
+                 capability_package_id="CPKG-0001", evaluated_at=_NOW)
+    asked.update(overrides)
+    return verify_selected_evidence(fabric_root, expected_uid=UID,
+                                    expected_gid=GID, **asked)
+
+
+def _fabric_inventory(base):
+    entries = {}
+    for path in sorted(Path(base).rglob("*")):
+        info = path.lstat()
+        entries[str(path.relative_to(base))] = (
+            stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode), info.st_uid,
+            info.st_gid, info.st_ino, info.st_mtime_ns, info.st_size,
+            path.read_bytes() if stat.S_ISREG(info.st_mode) else b"")
+    return entries
+
+
+# --- the exact valid chain --------------------------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    verdict = _verify(fabric_root)
+    check(verdict.supported, f"an exact selected chain supports preparation ({verdict.reason})")
+    check(verdict.reason is None, "a supported verdict names no refusal")
+    check(verdict.selection_id == "CSEL-000001", "the verdict carries the selection")
+    check(verdict.instance_id == "CINST-000001", "the verdict carries the instance")
+    check(verdict.capability_package_id == "CPKG-0001", "the verdict carries the package")
+    check(verdict.contract_id == "CCON-0001", "the verdict carries the contract")
+    check(verdict.capability_id == "CAPDEF-0001", "the verdict carries the capability")
+    check(verdict.effect_class == "read-only", "the verdict carries the effect class")
+    check(verdict.artifact_reference == "file:summarise.py",
+          "the verdict carries the package artefact reference for A4")
+    check(verdict.manifest_reference == "file:summarise.manifest.json",
+          "the verdict carries the package manifest reference for A4")
+
+    # A supported verdict is not an execution, and carries nothing executable.
+    for absent in ("command", "argv", "environment", "adapter", "network",
+                   "staged_path", "process", "executable"):
+        check(not hasattr(verdict, absent),
+              f"a verdict carries no {absent}")
+    check(verdict == _verify(fabric_root), "verification is deterministic")
+
+    # Verifying mutates the Fabric store in no respect.
+    before = _fabric_inventory(fabric_root)
+    _verify(fabric_root)
+    _verify(fabric_root, instance_id="CINST-000009")
+    _verify(fabric_root, selection_id="CSEL-000009")
+    check(_fabric_inventory(fabric_root) == before,
+          "verification leaves the fabric store byte-identical")
+    check(sorted(p.name for p in (fabric_root / "sequences").glob("*.seq")) ==
+          sorted(p.name for p in (fabric_root / "sequences").glob("*.seq")),
+          "verification advances no identifier sequence")
+    check(not list(fabric_root.rglob(".*.tmp")),
+          "verification leaves no temporary artefact")
+
+# --- missing evidence, one record at a time --------------------------------
+for kind, expected, description in (
+        ("capability-selection", REASON_SELECTION_ABSENT, "the selection"),
+        ("capability-instance", REASON_INSTANCE_ABSENT, "the instance"),
+        ("capability-package", REASON_PACKAGE_ABSENT, "the package"),
+        ("capability-contract", REASON_CONTRACT_ABSENT, "the contract"),
+        ("capability-definition", REASON_CAPABILITY_ABSENT, "the capability")):
+    with TemporaryDirectory() as tmp:
+        fabric_root = _chain(tmp, **{kind: None})
+        verdict = _verify(fabric_root)
+        check(not verdict.supported and verdict.reason == expected,
+              f"absent {description} refuses as {expected} ({verdict.reason})")
+
+# --- identity mismatch ------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    verdict = _verify(fabric_root, instance_id="CINST-000002")
+    check(not verdict.supported and verdict.reason == REASON_INSTANCE_MISMATCH,
+          f"a claimed instance the selection did not choose refuses ({verdict.reason})")
+    verdict = _verify(fabric_root, capability_package_id="CPKG-0002")
+    check(not verdict.supported and verdict.reason == REASON_PACKAGE_MISMATCH,
+          f"a claimed package the instance does not bind refuses ({verdict.reason})")
+
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp, **{"capability-instance": {"contract_id": "CCON-0009"}})
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason in (REASON_CONTRACT_ABSENT, REASON_INCOHERENT),
+          f"an instance naming an absent contract refuses ({verdict.reason})")
+
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp, **{"capability-package": {"contract_id": "CCON-0009"}})
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason == REASON_INCOHERENT,
+          f"a package bound to another contract refuses ({verdict.reason})")
+
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp, **{"capability-contract": {"capability_id": "CAPDEF-0009"}})
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason == REASON_INCOHERENT,
+          f"a contract bound to another capability refuses ({verdict.reason})")
+
+# --- a selection that chose nothing ----------------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp, **{"capability-selection": {"selected_instance_id": None,
+                                                          "refusal_reason": "no-eligible-candidate"}})
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason == REASON_SELECTION_REFUSED,
+          f"a recorded refusal executes nothing ({verdict.reason})")
+
+# --- lifecycle and window ---------------------------------------------------
+for state, expected, description in (
+        ("withdrawn", REASON_NOT_ADMITTED, "a withdrawn instance"),
+        ("retired", REASON_NOT_ADMITTED, "a retired instance"),
+        ("", REASON_NOT_ADMITTED, "an instance with no lifecycle state")):
+    with TemporaryDirectory() as tmp:
+        fabric_root = _chain(tmp, **{"capability-instance": {"lifecycle_state": state}})
+        verdict = _verify(fabric_root)
+        check(not verdict.supported and verdict.reason == expected,
+              f"{description} refuses as {expected} ({verdict.reason})")
+
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp, **{"capability-instance": {"superseded_by": "CINST-000002"}})
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason == REASON_SUPERSEDED,
+          f"a superseded instance is not the head and refuses ({verdict.reason})")
+
+for opened, expires, instant, description in (
+        (_OPENED, _NOW - _timedelta(days=1), _NOW, "an expired admission window"),
+        (_NOW + _timedelta(days=1), _EXPIRES, _NOW, "a window not yet open")):
+    with TemporaryDirectory() as tmp:
+        fabric_root = _chain(tmp, **{"capability-instance": {
+            "admitted_at": opened.isoformat(), "admitted_until": expires.isoformat()}})
+        verdict = _verify(fabric_root, evaluated_at=instant)
+        check(not verdict.supported and verdict.reason == REASON_WINDOW,
+              f"{description} refuses as {REASON_WINDOW} ({verdict.reason})")
+
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp, **{"capability-instance": {"admitted_until": "not-a-time"}})
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason == REASON_WINDOW,
+          f"an unreadable admission window refuses rather than being guessed ({verdict.reason})")
+
+# --- effect class -----------------------------------------------------------
+for effect, supported, description in (
+        ("read-only", True, "read-only"),
+        ("computational", True, "computational"),
+        ("content-generating", True, "content-generating"),
+        ("side-effecting", False, "side-effecting"),
+        ("", False, "an absent effect class"),
+        ("invented", False, "an effect class outside the vocabulary")):
+    with TemporaryDirectory() as tmp:
+        fabric_root = _chain(tmp, **{"capability-contract": {"effect_class": effect}})
+        verdict = _verify(fabric_root)
+        if supported:
+            check(verdict.supported, f"{description} is executable ({verdict.reason})")
+        else:
+            check(not verdict.supported and verdict.reason == REASON_EFFECT_CLASS,
+                  f"{description} refuses as {REASON_EFFECT_CLASS} ({verdict.reason})")
+
+# --- malformed records and an unusable store -------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    (fabric_root / "capability-selections" / "CSEL-000001.yaml").write_text(
+        "{not: [valid", encoding="utf-8")
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason is not None,
+          f"a malformed record refuses without a traceback ({verdict.reason})")
+
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    (fabric_root / "capability-instances" / "CINST-000001.yaml").write_text(
+        "- a\n- b\n", encoding="utf-8")
+    verdict = _verify(fabric_root)
+    check(not verdict.supported, "a record that is not a mapping refuses")
+
+with TemporaryDirectory() as tmp:
+    verdict = _verify(Path(tmp) / "absent")
+    check(not verdict.supported and verdict.reason == REASON_UNREADABLE,
+          f"an absent fabric store refuses as {REASON_UNREADABLE} ({verdict.reason})")
+    check(not (Path(tmp) / "absent").exists(),
+          "verifying against an absent store builds nothing")
+
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    verdict = _verify(fabric_root, selection_id="../escape")
+    check(not verdict.supported,
+          "a traversing claimed identity refuses")
+    verdict = _verify(fabric_root, selection_id="CINST-000001")
+    check(not verdict.supported,
+          "a claimed selection carrying another kind's prefix refuses")
+
+# --- symlink containment ----------------------------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    outside = Path(tmp) / "outside"
+    outside.mkdir()
+    (outside / "planted.yaml").write_text(
+        "selection_id: CSEL-000002\nselected_instance_id: CINST-000001\n"
+        "kind: capability-selection\n", encoding="utf-8")
+    (fabric_root / "capability-selections" / "CSEL-000002.yaml").symlink_to(
+        outside / "planted.yaml")
+    verdict = _verify(fabric_root, selection_id="CSEL-000002")
+    check(not verdict.supported,
+          f"a symlinked record cannot smuggle evidence in from outside ({verdict.reason})")
+
+# --- no fallback: the critical authority test -------------------------------
+# One claimed chain that refuses, and a perfectly good alternative sitting
+# beside it. A runtime that found the alternative would be selecting.
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp, **{"capability-instance": {"lifecycle_state": "withdrawn"}})
+    store = _FabricStore(fabric_root, expected_uid=UID, expected_gid=GID)
+    store.write_atomic(store.path_for("capability-instance", "CINST-000002"), {
+        "instance_id": "CINST-000002", "capability_id": "CAPDEF-0001",
+        "capability_package_id": "CPKG-0001", "contract_id": "CCON-0001",
+        "capability_host_id": "CHOST-0001", "lifecycle_state": "admitted",
+        "admitted_at": _OPENED.isoformat(), "admitted_until": _EXPIRES.isoformat(),
+        "admission_decision_id": "CINST-000000", "kind": "capability-instance"})
+    store.write_atomic(store.path_for("capability-selection", "CSEL-000002"), {
+        "selection_id": "CSEL-000002", "selected_instance_id": "CINST-000002",
+        "selection_reason": "first-eligible-in-declared-order",
+        "selected_at": _NOW.isoformat(), "route_id": "CROUTE-0001",
+        "route_version": 1, "kind": "capability-selection"})
+    verdict = _verify(fabric_root)
+    check(not verdict.supported and verdict.reason == REASON_NOT_ADMITTED,
+          f"the claimed chain refuses on its own terms ({verdict.reason})")
+    check(verdict.instance_id is None or verdict.instance_id == "CINST-000001",
+          "the refusal never names the alternative instance")
+    check("CINST-000002" not in str(verdict),
+          "a refused verification does not discover the healthy alternative")
+    check("CSEL-000002" not in str(verdict),
+          "a refused verification does not discover another selection")
+
+# --- the decision surfaces are not merely unused; they are unreachable ------
+_evidence_source = (root / "tools" / "capability" / "fabric_evidence.py").read_text(encoding="utf-8")
+for token, description in (
+        ("select_candidate", "C6 selection"),
+        ("evaluate_eligibility", "C5 eligibility"),
+        ("fabric.admission", "the C4 admission module"),
+        ("import admission", "the C4 admission module by name"),
+        ("admit_instance", "instance admission"),
+        ("withdraw_instance", "withdrawal"),
+        ("retire_instance", "retirement"),
+        ("create_route", "route mutation"),
+        ("trust_adapter", "the trust adapter"),
+        ("TrustStore", "the trust store"),
+        ("request_critical_section", "the fabric request lock"),
+        ("allocate_id", "identifier allocation"),
+        ("write_atomic", "a fabric write"),
+        ("write_record", "a fabric record write"),
+        ("FabricStore", "the fabric store itself"),
+        ("health", "health")):
+    check(token not in _evidence_source,
+          f"the evidence reader reaches {description} by no mechanism")
+
+check("from ..fabric.inspection import" in _evidence_source
+      or "from ..fabric import inspection" in _evidence_source,
+      "the evidence reader consumes fabric through the inspection surface only")
+
+# Structural, not textual: run a real verification with every forbidden
+# decision function replaced by something that raises if called.
+import tools.fabric.admission as _admission_module  # noqa: E402
+import tools.fabric.eligibility as _eligibility_module  # noqa: E402
+import tools.fabric.selection as _selection_module  # noqa: E402
+import tools.fabric.store as _fabric_store_module  # noqa: E402
+
+
+def _explode(*args, **kwargs):
+    raise AssertionError("a forbidden fabric decision surface was called")
+
+
+_tripwires = [
+    (_selection_module, "select_candidate"),
+    (_eligibility_module, "evaluate_eligibility"),
+    (_admission_module, "admit_instance"),
+    (_admission_module, "admit_subject"),
+    (_admission_module, "withdraw_instance"),
+    (_admission_module, "retire_instance"),
+    (_admission_module, "create_route"),
+    (_fabric_store_module.FabricStore, "write_atomic"),
+    (_fabric_store_module.FabricStore, "allocate_id"),
+    (_fabric_store_module.FabricStore, "request_critical_section"),
+]
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    _originals = [(owner, name, getattr(owner, name)) for owner, name in _tripwires]
+    for owner, name in _tripwires:
+        setattr(owner, name, _explode)
+    try:
+        armed = _verify(fabric_root)
+        refused = _verify(fabric_root, instance_id="CINST-000002")
+        tripped = None
+    except AssertionError as error:
+        armed = refused = None
+        tripped = str(error)
+    finally:
+        for owner, name, original in _originals:
+            setattr(owner, name, original)
+    check(tripped is None,
+          f"no forbidden fabric decision surface is called during verification ({tripped})")
+    check(armed is not None and armed.supported,
+          "verification still succeeds with every decision surface armed to explode")
+    check(refused is not None and not refused.supported,
+          "refusal still works with every decision surface armed to explode")
+
+# --- A3 creates no durable capability evidence ------------------------------
+with TemporaryDirectory() as tmp:
+    fabric_root = _chain(tmp)
+    capability_store = CapabilityStore(Path(tmp) / "capability",
+                                       expected_uid=UID, expected_gid=GID)
+    before = inventory(capability_store.root)
+    _verify(fabric_root)
+    _verify(fabric_root, instance_id="CINST-000002")
+    check(inventory(capability_store.root) == before,
+          "verification writes no capability runtime record")
+    check(capability_store.counts() == {"capability-invocation": 0,
+                                        "capability-result": 0},
+          "verification allocates no invocation or result identity")
 print(f"__FAILURES__={failures}")
 STOREPY
 )"
