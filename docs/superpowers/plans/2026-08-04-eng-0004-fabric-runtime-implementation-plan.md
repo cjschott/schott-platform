@@ -162,6 +162,21 @@ and the accepted write. **The replay helper in `request_identity.py` never
 enters it** — it assumes the boundary already holds it — so **nested acquisition
 and self-deadlock are impossible by construction**.
 
+**The lock is store-global, and the section is non-reentrant.** Increment 12
+gives C1 **one** request lock per Fabric store at
+**`sequences/request_identity.lock`**. It **serialises the governed write
+critical section across request identities within a store** — `request_id` is
+**never used to derive the lock file's identity**, and there is no per-request
+lock namespace. **Distinct request identities remain logically independent**:
+each allocates its own record identity, neither is treated as a replay of the
+other, and neither overwrites the other. **Simultaneous progress of distinct
+request identities is not required by the ENG-0004 contract**; store-global
+serialisation of governed writes is the accepted behaviour, and its cost is
+throughput, not correctness. Because the section is **non-reentrant**, a second
+acquisition on one thread would block against the first and hang the store for
+every later caller: **the C4/C6 operation boundaries acquire it once**, and
+**nested governed-operation acquisition is outside the accepted contract.**
+
 **Acquisition owners:**
 
 | Increment | Module | Call sites entering the context |
@@ -929,7 +944,16 @@ serialisation is **owned physically by C1 and is not a Fabric record**.
      holds it through identity allocation **and** the accepted write.
   4. The lock artifact is a guarded **`sequences/request_identity.lock`**. It
      contains **no replay or evidence state**, is **not a Fabric record**, and is
-     guarded and ownership-checked exactly like every other C1 path.
+     guarded and ownership-checked exactly like every other C1 path. It is
+     **one store-global C1 request lock**: every governed write request for that
+     store serialises through it regardless of request identity, `request_id` is
+     **never used to derive the lock file's identity**, and **no per-request lock
+     namespace exists**. **Distinct request identities remain logically
+     independent** — separate allocated identities, neither a replay of the
+     other — while **simultaneous progress of distinct request identities is not
+     required by this contract**. The section is **non-reentrant**: the C4/C6
+     operation boundaries acquire it **once**, and **nested governed-operation
+     acquisition is outside the accepted contract**.
   5. Acquisition is `LOCK_EX | LOCK_NB` **first**. On `EWOULDBLOCK` the hook is
      invoked with phase `lock_contended`, **then** the blocking `LOCK_EX` is
      taken — so contention produces a **positive, deterministic event** rather
