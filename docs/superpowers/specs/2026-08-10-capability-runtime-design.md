@@ -205,10 +205,35 @@ own `CSEL`.
 - MUST NOT accept `oci:`, `https:`, or any other scheme in the initial
   specification. Those are deferred with remote execution (§19).
 
-**Consequence, stated plainly:** packages already admitted with an
-`artifact_reference` outside this grammar are **not executable**. That is
-correct and intended — admission governed metadata, not an executable, and
-this specification will not retro-interpret free text as a path.
+### A Fabric-valid package is not necessarily executable
+
+**These are two different contracts.** A `CPKG` that ENG-0004 accepted is a
+valid governance record and stays one for ever. Execution additionally requires
+the **executable-package contract**: a reference inside the accepted grammar
+(§7) and integrity evidence that verifies (§8).
+
+**MUST NOT** — the runtime MUST NOT retroactively infer executable meaning from
+historical metadata. Specifically:
+
+- a free-text `artifact_reference` MUST NOT become executable by convention;
+- an existing `oci://` value MUST NOT be silently reinterpreted;
+- an absent `manifest_reference` MUST NOT be synthesised;
+- an optional historical `signature_reference` MUST NOT be read as evidence
+  that integrity was ever verified;
+- `package_version` is a declared string and MUST NOT be treated as a content
+  digest;
+- an unverified package MUST NOT execute.
+
+**Historical records remain immutable.** Nothing here mutates a `CPKG`, and no
+compatibility parser guesses what an operator meant. A package intended for
+execution that does not satisfy the executable-package contract requires a
+**new governed admission producing new records** with conforming metadata —
+which is an ENG-0004 operation, performed by an operator, not a migration this
+runtime performs.
+
+This is deliberate fail-closed behaviour. The alternative is a runtime that
+decides for itself what an ambiguous reference probably meant, on the one code
+path where being wrong means executing the wrong bytes.
 
 ## 8. Package integrity
 
@@ -261,37 +286,79 @@ the resources §10 grants it.
 across targets, select another `CINST`, widen Trust scope, make a health
 decision, write to the Fabric store, or acquire the Fabric request lock (§23).
 
-**Initial adapter set:** exactly one — an **in-process Python callable adapter**
-loading the verified artefact from its open descriptor. One adapter is enough
-to prove the abstraction; a second before the first is reviewed proves only
-that the interface was guessed.
+**No concrete adapter is authorised by this specification.**
+
+The abstract contract above is accepted. **A concrete adapter becomes
+authorised only when its isolation boundary satisfies the execution-containment
+contract of §10**, demonstrated rather than asserted.
+
+An **in-process callable adapter is explicitly rejected**, and the reasoning
+generalises: code running inside the coordinator's own process can read and
+mutate coordinator memory, import arbitrary modules, reach inherited process
+state and environment, open files anywhere the coordinator can, create sockets,
+mutate globals, interfere with evidence being written, call Fabric interfaces
+directly, and block or terminate the runtime. A specification that placed such
+an adapter behind the containment claims of §10 would be making promises the
+mechanism cannot keep.
+
+Until an isolation boundary is specified and accepted, **ENG-0005 has no
+executable path**. That is the honest state, and it is preferable to an
+executable path whose containment is nominal.
 
 ## 10. Execution containment
 
-**The initial specification defines containment for the in-process adapter
-only, and defers every adapter that would execute a separate process.**
+**Containment has two halves, and only one of them is the coordinator's.**
+Conflating them is how a specification ends up promising isolation that nothing
+enforces.
 
-**MUST** — for the accepted adapter: the working directory is the approved
-artefact directory, named explicitly; every path the adapter touches is checked
-with the shared containment primitive; the environment passed to capability
-code is **empty except for values the specification names**; arguments are
-passed as structured values, never as a command string; output is captured and
-bounded; the runtime runs as its own supplied UID/GID and performs no `chown`.
+### 10.1 Coordinator containment — what the runtime itself guarantees
 
-**MUST NOT** — no shell, no `subprocess`, no `os.system`, no network access
-from the adapter, no inherited environment, no argument interpolation into any
-string that another program will parse.
+**MUST** — the coordinator MUST enforce, on every invocation:
 
-**Deferred, explicitly:** subprocess, container, and shell adapters are
-**deferred** because specifying them safely requires a sandbox architecture
-this document does not contain. Naming them without designing them is how
-arbitrary code execution arrives implicitly.
+- approved paths only, resolved through the shared containment primitive
+  `tools/common/containment.contained_path`;
+- structured input, never a command string;
+- payload canonicalisation and digest binding (§5);
+- evidence ordering — the invocation record durable before the adapter runs;
+- an explicit, enumerated environment handed to the adapter, never the
+  coordinator's own;
+- no Fabric request lock held across an invocation (§23);
+- no provider or instance substitution (§2).
 
-**This is the weakest part of the initial architecture and is stated as such:**
-an in-process adapter shares the runtime's address space. It is accepted only
-because the artefact is integrity-verified before loading and because the
-effect class of everything routable is non-actuating (§11). It is not a
-substitute for isolation, and a hostile package remains a hostile package.
+**These are real guarantees and they hold regardless of adapter.**
+
+### 10.2 Adapter containment — what only the adapter can guarantee
+
+**The coordinator cannot make untrusted code safe by calling it carefully.**
+Once control passes to capability code, only the mechanism that executes it can
+constrain what it reaches. The following MUST therefore be provided by the
+**concrete adapter's isolation boundary**, and a concrete adapter is authorised
+only if it demonstrably provides them:
+
+- the capability cannot read or mutate Capability Runtime process memory;
+- the capability cannot acquire or observe the Fabric critical section;
+- only explicitly exposed filesystem paths are reachable, with no escape;
+- the working directory is explicit;
+- the environment is controlled and inherits nothing;
+- no secret is inherited;
+- network access is **denied by default**, enforced by the mechanism and not by
+  capability cooperation;
+- execution time is bounded;
+- CPU and memory are bounded where the architecture requires enforcement;
+- output is captured;
+- the capability cannot mutate evidence already written;
+- the capability cannot select another provider or `CINST`;
+- terminating the capability does not terminate the coordinator;
+- a crash remains attributable to its invocation.
+
+**MUST NOT** — the specification MUST NOT claim filesystem, environment,
+network, privilege, or runtime-integrity isolation for any adapter whose
+mechanism does not enforce it. Monkeypatching language-level APIs — sockets,
+`open`, imports — is **not** isolation and MUST NOT be presented as such: it
+constrains only code that does not try to get around it.
+
+**Until an adapter satisfying §10.2 is specified and accepted, ENG-0005
+executes nothing.**
 
 ## 11. Effect-class behaviour
 
@@ -301,6 +368,10 @@ substitute for isolation, and a hostile package remains a hostile package.
 | `computational` | yes | same-target transport retry permitted | refused by identity | unconstrained | standard |
 | `content-generating` | yes | same-target transport retry permitted | refused by identity | unconstrained | standard, and every attempt recorded |
 | `side-effecting` | **no — refused** | n/a | n/a | n/a | refusal recorded |
+
+"Executable" above means **permitted in principle**. Nothing executes at all
+until a concrete adapter is authorised under §9 and §10.2; the effect class is
+one gate, not the only one.
 
 **MUST** — the runtime MUST read the effect class from the contract and MUST
 refuse to execute `side-effecting`. **MUST NOT** — MUST NOT enable
@@ -422,17 +493,27 @@ non-actuating (§11); the honest statement is that the guarantee is
 
 ## 18. Secrets
 
-**MUST** — secrets are referenced, never stored. A reference names a secret;
-the runtime resolves it at invocation time through an explicit broker interface
-and passes the value to the adapter without persisting it. Log output and
-result reasons MUST be redacted.
+**The initial runtime requires no implemented secret broker.** Secret-free
+capability execution is permitted as soon as an adapter is authorised; secrets
+are not on the critical path to a first executable increment.
 
-**MUST NOT** — no secret value in any Fabric record (already an accepted
-prohibition), no secret value in any Capability Runtime immutable record, no
-secret in a canonical payload that is digested and stored, no plaintext
-environment file as the architecture, and no general secret-management platform
-invented here. If no broker is configured, capabilities requiring secrets are
-**refused**, not run without them.
+**MUST**
+
+- Secret values remain forbidden from Fabric records — an accepted prohibition.
+- Secret values remain forbidden from immutable Capability Runtime records.
+- The architecture MAY define **opaque secret references**; a reference names a
+  secret and carries no value.
+- If an invocation requires a secret and no authorised broker is available, the
+  runtime MUST **refuse before execution**.
+
+**MUST NOT**
+
+- Secret absence MUST NOT authorise an environment fallback.
+- No `.env` convention, no plaintext secret file convention, no inherited
+  arbitrary process environment.
+- No general secret-management platform is defined here.
+
+A broker MAY be specified separately, when an authorised adapter requires one.
 
 ## 19. Remote execution
 
@@ -585,8 +666,9 @@ ENG-0006 Health · automatic failover · scheduling · placement · adaptive
 routing · TrustGateway cutover (ENG-0003) · subject seeding · any Fabric
 policy, schema, or record-kind change · Deferred A (route-declaration
 uniqueness) · Deferred B (shared validated-read resolver) · `side-effecting`
-enablement · a generic arbitrary-code sandbox · subprocess, container, and
-shell adapters · remote execution · a broad secret-management platform ·
+enablement · a generic arbitrary-code sandbox · **every concrete adapter, until
+one is authorised under §9** · remote execution · a broad secret-management
+platform ·
 scheduler, placement, clustering, and leases (ENG-0007/0008).
 
 ## 29. Acceptance criteria
@@ -620,8 +702,13 @@ scheduler, placement, clustering, and leases (ENG-0007/0008).
 
 **Execution and containment**
 18. Capability code receives no inherited environment.
-19. No shell, subprocess, or `os.system` appears on any execution path.
+19. No caller-supplied text reaches a shell, a command string, or an argument
+    another program parses; the coordinator constructs no command strings.
 20. Adapter output is captured and bounded.
+20a. No concrete adapter executes before its isolation boundary is accepted
+    against §10.2, demonstrated rather than asserted.
+20b. Network access from an adapter is denied by the mechanism, and denial is
+    demonstrated from inside the boundary rather than assumed.
 
 **Effect class**
 21. `side-effecting` is refused, and no flag, route, or configuration lifts it.
@@ -698,9 +785,15 @@ Implementation remains **prohibited** until, in order:
 
 1. this specification is accepted;
 2. the architecture questions it records as open are resolved;
-3. an implementation plan is drafted;
-4. that plan is accepted;
-5. test-first entry is explicitly authorised.
+3. **a concrete adapter's isolation boundary is specified and accepted against
+   §10.2** — without one there is no executable path to plan;
+4. an implementation plan is drafted;
+5. that plan is accepted;
+6. test-first entry is explicitly authorised.
+
+Increments that build the coordinator, the execution store, identity, payload
+binding, package resolution, and integrity verification **do not depend on an
+adapter** and could be planned first. Nothing that executes can be.
 
 A satisfied gate is permission to plan the next increment, not to build it.
 
