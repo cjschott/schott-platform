@@ -29,6 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..common.containment import contained_path
 from .errors import TrustError
 from .evaluator import create_decision
 from .models import (
@@ -65,9 +66,10 @@ def _read_input(name: str, approved_directory: str) -> dict[str, Any]:
     """Read a write-command input file from an approved directory."""
     import yaml
 
-    approved = Path(approved_directory).expanduser().resolve(strict=False)
-    candidate = (approved / name).resolve(strict=False)
-    if candidate == approved or approved not in candidate.parents:
+    # The approved directory is the operator's to name, `~` included; the
+    # shared primitive answers containment and expands nothing.
+    candidate = contained_path(Path(approved_directory).expanduser(), name)
+    if candidate is None:
         raise TrustError(f"input file '{name}' resolves outside the approved directory")
     if not candidate.is_file():
         raise TrustError(f"input file '{name}' does not exist in the approved directory")
