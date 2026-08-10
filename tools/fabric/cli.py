@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pathlib
 import sys
 from datetime import datetime
 from typing import Any
@@ -43,6 +42,7 @@ from .eligibility import evaluate_eligibility
 from .errors import FabricError
 from .selection import select_candidate
 from .store import FabricStore
+from ..common.containment import contained_path
 from ..trust.store import TrustStore
 
 EXIT_SUCCESS = 0
@@ -109,9 +109,8 @@ def _decision_body(name: str, approved_directory: str) -> dict[str, Any]:
     followed. The body is never composed here: what the operator wrote is what
     the governed component receives.
     """
-    approved = pathlib.Path(approved_directory).resolve(strict=False)
-    candidate = (approved / name).resolve(strict=False)
-    if candidate == approved or approved not in candidate.parents:
+    candidate = contained_path(approved_directory, name)
+    if candidate is None:
         raise _Unusable(f"input file '{name}' resolves outside the approved directory")
     if not candidate.is_file():
         raise _Unusable(f"input file '{name}' does not exist in the approved directory")

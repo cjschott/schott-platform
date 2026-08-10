@@ -1542,6 +1542,126 @@ with TemporaryDirectory() as tmp:
     refuses_fabric(lambda: FabricStore(fabric, expected_uid=UID, expected_gid=GID),
                    "a symlinked record directory is still refused after the correction")
 
+
+# =======================================================================
+# Deferred C — the shared approved-directory containment primitive
+# =======================================================================
+# Four callers carried the same six lines: resolve both sides, then refuse
+# anything that is not strictly beneath the approved directory. A fourth copy
+# is how one of them ends up subtly weaker, so the containment question moves
+# to one primitive. What does NOT move is policy: each caller keeps its own
+# error type, its own message, and its own decision about whether the approved
+# directory itself is expanded.
+#
+# The primitive answers one question -- is this name contained? -- and answers
+# it the way every caller already answered it. These assertions are the proof
+# that nothing widened.
+
+import inspect  # noqa: E402
+from tools.common.containment import contained_path  # noqa: E402
+
+
+def probe(approved, name):
+    """The primitive's answer, as a short label."""
+    result = contained_path(approved, name)
+    return "refused" if result is None else result
+
+
+with TemporaryDirectory() as tmp:
+    root = Path(tmp) / "approved"
+    root.mkdir()
+    (root / "ok.yaml").write_text("a: 1", encoding="utf-8")
+    (root / "nested").mkdir()
+    (root / "nested" / "deep.yaml").write_text("a: 1", encoding="utf-8")
+    outside = Path(tmp) / "outside"
+    outside.mkdir()
+    (outside / "secret.yaml").write_text("a: 1", encoding="utf-8")
+    # A sibling whose name has the approved directory as a string prefix. A
+    # containment test written with startswith() accepts this one.
+    sibling = Path(tmp) / "approvedbar"
+    sibling.mkdir()
+    (sibling / "x.yaml").write_text("a: 1", encoding="utf-8")
+    (root / "link-inside").symlink_to(root / "ok.yaml")
+    (root / "link-outside").symlink_to(outside / "secret.yaml")
+    (root / "linkdir-outside").symlink_to(outside)
+
+    # --- what stays contained -------------------------------------------
+    for name, description in (
+            ("ok.yaml", "a normal child"),
+            ("nested/deep.yaml", "a nested child"),
+            ("./ok.yaml", "a dot segment"),
+            ("nested//deep.yaml", "a doubled separator"),
+            ("ok.yaml/", "a trailing separator"),
+            ("missing.yaml", "a leaf that does not exist"),
+            ("nodir/missing.yaml", "a parent that does not exist"),
+            ("link-inside", "a symlink that stays inside"),
+            ("éà.yaml", "a non-ASCII name"),
+            (str(root / "ok.yaml"), "an absolute path inside the root")):
+        check(probe(root, name) != "refused", f"{description} stays contained")
+
+    # --- what is refused -------------------------------------------------
+    for name, description in (
+            ("../outside/secret.yaml", "a traversing name"),
+            ("nested/../../outside/secret.yaml", "a traversal through a child"),
+            (str(outside / "secret.yaml"), "an absolute path outside the root"),
+            ("link-outside", "a symlink pointing out of the root"),
+            ("linkdir-outside/secret.yaml", "a symlinked parent directory"),
+            ("../approvedbar/x.yaml", "a sibling sharing the root's name prefix"),
+            (str(sibling / "x.yaml"), "an absolute sibling sharing the prefix"),
+            (".", "the approved directory itself"),
+            ("", "an empty name")):
+        check(probe(root, name) == "refused", f"{description} is refused")
+
+    # The resolved path is the real one, so a caller reads what was checked.
+    check(contained_path(root, "link-inside") == (root / "ok.yaml").resolve(),
+          "a contained symlink resolves to the file that was checked")
+
+    # --- the primitive decides nothing else -------------------------------
+    # Existence is the caller's policy: the primitive answers containment for a
+    # path that is not there, and the caller decides what that means.
+    check(contained_path(root, "missing.yaml") == (root / "missing.yaml"),
+          "containment is answered for a path that does not exist")
+
+    # --- the primitive mutates nothing ------------------------------------
+    def inventory(base):
+        entries = {}
+        for path in sorted(Path(base).rglob("*")):
+            info = path.lstat()
+            entries[str(path.relative_to(base))] = (
+                stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode),
+                info.st_uid, info.st_gid, info.st_ino, info.st_mtime_ns,
+                info.st_size)
+        return entries
+
+    before = inventory(tmp)
+    for name in ("ok.yaml", "../outside/secret.yaml", "missing.yaml",
+                 "nodir/deeper/missing.yaml", "link-outside", "", "."):
+        contained_path(root, name)
+    check(inventory(tmp) == before,
+          "answering containment creates, removes, and changes nothing")
+
+    # A root that does not exist is still answered, and still not created.
+    absent = Path(tmp) / "never"
+    check(contained_path(absent, "x.yaml") == (absent / "x.yaml"),
+          "an absent approved directory is answered rather than built")
+    check(not absent.exists(), "an absent approved directory stays absent")
+
+# --- the approved directory is the caller's to normalise ------------------
+# Trust expands `~` before checking; Fabric does not. That difference is
+# observable, it predates this consolidation, and the primitive does not decide
+# it -- so neither caller's reach changes.
+check("expanduser" not in inspect.getsource(contained_path),
+      "the primitive expands nothing on the caller's behalf")
+
+with TemporaryDirectory() as tmp:
+    root = Path(tmp) / "approved"
+    root.mkdir()
+    (root / "ok.yaml").write_text("a: 1", encoding="utf-8")
+    # Given an already-expanded root, the primitive is indifferent to how it
+    # got that way.
+    check(contained_path(Path(root).expanduser(), "ok.yaml")
+          == contained_path(root, "ok.yaml"),
+          "an already-expanded root is treated identically")
 print(f"__FAILURES__={failures}")
 STOREPY
 )"
@@ -11728,6 +11848,14 @@ with TemporaryDirectory() as tmp:
         check("Traceback" not in out + err, f"{description} shows no traceback")
     check(forensic(Path(tmp)) == before,
           "every containment refusal leaves the filesystem unchanged")
+
+    # Deferred C: the interface asks the shared primitive rather than carrying
+    # a fifth copy of the same six lines. Refusals above are unchanged -- this
+    # only fixes where the containment answer comes from.
+    check("contained_path" in CLI_SOURCE,
+          "the interface asks the shared containment primitive")
+    check("approved not in" not in CLI_SOURCE,
+          "the interface carries no containment test of its own")
 
 # --- J/K. Malformed input and unknown commands ----------------------------
 with TemporaryDirectory() as tmp:
