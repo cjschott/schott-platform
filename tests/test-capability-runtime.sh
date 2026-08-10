@@ -1278,6 +1278,301 @@ with TemporaryDirectory() as tmp:
     check(capability_store.counts() == {"capability-invocation": 0,
                                         "capability-result": 0},
           "verification allocates no invocation or result identity")
+
+# ===========================================================================
+# Deferred E — the descriptor-safe trusted-source primitive
+# ===========================================================================
+# Reading a file you do not control is a different problem from writing one you
+# do. Containment answers "is this name inside that directory?", which is
+# necessary and not sufficient: between resolving a name and opening it, whoever
+# can write the directory gets a turn. So this opens once, without following a
+# final link, and then asks the descriptor what it got -- never the path again.
+#
+# It reads. It creates nothing, changes nothing, and removes nothing.
+
+from tools.common.trusted_source import (  # noqa: E402
+    TrustedSourceError, open_trusted_regular_file)
+
+
+def refuses_source(action, message):
+    try:
+        handle = action()
+    except TrustedSourceError:
+        ok(message)
+    except Exception as error:  # noqa: BLE001
+        bad(f"{message} (raised {type(error).__name__}: {error})")
+    else:
+        os.close(handle)
+        bad(f"{message} (was accepted instead of refused)")
+
+
+def _trusted_tree(tmp, content=b"artifact bytes\n"):
+    """An approved root satisfying the source contract, and one file in it."""
+    approved = Path(tmp) / "approved"
+    approved.mkdir(mode=0o755)
+    nested = approved / "nested"
+    nested.mkdir(mode=0o755)
+    target = nested / "artifact.bin"
+    target.write_bytes(content)
+    target.chmod(0o644)
+    return approved, target
+
+
+def _read_all(handle):
+    chunks = []
+    while True:
+        chunk = os.read(handle, 4096)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+# --- the valid case ---------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    handle = open_trusted_regular_file(approved, "nested/artifact.bin",
+                                       expected_uid=UID)
+    try:
+        check(isinstance(handle, int), "a descriptor is returned, not a path")
+        check(_read_all(handle) == b"artifact bytes\n",
+              "the descriptor yields the file's bytes")
+        opened = os.fstat(handle)
+        actual = target.lstat()
+        check(opened.st_ino == actual.st_ino and opened.st_dev == actual.st_dev,
+              "the descriptor is bound to the file that was checked")
+    finally:
+        os.close(handle)
+
+    handle = open_trusted_regular_file(approved, "nested/artifact.bin",
+                                       expected_uid=UID, require_single_link=True)
+    os.close(handle)
+    ok("a single-linked file is accepted when link count is required")
+
+    # Bounded reads: the caller says how much it is willing to read.
+    handle = open_trusted_regular_file(approved, "nested/artifact.bin",
+                                       expected_uid=UID, maximum_bytes=5)
+    try:
+        check(os.fstat(handle).st_size > 5,
+              "the bound is not a claim about the file's size")
+    finally:
+        os.close(handle)
+    refuses_source(lambda: open_trusted_regular_file(
+        approved, "nested/artifact.bin", expected_uid=UID, maximum_bytes=3,
+        refuse_oversize=True),
+        "a file larger than the supplied bound refuses before it is read")
+
+# --- containment: traversal, escape, prefix ---------------------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    outside = Path(tmp) / "outside"
+    outside.mkdir(mode=0o755)
+    (outside / "secret.bin").write_bytes(b"secret\n")
+    sibling = Path(tmp) / "approvedbar"
+    sibling.mkdir(mode=0o755)
+    (sibling / "x.bin").write_bytes(b"x\n")
+
+    for name, description in (
+            ("../outside/secret.bin", "a traversing name"),
+            ("nested/../../outside/secret.bin", "a traversal through a child"),
+            (str(outside / "secret.bin"), "an absolute path outside the root"),
+            ("../approvedbar/x.bin", "a sibling sharing the root's name prefix"),
+            (str(sibling / "x.bin"), "an absolute sibling sharing the prefix"),
+            (".", "the approved root itself"),
+            ("", "an empty name"),
+            ("nested", "a directory as the final target"),
+            ("missing.bin", "a file that is not there"),
+            ("nodir/missing.bin", "a parent that is not there")):
+        refuses_source(lambda n=name: open_trusted_regular_file(
+            approved, n, expected_uid=UID), f"{description} is refused")
+
+# --- symlinks, at every position -------------------------------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    outside = Path(tmp) / "outside"
+    outside.mkdir(mode=0o755)
+    (outside / "secret.bin").write_bytes(b"secret\n")
+
+    (approved / "nested" / "link-outside").symlink_to(outside / "secret.bin")
+    (approved / "nested" / "link-inside").symlink_to(target)
+    (approved / "linkdir").symlink_to(outside)
+    for name, description in (
+            ("nested/link-outside", "a final component symlinked out of the root"),
+            ("nested/link-inside", "a final component symlinked inside the root"),
+            ("linkdir/secret.bin", "a symlinked parent directory")):
+        refuses_source(lambda n=name: open_trusted_regular_file(
+            approved, n, expected_uid=UID), f"{description} is refused")
+
+with TemporaryDirectory() as tmp:
+    outside = Path(tmp) / "elsewhere"
+    outside.mkdir(mode=0o755)
+    (outside / "artifact.bin").write_bytes(b"x\n")
+    linked_root = Path(tmp) / "approved"
+    linked_root.symlink_to(outside)
+    refuses_source(lambda: open_trusted_regular_file(
+        linked_root, "artifact.bin", expected_uid=UID),
+        "a symlinked approved root is refused")
+
+# --- ownership --------------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    for uid, description in ((UID + 1, "a file owned by another uid"),
+                             (0, "a file expected to be root-owned")):
+        refuses_source(lambda u=uid: open_trusted_regular_file(
+            approved, "nested/artifact.bin", expected_uid=u),
+            f"{description} is refused")
+    refuses_source(lambda: open_trusted_regular_file(
+        approved, "nested/artifact.bin", expected_uid=None),
+        "an absent expected uid is refused rather than defaulted")
+    refuses_source(lambda: open_trusted_regular_file(
+        approved, "nested/artifact.bin", expected_uid="1000"),
+        "a non-integer expected uid is refused")
+    refuses_source(lambda: open_trusted_regular_file(
+        approved, "nested/artifact.bin", expected_uid=True),
+        "a boolean masquerading as a uid is refused")
+
+# --- writability, at every position ----------------------------------------
+for position, mode, description in (
+        ("root", 0o775, "a group-writable approved root"),
+        ("root", 0o757, "a world-writable approved root"),
+        ("parent", 0o775, "a group-writable parent directory"),
+        ("parent", 0o757, "a world-writable parent directory"),
+        ("file", 0o664, "a group-writable file"),
+        ("file", 0o646, "a world-writable file")):
+    with TemporaryDirectory() as tmp:
+        approved, target = _trusted_tree(tmp)
+        if position == "root":
+            approved.chmod(mode)
+        elif position == "parent":
+            (approved / "nested").chmod(mode)
+        else:
+            target.chmod(mode)
+        refuses_source(lambda: open_trusted_regular_file(
+            approved, "nested/artifact.bin", expected_uid=UID),
+            f"{description} is refused")
+
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    approved.chmod(0o755)
+    (approved / "nested").chmod(0o755)
+    target.chmod(0o644)
+    handle = open_trusted_regular_file(approved, "nested/artifact.bin", expected_uid=UID)
+    os.close(handle)
+    ok("group and other may read and traverse; they may not write")
+
+# --- file type --------------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    fifo = approved / "nested" / "pipe"
+    os.mkfifo(fifo, 0o644)
+    refuses_source(lambda: open_trusted_regular_file(
+        approved, "nested/pipe", expected_uid=UID), "a FIFO is refused")
+    check(fifo.exists(), "the refused FIFO is left alone")
+
+    import socket as _socket  # noqa: E402  (test harness only, never production)
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        sock.bind(str(approved / "nested" / "sock"))
+        (approved / "nested" / "sock").chmod(0o644)
+        refuses_source(lambda: open_trusted_regular_file(
+            approved, "nested/sock", expected_uid=UID), "a unix socket is refused")
+    finally:
+        sock.close()
+
+    for device, description in (("/dev/null", "a character device"),):
+        if Path(device).exists():
+            refuses_source(lambda d=device: open_trusted_regular_file(
+                Path("/dev"), Path(d).name, expected_uid=0),
+                f"{description} is refused")
+
+# --- hard links -------------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    alias = approved / "nested" / "alias.bin"
+    os.link(target, alias)
+    check(target.lstat().st_nlink == 2, "the fixture really created a second link")
+    refuses_source(lambda: open_trusted_regular_file(
+        approved, "nested/artifact.bin", expected_uid=UID, require_single_link=True),
+        "a file with a second hard link is refused when a single link is required")
+    handle = open_trusted_regular_file(approved, "nested/artifact.bin", expected_uid=UID)
+    os.close(handle)
+    ok("the link-count rule is the caller's to require, not a silent default")
+
+# --- the race the primitive exists to close --------------------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp, content=b"ORIGINAL\n")
+    handle = open_trusted_regular_file(approved, "nested/artifact.bin", expected_uid=UID)
+    try:
+        # The pathname now names entirely different bytes. Anything reading by
+        # path would see them; a descriptor cannot.
+        replacement = approved / "nested" / "replacement.bin"
+        replacement.write_bytes(b"SUBSTITUTED\n")
+        replacement.chmod(0o644)
+        os.replace(replacement, target)
+        check(target.read_bytes() == b"SUBSTITUTED\n",
+              "the fixture really replaced the pathname's contents")
+        check(_read_all(handle) == b"ORIGINAL\n",
+              "the descriptor still yields the bytes that were validated")
+        os.lseek(handle, 0, os.SEEK_SET)
+        check(_read_all(handle) == b"ORIGINAL\n",
+              "re-reading the descriptor yields the same validated bytes")
+    finally:
+        os.close(handle)
+
+# --- the primitive creates, changes, and removes nothing -------------------
+with TemporaryDirectory() as tmp:
+    approved, target = _trusted_tree(tmp)
+    (approved / "nested" / "link-outside").symlink_to(Path(tmp) / "nowhere")
+
+    def source_inventory(base):
+        entries = {}
+        for path in sorted(Path(base).rglob("*")):
+            info = path.lstat()
+            entries[str(path.relative_to(base))] = (
+                stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode),
+                info.st_uid, info.st_gid, info.st_ino, info.st_mtime_ns,
+                info.st_size)
+        return entries
+
+    before = source_inventory(tmp)
+    for name in ("nested/artifact.bin", "../escape", "missing.bin", "nested",
+                 "nested/link-outside", "", "."):
+        try:
+            handle = open_trusted_regular_file(approved, name, expected_uid=UID)
+            os.close(handle)
+        except TrustedSourceError:
+            pass
+    check(source_inventory(tmp) == before,
+          "opening and refusing creates, changes, and removes nothing")
+
+    absent_root = Path(tmp) / "never"
+    refuses_source(lambda: open_trusted_regular_file(
+        absent_root, "x.bin", expected_uid=UID),
+        "an absent approved root is refused")
+    check(not absent_root.exists(), "an absent approved root stays absent")
+
+# --- the primitive never writes ---------------------------------------------
+_source_module = (root / "tools" / "common" / "trusted_source.py").read_text(encoding="utf-8")
+# The mechanisms, not the English. The invariant is that this module cannot
+# write; forbidding the word would also forbid "writable", which is the
+# vocabulary the module is built out of.
+for token, description in (("O_WRONLY", "a write mode"), ("O_RDWR", "a read-write mode"),
+                           ("O_CREAT", "a creation flag"), ("O_TRUNC", "a truncation flag"),
+                           ("O_APPEND", "an append flag"),
+                           ("os.chmod", "a mode change"), ("os.chown", "an owner change"),
+                           ("os.unlink", "a deletion"), ("os.remove", "a removal"),
+                           ("os.rmdir", "a directory removal"),
+                           ("os.mkdir", "a directory creation"),
+                           ("os.makedirs", "a directory tree creation"),
+                           ("os.rename", "a rename"), ("os.replace", "a replacement"),
+                           ("os.write", "a write"), ("os.truncate", "a truncation"),
+                           (".write(", "a write call"), (".write_text(", "a text write"),
+                           (".write_bytes(", "a byte write"), ("shutil", "a copy tool")):
+    check(token not in _source_module,
+          f"the trusted-source primitive contains no {description}")
+check("O_NOFOLLOW" in _source_module,
+      "the final component is opened without following a link")
+check("fstat" in _source_module,
+      "validation is performed on the descriptor rather than the path")
 print(f"__FAILURES__={failures}")
 STOREPY
 )"
