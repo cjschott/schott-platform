@@ -192,15 +192,31 @@ modes and establish the ownership root cannot; `setgroups([987])`,
 `no_new_privs`; `execve` the worker with an explicitly constructed environment.
 
 **The installed paths are fixed, because "the worker" was previously unnamed.**
-The helper is `/usr/libexec/kyri-exec-transition` and the worker is
-`/usr/libexec/kyri-exec-worker`. Both are root-owned with root-owned ancestry,
-non-writable by `cschott` or `kyri-capability`. The worker is executed by
-absolute path with a fixed absolute interpreter line; there is no `PATH`
-search, no shell, and no repository-relative executable — the repository module
-`tools/capability/execution/worker.py` is source, and source is not an
-installed executable. The helper's argv is exactly
-`[/usr/libexec/kyri-exec-worker, CINV-nnnnnn]`; everything else the worker needs
-arrives through inherited descriptors and internally derived roots.
+
+| Constant | Value | Ownership and mode |
+|---|---|---|
+| `HELPER_PATH` | `/usr/libexec/kyri-exec-transition` | `root:root`, executable |
+| `WORKER_INTERPRETER` | `/usr/bin/python3` | distribution-owned |
+| `WORKER_SCRIPT` | `/usr/libexec/kyri-exec-worker.py` | `root:root`, mode `0444` |
+
+The worker script is **not directly executed** and carries no executable bit:
+the interpreter is named explicitly and the script is passed to it as an
+argument. That removes the shebang line from the trust chain entirely — a
+script that cannot be executed cannot be executed by the wrong interpreter, and
+a mode of `0444` means the question of who may run it never arises.
+
+The execution tuple is exactly:
+
+```
+execve("/usr/bin/python3",
+       ("/usr/bin/python3", "/usr/libexec/kyri-exec-worker.py", "CINV-nnnnnn"),
+       CLOSED_ENVIRONMENT)
+```
+
+Neither path is ever selected through `PATH`, and neither is ever loaded from
+the repository checkout — `tools/capability/execution/worker.py` is source, and
+source is not an installed executable. Everything else the worker needs arrives
+through inherited descriptors and internally derived roots.
 
 **Root MUST NOT:** run Podman; construct container argv from caller input;
 accept a caller-supplied path, image, mount, environment, or runtime/resource
@@ -860,7 +876,8 @@ on this one. The same applies to secrets (§31), devices, and GPU.
 ## 34. Host prerequisites (described, not applied)
 
 Root-owned transition helper and ancestry (`/usr/libexec/kyri-exec-transition`) ·
-**root-owned worker executable** (`/usr/libexec/kyri-exec-worker`) ·
+**root-owned worker script** (`/usr/libexec/kyri-exec-worker.py`, mode `0444`,
+executed by `/usr/bin/python3`) ·
 root-owned administrative helper ·
 two sudoers drop-ins (NOPASSWD transition with the `CINV` argument contract;
 interactive-authenticated admin with fixed verbs) · root-owned immutable

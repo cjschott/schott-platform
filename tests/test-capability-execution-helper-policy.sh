@@ -304,8 +304,8 @@ print('OK')
 "
 
 run_case "the fixed roots are absolute and compiled in" "${PRELUDE}
-for name in ('EXECUTION_ROOT', 'HANDOFF_ROOT', 'WORKER_EXECUTABLE',
-             'HELPER_PATH', 'WORKING_DIRECTORY'):
+for name in ('EXECUTION_ROOT', 'HANDOFF_ROOT', 'WORKER_INTERPRETER',
+             'WORKER_SCRIPT', 'HELPER_PATH', 'WORKING_DIRECTORY'):
     value = getattr(helper, name)
     assert isinstance(value, str) and value.startswith('/'), (name, value)
 print('OK')
@@ -490,9 +490,15 @@ print('OK')
 
 run_case "the worker executable is fixed, absolute, and never searched for" "${PRELUDE}
 policy = helper.policy_for(['prog', 'CINV-000042'])
-assert policy.worker_executable == '/usr/libexec/kyri-exec-worker', policy.worker_executable
-assert policy.worker_argv == ('/usr/libexec/kyri-exec-worker', 'CINV-000042')
-assert helper.WORKER_EXECUTABLE.startswith('/')
+assert policy.worker_interpreter == '/usr/bin/python3', policy.worker_interpreter
+assert policy.worker_script == '/usr/libexec/kyri-exec-worker.py', policy.worker_script
+assert policy.worker_argv == ('/usr/bin/python3',
+                              '/usr/libexec/kyri-exec-worker.py',
+                              'CINV-000042'), policy.worker_argv
+assert helper.WORKER_INTERPRETER.startswith('/')
+assert helper.WORKER_SCRIPT.startswith('/')
+# The script is an argument, never the executable: no -m, no shebang reliance.
+assert '-m' not in policy.worker_argv
 code = code_only()
 # No lookup of any kind: no PATH read, no search helper, no normalisation that
 # could turn a relative name into a resolved one.
@@ -547,9 +553,9 @@ for banned in ('command', 'argv_extra', 'shell', 'env', 'cwd', 'image',
                'mounts', 'uid_arg', 'user_arg', 'config_path', 'extra'):
     assert banned not in names, banned
 assert names == {'cinv', 'worker_user', 'worker_uid', 'worker_gid',
-                 'worker_executable', 'worker_argv', 'evidence_path',
-                 'handoff_path', 'environment', 'working_directory',
-                 'inherited_descriptors'}, names
+                 'worker_interpreter', 'worker_script', 'worker_argv',
+                 'evidence_path', 'handoff_path', 'environment',
+                 'working_directory', 'inherited_descriptors'}, names
 print('OK')
 "
 
@@ -611,7 +617,7 @@ assert os.getuid() != 0, 'these tests must not run as root'
 for production in ('/data/kyri/capability-handoff',
                    '/data/kyri/capability-runtime/execution',
                    '/usr/libexec/kyri-exec-transition',
-                   '/usr/libexec/kyri-exec-worker'):
+                   '/usr/libexec/kyri-exec-worker.py'):
     assert not os.path.exists(production), f'{production} exists: T10 must not provision'
 print('OK')
 "

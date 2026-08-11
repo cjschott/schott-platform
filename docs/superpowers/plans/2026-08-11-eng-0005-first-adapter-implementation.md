@@ -118,6 +118,7 @@ Every path is reconstructed from existing repository conventions
 | Path | Purpose |
 |---|---|
 | `provisioning/execution/kyri-exec-transition.py` | transition helper source |
+| `provisioning/execution/kyri-exec-worker.py` | worker script source, installed mode 0444 |
 | `provisioning/execution/kyri-exec-admin.py` | administrative helper source |
 | `provisioning/execution/sudoers.d/kyri-exec.example` | reviewed sudoers example, not installed |
 | `provisioning/execution/backing-store.json.example` | backing-store config example |

@@ -41,7 +41,10 @@ from typing import Any, Sequence
 # Installed locations, compiled in. These are the trust anchor: the helper runs
 # before any verified descriptor exists, so a constant is what anchors it.
 HELPER_PATH = "/usr/libexec/kyri-exec-transition"
-WORKER_EXECUTABLE = "/usr/libexec/kyri-exec-worker"
+WORKER_INTERPRETER = "/usr/bin/python3"
+# Not directly executed and mode 0444 when installed: naming the
+# interpreter explicitly keeps the shebang line out of the trust chain.
+WORKER_SCRIPT = "/usr/libexec/kyri-exec-worker.py"
 EXECUTION_ROOT = "/data/kyri/capability-runtime/execution"
 HANDOFF_ROOT = "/data/kyri/capability-handoff"
 WORKING_DIRECTORY = "/"
@@ -115,7 +118,8 @@ class TransitionPolicy:
     worker_user: str
     worker_uid: int
     worker_gid: int
-    worker_executable: str
+    worker_interpreter: str
+    worker_script: str
     worker_argv: tuple[str, ...]
     evidence_path: str
     handoff_path: str
@@ -243,8 +247,9 @@ def policy_for(argv: Sequence[str]) -> TransitionPolicy:
         worker_user=WORKER_USER,
         worker_uid=WORKER_UID,
         worker_gid=WORKER_GID,
-        worker_executable=WORKER_EXECUTABLE,
-        worker_argv=(WORKER_EXECUTABLE, cinv),
+        worker_interpreter=WORKER_INTERPRETER,
+        worker_script=WORKER_SCRIPT,
+        worker_argv=(WORKER_INTERPRETER, WORKER_SCRIPT, cinv),
         evidence_path=evidence_path(cinv),
         handoff_path=handoff_path(cinv),
         environment=ENVIRONMENT,
