@@ -27,6 +27,7 @@ set -Eeuo pipefail
 #   - tests/test-remote-collectors.sh      (drives a fake transport; spawns the CLI)
 #   - tests/test-trust-runtime.sh          (builds synthetic trust stores; spawns the CLI)
 #   - tests/test-fabric-runtime.sh         (builds synthetic fabric records; spawns Python)
+#   - tests/test-capability-runtime.sh     (builds temporary capability stores; spawns Python)
 #   - the three Docker Compose renders  (each spawns the compose binary)
 #
 # Quick mode still runs syntax checking, ShellCheck, both static suites, both
@@ -99,14 +100,14 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 32 checks plus the closing summary. Quick mode drops
-# nine of them. A validation tool that miscounts its own steps invites doubt
+# Counted, not guessed: 33 checks plus the closing summary. Quick mode drops
+# ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports.
 if (( QUICK == 1 )); then
   TOTAL_STEPS=24
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=34
+  TOTAL_STEPS=35
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -171,11 +172,18 @@ if (( QUICK == 0 )); then
   # builds synthetic records in memory and spawns Python, so it sits with the
   # other subprocess-driving suites rather than in the quick path.
   run "Fabric runtime" bash tests/test-fabric-runtime.sh
+
+  # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
+  # permanent backstop asserting the package still executes nothing. It builds
+  # temporary stores and spawns Python, so it sits with the other
+  # subprocess-driving suites rather than in the quick path.
+  run "Capability runtime" bash tests/test-capability-runtime.sh
 else
   skipped_note "Initial read-only collectors"
   skipped_note "Knowledge orchestrator"
   skipped_note "Operational integrity"
   skipped_note "Experience engine"
+  skipped_note "Capability runtime"
   skipped_note "Occurrence timeline"
   skipped_note "Remote collectors"
   skipped_note "Trust runtime"
@@ -330,6 +338,7 @@ if (( QUICK == 1 )); then
     - tests/test-remote-collectors.sh
     - tests/test-trust-runtime.sh
     - tests/test-fabric-runtime.sh
+    - tests/test-capability-runtime.sh
     - the three Docker Compose renders
 
   Run without --quick before pushing.

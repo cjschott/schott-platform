@@ -215,7 +215,7 @@ assert_contains "${ADR}" 'placement' "ADR-0013 reconciles the reserved placement
 # implements the Fabric and evaluates no health; every health-runtime name here
 # stays forbidden.
 for forbidden_dir in tools/health tools/monitor tools/heartbeat tools/probe \
-                     tools/telemetry tools/metrics tools/capability; do
+                     tools/telemetry tools/metrics; do
   if [[ -d "${ROOT}/${forbidden_dir}" ]]; then
     fail "architecture only; ${forbidden_dir} must not exist"
   else

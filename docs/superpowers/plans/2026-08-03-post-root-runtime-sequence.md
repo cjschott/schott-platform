@@ -181,8 +181,10 @@ commits are both present on `main`. Its first increment requires its own accepte
 specification, test-first plan, feature branch, review, and release boundary.
 
 ENG-0005 Capability Runtime is an increment of Fabric delivery, sequenced after
-ENG-0004 and before ENG-0006, under its own accepted specification. Its exact
-boundary against ENG-0004 is not yet specified.
+ENG-0004 and before ENG-0006, under its own accepted specification. **Its
+boundary against ENG-0004 is now specified**: the Fabric governs and selects;
+the Capability Runtime executes what was selected, and decides nothing about
+what may run.
 
 TrustGateway remains in code-owned-policy mode during Fabric, Capability, and
 Health runtime construction by design.
