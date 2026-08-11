@@ -201,6 +201,24 @@ jobs:
       - name: Capability health tests
         run: bash tests/test-capability-health.sh
 
+      # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
+      # carrying the purity or authority backstop for the modules that increment
+      # added. Pure or descriptor-scoped: no host state, no Podman, no network.
+      - name: Capability execution types tests
+        run: bash tests/test-capability-execution.sh
+
+      - name: Capability execution canonical JSON tests
+        run: bash tests/test-capability-execution-canonical-json.sh
+
+      - name: Capability execution payload tests
+        run: bash tests/test-capability-execution-payload.sh
+
+      - name: Capability execution implementation authority tests
+        run: bash tests/test-capability-execution-implementation-authority.sh
+
+      - name: Capability execution mutation tests
+        run: bash tests/test-capability-execution-mutation.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

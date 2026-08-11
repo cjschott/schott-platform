@@ -201,7 +201,8 @@ assert_pure_types
 # loudly rather than silently gaining whatever authority it likes.
 assert_backstop_coverage() {
   local covered=("__init__.py" "types.py" "canonical_json.py" "payload.py"
-                 "implementation_authority.py")
+                 "implementation_authority.py" "backing_store.py"
+                 "mutation.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

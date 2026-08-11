@@ -85,7 +85,13 @@ FORBIDDEN_ATTRS = {
 }
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__"}
 # The only production modules permitted to mutate the filesystem.
-WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py"}
+# mutation.py joined the set at ENG-0005 T5: it is the accepted CMUT durability
+# substrate and the first write-capable execution module. Its writes are bounded
+# far more tightly than this guard can express -- closed target identities,
+# descriptor-relative only, create-once -- and that is asserted by
+# tests/test-capability-execution-mutation.sh rather than here.
+WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py",
+                        "mutation.py"}
 # Authority planes this package may never reach, by import or by symbol.
 FORBIDDEN_PLANES = ("tools.trust", "..trust", "TrustStore", "TrustGateway",
                     "trust_adapter", "tools.health", "..health",
@@ -115,7 +121,11 @@ for path in sorted(package.rglob("*.py")):
         if token.type in (tokenize.COMMENT, tokenize.STRING):
             continue
         stripped.append(token.string)
-    code_text = " ".join(stripped)
+    # Tokens are joined with spaces, which turns `os.write` into `os . write`
+    # and silently defeated every dotted check below -- the mutation guard had
+    # never matched a single one. Attribute spellings are rejoined so those
+    # checks test what they claim to. Found at ENG-0005 T5.
+    code_text = " ".join(stripped).replace(" . ", ".")
 
     tree = ast.parse(source)
     for node in ast.walk(tree):
