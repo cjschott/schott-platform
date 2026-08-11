@@ -198,8 +198,18 @@ Regression set unless stated otherwise:
 ### T4 — CIMP/CGEN read-only authority consumer
 
 **Files:** `tools/capability/execution/implementation_authority.py`
-**Interfaces:** `current_generation(root: Path) -> Generation`,
-`resolve_implementation(cimp: str, generation: Generation) -> Admission`
+**Interfaces:** `current_generation(root_fd: int) -> Generation`,
+`resolve_implementation(root_fd: int, cimp: str, *, generation: Generation) -> Admission`
+
+> **Interface amended 2026-08-11, before implementation.** The original
+> signatures took `root: Path`. A pathname is re-resolved on every use, so the
+> authority root would not be anchored and the "root replacement cannot
+> redirect an anchored validation" property would be unprovable; it would also
+> make this the first module in the package to hold path authority, in the
+> component that decides what may execute. The reviewer's T4 ruling requires an
+> already-open trusted directory descriptor, so both signatures now take
+> `root_fd`, matching the T3 precedent `validate_payload(descriptor: int, …)`.
+> Recorded here rather than changed silently in the implementation commit.
 
 - Failing tests: grammar `^CIMP-[0-9]{6}$` and `^CGEN-[0-9]{12}$`; genesis is
   the only null-predecessor generation; authority-set digest must match the
