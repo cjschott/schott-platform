@@ -91,7 +91,7 @@ FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__"}
 # descriptor-relative only, create-once -- and that is asserted by
 # tests/test-capability-execution-mutation.sh rather than here.
 WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py",
-                        "mutation.py", "state.py"}
+                        "mutation.py", "state.py", "handoff.py"}
 # Authority planes this package may never reach, by import or by symbol.
 FORBIDDEN_PLANES = ("tools.trust", "..trust", "TrustStore", "TrustGateway",
                     "trust_adapter", "tools.health", "..health",

@@ -202,7 +202,8 @@ assert_pure_types
 assert_backstop_coverage() {
   local covered=("__init__.py" "types.py" "canonical_json.py" "payload.py"
                  "implementation_authority.py" "backing_store.py"
-                 "mutation.py" "state.py" "capacity.py")
+                 "mutation.py" "state.py" "capacity.py"
+                 "package_contract.py" "handoff.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do
