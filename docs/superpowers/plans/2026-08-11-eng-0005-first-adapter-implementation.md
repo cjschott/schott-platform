@@ -226,9 +226,47 @@ Regression set unless stated otherwise:
 ### T5 — Backing store + CMUT interface
 
 **Files:** `tools/capability/execution/{backing_store,mutation}.py`
-**Interfaces:** `verify_backing_store(config: Path, root: Path) -> RootDescriptor`,
-`Mutation.begin(target, schema_type, expected_sha256) -> CMUT`,
-`Mutation.commit(cmut) -> None`, `Mutation.recover(root) -> list[UnknownOutcome]`
+**Interfaces:**
+`verify_backing_store(config_fd: int, root_fd: int, *, observed: ObservedFilesystem) -> RootDescriptor`,
+`Mutation.begin(target: MutationTarget, *, schema_type: str, expected_sha256: str) -> str`,
+`Mutation.install(cmut: str, body: bytes) -> None`,
+`Mutation.commit(cmut: str) -> None`,
+`Mutation.recover(root_fd: int) -> tuple[UnknownOutcome, ...]`
+
+> **Interface amended 2026-08-11, before implementation.** Authority-bearing
+> writes and their recovery must stay anchored to trusted filesystem objects,
+> so nothing re-resolves a mutable pathname after trust is established.
+>
+> - **Was** `verify_backing_store(config: Path, root: Path)`; **now** both are
+>   already-open descriptors. A third input, `observed`, is required by a
+>   concrete runtime limitation: **Python exposes no way to obtain a filesystem
+>   UUID from a directory descriptor.** `os.fstat` yields `st_dev` and
+>   `os.statvfs` yields no UUID, so UUID and mount facts must be observed by
+>   the caller — which already holds that authority — and passed as an
+>   immutable value. T5 then binds the *descriptor's* `st_dev` itself, so the
+>   mutation transaction is anchored to the descriptor rather than to the
+>   caller's claim.
+> - **Was** `Mutation.recover(root)`; **now** `recover(root_fd)`. Recovery
+>   derives only canonical child names from validated CMUT identities.
+> - **`target` was unannotated.** It is now the closed `MutationTarget` value:
+>   a kind from a fixed enum plus a name matching that kind's canonical
+>   grammar. No caller-supplied string, `Path`, absolute path, traversal, or
+>   unvalidated component can reach the filesystem. The plan left this open
+>   rather than modelling it as free-form, so it is closed here rather than
+>   reported as a conflict.
+> - **`install` was missing.** The plan named `begin` and `commit` but no
+>   installation step, while requiring at-most-one installation attempt. The
+>   step is now explicit so "at most once" is enforceable at a named boundary.
+>
+> **Descriptor ownership and lifetime.** Callers retain ownership of every
+> descriptor they pass; T5 never closes a caller's descriptor. `RootDescriptor`
+> holds a **duplicate** of `root_fd`, made with `os.dup`, so the verified root
+> survives independently of the caller's lifetime and cannot be invalidated by
+> the caller closing theirs. The duplicate is released by `RootDescriptor.close()`.
+> Any pathname in returned metadata is diagnostic only and is never used to
+> reopen, locate, recover, install, or fsync.
+>
+> No specification semantics change; only the interfaces do.
 
 - Failing tests: UUID and type mismatch → `quarantine_backing_store_mismatch`;
   config integrity mismatch → `…_config_integrity_failure`; device name changes
