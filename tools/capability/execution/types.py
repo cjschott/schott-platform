@@ -131,14 +131,32 @@ class LifecycleState(enum.Enum):
 
 
 @dataclasses.dataclass(frozen=True)
+class Mount:
+    """One mount in the governed topology.
+
+    Compared by destination rather than by the order a runtime happens to
+    report, because mount order carries no meaning while destination does.
+    """
+
+    destination: str
+    read_only: bool
+    source_kind: str
+
+
+@dataclasses.dataclass(frozen=True)
 class ExecutionProfile:
     """The §12 runtime profile, owned by the adapter.
 
     Every field is adapter-owned. No capability, package, or caller value
     reaches this type — that is enforced where the profile is built, and the
     type exists so the built result cannot be edited afterwards.
+
+    No field carries a default. A security control that could be omitted at
+    construction is one that can be forgotten, and a forgotten control looks
+    exactly like a control nobody needed.
     """
 
+    cinv: str
     image_digest: str
     network: str
     memory_bytes: int
@@ -152,6 +170,24 @@ class ExecutionProfile:
     cap_drop_all: bool
     tmpfs_bytes: int
     profile_schema_version: int
+    cimp: str
+    adapter_identity: str
+    payload_schema_version: int
+    execution_uid: int
+    execution_gid: int
+    hostname: str
+    cpu_quota_us: int
+    cpu_period_us: int
+    tmpfs_mode: int
+    tmpfs_options: tuple[str, ...]
+    dropped_capabilities: tuple[str, ...]
+    mounts: tuple[Mount, ...]
+    devices: tuple[str, ...]
+    sockets: tuple[str, ...]
+    privileged: bool
+    host_network: bool
+    host_pid: bool
+    gpu: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -164,9 +200,11 @@ class ExecutionFingerprint:
     something did.
     """
 
+    cinv: str
     profile_digest: str
     image_digest: str
     cimp: str
+    adapter_identity: str
     profile_schema_version: int
     execution_uid: int
     execution_gid: int

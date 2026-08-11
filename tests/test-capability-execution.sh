@@ -203,7 +203,7 @@ assert_backstop_coverage() {
   local covered=("__init__.py" "types.py" "canonical_json.py" "payload.py"
                  "implementation_authority.py" "backing_store.py"
                  "mutation.py" "state.py" "capacity.py"
-                 "package_contract.py" "handoff.py")
+                 "package_contract.py" "handoff.py" "profile.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do
@@ -228,6 +228,30 @@ assert_backstop_coverage
 # ===========================================================================
 # Behaviour
 # ===========================================================================
+
+PROFILE_HELPER="
+import dataclasses
+from tools.capability.execution.types import Mount
+PROFILE_FIELDS = dict(
+    cinv='CINV-000042', image_digest='sha256:' + 'a' * 64, network='none',
+    memory_bytes=268435456, memory_swap_bytes=268435456, cpus='0.5',
+    pids_limit=64, timeout_seconds=30, grace_seconds=2,
+    read_only_rootfs=True, no_new_privileges=True, cap_drop_all=True,
+    tmpfs_bytes=16777216, profile_schema_version=1, cimp='CIMP-000001',
+    adapter_identity='python-podman-v1', payload_schema_version=1,
+    execution_uid=1000, execution_gid=1000, hostname='trackb',
+    cpu_quota_us=50000, cpu_period_us=100000, tmpfs_mode=0o1777,
+    tmpfs_options=('noexec', 'nosuid', 'nodev'),
+    dropped_capabilities=('ALL',),
+    mounts=(Mount(destination='/kyri/package', read_only=True, source_kind='bind'),),
+    devices=(), sockets=(), privileged=False, host_network=False,
+    host_pid=False, gpu=False)
+FINGERPRINT_FIELDS = dict(
+    cinv='CINV-000042', profile_digest='b' * 64,
+    image_digest='sha256:' + 'a' * 64, cimp='CIMP-000001',
+    adapter_identity='python-podman-v1', profile_schema_version=1,
+    execution_uid=999, execution_gid=987)
+"
 
 run_python_case() {
   local label="$1" script="$2" actual
@@ -326,14 +350,9 @@ assert [s.value for s in LifecycleState] == expected, [s.value for s in Lifecycl
 print('OK')
 "
 
-run_python_case "ExecutionProfile is frozen" "
+run_python_case "ExecutionProfile is frozen" "${PROFILE_HELPER}
 from tools.capability.execution.types import ExecutionProfile
-p = ExecutionProfile(image_digest='sha256:' + 'a' * 64, network='none',
-                     memory_bytes=268435456, memory_swap_bytes=268435456,
-                     cpus='0.5', pids_limit=64, timeout_seconds=30,
-                     grace_seconds=2, read_only_rootfs=True,
-                     no_new_privileges=True, cap_drop_all=True,
-                     tmpfs_bytes=16777216, profile_schema_version=1)
+p = ExecutionProfile(**PROFILE_FIELDS)
 try:
     p.pids_limit = 4096
 except Exception as error:
@@ -343,28 +362,20 @@ else:
     raise AssertionError('ExecutionProfile was mutated')
 "
 
-run_python_case "ExecutionProfile rejects an unknown field" "
+run_python_case "ExecutionProfile rejects an unknown field" "${PROFILE_HELPER}
 from tools.capability.execution.types import ExecutionProfile
 try:
-    ExecutionProfile(image_digest='sha256:' + 'a' * 64, network='none',
-                     memory_bytes=268435456, memory_swap_bytes=268435456,
-                     cpus='0.5', pids_limit=64, timeout_seconds=30,
-                     grace_seconds=2, read_only_rootfs=True,
-                     no_new_privileges=True, cap_drop_all=True,
-                     tmpfs_bytes=16777216, profile_schema_version=1,
-                     privileged=True)
+    ExecutionProfile(**PROFILE_FIELDS, unknown_control=True)
 except TypeError as error:
-    assert 'privileged' in str(error), str(error)
+    assert 'unknown_control' in str(error), str(error)
     print('OK')
 else:
     raise AssertionError('an unknown profile field was accepted')
 "
 
-run_python_case "ExecutionFingerprint is frozen and compares by value" "
+run_python_case "ExecutionFingerprint is frozen and compares by value" "${PROFILE_HELPER}
 from tools.capability.execution.types import ExecutionFingerprint
-kwargs = dict(profile_digest='b' * 64, image_digest='sha256:' + 'a' * 64,
-              cimp='CIMP-000001', profile_schema_version=1,
-              execution_uid=999, execution_gid=987)
+kwargs = dict(FINGERPRINT_FIELDS)
 a = ExecutionFingerprint(**kwargs)
 b = ExecutionFingerprint(**kwargs)
 assert a == b and hash(a) == hash(b), 'value equality failed'
@@ -390,15 +401,10 @@ else:
     raise AssertionError('SlotReservation was mutated')
 "
 
-run_python_case "deterministic equality: identical values are equal across construction" "
+run_python_case "deterministic equality: identical values are equal across construction" "${PROFILE_HELPER}
 from tools.capability.execution.types import ExecutionProfile
 def make():
-    return ExecutionProfile(image_digest='sha256:' + 'a' * 64, network='none',
-                            memory_bytes=268435456, memory_swap_bytes=268435456,
-                            cpus='0.5', pids_limit=64, timeout_seconds=30,
-                            grace_seconds=2, read_only_rootfs=True,
-                            no_new_privileges=True, cap_drop_all=True,
-                            tmpfs_bytes=16777216, profile_schema_version=1)
+    return ExecutionProfile(**PROFILE_FIELDS)
 assert make() == make()
 assert hash(make()) == hash(make())
 print('OK')

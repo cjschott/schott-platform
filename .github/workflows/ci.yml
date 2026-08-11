@@ -230,6 +230,9 @@ jobs:
       - name: Capability execution handoff tests
         run: bash tests/test-capability-execution-handoff.sh
 
+      - name: Capability execution profile tests
+        run: bash tests/test-capability-execution-profile.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

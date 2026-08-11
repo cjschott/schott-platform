@@ -100,15 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 41 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 42 checks plus the closing summary. Quick mode drops
 # ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports. The five ENG-0005 execution suites are
 # always-on, so both totals rose by five.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=32
+  TOTAL_STEPS=33
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=43
+  TOTAL_STEPS=44
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -221,6 +221,7 @@ run "Capability execution capacity" bash tests/test-capability-execution-capacit
 run "Capability execution capacity race" \
   bash tests/test-capability-execution-capacity-race.sh
 run "Capability execution handoff" bash tests/test-capability-execution-handoff.sh
+run "Capability execution profile" bash tests/test-capability-execution-profile.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
