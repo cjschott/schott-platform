@@ -236,6 +236,11 @@ jobs:
       - name: Capability execution protocol tests
         run: bash tests/test-capability-execution-protocol.sh
 
+      # Policy logic only, run as the ordinary CI user. Installs no helper,
+      # touches no sudoers file, and requires no privilege.
+      - name: Capability execution helper policy tests
+        run: bash tests/test-capability-execution-helper-policy.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
