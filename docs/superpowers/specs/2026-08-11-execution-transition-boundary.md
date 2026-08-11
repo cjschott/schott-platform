@@ -1,11 +1,14 @@
 # Execution Transition Boundary Design (ENG-0005)
 
-**Status:** Proposed — not accepted
+**Status:** Accepted — `TRANSITION-A` is the accepted transition architecture.
+Rulings R1–R6 are resolved in §12 and are normative.
 
-> **Architecture discovery only. This document authorises no host change and no
-> implementation.** No helper exists, no sudoers entry exists, no unit file
-> exists, no handoff directory exists, and no adapter is implemented. Every
-> host fact below was obtained by read-only inspection on `schai`.
+> **Accepted architecture, not authorised implementation. This document
+> authorises no host change and no code.** No helper exists, no sudoers entry
+> exists, no unit file exists, no handoff directory exists, and no adapter is
+> implemented. Acceptance of the architecture is not authorisation to build it;
+> that remains a separate increment. Every host fact below was obtained by
+> read-only inspection on `schai`.
 
 Resolves one question left open by
 [Track B](../plans/2026-08-10-rootless-execution-prerequisite.md#22-track-b-provisioning-outcome-2026-08-11):
@@ -89,25 +92,27 @@ Track-B prerequisite design, and the Track-B enforcement findings.
 | 35 | Every privileged transition is auditable to a caller and a `CINV` | new |
 | 36 | The grant is removable by deleting one file, with no residue | new |
 
-### Requirement conflict, reported before any mechanism is chosen
+### Requirement conflict, resolved by ruling R1
 
 **Design §20 states: "no daemon, no worker service, no queue consumer, no
 systemd unit, and nothing that keeps provider state alive between
 invocations."** Read literally this forecloses TRANS-B and TRANS-C before
 their merits are considered.
 
-The narrow reading is that §20 governs the *Capability Runtime's own form*, and
-a root-owned host component is not the runtime. **The narrow reading does not
-rescue B or C**, because §20's stated rationale — added credential lifetime,
-cancellation surface, and crash-recovery surface — applies with more force to a
-component running as root than to one running as the coordinator. Prerequisite
-§13 independently rejected the socket, the user service, and the system service
-on the same grounds.
+**Ruling R1 resolves the scope.** §20's prohibition on a daemon, a worker
+service, a persistent systemd execution service, and a Podman API service is
+**normative for the execution architecture**, not merely for the runtime
+plane. It does **not** prohibit a one-shot root-owned privilege-transition
+executable. TRANS-B and the persistent, service-oriented form of TRANS-C are
+therefore **rejected under §20**; **TRANS-A is compatible with §20**.
 
-This design therefore treats §20 as disfavouring B and C rather than as
-formally deciding them, evaluates all three, and reaches the same conclusion by
-independent argument. **A reviewer ruling is requested** on whether §20 binds
-host components (ruling R1, §12).
+The comparison in §§4–6 is retained because it reaches the same conclusion by
+independent argument — §20's stated rationale of credential lifetime,
+cancellation surface, and crash-recovery surface applies with more force to a
+component running as root, and prerequisite §13 rejected the socket, the user
+service, and the system service on the same grounds. The evidence is kept so a
+future reviewer can see why the rejections hold on their merits and not only by
+citation.
 
 ## 3. TRANS-A — narrow root-owned helper via scoped sudo
 
@@ -128,7 +133,7 @@ Root does the minimum that only root can do, then leaves:
 
 | Phase | Privilege | Responsibility |
 |---|---|---|
-| 1 | root | authenticate caller from `SUDO_UID`, cross-checked against the kernel-reported credentials |
+| 1 | root | establish that it was invoked through the expected authorised transition context, and that the caller is `cschott` — or **refuse** |
 | 2 | root | validate the argument against `^CINV-[0-9]{6}$` — total, no path resolution |
 | 3 | root | read the prepared record; confirm `execution-prepared`, not refused, not conflicting, not already attempted |
 | 4 | root | chown the pre-created handoff to the execution identity, read-only |
@@ -139,6 +144,26 @@ Root does the minimum that only root can do, then leaves:
 opens a caller-supplied path, never touches container output. Phases 1–5 are
 the entire root-owned attack surface, and none of them parses anything larger
 than eleven fixed characters.
+
+**Ruling R3 makes sudo the authenticated caller and authorisation boundary.**
+No additional broker socket is required merely to obtain `SO_PEERCRED`; the
+`SO_PEERCRED` advantage recorded in §4 is not worth a resident root process.
+The single permitted caller is `cschott`.
+
+Phase 1 is a **refusal gate, not a lookup**. The helper MUST independently
+establish that it is executing in the expected authorised transition context —
+at minimum that it holds root privilege at all, since a helper invoked directly
+by an unprivileged caller has none — and MUST NOT accept caller identity from
+argv, from any environment the caller controls, from the payload, or from the
+content of the supplied `CINV`. **If the expected invoking identity cannot be
+established, the helper refuses.** Failing closed here costs one refused
+invocation; failing open would make every later control decorative.
+
+Root MUST NOT run Podman, construct arbitrary container argv from caller input,
+accept a caller-supplied path, image, mount, environment, or runtime/resource
+flag, expose a shell, expose a generic user-switch operation, implement
+selection, call Trust or Health, mutate Fabric, or become a general Capability
+Runtime API.
 
 ### 3.2 sudoers analysis
 
@@ -153,58 +178,82 @@ implementation increment, but its required properties are normative:
   a regular expression"). The argument specification is therefore
   `^CINV-[0-9]{6}$` — the same grammar as the runtime identifier, **enforced by
   the sudo policy layer before the helper is executed at all**;
-- **`NOPASSWD`**, because the coordinator is non-interactive — this is the one
-  genuinely uncomfortable property, and it is bounded by every constraint above;
-- **`env_reset` in force** with **no `env_keep` addition**. `env_reset` yields a
-  minimal environment of `TERM`, `PATH`, `HOME`, `MAIL`, `SHELL`, `LOGNAME`,
-  `USER`, and `SUDO_*` (sudoers(5)). The helper MUST NOT trust any of them and
-  MUST construct the worker environment explicitly, as design §10.1 already
-  requires of the coordinator;
-- **no `setenv`**, no `!authenticate` beyond `NOPASSWD`, and no shell.
+- **`NOPASSWD`**, because the coordinator is non-interactive. **Ruling R4
+  accepts a narrowly scoped `NOPASSWD` rule for the final reviewed transition
+  helper only.** The accepted authority is exactly: *`cschott` may execute
+  exactly the Kyri transition helper with exactly one valid `CINV` identity.*
+  It is **not** general passwordless root or switch-user authority;
+- **`env_reset` in force** with **no `env_keep` addition** and **no `SETENV`**.
+  `env_reset` yields a minimal environment of `TERM`, `PATH`, `HOME`, `MAIL`,
+  `SHELL`, `LOGNAME`, `USER`, and `SUDO_*` (sudoers(5)). The helper MUST NOT
+  trust any of them and MUST construct the worker environment explicitly, as
+  design §10.1 already requires of the coordinator;
+- **no `!authenticate` beyond `NOPASSWD`, and no shell.**
 
-**Argument validation is not delegated to sudoers.** The regex is defence in
-depth; the helper re-validates independently. A policy layer that is the *only*
-validator is one syntax error away from being no validator.
+**Ruling R4 explicitly forbids**, and no future rule may introduce: `NOPASSWD`
+on `podman`, `runuser`, `su`, `sh`/`bash`, or `systemd-run`; an arbitrary
+`RunAs`; arbitrary helper subcommands; arbitrary helper paths; arbitrary
+additional argv; or `SETENV`. The rule constrains **one absolute helper path
+and one exact `CINV` argument contract**.
+
+**Argument validation is not delegated to sudoers.** Ruling R4 requires the
+helper to **independently revalidate `^CINV-[0-9]{6}$`** and to not rely solely
+on sudoers argument matching. The regex in the policy is defence in depth; a
+policy layer that is the *only* validator is one syntax error away from being
+no validator.
 
 ### 3.3 Executable integrity
 
-Three layers, and the first two are the ones that matter:
+**Ruling R5 requires both controls, and ranks them.**
 
-1. **Ownership.** The helper and **every ancestor directory** MUST be
-   `root:root` and non-writable by `cschott`. `/usr/libexec` on this host is
-   already `root:root`. sudoers(5) warns explicitly: *"if the user has write
-   access to the command itself"* the grant is void — a digest cannot repair a
-   writable binary.
-2. **Digest pinning.** sudoers supports `sha224/sha256/sha384/sha512`
-   `Digest_Spec` on a command; *"the command will only match successfully if it
-   can be verified using one of the SHA-2 digests in the list"* (sudo ≥ 1.8.7;
-   host has 1.9.15p5). This is **recommended in addition to** root ownership,
-   because it converts a silent binary replacement into a failed match.
-3. **Execution from the verified descriptor.** sudo's `fdexec` default is
-   `digest_only`, which *"avoids a time of check versus time of use race
-   condition"* by executing the descriptor it hashed. The classic
-   hash-then-swap race is therefore closed by the mechanism, not by our code.
+**Primary control — immutable root-owned ancestry.** The helper and **every
+security-sensitive writable ancestor** MUST be `root:root` and non-writable by
+`cschott`, by `kyri-capability`, and by any unprivileged user or group.
+`/usr/libexec` on this host is already `root:root`. sudoers(5) warns
+explicitly: *"if the user has write access to the command itself"* the grant is
+void — a digest cannot repair a writable binary.
 
-**Digest pinning has an operational cost that must be accepted deliberately:**
-every helper upgrade requires a coordinated sudoers update, and a mismatch
-fails closed — the transition stops working. That is the correct failure
-direction, but it is a real operational burden and should not be adopted
-absent-mindedly.
+**Secondary control — SHA-256 digest pinning, defence in depth.** sudoers
+supports `sha224/sha256/sha384/sha512` `Digest_Spec` on a command; *"the
+command will only match successfully if it can be verified using one of the
+SHA-2 digests in the list"* (sudo ≥ 1.8.7; host has 1.9.15p5). R5 requires it
+**if supported by the deployed sudo version and verified during
+implementation**, and **MUST NOT** treat it as a substitute for immutable
+root-owned pathname ancestry.
+
+**Supporting mechanism.** sudo's `fdexec` default is `digest_only`, which
+*"avoids a time of check versus time of use race condition"* by executing the
+descriptor it hashed. The classic hash-then-swap race is therefore closed by
+the mechanism, not by our code.
+
+**A helper upgrade that requires a digest update is an intentional review
+event**, per R5. The transition fails closed on mismatch. That is the correct
+failure direction and the coordination cost is accepted deliberately.
 
 ### 3.4 Environment model
 
-The helper treats its entire inherited environment as hostile. It reads
-`SUDO_UID` only as a cross-check against kernel-reported credentials, never as
-the sole authentication. It clears the environment and constructs the worker's
-explicitly — the same `env -i` discipline Track B proved, which produced a
-four-variable container environment with a planted secret provably absent.
+The helper treats its entire inherited environment as hostile. It clears the
+environment and constructs the worker's explicitly — the same `env -i`
+discipline Track B proved, which produced a four-variable container environment
+with a planted secret provably absent.
 
-`LD_PRELOAD` and `LD_LIBRARY_PATH` are removed from any set-user-ID process by
-the dynamic loader, and sudo's `env_reset` removes them again. **`PATH` is the
-one to watch**: `secure_path` *"is not set by default"* per sudoers(5), and
-`/etc/sudoers` is not readable by `cschott`, so **whether it is set on this
-host is unverified** (ruling R2, §12). The helper MUST NOT depend on the
-answer: it MUST use absolute paths for every executable it invokes.
+**Ruling R2 is normative and settles the `PATH` question by removing the
+dependency rather than by measuring it.** `secure_path` *"is not set by
+default"* per sudoers(5) and `/etc/sudoers` is not readable by `cschott`, so
+its state on this host is unknown — and under R2 that no longer matters. **The
+transition boundary MUST NOT depend on host `secure_path`.** Every
+security-sensitive executable and configuration reference MUST be named by
+**absolute path**, and `PATH` resolution MUST NOT influence execution.
+
+The default reset-environment discipline is preserved, and **no
+caller-controlled environment is authoritative**. R2 forbids preserving `PATH`,
+`LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONPATH`, any executable or runtime
+override variable, any Podman configuration override variable, and any
+arbitrary caller environment. `LD_PRELOAD` and `LD_LIBRARY_PATH` are also
+stripped from set-user-ID processes by the dynamic loader and again by
+`env_reset`; R2 makes that redundancy explicit policy rather than a fortunate
+default. The helper and worker each construct any required minimal environment
+themselves.
 
 ## 4. TRANS-B — root-owned broker
 
@@ -233,10 +282,9 @@ executable with one argument, and adding a second operation means adding a
 second sudoers entry that a reviewer must approve.
 
 TRANS-B trades a better authentication primitive for a permanently larger root
-attack surface. **Rejected**, with its one genuine advantage carried into R3
-(§12): a helper could obtain the same unforgeable credentials by having the
-coordinator connect to a socketpair, at the cost of complexity that
-`SUDO_UID` + cross-check may not justify.
+attack surface. **Rejected** — by ruling R1 under design §20, and on its merits
+here. Ruling R3 disposes of its one genuine advantage: sudo is the authenticated
+boundary, and no broker socket is warranted merely to obtain `SO_PEERCRED`.
 
 ## 5. TRANS-C — systemd-mediated transition
 
@@ -270,7 +318,15 @@ the caller cannot reach it. But:
 
 **Rejected.** The fixed variant is defensible in principle and still requires
 sudo or polkit underneath it, so it adds a systemd dependency and a second
-authorisation plane without removing anything.
+authorisation plane without removing anything. Under ruling R1 the persistent,
+service-oriented form is rejected outright, and general or transient
+`systemd-run` authority is rejected because it would grant the coordinator
+property-injection authority.
+
+**A future systemd wrapper around the exact accepted helper may be reconsidered
+only if implementation evidence shows sudo cannot satisfy the accepted narrow
+contract.** It is not the selected architecture, and reconsideration would be a
+new ruling rather than an implementation detail.
 
 ## 6. Rejected baselines
 
@@ -327,13 +383,25 @@ is correct.
 verifier would run as `kyri-capability`, the identity being authorised. The
 execution identity cannot be the authority on whether it may execute.
 
-**Recommended: Model 1, minimised.** Root reads exactly one record, by an
-identifier it has already validated totally, from a path it constructs itself
-from a compiled-in root and the validated `CINV` — **no caller-supplied path
-component ever reaches an `open`**. It checks a small number of fields and
-forms no opinion about anything else. Root gains read access to one directory
-of the evidence store, which is a real cost, and it is smaller than any
-alternative that does not invent a trust plane.
+**Accepted: Model 1, minimised.** Root reads the **minimum immutable Capability
+Runtime evidence** required by the adapter contract, by an identifier it has
+already validated totally, from a path it **constructs itself** from a
+compiled-in root and the validated `CINV` — **no caller-supplied path component
+is authorised, and none ever reaches an `open`**. It checks a small number of
+fields and forms no opinion about anything else. Root gains read access to one
+directory of the evidence store, which is a real cost, and it is smaller than
+any alternative that does not invent a trust plane. **No signed
+execution-ticket trust plane is to be introduced.**
+
+**The input crossing the privilege boundary is `CINV-nnnnnn`, never the opaque
+caller-supplied `invocation_id`.**
+
+**Bounded schema, with a stop condition.** The first-adapter specification MUST
+minimise how much `CINV` schema the root helper needs to understand. **If root
+would need to implement broad A1–A5 semantics, that is a stop condition: halt
+and request another ruling** rather than growing the privileged component to
+fit. A root helper that has to understand the store is no longer a transition
+mechanism.
 
 **Division of labour.** The unprivileged worker derives fixed Podman argv from
 the operator-owned profile, executes, monitors lifecycle, and collects output.
@@ -355,10 +423,12 @@ and unreachable. Per invocation:
 parent so the execution identity can traverse to a named child without
 enumerating siblings; `0555` on the invocation directory; artefact `0444`.
 
-**Copy, not hard link.** A hard link aliases the canonical inode into an
-execution-reachable directory; permissions live on the inode, so canonical and
-handoff cannot diverge, and an `unlink` in a directory the execution identity
-can write would affect the canonical object's link count. The copy is made
+**Copy, not hard link — normative.** Ruling: a hard link MUST NOT be used to
+alias the canonical inode for the first adapter. A hard link aliases the
+canonical inode into an execution-reachable directory; permissions live on the
+inode, so canonical and handoff cannot diverge, and an `unlink` in a directory
+the execution identity can write would affect the canonical object's link
+count. The copy is made
 **from the descriptor already opened and verified** — no source-path reopen —
 then published atomically by `rename`, then re-verified by digest after
 publication. This is the B10 discipline applied to a second hop.
@@ -389,10 +459,13 @@ Threat-modelled rather than chosen to make Podman work:
 | Coordinator-owned, execution-writable subdirectory | Coordinator owns the root and controls the namespace; only the leaf is writable by uid 999 |
 | Shared group | Widens standing authority for both identities; a group outlives the invocation |
 
-**Recommended: coordinator-owned root, per-invocation execution-writable leaf.**
-`/data/kyri/capability-handoff/<CINV>/out/`, owned by the coordinator, chowned
-to the execution identity for the invocation, mounted read-write. The
-coordinator retains the namespace; the execution identity gets one bounded leaf.
+**Carried into the first-adapter specification: coordinator-owned root,
+per-invocation execution-writable leaf.** `/data/kyri/capability-handoff/<CINV>/out/`,
+owned by the coordinator, chowned to the execution identity for the invocation,
+mounted read-write. The coordinator retains the namespace; the execution
+identity gets one bounded leaf. Under ruling R6 this root, like every new
+execution-related root, receives an **explicit** owner, group, mode, and access
+contract in that specification rather than inheriting one.
 
 **The ownership model does not make the output safe.** Finding A stands
 regardless: collection MUST walk descriptor-relatively with `O_NOFOLLOW`,
@@ -453,13 +526,17 @@ disk**. Bounded by policy — handoff size, output count and bytes, retained
 container count, residue age, image inventory, graphroot free-space thresholds
 — not solved here.
 
-**Deferred G interaction.** The six `0755` coordinator data roots are not
-mounted into any container and are not on the transition path. But
-`/data/kyri/capability-handoff` is a **new** root under the same parent, and it
-MUST NOT inherit the `0755` habit: `0711` is specified above precisely so the
-execution identity can traverse to a named child without enumerating the rest.
-Deferred G should be resolved before the handoff root is created, so the
-correction and the creation are one decision rather than two.
+**Deferred G interaction — resolved by ruling R6.** Deferred G remains open and
+**does not block** transition or adapter specification. The six existing `0755`
+coordinator directories MUST NOT be modified during this increment.
+
+**No new adapter, handoff, or output directory may inherit permissive modes by
+convention.** Every new execution-related filesystem root MUST receive an
+explicit owner, group, mode, and access contract in the first-adapter
+specification. `/data/kyri/capability-handoff` is a new root under the same
+parent as the Deferred G directories, and `0711` is specified above precisely
+so the execution identity can traverse to a named child without enumerating the
+rest — an explicit contract, not an inherited default.
 
 ## 10. Comparison
 
@@ -488,53 +565,92 @@ the Capability Runtime evidence store; and the coordinator. TRANS-A adds
 resident root process**. TRANS-C adds **systemd plus a second authorisation
 plane**. Ranked by root-owned logic that must be correct, A < C < B.
 
-## 11. Recommendation
+## 11. Accepted architecture
 
-### **TRANSITION-A — narrow root-owned helper recommended**
+### **TRANSITION-A — narrow root-owned helper — ACCEPTED**
 
 It is the only candidate that satisfies the authority model without violating
 design §20 or prerequisite §13, and it is the smallest privileged surface of
 the three. Its properties compose rather than merely coexist: the identifier
 grammar is small enough to validate totally, the sudo policy layer enforces
-that grammar independently before the helper runs, the digest and `fdexec`
-close binary substitution and its TOCTOU, and the root process exists for
-milliseconds and leaves nothing resident.
+that grammar independently before the helper runs, the helper revalidates it
+regardless, the digest and `fdexec` close binary substitution and its TOCTOU,
+and the root process exists for milliseconds and leaves nothing resident.
 
-**Chosen despite sudo, not because of it.** The reviewer's instruction not to
-assume `sudo`/`NOPASSWD` is acceptable is correct, and the distinction that
-matters is between *sudo as a general privilege grant* — TRANS-E, rejected —
-and *sudo as the invocation mechanism for one root-owned binary taking one
-regex-constrained argument from one caller*. The second is a bounded grant
-whose entire authority is visible in one file and removable by deleting it.
+Accepted normative flow:
 
-**`NOPASSWD` remains the least comfortable property in this design.** It is
-required because the coordinator is non-interactive, and it is bounded by exact
-path, single caller, fixed runas, regex-constrained argument, digest pinning,
-and `env_reset`. It should be accepted explicitly, not by omission.
+```
+cschott
+  → sudo <exact root-owned transition helper> CINV-nnnnnn
+    → privileged authorisation and handoff preparation
+      → permanent drop to kyri-capability
+        → unprivileged execution worker
+          → rootless Podman (direct CLI, no socket, no API)
+```
 
-## 12. Reviewer rulings requested
+**Accepted despite sudo, not because of it.** The distinction that matters is
+between *sudo as a general privilege grant* — TRANS-E, rejected — and *sudo as
+the invocation mechanism for one root-owned binary taking one regex-constrained
+argument from one caller*. The second is a bounded grant whose entire authority
+is visible in one file and removable by deleting it. **The accepted rule is for
+one Kyri transition operation. It is not permission to become
+`kyri-capability` arbitrarily.**
 
-- **R1 — does design §20's "no daemon, no systemd unit" bind host components,
-  or only the Capability Runtime plane?** TRANS-A is unaffected either way;
-  the ruling matters for whether B and C were ever admissible.
-- **R2 — `secure_path` is unverified.** sudoers(5) says it is not set by
-  default; `/etc/sudoers` is unreadable by `cschott`. An operator must report
-  `sudo -V | grep -i 'secure path'` as root. The helper must not depend on the
-  answer, but the answer belongs in the record.
-- **R3 — caller authentication primitive.** `SUDO_UID` cross-checked against
-  kernel-reported credentials, or a socketpair for `SO_PEERCRED`? The latter is
-  strictly stronger and materially more complex.
-- **R4 — is `NOPASSWD` accepted** under the bounding constraints of §3.2?
-- **R5 — digest pinning accepted**, with its upgrade-coordination cost?
-- **R6 — Deferred G before handoff-root creation**, so the `0755` question is
-  settled once rather than inherited by a new root.
+**`NOPASSWD` remains the least comfortable property in this design**, and it is
+accepted deliberately under R4 rather than by omission: bounded by exact path,
+single caller, fixed runas, regex-constrained argument, independent helper
+revalidation, digest pinning, and `env_reset` with no `SETENV`.
+
+**Acceptance of the architecture is not authorisation to implement it.** No
+helper, sudoers entry, unit file, handoff directory, or adapter is authorised
+by this document.
+
+## 12. Rulings — resolved
+
+All six are resolved. None remains open.
+
+- **R1 — §20 scope. RESOLVED.** The prohibition on a daemon, worker service,
+  persistent systemd execution service, and Podman API service is **normative
+  for the execution architecture**, and does **not** prohibit a one-shot
+  root-owned privilege-transition executable. TRANS-B rejected;
+  persistent/service-oriented TRANS-C rejected; **TRANS-A compatible with §20**.
+- **R2 — PATH and environment. RESOLVED.** Do not depend on host
+  `secure_path`. Absolute paths for every security-sensitive executable and
+  configuration reference; `PATH` resolution must not influence execution;
+  default reset-environment discipline preserved; no caller-controlled
+  environment is authoritative; `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `PYTHONPATH`, executable/runtime override variables, Podman configuration
+  override variables, and arbitrary caller environment are not preserved. See
+  §3.4.
+- **R3 — caller authentication. RESOLVED.** sudo is the authenticated caller
+  and authorisation boundary; no broker socket is required merely to obtain
+  `SO_PEERCRED`. Permitted caller: `cschott`. The helper independently
+  establishes the expected authorised transition context and **refuses** if it
+  cannot; caller identity is never taken from argv, caller-controlled
+  environment, payload, or `CINV` content. See §3.1.
+- **R4 — `NOPASSWD`. RESOLVED — accepted, narrowly.** Only for the final
+  reviewed transition helper, with one absolute helper path and one exact
+  `CINV` argument contract; the helper independently revalidates
+  `^CINV-[0-9]{6}$`. Not general passwordless root or switch-user authority.
+  See §3.2 for the explicit prohibitions.
+- **R5 — executable integrity. RESOLVED — both controls.** Primary:
+  root-owned, non-writable helper and security-sensitive ancestry. Secondary:
+  SHA-256 digest pinning where supported and verified at implementation, as
+  defence in depth and never a substitute for immutable ancestry. A helper
+  upgrade requiring a digest update is an intentional review event. See §3.3.
+- **R6 — Deferred G. RESOLVED — remains open, and does not block.** The six
+  existing `0755` directories are not modified in this increment; no new
+  execution-related root inherits permissive modes by convention, and each
+  receives an explicit owner/group/mode/access contract in the first-adapter
+  specification. See §9.
 
 ## 13. What this document does not do
 
-It specifies no implementation, authorises no host change, creates no helper,
-no sudoers entry, no unit file, and no handoff directory. It does not begin the
-first-adapter specification, which remains a separate authorised step, and it
-does not begin ENG-0006. **ENG-0005 still executes nothing.**
+It accepts an architecture. It specifies no implementation, authorises no host
+change, and creates no helper, sudoers entry, unit file, or handoff directory.
+It does not begin the first-adapter specification, which remains a separate
+authorised step, and it does not begin ENG-0006. **ENG-0005 still executes
+nothing.**
 
 ## 14. Related records
 
