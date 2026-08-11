@@ -43,6 +43,8 @@ assert_file() {
 # the same reviewed increment, which is what keeps the vocabulary closed.
 SPEC_CLASSIFICATIONS=(
   execution_capacity_exhausted
+  execution_image_unavailable
+  transition_failed_before_execution
   execution_container_name_collision
   execution_container_name_collision_unstable
   execution_state_lost

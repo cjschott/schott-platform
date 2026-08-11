@@ -31,6 +31,12 @@ class Classification(enum.Enum):
 
     # Execution
     EXECUTION_CAPACITY_EXHAUSTED = "execution_capacity_exhausted"
+    # The bound digest is absent from the rootless store at a required check.
+    # It authorises no pull, no substitute digest, and no different CIMP.
+    EXECUTION_IMAGE_UNAVAILABLE = "execution_image_unavailable"
+    # Transition failed with launch_authorized provably not issued. Only usable
+    # when execution can be excluded; otherwise the reconciliation path applies.
+    TRANSITION_FAILED_BEFORE_EXECUTION = "transition_failed_before_execution"
     EXECUTION_CONTAINER_NAME_COLLISION = "execution_container_name_collision"
     EXECUTION_CONTAINER_NAME_COLLISION_UNSTABLE = (
         "execution_container_name_collision_unstable")

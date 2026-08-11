@@ -671,7 +671,7 @@ not hold the lifecycle lock.
 | Boundary | Outcome |
 |---|---|
 | before `reserved` | nothing consumed; retry is a new `CINV` |
-| after `reserved`, before `launch_authorized` | `CINV` consumed; no container |
+| after `reserved`, before `launch_authorized` | `CINV` consumed; no container. A transition or helper failure here, with `launch_authorized` provably not issued, is `transition_failed_before_execution` |
 | after `launch_authorized`, no container ID | candidate discovery, else `execution_state_lost` |
 | after create, before `container_verified` | fingerprint decides; mismatch fails closed |
 | after `start_authorized` | §17 start reconciliation |
@@ -682,13 +682,34 @@ not hold the lifecycle lock.
 
 ## 25. Classifications
 
-**Execution:** `execution_capacity_exhausted` · `execution_container_name_collision` ·
+**Execution:** `execution_capacity_exhausted` · `execution_image_unavailable` ·
+`transition_failed_before_execution` · `execution_container_name_collision` ·
 `execution_container_name_collision_unstable` · `execution_state_lost` ·
 `execution_state_lost_during_mutation_freeze` · `execution_identity_mismatch` ·
 `execution_profile_version_unsupported` · `execution_profile_verifier_unavailable` ·
 `execution_start_outcome_unknown` · `start_reconciled_running` ·
 `start_reconciled_terminal` · `execution_lifecycle_integrity_failure` ·
 `execution_cleanup_incomplete` · `execution_protocol_violation`.
+
+**`execution_image_unavailable`** — the exact immutable OCI digest bound to the
+governed `CINV`/`CIMP` execution contract is not present in the
+`kyri-capability` rootless store at a required availability check. It
+authorises **no** pull, registry access, mutable-tag lookup, substitute digest,
+newer implementation, different `CIMP`, automatic provisioning, or retry using
+different executable bytes. Pre-reservation detection consumes **no** execution
+slot. If the second required check fails after `reserved` but before
+`launch_authorized`, the `CINV` remains consumed and follows the governed
+pre-launch failure and cleanup path.
+
+**`transition_failed_before_execution`** — used **only** when the `CINV` has
+already entered execution lifecycle authority, transition or helper processing
+fails, `launch_authorized` has **not** been durably issued, and Kyri can
+therefore prove no governed container creation authority was issued. The `CINV`
+remains permanently consumed: no rollback to unused, no automatic retry, and no
+new transition attempt for the same `CINV`. Capacity may release after durable
+terminal classification and governed cleanup. **If `launch_authorized` may have
+been issued, or execution cannot be excluded, this classification MUST NOT be
+used** — enter the corresponding fail-closed reconciliation path instead.
 
 **Result/output:** `result_missing` · `result_invalid`.
 
@@ -731,8 +752,9 @@ recorded, not exactly-once executed.**
 
 The exact digest MUST already exist in the `kyri-capability` rootless store
 before execution; **there is no pull during invocation**, and absence is a
-refusal, not a fetch. The image is admitted separately through governed
-provisioning; the execution runtime cannot modify the allowlist.
+refusal, not a fetch — classified `execution_image_unavailable` (§25). The
+image is admitted separately through governed provisioning; the execution
+runtime cannot modify the allowlist.
 
 Contents: one fixed exact Python patch version, standard library only, a fixed
 non-root container UID/GID, purpose-built for Kyri — **no pip, no package
@@ -819,6 +841,9 @@ on this one. The same applies to secrets (§31), devices, and GPU.
 | backing-store mismatch | refuse mutation |
 | identifier exhaustion (`CINV`/`CIMP`/`CGEN`/`CADM`/`CMUT`) | refuse |
 | capacity exhausted | `execution_capacity_exhausted` |
+| bound image digest absent from the rootless store | `execution_image_unavailable`; never pull, never substitute |
+| transition fails with `launch_authorized` provably not issued | `transition_failed_before_execution`; `CINV` stays consumed |
+| transition fails and execution cannot be excluded | **not** `transition_failed_before_execution` — fail-closed reconciliation (§18) |
 | ambiguity anywhere | refuse; never guess |
 
 ## 34. Host prerequisites (described, not applied)
