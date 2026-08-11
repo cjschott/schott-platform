@@ -1,6 +1,7 @@
 # Rootless Execution Prerequisite Design (ENG-0005)
 
-**Status:** Proposed — not accepted
+**Status:** Proposed — not accepted. The host changes this document anticipated
+were subsequently provisioned and validated on `schai` on 2026-08-11; see §22.
 
 > **Documentation and read-only discovery only. This document authorises no
 > host change.** No package is installed, no AppArmor policy altered, no sysctl
@@ -455,13 +456,123 @@ provisioning, not discovery.
 6. **Coordinator/execution identity separation is a recommendation, not yet a
    ruling** (§5).
 
-## 22. Related records
+## 22. Track-B provisioning outcome (2026-08-11)
+
+**Track B is provisioned.** The host changes in §19 were applied and an
+enforcement battery was executed against the resulting sandbox. Sandbox
+isolation is proven; **no adapter exists**, so capability execution through the
+Kyri Capability Runtime remains unavailable.
+
+Provisioned: podman 4.9.3 with `uidmap`; the `kyri-capability` system account
+(uid 999, `nologin`); subuid/subgid `200000:65536`; lingering; graphroot at
+`/data/kyri/capability/.local/share/containers/storage`; one digest-pinned
+image. Rootful `podman.socket` and `podman.service` are **masked and inactive**
+and no Podman listener exists, satisfying §13's no-daemon, no-API requirement.
+As §20 required, no sysctl and no AppArmor policy changed —
+`apparmor_restrict_unprivileged_userns` remains `1`.
+
+Eighteen isolation domains were exercised. Seventeen passed on the first
+battery; the PID-limit probe was initially **inconclusive** because it exhausted
+the PID budget and then needed a fork to report, so its diagnostics destroyed
+themselves. A corrected probe read the cgroup leaf from the host via
+`/proc/<live-pid>/cgroup` and closed the gate.
+
+| Control | Evidence |
+|---|---|
+| Rootless identity | container uid 0 → host uid 999; `uid_map 1 200000 65536` |
+| Network | `--network none`; loopback only, no route, no DNS, no outbound |
+| Filesystem | repository, Fabric, Trust, evidence store, canonical staging, and both sockets absent from the namespace |
+| Root filesystem | read-only; `/tmp` a bounded tmpfs, `noexec` proven (rc=126) |
+| Privilege | `CapBnd` all-zero, `NoNewPrivs=1`, seccomp filter active |
+| Devices/GPU | no nvidia, no block devices, no sockets |
+| Memory | `memory.max=268435456`; OOM kill observed (137) |
+| CPU | `cpu.max 50000 100000`; measured 1.539 s CPU over 3 s wall ≈ 0.51 cores |
+| PIDs | `pids.max=64`, `pids.peak=64`, `pids.events: max 1` |
+| Environment | planted secret absent; four-variable container environment |
+
+The PID result rests on the kernel's own counters. Sampling alone peaked at 63
+and would have left the gate inconclusive; `pids.peak` is race-immune and
+recorded the boundary, and `pids.events` counts denials the kernel actually
+refused.
+
+**A repository-access contract violation was found and corrected.** The
+execution identity could read `/opt/schott-platform`, because the directory was
+mode `0755` — world traverse, not a group or ACL grant. It is now `0750
+cschott:cschott`. The two-identity model requires the execution identity to lack
+repository access in its own right, rather than relying on an adapter's promise
+never to run capability code outside a container.
+
+**Also recorded, not solved:** `/data` is XFS mounted `noquota`, so disk-quota
+enforcement is unavailable without a storage or mount architecture change. This
+is not an isolation blocker — cgroup memory, PID, and CPU controls do not bound
+disk, so §23-D applies instead.
+
+Track A remains non-executing, ENG-0005 is **not** complete, ENG-0006 has not
+begun, no subjects are seeded, and no TrustGateway cutover has occurred. The
+next step is a first-adapter specification, not an implementation.
+
+## 23. Mandatory first-adapter requirements from Track-B evidence
+
+These are normative inputs to the first adapter specification.
+
+### A — output directories are hostile
+
+A container-created symlink persisted into the shared work directory as
+`link -> /etc/shadow`. Inside the container it resolved to the image's own
+`/etc/shadow`, which is harmless. On the host it resolved to the **real**
+`/etc/shadow` (`root:shadow`, mode `0640`), so a privileged host reader
+following it — a `sudo cat`, a glob copy, an adapter harvesting outputs — would
+read it. The unprivileged container wrote a symlink that weaponises a privileged
+reader.
+
+**Container output is untrusted filesystem input to the coordinator.** The
+output collector must walk descriptor-relatively; never follow symlinks; use
+no-follow semantics throughout; accept regular files only by default; reject
+symlinks, FIFOs, sockets, and devices; enforce ownership, type, and link rules;
+bound output file count, individual size, and aggregate size; stay beneath the
+approved output root; read only through verified descriptors; and **never
+privileged-glob-copy an output directory**.
+
+`tools/common/trusted_source.py` already implements the required primitive —
+`O_NOFOLLOW` with component-by-component `openat` against a directory
+descriptor. The collector should extend it rather than introduce a second
+mechanism.
+
+### B — lifecycle state precedes ExitCode
+
+A container whose configured command did not exist reported state `Created`
+with `ExitCode = 0` — a failed launch indistinguishable from success by exit
+code alone. **ExitCode is not execution-success authority.** Classification must
+evaluate, in order: container creation, workload start, runtime/container
+lifecycle state, termination mode, **ExitCode only after the workload is proven
+to have started**, then bounded output evidence. `Created` or any never-started
+state is a launch failure regardless of the reported exit code.
+
+### C — canonical staging requires a per-invocation handoff
+
+The execution identity has no host access to canonical A4 staging, and must not
+be granted persistent access to it. The adapter must introduce a per-invocation
+handoff proving `canonical staged digest == handoff digest == bytes mounted into
+the container`, derived only from the verified staged object with no
+source-path reopen, immutable from the execution identity, in an
+invocation-specific namespace exposing no unrelated artefact, with a bounded
+lifetime, residue reporting, and descriptor-safe cleanup.
+
+### D — disk exhaustion is unbounded
+
+Because `/data` is mounted `noquota` (§22), first-adapter and runtime hardening
+must bound invocation work and output size, handoff size, retained container
+count, residue count and age, rootless image inventory, and graphroot
+free-space thresholds. `/data` is not to be remounted during adapter
+specification.
+
+## 24. Related records
 
 - [ENG-0005 Capability Runtime design](../specs/2026-08-10-capability-runtime-design.md)
 - [ENG-0005 non-executing implementation plan](2026-08-10-eng-0005-capability-runtime-implementation-plan.md)
 - [Fabric governance boundaries](../../fabric/governance-boundaries.md)
 
-## 23. External sources
+## 25. External sources
 
 Consulted 2026-08-10:
 

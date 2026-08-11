@@ -343,12 +343,16 @@ is missing is a separately authorised execution mechanism.
 **No adapter exists**, and the package-wide guard in
 `tests/test-capability-runtime.sh` discovers every production module rather
 than consulting a list, so a future file cannot escape the boundary by not
-being named. **Track B is unprovisioned**: Podman is absent, no execution
-identity exists, and no host security setting has been changed.
+being named. **Track B was unprovisioned when this plan was written.** It has
+since been provisioned and its sandbox proven on `schai` — see §22 of the
+[rootless execution
+prerequisite](2026-08-10-rootless-execution-prerequisite.md) — with no sysctl
+and no AppArmor policy changed.
 
-Real capability execution therefore remains blocked on two separate
-acceptances: the rootless execution prerequisite (Track B) and a separately
-authorised adapter increment.
+Real capability execution was blocked on two separate acceptances: the rootless
+execution prerequisite (Track B) and a separately authorised adapter increment.
+The first is now satisfied; **the second is not**, so nothing in this plan's
+non-execution boundary changes.
 
 | Increment | Delivers |
 |---|---|
