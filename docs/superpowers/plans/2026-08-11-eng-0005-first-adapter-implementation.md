@@ -330,8 +330,35 @@ Regression set unless stated otherwise:
 ### T7 — Package contract and handoff publication
 
 **Files:** `tools/capability/execution/{package_contract,handoff}.py`
-**Interfaces:** `validate_package(descriptor: int) -> PackageBinding`,
-`publish_handoff(cinv, artefact_fd, payload_bytes) -> HandoffRoots`
+**Interfaces:**
+`validate_package(descriptor: int, *, entrypoint: str) -> PackageBinding`,
+`publish_handoff(root: RootDescriptor, cinv: str, artefact_fd: int, payload: PayloadBinding, package: PackageBinding) -> HandoffBinding`
+
+> **Interface amended 2026-08-11, before implementation.** Handoff publication
+> writes security-critical execution input, so it is anchored to a verified
+> descriptor rather than to a name.
+>
+> - **`publish_handoff` had no destination authority at all** — it named a
+>   `CINV` and some bytes with nothing to write them through. It now takes the
+>   T5-verified `RootDescriptor` first, as T6 established for every
+>   authority-bearing runtime interface.
+> - **`payload_bytes` becomes `payload: PayloadBinding`.** Proving the
+>   published bytes match the T3 digest requires the digest, and only the
+>   binding carries it. Raw bytes could prove equality with themselves and
+>   nothing more.
+> - **`validate_package` gains `entrypoint`.** The governed entrypoint comes
+>   from capability metadata and must be validated against the tree; the
+>   original signature had nowhere to supply it.
+> - **`HandoffRoots` becomes `HandoffBinding`.** What it carries is identity —
+>   digests proving what was published — not a set of directories.
+>
+> **`descriptor: int` is retained for `validate_package` and expresses the tree
+> correctly**: it is an already-open *directory* descriptor, and `os.scandir`
+> enumerates it descriptor-relatively. No pathname tree is invented, and no
+> conflict exists to report.
+>
+> `artefact_fd` is the verified package-tree descriptor whose contents are
+> copied. Descriptor ownership follows T5: callers own what they pass.
 
 - Failing tests: 64 MiB / 1,024 entries / 16 MiB per file; native extension,
   ELF, `.so`, and non-`.py` entrypoint rejected; traversal and symlink escape
