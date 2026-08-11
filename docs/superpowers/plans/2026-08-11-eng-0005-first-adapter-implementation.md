@@ -406,8 +406,19 @@ Regression set unless stated otherwise:
 
 **Files:** `provisioning/execution/kyri-exec-transition.py` (policy functions only)
 **Interfaces:** `validate_cinv(arg: str) -> str`,
-`evidence_path(root: Path, cinv: str) -> Path`,
-`check_launch_authorisation(record: dict) -> None`
+`evidence_path(cinv: str) -> Path`,
+`check_launch_authorisation(record: dict) -> None`,
+`policy_for(argv: Sequence[str]) -> TransitionPolicy`
+
+> **Interface amended 2026-08-11, before implementation.** `evidence_path` took
+> a `root: Path`, which contradicted the plan's own T10 prose, §6 of the design
+> ("construct the evidence pathname itself from a compiled-in root"), and the
+> T10 ruling ("the caller never supplies… evidence path"). The parameter is
+> **removed** rather than replaced with a descriptor: the root helper runs
+> before any verified descriptor exists, so the compiled-in constant *is* the
+> trust anchor. `policy_for` is named because the CLI grammar and the immutable
+> policy result are T10 deliverables that the original three signatures had
+> nowhere to express.
 
 - Failing tests, run **entirely unprivileged**: grammar rejects
   `CINV-00004`, `CINV-0000042`, `-CINV-000042`, `CINV-000042 `, `--help`,

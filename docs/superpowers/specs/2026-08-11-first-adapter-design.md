@@ -174,7 +174,7 @@ migration that preserves historical authority.
 ## 6. Transition helper contract
 
 ```
-cschott → sudo <exact absolute helper path> CINV-nnnnnn
+cschott → sudo /usr/libexec/kyri-exec-transition CINV-nnnnnn
 ```
 
 One argument, matching `^CINV-[0-9]{6}$`, constrained by the sudoers policy
@@ -190,6 +190,17 @@ not already attempted; verify the handoff exists with expected ownership and
 modes and establish the ownership root cannot; `setgroups([987])`,
 `setgid(987)`, `setuid(999)`, verify the transition took effect; set
 `no_new_privs`; `execve` the worker with an explicitly constructed environment.
+
+**The installed paths are fixed, because "the worker" was previously unnamed.**
+The helper is `/usr/libexec/kyri-exec-transition` and the worker is
+`/usr/libexec/kyri-exec-worker`. Both are root-owned with root-owned ancestry,
+non-writable by `cschott` or `kyri-capability`. The worker is executed by
+absolute path with a fixed absolute interpreter line; there is no `PATH`
+search, no shell, and no repository-relative executable — the repository module
+`tools/capability/execution/worker.py` is source, and source is not an
+installed executable. The helper's argv is exactly
+`[/usr/libexec/kyri-exec-worker, CINV-nnnnnn]`; everything else the worker needs
+arrives through inherited descriptors and internally derived roots.
 
 **Root MUST NOT:** run Podman; construct container argv from caller input;
 accept a caller-supplied path, image, mount, environment, or runtime/resource
@@ -848,7 +859,9 @@ on this one. The same applies to secrets (§31), devices, and GPU.
 
 ## 34. Host prerequisites (described, not applied)
 
-Root-owned transition helper and ancestry · root-owned administrative helper ·
+Root-owned transition helper and ancestry (`/usr/libexec/kyri-exec-transition`) ·
+**root-owned worker executable** (`/usr/libexec/kyri-exec-worker`) ·
+root-owned administrative helper ·
 two sudoers drop-ins (NOPASSWD transition with the `CINV` argument contract;
 interactive-authenticated admin with fixed verbs) · root-owned immutable
 backing-store config · provisioned `CADM` counter · `/data/kyri/capability-handoff`
