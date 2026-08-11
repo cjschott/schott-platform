@@ -1,6 +1,6 @@
 # Capability Runtime Design (ENG-0005)
 
-**Status:** Draft — awaiting review
+**Status:** Accepted
 
 > **This document specifies architecture and scope only. It authorises no
 > implementation.** No runtime source, scaffolding, executable schema,

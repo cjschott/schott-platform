@@ -1372,9 +1372,12 @@ assert_contains "${LEDGER}" \
   'ENG-0001 -> ENG-0002 -> ENG-0004 -> ENG-0005 -> ENG-0006 -> ENG-0003' \
   "engineering ledger orders defects, Fabric, Capability, Health, then cutover"
 # Capability Runtime stays in the canonical sequence rather than drifting into
-# an indefinite Future bucket.
-assert_contains "${LEDGER}" 'ENG-0005 \| Capability Runtime \| Blocked by Fabric Runtime' \
-  "ledger keeps Capability Runtime sequenced, not deferred"
+# an indefinite Future bucket. The row's wording advances as the work does --
+# what must not change is that it stays sequenced and never becomes "Future".
+assert_contains "${LEDGER}" 'ENG-0005 \| Capability Runtime \|' \
+  "ledger keeps Capability Runtime in the sequence"
+assert_not_contains "${LEDGER}" 'ENG-0005 \| Capability Runtime \| Future' \
+  "ledger does not defer Capability Runtime into the Future bucket"
 assert_contains "${LEDGER}" 'ENG-0005 is an increment of the Fabric' \
   "ledger states the Capability Runtime relationship to Fabric Runtime explicitly"
 

@@ -84,6 +84,13 @@ FORBIDDEN_ATTRS = {
     "execv", "execve", "execvp", "execvpe", "startfile",
 }
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__"}
+# The only production modules permitted to mutate the filesystem.
+WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py"}
+# Authority planes this package may never reach, by import or by symbol.
+FORBIDDEN_PLANES = ("tools.trust", "..trust", "TrustStore", "TrustGateway",
+                    "trust_adapter", "tools.health", "..health",
+                    "scheduler", "placement", "clustering", "failover",
+                    "liveness", "readiness", "heartbeat", "adaptive_routing")
 # Words that would name an execution seam even without a call.
 FORBIDDEN_TEXT = ("adapter_registry", "register_adapter", "ADAPTERS = ",
                   "docker run", "podman run", "/bin/sh", "/bin/bash",
@@ -144,11 +151,18 @@ for path in sorted(package.rglob("*.py")):
         if phrase in code_text:
             findings.append(f"{name} carries the execution seam '{phrase}'")
 
+    for plane in FORBIDDEN_PLANES:
+        if plane in code_text:
+            findings.append(f"{name} reaches another authority plane ('{plane}')")
+
     # Filesystem mutation is permitted in exactly two modules: the store, which
     # is a store, and package staging, which must write the verified copy.
     # Everywhere else in the package it is forbidden, so "A4 stages bytes" does
     # not become "the runtime may write anywhere".
-    if path.name not in {"store.py", "package_resolution.py", "evidence.py"}:
+    # Filesystem mutation belongs to three modules and is denied everywhere
+    # else. A new module is read-only by default: escaping this guard takes an
+    # authorised change to the set, not merely a filename nobody listed.
+    if path.name not in WRITE_OWNING_MODULES:
         for mutator in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "os.write",
                         "os.rename", "os.replace", "os.link", "os.unlink",
                         "os.mkdir", "os.chmod", "os.chown", "write_text",
@@ -173,32 +187,13 @@ SCANPY
 
 assert_no_execution_surface
 
-# The authorised production surface, and nothing beyond it: A1's store
-# modules plus A2's pure identity and binding layer.
-assert_file "${CAPABILITY}/__init__.py"
-assert_file "${CAPABILITY}/errors.py"
-assert_file "${CAPABILITY}/identifiers.py"
-assert_file "${CAPABILITY}/store.py"
-assert_file "${CAPABILITY}/invocation_identity.py"
-assert_file "${CAPABILITY}/fabric_evidence.py"
-assert_file "${CAPABILITY}/package_resolution.py"
-assert_file "${CAPABILITY}/records.py"
-assert_file "${CAPABILITY}/evidence.py"
-assert_file "${CAPABILITY}/inspection.py"
-assert_file "${CAPABILITY}/coordinator.py"
-assert_file "${CAPABILITY}/cli.py"
-
-if [[ -d "${ROOT}/${CAPABILITY}" ]]; then
-  UNEXPECTED="$(find "${ROOT}/${CAPABILITY}" -maxdepth 1 -name '*.py' -printf '%f\n' 2>/dev/null \
-    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py|fabric_evidence\.py|package_resolution\.py|records\.py|evidence\.py|inspection\.py|coordinator\.py|cli\.py' || true)"
-  if [[ -z "${UNEXPECTED}" ]]; then
-    pass "increment A1 adds no module beyond its authorised surface"
-  else
-    while IFS= read -r module; do
-      fail "unauthorised module for increment A1: ${module}"
-    done <<< "${UNEXPECTED}"
-  fi
-fi
+# The twelve modules Track A built. Named so their absence is a failure, not
+# a silently smaller package.
+for module in __init__ errors identifiers store invocation_identity \
+              fabric_evidence package_resolution records evidence \
+              inspection coordinator cli; do
+  assert_file "${CAPABILITY}/${module}.py"
+done
 
 # ===========================================================================
 # A1 — the Capability Runtime immutable store
@@ -3158,6 +3153,359 @@ with TemporaryDirectory() as tmp:
                   "artifact_digest", "staged_path"):
         check(through_cli[field] == getattr(prepared, field),
               f"the interface does not alter {field}")
+
+# ===========================================================================
+# A7 — Track A closure: the composed runtime, and where it stops
+# ===========================================================================
+# Each increment proved its own boundary. This proves the composition: one
+# operator request travelling the whole path, every identity and digest linking
+# to the next, and then nothing. The absence of a next step is the property.
+
+import ast as _ast  # noqa: E402
+
+# --- the composed authority chain, end to end ------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    code, out, err = _run(_invoke_args(tmp, **world, invocation_id="inv-chain"))
+    result = _json.loads(out)
+    check(code == EXIT_DENIED and result["reason"] == REASON_NO_ADAPTER,
+          f"the composed path ends at the adapter boundary ({result['reason']})")
+
+    store = _opened_capability(tmp)
+    cinv = store.read_record("capability-invocation", result["invocation_record_id"])
+    fabric = _FabricStore.open_for_read(world["fabric_root"], expected_uid=UID,
+                                        expected_gid=GID)
+    csel = fabric.read_record("capability-selection", "CSEL-000001")
+    cinst = fabric.read_record("capability-instance", csel["selected_instance_id"])
+    cpkg = fabric.read_record("capability-package", cinst["capability_package_id"])
+    ccon = fabric.read_record("capability-contract", cinst["contract_id"])
+    capdef = fabric.read_record("capability-definition", cinst["capability_id"])
+    manifest = _json.loads(
+        (world["approved"] / "nested" / "artifact.manifest.json").read_text(encoding="utf-8"))
+    staged = Path(cinv["staged_path"])
+
+    # Every link, checked against the record that establishes it.
+    check(cinv["invocation_id"] == "inv-chain", "the opaque identity is the caller's")
+    check(cinv["binding_digest"] == bind(
+        payload={"text": "summarise"}, invocation_id="inv-chain",
+        selection_id="CSEL-000001", instance_id="CINST-000001",
+        capability_package_id="CPKG-0001", actor="operator:cschott"),
+        "the binding digest covers the payload and the claim")
+    check(cinv["payload_digest"] == payload_digest({"text": "summarise"}),
+          "the payload digest is of the canonical logical payload")
+    check(cinv["selection_id"] == csel["selection_id"], "the record names the verified CSEL")
+    check(cinv["instance_id"] == csel["selected_instance_id"],
+          "the instance is the one the selection chose")
+    check(cinv["capability_package_id"] == cinst["capability_package_id"],
+          "the package is the one the instance binds")
+    check(cinv["contract_id"] == cpkg["contract_id"] == ccon["contract_id"],
+          "instance, package, and contract agree on the contract")
+    check(cinv["capability_id"] == ccon["capability_id"] == capdef["capability_id"],
+          "contract and definition agree on the capability")
+    check(cinv["effect_class"] == ccon["effect_class"] == "read-only",
+          "the effect class is read from the contract")
+    check(manifest["capability_package_id"] == cinv["capability_package_id"]
+          and manifest["contract_id"] == cinv["contract_id"]
+          and manifest["capability_id"] == cinv["capability_id"],
+          "the manifest is bound to the governed identities")
+    check(cinv["artifact_digest"] == manifest["artifact_sha256"],
+          "the verified digest is the one the manifest declared")
+    check(staged.parent.name == "sha256-" + cinv["artifact_digest"].split(":")[1],
+          "the staged identity derives from the verified digest")
+    check("sha256:" + _hashlib2.sha256(staged.read_bytes()).hexdigest()
+          == cinv["artifact_digest"],
+          "the staged bytes hash to the digest the record carries")
+    check(cinv["evidence"]["outcome"] == OUTCOME_PREPARED,
+          "the chain terminates in a prepared invocation record")
+    check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+          f"and in nothing else ({store.counts()})")
+
+# --- the central closure test: a hostile artefact, four ways ---------------
+with TemporaryDirectory() as tmp:
+    markers = {name: Path(tmp) / f"marker-{name}"
+               for name in ("import", "exec", "shell", "spawn")}
+    hostile = (
+        "import pathlib, os, sys\n"
+        f"pathlib.Path({str(markers['import'])!r}).write_text('imported')\n"
+        f"os.system('touch {markers['shell']}')\n"
+        f"open({str(markers['exec'])!r}, 'w').write('executed')\n"
+        f"os.spawnl(os.P_NOWAIT, '/bin/true', 'true')\n"
+        f"pathlib.Path({str(markers['spawn'])!r}).write_text('spawned')\n"
+    ).encode("utf-8")
+    digest = "sha256:" + _hashlib2.sha256(hostile).hexdigest()
+    fabric_root = _chain(tmp, **{"capability-package": {
+        "artifact_reference": "file:nested/artifact.bin",
+        "manifest_reference": "file:nested/artifact.manifest.json"}})
+    approved, artifact = _source(tmp, content=hostile,
+                                 manifest=_manifest(artifact_sha256=digest))
+    world = dict(fabric_root=fabric_root, approved=approved,
+                 staging=_staging(tmp), payload_root=_payload_root(tmp)[0],
+                 capability_root=Path(tmp) / "capability")
+    _opened_capability(tmp)
+
+    children_before = len(os.listdir("/proc/self/task"))
+    code, out, err = _run(_invoke_args(tmp, **world, invocation_id="inv-hostile"))
+    result = _json.loads(out)
+
+    check(code == EXIT_DENIED and result["reason"] == REASON_NO_ADAPTER,
+          f"a hostile artefact reaches only the adapter boundary ({result['reason']})")
+    check(result["status"] == "prepared", "its preparation genuinely succeeded")
+    for name, marker in markers.items():
+        check(not marker.exists(), f"nothing {name}ed the staged artefact")
+    check(len(os.listdir("/proc/self/task")) == children_before,
+          "no thread or child was spawned by the invocation")
+
+    store = _opened_capability(tmp)
+    check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+          "the hostile artefact produced one prepared record and no result")
+    staged = Path(store.list_records("capability-invocation")[0]["staged_path"])
+    check(staged.read_bytes() == hostile,
+          "the hostile bytes are staged unchanged, as data")
+    check(not stat.S_IMODE(staged.lstat().st_mode) & 0o111,
+          "the staged hostile artefact is not executable")
+
+# --- there is no adapter to look up ----------------------------------------
+_all_production = sorted((root / "tools" / "capability").glob("*.py"))
+check(len(_all_production) == 12,
+      f"the package holds exactly the twelve Track-A modules ({len(_all_production)})")
+_combined = "\n".join(p.read_text(encoding="utf-8") for p in _all_production)
+for token, description in (
+        ("import subprocess", "a subprocess import"),
+        ("import multiprocessing", "a multiprocessing import"),
+        ("import runpy", "a module runner"),
+        ("import ctypes", "a foreign function loader"),
+        ("import socket", "a socket"),
+        ("shell=True", "a shell invocation"),
+        ("os.fork", "a fork"),
+        ("os.spawn", "a spawn"),
+        ("os.posix_spawn", "a posix spawn"),
+        ("docker", "docker"), ("podman", "podman"),
+        ("class Adapter", "an adapter class"),
+        ("def invoke_adapter", "an adapter invocation"),
+        ("ADAPTERS", "an adapter table"),
+        ("entry_points", "a plugin entry point"),
+        ("pkgutil", "a plugin walker")):
+    check(token not in _combined,
+          f"no production module contains {description}")
+
+# The refusal literal is a named constant in exactly one module. Prose may
+# discuss it; only one place may define it.
+_defining = [p.name for p in _all_production
+             if 'REASON_NO_ADAPTER = "no_authorised_adapter"' in p.read_text(encoding="utf-8")]
+check(_defining == ["coordinator.py"],
+      f"the refusal literal is defined once, in the coordinator ({_defining})")
+
+# --- dependency inventory ---------------------------------------------------
+_imports = set()
+for module in _all_production:
+    for node in _ast.walk(_ast.parse(module.read_text(encoding="utf-8"))):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                _imports.add(alias.name.split(".")[0])
+        elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
+            _imports.add(node.module.split(".")[0])
+_expected = {"__future__", "argparse", "contextlib", "dataclasses", "datetime",
+             "fcntl", "hashlib", "hmac", "json", "os", "pathlib", "re", "stat",
+             "sys", "tempfile", "typing", "yaml"}
+check(_imports <= _expected,
+      f"the package depends only on the standard library and yaml "
+      f"({sorted(_imports - _expected)})")
+
+# --- tamper matrix, composed through the interface -------------------------
+_tampers = []
+
+
+def _tamper(description, mutate, expected_code, expected_reason=None):
+    with TemporaryDirectory() as tmp:
+        world = _world(tmp)
+        store = _opened_capability(tmp)
+        # A mutation may return CLI overrides, or nothing at all. Anything
+        # that is not a mapping is a side effect, not an argument.
+        produced = mutate(world, tmp)
+        overrides = produced if isinstance(produced, dict) else {}
+        code, out, err = _run(_invoke_args(tmp, **world, invocation_id="inv-t",
+                                           **overrides))
+        body = _json.loads(out) if out.strip() else {}
+        actual = body.get("reason")
+        ok_code = code == expected_code
+        ok_reason = expected_reason is None or actual == expected_reason
+        _tampers.append((description, code, actual))
+        check(ok_code and ok_reason,
+              f"{description} -> exit {code} reason {actual}")
+        # Nothing tampered with may ever execute.
+        check(not any(Path(tmp).glob("marker*")),
+              f"{description} executes nothing")
+
+
+def _write_manifest(world, **overrides):
+    path = world["approved"] / "nested" / "artifact.manifest.json"
+    body = _json.loads(path.read_text(encoding="utf-8"))
+    body.update(overrides)
+    path.chmod(0o644)
+    path.write_text(_json.dumps(body), encoding="utf-8")
+    path.chmod(0o644)
+
+
+def _write_fabric(world, kind, identity, **overrides):
+    store = _FabricStore(world["fabric_root"], expected_uid=UID, expected_gid=GID)
+    path = store.path_for(kind, identity)
+    body = _yaml_load(path.read_text(encoding="utf-8"))
+    body.update(overrides)
+    path.chmod(0o600)
+    path.write_text(_yaml_dump(body), encoding="utf-8")
+    path.chmod(0o400)
+
+
+_tamper("a claimed selection that was never made",
+        lambda w, t: {"--selection-id": "CSEL-000009"}, EXIT_DENIED, "selection-not-found")
+_tamper("a claimed instance the selection did not choose",
+        lambda w, t: {"--instance-id": "CINST-000002"}, EXIT_DENIED,
+        "claimed-instance-not-selected")
+_tamper("a claimed package the instance does not bind",
+        lambda w, t: {"--package-id": "CPKG-0009"}, EXIT_DENIED,
+        "claimed-package-not-bound")
+_tamper("a withdrawn instance",
+        lambda w, t: _write_fabric(w, "capability-instance", "CINST-000001",
+                                   lifecycle_state="withdrawn"),
+        EXIT_DENIED, "instance-not-admitted")
+_tamper("an expired admission window",
+        lambda w, t: _write_fabric(w, "capability-instance", "CINST-000001",
+                                   admitted_until=_OPENED.isoformat()),
+        EXIT_DENIED, "admission-window-not-open")
+_tamper("a side-effecting contract",
+        lambda w, t: _write_fabric(w, "capability-contract", "CCON-0001",
+                                   effect_class="side-effecting"),
+        EXIT_DENIED, "effect-class-not-executable")
+_tamper("a manifest naming another package",
+        lambda w, t: _write_manifest(w, capability_package_id="CPKG-0009"),
+        EXIT_DENIED, "manifest-identity-mismatch")
+_tamper("a manifest naming another contract",
+        lambda w, t: _write_manifest(w, contract_id="CCON-0009"),
+        EXIT_DENIED, "manifest-identity-mismatch")
+_tamper("a manifest naming another capability",
+        lambda w, t: _write_manifest(w, capability_id="CAPDEF-0009"),
+        EXIT_DENIED, "manifest-identity-mismatch")
+_tamper("a manifest declaring another artefact",
+        lambda w, t: _write_manifest(w, artifact_reference="file:nested/other.bin"),
+        EXIT_DENIED, "manifest-identity-mismatch")
+_tamper("a manifest digest for different bytes",
+        lambda w, t: _write_manifest(w, artifact_sha256="sha256:" + "0" * 64),
+        EXIT_DENIED, "substitution-detected")
+_tamper("substituted artefact bytes",
+        lambda w, t: ((w["approved"] / "nested" / "artifact.bin").chmod(0o644),
+                      (w["approved"] / "nested" / "artifact.bin").write_bytes(b"other\n")),
+        EXIT_DENIED, "substitution-detected")
+_tamper("a group-writable artefact",
+        lambda w, t: (w["approved"] / "nested" / "artifact.bin").chmod(0o664),
+        EXIT_DENIED, "artifact-not-readable")
+_tamper("an aliased artefact",
+        lambda w, t: os.link(w["approved"] / "nested" / "artifact.bin",
+                             w["approved"] / "nested" / "alias.bin"),
+        EXIT_DENIED, "artifact-not-readable")
+_tamper("a payload carrying a duplicate key",
+        lambda w, t: ((w["payload_root"] / "payload.json").chmod(0o644),
+                      (w["payload_root"] / "payload.json").write_text('{"a":1,"a":2}')),
+        EXIT_USAGE)
+_tamper("a payload owned by another uid",
+        lambda w, t: {"--payload-source-uid": str(UID + 1)}, EXIT_USAGE)
+_tamper("a group-writable payload",
+        lambda w, t: (w["payload_root"] / "payload.json").chmod(0o664), EXIT_USAGE)
+
+check(len(_tampers) == 17, f"the tamper matrix covered every case ({len(_tampers)})")
+
+# --- staged-object tampering after publication -----------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    _run(_invoke_args(tmp, **world, invocation_id="inv-first"))
+    store = _opened_capability(tmp)
+    staged = Path(store.list_records("capability-invocation")[0]["staged_path"])
+    staged.chmod(0o600)
+    staged.write_bytes(b"tampered\n")
+    staged.chmod(0o400)
+    code, out, err = _run(_invoke_args(tmp, **world, invocation_id="inv-second"))
+    check(code == EXIT_DENIED and _json.loads(out)["reason"] == "staged-digest-collision",
+          f"a tampered staged object refuses ({_json.loads(out)['reason']})")
+
+# --- replay, conflict, and a new decision, through the interface -----------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    first = _json.loads(_run(_invoke_args(tmp, **world, invocation_id="inv-r"))[1])
+    store = _opened_capability(tmp)
+    before = inventory(store.root)
+    staged_before = sorted(p.name for p in world["staging"].glob("sha256-*"))
+
+    _saved = [(_a3mod, "verify_selected_evidence", _a3mod.verify_selected_evidence),
+              (_a4mod, "resolve_and_stage_package", _a4mod.resolve_and_stage_package)]
+    for owner, name, _ in _saved:
+        setattr(owner, name, _explode_authority)
+    try:
+        replayed = _json.loads(_run(_invoke_args(tmp, **world, invocation_id="inv-r"))[1])
+        tripped = None
+    except AssertionError as error:
+        replayed, tripped = None, str(error)
+    finally:
+        for owner, name, original in _saved:
+            setattr(owner, name, original)
+    check(tripped is None, f"exact replay reruns neither verification nor staging ({tripped})")
+    check(replayed["status"] == "consumed", "exact replay is consumed")
+    check(inventory(store.root) == before, "exact replay writes nothing")
+    check(sorted(p.name for p in world["staging"].glob("sha256-*")) == staged_before,
+          "exact replay publishes nothing further")
+
+    (world["payload_root"] / "payload.json").chmod(0o644)
+    (world["payload_root"] / "payload.json").write_text('{"text":"other"}', encoding="utf-8")
+    conflicting = _json.loads(_run(_invoke_args(tmp, **world, invocation_id="inv-r"))[1])
+    check(conflicting["status"] == "conflict", "a changed payload conflicts")
+    check(inventory(store.root) == before, "a conflict writes nothing")
+
+    fresh = _json.loads(_run(_invoke_args(tmp, **world, invocation_id="inv-r2"))[1])
+    check(fresh["status"] == "prepared" and fresh["reason"] == REASON_NO_ADAPTER,
+          "a new identity is an independent decision")
+    check(store.counts()["capability-invocation"] == 2, "and gets its own record")
+
+# --- residue, told apart ----------------------------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    _run(_invoke_args(tmp, **world, invocation_id="inv-res"))
+    store = _opened_capability(tmp)
+    runtime_residue = store.root / "capability-invocations" / ".CINV-000009.tmp"
+    runtime_residue.write_text("partial", encoding="utf-8")
+    staging_residue = world["staging"] / ".staging-abc.tmp"
+    staging_residue.write_text("partial", encoding="utf-8")
+    before = (runtime_residue.read_bytes(), staging_residue.read_bytes())
+
+    code, out, err = _run(["validate", "--store-root", str(world["capability_root"]),
+                           "--expected-uid", str(UID), "--expected-gid", str(GID)])
+    findings = _json.loads(out)["findings"]
+    check(code == EXIT_DENIED and any("CINV-000009" in f for f in findings),
+          f"runtime residue is reported ({findings})")
+    check(not any("staging" in f for f in findings),
+          "staging residue is A4's boundary, not the evidence validator's")
+    check((runtime_residue.read_bytes(), staging_residue.read_bytes()) == before,
+          "neither residue is cleaned")
+
+# --- the permission map, as it actually is ---------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    _run(_invoke_args(tmp, **world, invocation_id="inv-perm"))
+    store = _opened_capability(tmp)
+    staged = Path(store.list_records("capability-invocation")[0]["staged_path"])
+    for target, expected, description in (
+            (store.root / "capability-invocations", 0o700, "the record directory"),
+            (store.root / "sequences", 0o700, "the sequence directory"),
+            (store.path_for("capability-invocation",
+                            store.list_records("capability-invocation")[0]
+                            ["invocation_record_id"]), 0o600, "a record file"),
+            (staged.parent, 0o700, "the staged digest directory"),
+            (staged, 0o400, "the staged artefact")):
+        actual = stat.S_IMODE(Path(target).lstat().st_mode)
+        check(actual == expected,
+              f"{description} is {oct(expected)} ({oct(actual)})")
+        check(Path(target).lstat().st_uid == UID, f"{description} is coordinator-owned")
+    # Roots inherit the ambient umask, exactly as the released stores do. This
+    # is recorded rather than corrected: Deferred D owns it across planes.
+    check(not stat.S_IMODE(store.root.lstat().st_mode) & stat.S_IWOTH,
+          "the runtime root is not world-writable")
 print(f"__FAILURES__={failures}")
 STOREPY
 )"

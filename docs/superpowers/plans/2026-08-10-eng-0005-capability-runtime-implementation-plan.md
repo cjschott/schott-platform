@@ -1,6 +1,6 @@
 # ENG-0005 Capability Runtime Implementation Plan — Non-Executing Foundation
 
-**Status:** Proposed — not accepted
+**Status:** Accepted — Track A implemented locally through A7
 
 > **For agentic workers:** Execute one increment at a time. Stop for independent
 > review and explicit approval after each. **This plan authorises no
@@ -332,7 +332,35 @@ specification is found to require an architecture decision it does not contain.
 3. **Result records** are specified but only the interrupted and refused cases
    are reachable here; the completed case arrives with the adapter.
 
-## 12. Related records
+## 12. Track A is built, and it does not execute
+
+**A1 through A7 are implemented locally.** The coordinator resolves, verifies,
+binds, stages, and records — and then stops. `invoke` reaches the adapter
+boundary and returns `no_authorised_adapter`; the durable invocation record
+says `execution-prepared`, because the preparation genuinely succeeded and what
+is missing is a separately authorised execution mechanism.
+
+**No adapter exists**, and the package-wide guard in
+`tests/test-capability-runtime.sh` discovers every production module rather
+than consulting a list, so a future file cannot escape the boundary by not
+being named. **Track B is unprovisioned**: Podman is absent, no execution
+identity exists, and no host security setting has been changed.
+
+Real capability execution therefore remains blocked on two separate
+acceptances: the rootless execution prerequisite (Track B) and a separately
+authorised adapter increment.
+
+| Increment | Delivers |
+|---|---|
+| A1 | immutable Capability Runtime store, its own plane and lock |
+| A2 | opaque invocation identity, canonical payload, binding digest |
+| A3 | read-only verification of the selected Fabric evidence |
+| A4 | executable-package grammar, integrity, content-addressed staging |
+| A5 | durable invocation decisions, replay, conflict, refusal evidence |
+| A6 | inspection, validation, and the interface that refuses |
+| A7 | package-wide guards and the composed non-execution proof |
+
+## 13. Related records
 
 - [ENG-0005 Capability Runtime design](../specs/2026-08-10-capability-runtime-design.md)
 - [Rootless execution prerequisite design](2026-08-10-rootless-execution-prerequisite.md)
