@@ -43,6 +43,7 @@ FIRST_CMUT = "CMUT-000000000001"
 
 _MUTATIONS = "mutations"
 _STATE = "state"
+_TRANSITIONS = "transitions"
 _INTENT = "intent"
 _OUTCOME = "outcome"
 
@@ -88,9 +89,13 @@ class TargetKind(enum.Enum):
     """The closed set of things a mutation may install."""
 
     EXECUTION_STATE = "execution-state"
+    # Added at T6. Lifecycle state is append-only because install is
+    # create-once, so each transition needs its own sequenced name.
+    EXECUTION_TRANSITION = "execution-transition"
 
 
-_TARGET_DIRECTORY = {TargetKind.EXECUTION_STATE: _STATE}
+_TARGET_DIRECTORY = {TargetKind.EXECUTION_STATE: _STATE,
+                     TargetKind.EXECUTION_TRANSITION: _TRANSITIONS}
 
 
 def _is_cinv(name: str) -> bool:
@@ -98,7 +103,14 @@ def _is_cinv(name: str) -> bool:
             and set(name[5:]) <= _DIGITS)
 
 
-_TARGET_GRAMMAR = {TargetKind.EXECUTION_STATE: _is_cinv}
+def _is_sequenced_cinv(name: str) -> bool:
+    if len(name) != 18 or name[11] != ".":
+        return False
+    return _is_cinv(name[:11]) and set(name[12:]) <= _DIGITS
+
+
+_TARGET_GRAMMAR = {TargetKind.EXECUTION_STATE: _is_cinv,
+                   TargetKind.EXECUTION_TRANSITION: _is_sequenced_cinv}
 
 
 @dataclasses.dataclass(frozen=True)

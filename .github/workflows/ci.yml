@@ -219,6 +219,14 @@ jobs:
       - name: Capability execution mutation tests
         run: bash tests/test-capability-execution-mutation.sh
 
+      - name: Capability execution capacity tests
+        run: bash tests/test-capability-execution-capacity.sh
+
+      # Forks real processes against a pipe barrier: the two-slot ceiling only
+      # means something if it holds under a genuine race.
+      - name: Capability execution capacity race tests
+        run: bash tests/test-capability-execution-capacity-race.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
