@@ -90,15 +90,23 @@ assert_file "${EXECUTION}/types.py"
 # increment that can be proven pure by inspection, so it is proven here rather
 # than assumed later when the modules have grown.
 
+# Scoped to T1's own modules. Each increment carries a backstop for the
+# modules it adds, with the authority that increment actually accepted -- T3
+# may read a descriptor, T1 may not, and one shared scan cannot express both.
+# The coverage guard below makes sure narrowing the scope leaves nothing
+# unscanned.
+T1_MODULES=("__init__.py" "types.py")
+
 assert_pure_types() {
   local report
-  report="$(python3 - "${ROOT}" "${EXECUTION}" <<'SCANPY'
+  report="$(python3 - "${ROOT}" "${EXECUTION}" "${T1_MODULES[@]}" <<'SCANPY'
 import ast
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
 package = root / sys.argv[2]
+targets = sys.argv[3:]
 
 # Every way T1 could stop being pure.
 FORBIDDEN_IMPORTS = {
@@ -122,7 +130,11 @@ if not package.is_dir():
     print("package-absent")
     raise SystemExit(0)
 
-for path in sorted(package.glob("*.py")):
+for name in targets:
+    path = package / name
+    if not path.is_file():
+        findings.append(f"{name}: absent")
+        continue
     source = path.read_text(encoding="utf-8")
     rel = path.relative_to(root)
     try:
@@ -182,6 +194,33 @@ SCANPY
 }
 
 assert_pure_types
+
+# Narrowing the T1 scan must not let a module slip through unscanned. Every
+# module in the package belongs to some increment and is covered by that
+# increment's backstop; a new one appearing here without a backstop fails
+# loudly rather than silently gaining whatever authority it likes.
+assert_backstop_coverage() {
+  local covered=("__init__.py" "types.py" "canonical_json.py" "payload.py")
+  local uncovered=()
+  local path name known found
+  for path in "${ROOT}/${EXECUTION}"/*.py; do
+    [[ -f "${path}" ]] || continue
+    name="${path##*/}"
+    found=0
+    for known in "${covered[@]}"; do
+      if [[ "${name}" == "${known}" ]]; then found=1; break; fi
+    done
+    if [[ "${found}" -eq 0 ]]; then uncovered+=("${name}"); fi
+  done
+
+  if [[ "${#uncovered[@]}" -eq 0 ]]; then
+    pass "every execution module is covered by an increment purity backstop"
+  else
+    fail "modules with no purity backstop: ${uncovered[*]}"
+  fi
+}
+
+assert_backstop_coverage
 
 # ===========================================================================
 # Behaviour
