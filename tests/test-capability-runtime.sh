@@ -122,7 +122,12 @@ for path in sorted(package.rglob("*.py")):
             if node.module and node.module.split(".")[0] in FORBIDDEN_IMPORTS:
                 findings.append(f"{name}:{node.lineno} imports from {node.module}")
             spelled = "." * node.level + (node.module or "")
-            if "fabric" in spelled and spelled not in ALLOWED_FABRIC_IMPORTS:
+            # Only the Fabric package is governed here. A sibling capability
+            # module whose name merely contains "fabric" is not a Fabric import,
+            # and flagging it would push the real check toward being loosened.
+            reaches_fabric = (spelled.startswith("..fabric")
+                              or spelled.startswith("tools.fabric"))
+            if reaches_fabric and spelled not in ALLOWED_FABRIC_IMPORTS:
                 findings.append(f"{name}:{node.lineno} imports from {spelled}")
             for alias in node.names:
                 if alias.name in FORBIDDEN_FABRIC_SYMBOLS:
@@ -179,10 +184,13 @@ assert_file "${CAPABILITY}/fabric_evidence.py"
 assert_file "${CAPABILITY}/package_resolution.py"
 assert_file "${CAPABILITY}/records.py"
 assert_file "${CAPABILITY}/evidence.py"
+assert_file "${CAPABILITY}/inspection.py"
+assert_file "${CAPABILITY}/coordinator.py"
+assert_file "${CAPABILITY}/cli.py"
 
 if [[ -d "${ROOT}/${CAPABILITY}" ]]; then
   UNEXPECTED="$(find "${ROOT}/${CAPABILITY}" -maxdepth 1 -name '*.py' -printf '%f\n' 2>/dev/null \
-    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py|fabric_evidence\.py|package_resolution\.py|records\.py|evidence\.py' || true)"
+    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py|fabric_evidence\.py|package_resolution\.py|records\.py|evidence\.py|inspection\.py|coordinator\.py|cli\.py' || true)"
   if [[ -z "${UNEXPECTED}" ]]; then
     pass "increment A1 adds no module beyond its authorised surface"
   else
@@ -2637,6 +2645,519 @@ with TemporaryDirectory() as tmp:
     for forbidden in ("requests", "replay", "index", "ledger", "mapping", "cache"):
         check(not (store.root / forbidden).exists(),
               f"no {forbidden} namespace exists")
+
+# ===========================================================================
+# A6 — inspection, validation, and the interface that refuses
+# ===========================================================================
+# An operator surface over everything A1-A5 built, and a place where the
+# absence of an adapter becomes visible: preparation succeeds, and then the
+# interface says the one thing it can honestly say.
+#
+# Exit codes are coarse on purpose -- 0 success, 1 governed negative, 2 the
+# request itself was unusable -- and the JSON carries the precise state.
+
+import subprocess as _sub  # noqa: E402  (test harness only, never production)
+
+from tools.capability.cli import (  # noqa: E402
+    EXIT_DENIED, EXIT_SUCCESS, EXIT_USAGE, PAYLOAD_MAXIMUM_BYTES, main)
+from tools.capability.coordinator import (  # noqa: E402
+    REASON_NO_ADAPTER, prepare_invocation)
+from tools.capability.inspection import (  # noqa: E402
+    FINDING_DUPLICATE_IDENTITY, FINDING_INTERRUPTED_REFUSAL,
+    FINDING_ORPHAN_RESULT, FINDING_OUTCOME_MISMATCH, inspect_records,
+    validate_store)
+
+
+def _run(argv):
+    """The interface, invoked in-process, with its output captured."""
+    import io
+    import contextlib
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(argv)
+    return code, out.getvalue(), err.getvalue()
+
+
+def _payload_root(tmp, name="payload.json", text='{"text":"summarise"}'):
+    root = Path(tmp) / "payloads"
+    root.mkdir(mode=0o755, exist_ok=True)
+    target = root / name
+    target.write_text(text, encoding="utf-8")
+    target.chmod(0o644)
+    return root, target
+
+
+def _invoke_args(tmp, *, approved, staging, fabric_root, payload_root,
+                 capability_root, invocation_id="inv-cli", payload="payload.json",
+                 **overrides):
+    args = {
+        "--store-root": str(capability_root),
+        "--expected-uid": str(UID), "--expected-gid": str(GID),
+        "--fabric-root": str(fabric_root),
+        "--fabric-expected-uid": str(UID), "--fabric-expected-gid": str(GID),
+        "--approved-artifact-root": str(approved),
+        "--trusted-source-uid": str(UID),
+        "--staging-root": str(staging), "--coordinator-uid": str(UID),
+        "--approved-payload-root": str(payload_root),
+        "--payload-source-uid": str(UID), "--payload-file": payload,
+        "--invocation-id": invocation_id,
+        "--selection-id": "CSEL-000001",
+        "--instance-id": "CINST-000001",
+        "--package-id": "CPKG-0001",
+        "--actor": "operator:cschott",
+        "--request-id": "req-alpha",
+        "--requested-at": _WHEN.isoformat(),
+    }
+    args.update(overrides)
+    argv = ["invoke"]
+    for flag, value in args.items():
+        if value is not None:
+            argv.extend([flag, value])
+    return argv
+
+
+def _world(tmp):
+    """A fabric chain, a verified package, a staging root, and a payload."""
+    fabric_root = _chain(tmp, **{"capability-package": {
+        "artifact_reference": "file:nested/artifact.bin",
+        "manifest_reference": "file:nested/artifact.manifest.json"}})
+    approved, artifact = _source(tmp)
+    staging = _staging(tmp)
+    payload_root, _ = _payload_root(tmp)
+    capability_root = Path(tmp) / "capability"
+    _opened_capability(tmp)
+    return dict(fabric_root=fabric_root, approved=approved, staging=staging,
+                payload_root=payload_root, capability_root=capability_root)
+
+
+# --- the command inventory, and nothing beyond it --------------------------
+code, out, err = _run(["--help"])
+check(code in (EXIT_SUCCESS, EXIT_USAGE), "the interface offers help")
+for command in ("invoke", "inspect", "validate"):
+    check(command in out, f"the interface offers {command}")
+for forbidden in ("retry", "cancel", "list-adapters", "run", "execute", "start"):
+    check(f" {forbidden} " not in out.replace(",", " "),
+          f"the interface offers no {forbidden} command")
+
+check((EXIT_SUCCESS, EXIT_DENIED, EXIT_USAGE) == (0, 1, 2),
+      f"the exit codes are 0/1/2 ({EXIT_SUCCESS}/{EXIT_DENIED}/{EXIT_USAGE})")
+check(PAYLOAD_MAXIMUM_BYTES == 1048576,
+      f"the payload bound is 1 MiB ({PAYLOAD_MAXIMUM_BYTES})")
+
+# --- exit 0: sound inspect and validate ------------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    store = _opened_capability(tmp)
+    code, out, err = _run(["inspect", "--store-root", str(world["capability_root"]),
+                           "--expected-uid", str(UID), "--expected-gid", str(GID)])
+    check(code == EXIT_SUCCESS, f"a sound inspect exits 0 ({code} {err[:60]})")
+    report = _json.loads(out)
+    check(report["status"] == "reported", "inspect reports its status")
+    check(report["records"] == [], "an empty store reports no records")
+
+    code, out, err = _run(["validate", "--store-root", str(world["capability_root"]),
+                           "--expected-uid", str(UID), "--expected-gid", str(GID)])
+    check(code == EXIT_SUCCESS, f"a sound validate exits 0 ({code})")
+    check(_json.loads(out)["findings"] == [], "a sound store reports no findings")
+
+# --- exit 1: the interface reaches the boundary and refuses ----------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    code, out, err = _run(_invoke_args(tmp, **world))
+    check(code == EXIT_DENIED, f"a prepared invocation with no adapter exits 1 ({code} {err[:80]})")
+    result = _json.loads(out)
+    check(result["reason"] == REASON_NO_ADAPTER,
+          f"the interface names the missing adapter ({result['reason']})")
+    check(result["reason"] == "no_authorised_adapter",
+          "the reason literal is the accepted one")
+    check(result["status"] == "prepared",
+          f"the durable decision is a preparation ({result['status']})")
+    check(result["invocation_record_id"] is not None, "a CINV identity is reported")
+
+    store = _opened_capability(tmp)
+    check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+          f"the durable shape is one CINV and no CRES ({store.counts()})")
+    cinv = store.read_record("capability-invocation", result["invocation_record_id"])
+    check(cinv["evidence"]["outcome"] == OUTCOME_PREPARED,
+          f"the record stays execution-prepared ({cinv['evidence']['outcome']})")
+    check(cinv["invocation_id"] == "inv-cli", "the opaque identity is durable")
+
+    # Consumed even though the preparation succeeded.
+    code, out, err = _run(_invoke_args(tmp, **world))
+    check(code == EXIT_DENIED, "presenting the identity again exits 1")
+    check(_json.loads(out)["status"] == "consumed",
+          f"the identity is consumed ({_json.loads(out)['status']})")
+    check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+          "a consumed replay writes nothing further")
+
+    # A different binding under the same identity conflicts.
+    other_root, _ = _payload_root(tmp, name="other.json", text='{"text":"translate"}')
+    code, out, err = _run(_invoke_args(tmp, **world, payload="other.json"))
+    check(code == EXIT_DENIED and _json.loads(out)["status"] == "conflict",
+          f"a different payload under one identity conflicts ({_json.loads(out)['status']})")
+
+    # A new identity prepares again.
+    code, out, err = _run(_invoke_args(tmp, **world, invocation_id="inv-cli-2"))
+    check(code == EXIT_DENIED and _json.loads(out)["status"] == "prepared",
+          "a new identity prepares again")
+    check(store.counts()["capability-invocation"] == 2, "the new identity has its own record")
+
+# --- exit 1: governed refusals ---------------------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    # A3 refusal: the claimed selection is not there.
+    code, out, err = _run(_invoke_args(tmp, **world, **{"--selection-id": "CSEL-000009"}))
+    check(code == EXIT_DENIED, "an unverifiable selection exits 1")
+    check(_json.loads(out)["reason"] == "selection-not-found",
+          f"the A3 reason is carried through ({_json.loads(out)['reason']})")
+
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    # A4 refusal: the artefact no longer matches its manifest.
+    artifact = world["approved"] / "nested" / "artifact.bin"
+    artifact.chmod(0o644)
+    artifact.write_bytes(b"substituted\n")
+    artifact.chmod(0o644)
+    code, out, err = _run(_invoke_args(tmp, **world))
+    check(code == EXIT_DENIED, "a substituted artefact exits 1")
+    check(_json.loads(out)["reason"] == "substitution-detected",
+          f"the A4 reason is carried through ({_json.loads(out)['reason']})")
+
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    code, out, err = _run(["inspect", "--store-root", str(world["capability_root"]),
+                           "--expected-uid", str(UID), "--expected-gid", str(GID),
+                           "--kind", "capability-invocation",
+                           "--identifier", "CINV-999999"])
+    check(code == EXIT_DENIED, f"a valid query for a missing record exits 1 ({code})")
+    check(_json.loads(out)["status"] == "not-found", "the missing record is reported")
+
+# --- exit 2: the request itself is unusable --------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    store = _opened_capability(tmp)
+    for argv, description in (
+            (["nonsense"], "an unknown command"),
+            ([], "no command at all"),
+            (["invoke"], "invoke with no arguments"),
+            (["inspect", "--store-root", str(world["capability_root"])],
+             "a missing required argument"),
+            (["inspect", "--store-root", str(world["capability_root"]),
+              "--expected-uid", "not-a-number", "--expected-gid", str(GID)],
+             "a malformed uid")):
+        code, out, err = _run(argv)
+        check(code == EXIT_USAGE, f"{description} exits 2 ({code})")
+        check("Traceback" not in out + err, f"{description} shows no traceback")
+
+    for override, description in (
+            ({"--payload-file": "../escape.json"}, "a traversing payload name"),
+            ({"--payload-file": "missing.json"}, "an absent payload file"),
+            ({"--payload-source-uid": str(UID + 1)}, "a payload owned by another uid"),
+            ({"--approved-payload-root": str(Path(tmp) / "absent")}, "an unusable payload root"),
+            ({"--store-root": str(world["payload_root"] / "payload.json" / "deep")},
+             "a runtime root beneath a regular file")):
+        code, out, err = _run(_invoke_args(tmp, **world, **override))
+        check(code == EXIT_USAGE, f"{description} exits 2 ({code})")
+    check(store.counts() == {"capability-invocation": 0, "capability-result": 0},
+          f"no interface failure persists evidence ({store.counts()})")
+
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    store = _opened_capability(tmp)
+    outside = Path(tmp) / "outside"
+    outside.mkdir(mode=0o755)
+    (outside / "planted.json").write_text('{"text":"planted"}', encoding="utf-8")
+    (world["payload_root"] / "linked.json").symlink_to(outside / "planted.json")
+    code, out, err = _run(_invoke_args(tmp, **world, payload="linked.json"))
+    check(code == EXIT_USAGE, f"a symlinked payload exits 2 ({code})")
+    check(store.counts()["capability-invocation"] == 0,
+          "a symlinked payload consumes no invocation identity")
+
+# --- payload parsing: duplicate keys, at any depth -------------------------
+for text, description in (('{"a":1,"a":2}', "a duplicate key at the top level"),
+                          ('{"outer":{"a":1,"a":2}}', "a duplicate key nested once"),
+                          ('{"o":{"p":{"a":1,"a":2}}}', "a duplicate key nested twice"),
+                          ('{"list":[{"a":1,"a":2}]}', "a duplicate key inside an array"),
+                          ('{"a":1} {"b":2}', "a trailing second document"),
+                          ('{"a":', "malformed JSON"),
+                          ('', "an empty payload")):
+    with TemporaryDirectory() as tmp:
+        world = _world(tmp)
+        store = _opened_capability(tmp)
+        (world["payload_root"] / "payload.json").chmod(0o644)
+        (world["payload_root"] / "payload.json").write_text(text, encoding="utf-8")
+        code, out, err = _run(_invoke_args(tmp, **world))
+        check(code == EXIT_USAGE, f"{description} exits 2 ({code})")
+        check(store.counts() == {"capability-invocation": 0, "capability-result": 0},
+              f"{description} persists nothing and consumes no identity")
+
+# --- payload formatting equivalence and distinction ------------------------
+_digests = {}
+for label, text in (("compact", '{"a":1,"b":[1,2],"c":{"d":"x"}}'),
+                    ("spaced", '{ "a" : 1 , "b" : [ 1 , 2 ] , "c" : { "d" : "x" } }'),
+                    ("indented", '{\n  "b": [1, 2],\n  "a": 1,\n  "c": {"d": "x"}\n}'),
+                    ("reordered", '{"c":{"d":"x"},"b":[1,2],"a":1}')):
+    with TemporaryDirectory() as tmp:
+        world = _world(tmp)
+        (world["payload_root"] / "payload.json").chmod(0o644)
+        (world["payload_root"] / "payload.json").write_text(text, encoding="utf-8")
+        code, out, err = _run(_invoke_args(tmp, **world))
+        _digests[label] = _json.loads(out)["payload_digest"]
+check(len(set(_digests.values())) == 1,
+      f"equivalent textual payloads bind identically ({_digests})")
+
+_distinct = {}
+for label, text in (("integer", '{"a":1}'), ("string", '{"a":"1"}'),
+                    ("boolean", '{"a":true}'), ("order", '{"a":[1,2]}'),
+                    ("order2", '{"a":[2,1]}'), ("nested", '{"a":{"b":1}}')):
+    with TemporaryDirectory() as tmp:
+        world = _world(tmp)
+        (world["payload_root"] / "payload.json").chmod(0o644)
+        (world["payload_root"] / "payload.json").write_text(text, encoding="utf-8")
+        code, out, err = _run(_invoke_args(tmp, **world))
+        _distinct[label] = _json.loads(out)["payload_digest"]
+check(len(set(_distinct.values())) == len(_distinct),
+      f"distinct logical payloads bind differently ({len(set(_distinct.values()))}/{len(_distinct)})")
+
+# --- payload bound ----------------------------------------------------------
+for size, expected, description in ((PAYLOAD_MAXIMUM_BYTES, EXIT_DENIED, "a payload at the bound"),
+                                    (PAYLOAD_MAXIMUM_BYTES + 1, EXIT_USAGE, "a payload one byte over")):
+    with TemporaryDirectory() as tmp:
+        world = _world(tmp)
+        filler = '{"a":"' + "p" * (size - len('{"a":""}') - 1) + '"}'
+        filler = filler + " " * max(0, size - len(filler))
+        (world["payload_root"] / "payload.json").chmod(0o644)
+        (world["payload_root"] / "payload.json").write_text(filler[:size], encoding="utf-8")
+        code, out, err = _run(_invoke_args(tmp, **world))
+        check(code == expected, f"{description} exits {expected} ({code})")
+
+# --- the payload descriptor race -------------------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    original = '{"text":"ORIGINAL"}'
+    (world["payload_root"] / "payload.json").chmod(0o644)
+    (world["payload_root"] / "payload.json").write_text(original, encoding="utf-8")
+    substitute = world["payload_root"] / "substitute.json"
+    substitute.write_text('{"text":"SUBSTITUTED"}', encoding="utf-8")
+    substitute.chmod(0o644)
+
+    import tools.capability.cli as _a6cli  # noqa: E402
+    _original_open = _a6cli.open_trusted_regular_file
+
+    def _swapping(*args, **kwargs):
+        handle = _original_open(*args, **kwargs)
+        os.replace(substitute, world["payload_root"] / "payload.json")
+        return handle
+
+    _a6cli.open_trusted_regular_file = _swapping
+    try:
+        code, out, err = _run(_invoke_args(tmp, **world))
+    finally:
+        _a6cli.open_trusted_regular_file = _original_open
+
+    check((world["payload_root"] / "payload.json").read_text(encoding="utf-8")
+          == '{"text":"SUBSTITUTED"}',
+          "the fixture really replaced the payload pathname")
+    expected_digest = payload_digest({"text": "ORIGINAL"})
+    check(_json.loads(out)["payload_digest"] == expected_digest,
+          "the parsed payload is the one that was opened, not the one now at the path")
+
+# --- inspection matrix ------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    _run(_invoke_args(tmp, **world))
+    store = _opened_capability(tmp)
+    identity = store.list_records("capability-invocation")[0]["invocation_record_id"]
+
+    code, out, err = _run(["inspect", "--store-root", str(world["capability_root"]),
+                           "--expected-uid", str(UID), "--expected-gid", str(GID),
+                           "--kind", "capability-invocation", "--identifier", identity])
+    check(code == EXIT_SUCCESS, "inspecting one record exits 0")
+    reported = _json.loads(out)["records"]
+    check(len(reported) == 1 and reported[0]["invocation_record_id"] == identity,
+          "the named record is reported")
+    check(_run(["inspect", "--store-root", str(world["capability_root"]),
+                "--expected-uid", str(UID), "--expected-gid", str(GID)])[1]
+          == _run(["inspect", "--store-root", str(world["capability_root"]),
+                   "--expected-uid", str(UID), "--expected-gid", str(GID)])[1],
+          "inspection output is deterministic")
+
+    code, out, err = _run(["inspect", "--store-root", str(world["capability_root"]),
+                           "--expected-uid", str(UID), "--expected-gid", str(GID),
+                           "--kind", "capability-nonsense"])
+    check(code == EXIT_USAGE, f"an unknown record kind exits 2 ({code})")
+
+    # Inspection reruns no authority and mutates nothing.
+    before = inventory(store.root)
+    fabric_before = _fabric_inventory(world["fabric_root"])
+    _saved = [(_a3mod, "verify_selected_evidence", _a3mod.verify_selected_evidence),
+              (_a4mod, "resolve_and_stage_package", _a4mod.resolve_and_stage_package)]
+    for owner, name, _ in _saved:
+        setattr(owner, name, _explode_authority)
+    try:
+        _run(["inspect", "--store-root", str(world["capability_root"]),
+              "--expected-uid", str(UID), "--expected-gid", str(GID)])
+        _run(["validate", "--store-root", str(world["capability_root"]),
+              "--expected-uid", str(UID), "--expected-gid", str(GID)])
+        tripped = None
+    except AssertionError as error:
+        tripped = str(error)
+    finally:
+        for owner, name, original in _saved:
+            setattr(owner, name, original)
+    check(tripped is None, f"inspection and validation rerun no authority ({tripped})")
+    check(inventory(store.root) == before,
+          "inspection and validation leave the runtime store byte-identical")
+    check(_fabric_inventory(world["fabric_root"]) == fabric_before,
+          "inspection and validation leave the fabric store byte-identical")
+
+# --- validation matrix ------------------------------------------------------
+def _seed(tmp, records):
+    store = _opened_capability(tmp)
+    for kind, body in records:
+        identity = body["invocation_record_id"] if kind == "capability-invocation" \
+            else body["capability_result_id"]
+        store.write_atomic(store.path_for(kind, identity), body)
+    return store
+
+
+def _cinv(identity, *, invocation_id="inv-a", outcome=OUTCOME_PREPARED):
+    return {
+        "invocation_record_id": identity, "invocation_id": invocation_id,
+        "request_id": "req-1", "selection_id": "CSEL-000001",
+        "instance_id": "CINST-000001", "capability_package_id": "CPKG-0001",
+        "contract_id": "CCON-0001", "capability_id": "CAPDEF-0001",
+        "actor": "operator:cschott", "payload_digest": payload_digest({"a": 1}),
+        "binding_digest": payload_digest({"b": 2}), "effect_class": "read-only",
+        "artifact_digest": payload_digest({"c": 3}), "staged_path": "/staging/x",
+        "requested_at": _WHEN, "kind": "capability-invocation",
+        "schema_version": 1,
+        "evidence": {"actor": "operator:cschott", "outcome": outcome,
+                     "request_id": "req-1", "selection_id": "CSEL-000001"},
+    }
+
+
+def _cres(identity, invocation_record_id):
+    return {
+        "capability_result_id": identity,
+        "invocation_record_id": invocation_record_id, "attempt_number": 1,
+        "outcome_class": "refused", "reason": "instance-not-admitted",
+        "recorded_at": _WHEN, "kind": "capability-result", "schema_version": 1,
+        "evidence": {"actor": "operator:cschott", "outcome": OUTCOME_REFUSED},
+    }
+
+
+for records, expect_sound, expected_finding, description in (
+        ([("capability-invocation", _cinv("CINV-000001"))], True, None,
+         "a prepared invocation with no result"),
+        ([("capability-invocation", _cinv("CINV-000001", outcome=OUTCOME_REFUSED)),
+          ("capability-result", _cres("CRES-000001", "CINV-000001"))], True, None,
+         "a refused invocation with its result"),
+        ([("capability-invocation", _cinv("CINV-000001", outcome=OUTCOME_REFUSED))],
+         False, FINDING_INTERRUPTED_REFUSAL, "a refused invocation with no result"),
+        ([("capability-result", _cres("CRES-000001", "CINV-000009"))],
+         False, FINDING_ORPHAN_RESULT, "a result naming no invocation"),
+        ([("capability-invocation", _cinv("CINV-000001")),
+          ("capability-result", _cres("CRES-000001", "CINV-000001"))],
+         False, FINDING_OUTCOME_MISMATCH, "a refusal result linked to a prepared invocation"),
+        ([("capability-invocation", _cinv("CINV-000001", invocation_id="inv-a")),
+          ("capability-invocation", _cinv("CINV-000002", invocation_id="inv-a"))],
+         False, FINDING_DUPLICATE_IDENTITY, "two records for one opaque identity")):
+    with TemporaryDirectory() as tmp:
+        store = _seed(tmp, records)
+        before = inventory(store.root)
+        code, out, err = _run(["validate", "--store-root", str(store.root),
+                               "--expected-uid", str(UID), "--expected-gid", str(GID)])
+        findings = _json.loads(out)["findings"]
+        if expect_sound:
+            check(code == EXIT_SUCCESS and not findings,
+                  f"{description} is sound ({code} {findings})")
+        else:
+            check(code == EXIT_DENIED, f"{description} exits 1 ({code})")
+            check(any(expected_finding in finding for finding in findings),
+                  f"{description} reports {expected_finding} ({findings})")
+        check(inventory(store.root) == before,
+              f"validating {description} repairs nothing")
+        check(tuple(_json.loads(_run(["validate", "--store-root", str(store.root),
+                                      "--expected-uid", str(UID),
+                                      "--expected-gid", str(GID)])[1])["findings"])
+              == tuple(findings),
+              f"validating {description} is deterministic")
+
+with TemporaryDirectory() as tmp:
+    # Residue is reported and never removed.
+    store = _seed(tmp, [("capability-invocation", _cinv("CINV-000001"))])
+    residue = store.root / "capability-invocations" / ".CINV-000002.tmp"
+    residue.write_text("partial", encoding="utf-8")
+    before = (residue.lstat().st_ino, residue.read_bytes())
+    code, out, err = _run(["validate", "--store-root", str(store.root),
+                           "--expected-uid", str(UID), "--expected-gid", str(GID)])
+    check(code == EXIT_DENIED and any("tmp" in f for f in _json.loads(out)["findings"]),
+          f"residue is reported ({_json.loads(out)['findings']})")
+    check((residue.lstat().st_ino, residue.read_bytes()) == before,
+          "residue is not removed by validation")
+
+# --- the interface never crosses the boundary ------------------------------
+with TemporaryDirectory() as tmp:
+    # A staged artefact that would leave a marker if anything ran it.
+    marker = Path(tmp) / "marker"
+    hostile = (f"import pathlib\npathlib.Path({str(marker)!r}).write_text('ran')\n").encode()
+    digest = "sha256:" + _hashlib2.sha256(hostile).hexdigest()
+    fabric_root = _chain(tmp, **{"capability-package": {
+        "artifact_reference": "file:nested/artifact.bin",
+        "manifest_reference": "file:nested/artifact.manifest.json"}})
+    approved, artifact = _source(tmp, content=hostile,
+                                 manifest=_manifest(artifact_sha256=digest))
+    staging = _staging(tmp)
+    payload_root, _ = _payload_root(tmp)
+    capability_root = Path(tmp) / "capability"
+    _opened_capability(tmp)
+    world = dict(fabric_root=fabric_root, approved=approved, staging=staging,
+                 payload_root=payload_root, capability_root=capability_root)
+
+    code, out, err = _run(_invoke_args(tmp, **world))
+    check(code == EXIT_DENIED and _json.loads(out)["reason"] == REASON_NO_ADAPTER,
+          f"a hostile artefact still ends at the adapter boundary ({_json.loads(out)['reason']})")
+    check(not marker.exists(),
+          "nothing imported, executed, or spawned the staged artefact")
+
+# --- there is no adapter to find -------------------------------------------
+for module in ("cli", "coordinator", "inspection"):
+    source_text = (root / "tools" / "capability" / f"{module}.py").read_text(encoding="utf-8")
+    for token, description in (("subprocess", "a subprocess"), ("os.system", "a shell"),
+                               ("importlib", "dynamic loading"), ("runpy", "a module runner"),
+                               ("docker", "docker"), ("podman", "podman"),
+                               ("socket", "a socket"), ("eval(", "eval"),
+                               ("exec(", "exec"), ("adapter_registry", "an adapter registry"),
+                               ("register_adapter", "adapter registration"),
+                               ("load_adapter", "adapter loading"),
+                               ("request_critical_section", "the fabric lock"),
+                               ("TrustStore", "trust")):
+        check(token not in source_text,
+              f"{module}.py contains no {description}")
+check("no_authorised_adapter" in (root / "tools" / "capability" / "coordinator.py").read_text(encoding="utf-8"),
+      "the refusal literal exists as a named architectural state")
+
+# --- interface and direct orchestration agree ------------------------------
+with TemporaryDirectory() as tmp:
+    world = _world(tmp)
+    code, out, err = _run(_invoke_args(tmp, **world, invocation_id="inv-equal"))
+    through_cli = _json.loads(out)
+
+    direct_root = Path(tmp) / "capability-direct"
+    direct = CapabilityStore(direct_root, expected_uid=UID, expected_gid=GID)
+    prepared = prepare_invocation(
+        direct, fabric_root=world["fabric_root"], fabric_expected_uid=UID,
+        fabric_expected_gid=GID, approved_artifact_root=world["approved"],
+        trusted_source_uid=UID, staging_root=world["staging"], coordinator_uid=UID,
+        selection_id="CSEL-000001", instance_id="CINST-000001",
+        capability_package_id="CPKG-0001", invocation_id="inv-equal",
+        payload={"text": "summarise"}, actor="operator:cschott",
+        request_id="req-alpha", requested_at=_WHEN)
+    for field in ("status", "reason", "payload_digest", "binding_digest",
+                  "artifact_digest", "staged_path"):
+        check(through_cli[field] == getattr(prepared, field),
+              f"the interface does not alter {field}")
 print(f"__FAILURES__={failures}")
 STOREPY
 )"
