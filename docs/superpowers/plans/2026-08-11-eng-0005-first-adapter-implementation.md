@@ -282,8 +282,40 @@ Regression set unless stated otherwise:
 ### T6 — Capacity, locks, lifecycle state
 
 **Files:** `tools/capability/execution/{state,capacity}.py`
-**Interfaces:** `reserve(root, cinv) -> SlotReservation`, `release(reservation)`,
-`transition(cinv, frm, to) -> None`
+**Interfaces:**
+`current_state(root: RootDescriptor, cinv: str) -> LifecycleState | None`,
+`transition(root: RootDescriptor, cinv: str, frm: LifecycleState, to: LifecycleState) -> None`,
+`reserve(root: RootDescriptor, cinv: str) -> SlotReservation`,
+`release(root: RootDescriptor, reservation: SlotReservation) -> None`
+
+> **Interface amended 2026-08-11, before implementation.** Capacity and
+> lifecycle state are authority-bearing, so they stay anchored to the T5
+> verified backing-store object instead of to a root that could be re-resolved.
+>
+> - **Was** `reserve(root, cinv)`, `release(reservation)`, `transition(cinv,
+>   frm, to)` — `root` unannotated and absent entirely from the latter two.
+>   **Now** every authority-bearing operation takes the T5-verified
+>   `RootDescriptor` first. No pathname parameter is introduced anywhere as a
+>   workaround.
+> - **Descriptor lifetime** follows T5: callers own what they pass, T6 closes
+>   nothing it did not open, and no raw fd integer is ever persisted as durable
+>   state.
+> - **Lock order is `global capacity → per-CINV`, never inverted.** A path
+>   already holding a CINV lock must not acquire the capacity lock.
+>
+> **State is append-only, and that follows from T5 rather than from taste.**
+> `Mutation.install` is create-once: it refuses a target that already exists,
+> deliberately, so a single mutable state file per CINV cannot work. Each
+> transition is therefore its own immutable record, and the current state is
+> the last record of a validated contiguous chain. This also matches the
+> immutable-store discipline used everywhere else in the runtime.
+>
+> Recording a transition needs a sequenced target name, which the existing
+> `TargetKind.EXECUTION_STATE` grammar (`CINV-nnnnnn`) cannot express, so T6
+> adds `TargetKind.EXECUTION_TRANSITION` with grammar
+> `CINV-nnnnnn.nnnnnn` under `transitions/`. That is an additive extension of
+> the T5 substrate at its intended extension point — not a second write
+> protocol, which the ruling forbids.
 
 - Failing tests: two slots granted, third → `execution_capacity_exhausted`;
   `reserved` consumes the `CINV` permanently with no rollback; lock order
