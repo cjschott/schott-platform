@@ -143,7 +143,7 @@ for path in sorted(package.rglob("*.py")):
     # is a store, and package staging, which must write the verified copy.
     # Everywhere else in the package it is forbidden, so "A4 stages bytes" does
     # not become "the runtime may write anywhere".
-    if path.name not in {"store.py", "package_resolution.py"}:
+    if path.name not in {"store.py", "package_resolution.py", "evidence.py"}:
         for mutator in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "os.write",
                         "os.rename", "os.replace", "os.link", "os.unlink",
                         "os.mkdir", "os.chmod", "os.chown", "write_text",
@@ -177,10 +177,12 @@ assert_file "${CAPABILITY}/store.py"
 assert_file "${CAPABILITY}/invocation_identity.py"
 assert_file "${CAPABILITY}/fabric_evidence.py"
 assert_file "${CAPABILITY}/package_resolution.py"
+assert_file "${CAPABILITY}/records.py"
+assert_file "${CAPABILITY}/evidence.py"
 
 if [[ -d "${ROOT}/${CAPABILITY}" ]]; then
   UNEXPECTED="$(find "${ROOT}/${CAPABILITY}" -maxdepth 1 -name '*.py' -printf '%f\n' 2>/dev/null \
-    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py|fabric_evidence\.py|package_resolution\.py' || true)"
+    | grep -vxE '__init__\.py|errors\.py|identifiers\.py|store\.py|invocation_identity\.py|fabric_evidence\.py|package_resolution\.py|records\.py|evidence\.py' || true)"
   if [[ -z "${UNEXPECTED}" ]]; then
     pass "increment A1 adds no module beyond its authorised surface"
   else
@@ -2156,6 +2158,485 @@ with TemporaryDirectory() as tmp:
           "staging allocates no invocation or result identity")
     check(_fabric_inventory(fabric_root) == fabric_before,
           "staging leaves the fabric store byte-identical")
+
+# ===========================================================================
+# A5 — durable invocation decisions, replay, and conflict
+# ===========================================================================
+# One opaque invocation_id, one authoritative binding, for ever. Establishing
+# that has to be a single serialized act: looking up outside the lock and
+# writing inside it is a race with a different shape, not a smaller one.
+#
+# Nothing here executes. A5 records that a preparation was decided.
+
+from tools.capability.package_resolution import StagedArtifact  # noqa: E402
+from tools.capability.records import (  # noqa: E402
+    INVOCATION_FIELDS, RESULT_FIELDS, RECORD_SCHEMA_VERSION)
+from tools.capability.evidence import (  # noqa: E402
+    OUTCOME_PREPARED, OUTCOME_REFUSED, STATUS_CONFLICT, STATUS_CONSUMED,
+    STATUS_PREPARED, STATUS_REFUSED, REASON_CORRUPT_EVIDENCE,
+    REASON_INVOCATION_INPUT, record_invocation)
+
+_WHEN = _datetime(2026, 8, 11, 9, 0, 0, tzinfo=_timezone(_timedelta(hours=-5)))
+
+
+def _prepared_inputs(tmp, *, invocation_id="inv-alpha", payload=None,
+                     actor="operator:cschott", **binding_overrides):
+    """One fully verified invocation, ready to be decided durably."""
+    approved, artifact = _source(tmp)
+    staging = _staging(tmp)
+    evidence = _evidence()
+    staged = _stage(tmp, approved=approved, staging=staging, evidence=evidence)
+    body = {"text": "summarise"} if payload is None else payload
+    binding = dict(invocation_id=invocation_id, selection_id=evidence.selection_id,
+                   instance_id=evidence.instance_id,
+                   capability_package_id=evidence.capability_package_id,
+                   actor=actor)
+    binding.update(binding_overrides)
+    return dict(
+        invocation_id=invocation_id,
+        binding_digest=bind(payload=body, **binding),
+        payload_digest=payload_digest(body),
+        evidence=evidence, staged=staged, actor=binding["actor"],
+        request_id="req-alpha", requested_at=_WHEN)
+
+
+def _decide(store, inputs, **overrides):
+    asked = dict(inputs)
+    asked.update(overrides)
+    return record_invocation(store, **asked)
+
+
+def _opened_capability(tmp, name="capability"):
+    return CapabilityStore(Path(tmp) / name, expected_uid=UID, expected_gid=GID)
+
+
+# --- record schemas are closed and versioned -------------------------------
+check(RECORD_SCHEMA_VERSION == 1, f"records carry schema version 1 ({RECORD_SCHEMA_VERSION})")
+for field in ("invocation_record_id", "invocation_id", "request_id", "selection_id",
+              "instance_id", "capability_package_id", "contract_id", "capability_id",
+              "actor", "payload_digest", "binding_digest", "effect_class",
+              "artifact_digest", "requested_at", "kind", "schema_version", "evidence"):
+    check(field in INVOCATION_FIELDS, f"the invocation record carries {field}")
+for field in ("capability_result_id", "invocation_record_id", "attempt_number",
+              "outcome_class", "reason", "recorded_at", "kind", "schema_version",
+              "evidence"):
+    check(field in RESULT_FIELDS, f"the result record carries {field}")
+for forbidden in ("payload", "command", "argv", "environment", "secret", "adapter",
+                  "manifest_bytes", "artifact_bytes", "stdout", "stderr"):
+    check(forbidden not in INVOCATION_FIELDS and forbidden not in RESULT_FIELDS,
+          f"no record carries {forbidden}")
+
+# --- first accepted invocation ---------------------------------------------
+with TemporaryDirectory() as tmp:
+    store = _opened_capability(tmp)
+    inputs = _prepared_inputs(tmp)
+    decision = _decide(store, inputs)
+
+    check(decision.status == STATUS_PREPARED,
+          f"a first verified invocation is prepared ({decision.status} {decision.reason})")
+    check(decision.reason is None, "a prepared decision names no refusal")
+    check(decision.invocation_record_id is not None, "a CINV identity is allocated")
+    check(decision.result_record_id is None,
+          "an accepted preparation allocates no result record")
+    check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+          f"exactly one record is written ({store.counts()})")
+
+    written = store.read_record("capability-invocation", decision.invocation_record_id)
+    check(written["invocation_id"] == "inv-alpha", "the opaque identity is persisted")
+    check(written["binding_digest"] == inputs["binding_digest"], "the binding digest is persisted")
+    check(written["payload_digest"] == inputs["payload_digest"], "the payload digest is persisted")
+    check(written["request_id"] == "req-alpha", "the fabric request identity is persisted")
+    check(written["selection_id"] == "CSEL-000001", "the selection is persisted")
+    check(written["instance_id"] == "CINST-000001", "the instance is persisted")
+    check(written["capability_package_id"] == "CPKG-0001", "the package is persisted")
+    check(written["contract_id"] == "CCON-0001", "the contract is persisted")
+    check(written["capability_id"] == "CAPDEF-0001", "the capability is persisted")
+    check(written["actor"] == "operator:cschott", "the actor is persisted")
+    check(written["effect_class"] == "read-only", "the effect class is persisted")
+    check(written["artifact_digest"] == inputs["staged"].artifact_sha256,
+          "the verified artefact digest is persisted")
+    check(written["evidence"]["outcome"] == OUTCOME_PREPARED,
+          f"the record states its own outcome ({written['evidence']['outcome']})")
+    check(set(written) == set(INVOCATION_FIELDS),
+          f"the record carries exactly its schema ({sorted(set(written) ^ set(INVOCATION_FIELDS))})")
+    check("summarise" not in str(written),
+          "the payload body is nowhere in the record, only its digest")
+
+# --- exact replay -----------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    store = _opened_capability(tmp)
+    inputs = _prepared_inputs(tmp)
+    first = _decide(store, inputs)
+    before = inventory(store.root)
+
+    replayed = _decide(store, inputs)
+    check(replayed.status == STATUS_CONSUMED,
+          f"presenting the same identity and binding is consumed ({replayed.status})")
+    check(replayed.reason == "invocation_identity_consumed",
+          f"the consumed reason is the accepted one ({replayed.reason})")
+    check(replayed.invocation_record_id == first.invocation_record_id,
+          "replay returns the original authoritative record")
+    check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+          f"replay allocates and writes nothing ({store.counts()})")
+    check(inventory(store.root) == before,
+          "replay leaves the evidence store byte-identical")
+
+    # Replay returns the stored decision; it does not reconsult authority.
+    import tools.capability.evidence as _a5  # noqa: E402
+    import tools.capability.fabric_evidence as _a3mod  # noqa: E402
+    import tools.capability.package_resolution as _a4mod  # noqa: E402
+
+    def _explode_authority(*args, **kwargs):
+        raise AssertionError("authority was reconsulted during exact replay")
+
+    _saved = [(_a3mod, "verify_selected_evidence", _a3mod.verify_selected_evidence),
+              (_a4mod, "resolve_and_stage_package", _a4mod.resolve_and_stage_package)]
+    for owner, name, _ in _saved:
+        setattr(owner, name, _explode_authority)
+    try:
+        armed = _decide(store, inputs)
+        tripped = None
+    except AssertionError as error:
+        armed = None
+        tripped = str(error)
+    finally:
+        for owner, name, original in _saved:
+            setattr(owner, name, original)
+    check(tripped is None, f"exact replay reconsults no authority surface ({tripped})")
+    check(armed is not None and armed.status == STATUS_CONSUMED,
+          "exact replay still answers from stored evidence with authority armed")
+
+# --- conflicting reuse ------------------------------------------------------
+for changed, description in (("payload", "a different payload"),
+                             ("actor", "a different actor"),
+                             ("selection_id", "a different selection"),
+                             ("instance_id", "a different instance"),
+                             ("capability_package_id", "a different package")):
+    with TemporaryDirectory() as tmp:
+        store = _opened_capability(tmp)
+        inputs = _prepared_inputs(tmp)
+        first = _decide(store, inputs)
+        before = inventory(store.root)
+
+        if changed == "payload":
+            other = _prepared_inputs(tmp, payload={"text": "translate"})
+        else:
+            other = _prepared_inputs(tmp, **{changed: "OTHER-000009"})
+        other["invocation_id"] = "inv-alpha"
+        # Rebuild the binding under the same opaque identity.
+        conflicting = _decide(store, dict(inputs, binding_digest=other["binding_digest"]))
+        check(conflicting.status == STATUS_CONFLICT,
+              f"{description} under one identity conflicts ({conflicting.status})")
+        check(conflicting.reason == "invocation_identity_conflict",
+              f"the conflict reason is the accepted one ({conflicting.reason})")
+        check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+              f"a conflict allocates nothing ({store.counts()})")
+        check(inventory(store.root) == before,
+              "a conflict leaves the original record byte-identical")
+
+# --- refusal persistence ----------------------------------------------------
+with TemporaryDirectory() as tmp:
+    # An input refusal cannot form the authoritative key, so it records nothing.
+    store = _opened_capability(tmp)
+    inputs = _prepared_inputs(tmp)
+    for bad_id, description in (("", "an empty identity"), ("has space", "an unsafe identity"),
+                                (None, "an absent identity")):
+        outcome = _decide(store, inputs, invocation_id=bad_id)
+        check(outcome.status == STATUS_REFUSED and outcome.reason == REASON_INVOCATION_INPUT,
+              f"{description} refuses without persistence ({outcome.reason})")
+    check(store.counts() == {"capability-invocation": 0, "capability-result": 0},
+          f"an input refusal writes nothing ({store.counts()})")
+
+for spoil, expected_kind, description in (
+        (lambda i: dict(i, evidence=EvidenceVerdict(False, "instance-not-admitted")),
+         "instance-not-admitted", "a refused fabric evidence"),
+        (lambda i: dict(i, staged=StagedArtifact(False, "substitution-detected")),
+         "substitution-detected", "a refused package verification")):
+    with TemporaryDirectory() as tmp:
+        store = _opened_capability(tmp)
+        inputs = spoil(_prepared_inputs(tmp))
+        outcome = _decide(store, inputs)
+        check(outcome.status == STATUS_REFUSED,
+              f"{description} refuses ({outcome.status})")
+        check(outcome.reason == expected_kind,
+              f"{description} carries the upstream reason ({outcome.reason})")
+        check(outcome.invocation_record_id is not None,
+              f"{description} still consumes its invocation identity")
+        check(outcome.result_record_id is not None,
+              f"{description} persists a refusal record")
+        check(store.counts() == {"capability-invocation": 1, "capability-result": 1},
+              f"{description} writes exactly two records ({store.counts()})")
+        cinv = store.read_record("capability-invocation", outcome.invocation_record_id)
+        cres = store.read_record("capability-result", outcome.result_record_id)
+        check(cinv["evidence"]["outcome"] == OUTCOME_REFUSED,
+              "the invocation record states that it was refused")
+        check(cres["invocation_record_id"] == outcome.invocation_record_id,
+              "the result record links to its invocation")
+        check(cres["outcome_class"] == "refused",
+              f"the result outcome class is refused ({cres['outcome_class']})")
+        check(cres["reason"] == expected_kind, "the result names the refusal reason")
+        check(cres["attempt_number"] == 1, "the first attempt is numbered one")
+        check(set(cres) == set(RESULT_FIELDS), "the result carries exactly its schema")
+
+        # A refused invocation consumes its identity: going forward is a new one.
+        again = _decide(store, inputs)
+        check(again.status in (STATUS_CONSUMED, STATUS_CONFLICT),
+              f"a refused identity is not silently retryable ({again.status})")
+        check(store.counts() == {"capability-invocation": 1, "capability-result": 1},
+              "presenting a refused identity again writes nothing further")
+
+# --- corruption -------------------------------------------------------------
+def _corrupt(store, record_id, mutation):
+    path = store.path_for("capability-invocation", record_id)
+    body = _yaml_load(path.read_text(encoding="utf-8"))
+    mutation(body)
+    path.chmod(0o600)
+    path.write_text(_yaml_dump(body), encoding="utf-8")
+    path.chmod(0o400)
+
+
+import yaml as _yaml  # noqa: E402
+_yaml_load = _yaml.safe_load
+
+
+def _yaml_dump(body):
+    return _yaml.safe_dump(body, sort_keys=True, default_flow_style=False)
+
+
+for mutation, description in (
+        (lambda b: b.__setitem__("binding_digest", "not-a-digest"), "a malformed binding digest"),
+        (lambda b: b.__setitem__("payload_digest", "sha256:short"), "a malformed payload digest"),
+        (lambda b: b.__setitem__("invocation_id", ""), "a malformed opaque identity"),
+        (lambda b: b.__setitem__("kind", "capability-result"), "a wrong record kind"),
+        (lambda b: b.__setitem__("schema_version", 2), "an unknown schema version"),
+        (lambda b: b.__setitem__("unexpected", "field"), "an unknown field"),
+        (lambda b: b.pop("binding_digest"), "a missing binding digest")):
+    with TemporaryDirectory() as tmp:
+        store = _opened_capability(tmp)
+        inputs = _prepared_inputs(tmp)
+        first = _decide(store, inputs)
+        _corrupt(store, first.invocation_record_id, mutation)
+        outcome = _decide(store, inputs)
+        check(outcome.status == STATUS_REFUSED and outcome.reason == REASON_CORRUPT_EVIDENCE,
+              f"{description} in stored evidence refuses deterministically ({outcome.reason})")
+        check(store.counts()["capability-invocation"] == 1,
+              f"{description} is not repaired and nothing is added")
+
+with TemporaryDirectory() as tmp:
+    # Two authoritative records for one opaque identity is corruption, not a
+    # question about which one to prefer.
+    store = _opened_capability(tmp)
+    inputs = _prepared_inputs(tmp)
+    first = _decide(store, inputs)
+    duplicate = store.allocate_id("capability-invocation")
+    body = store.read_record("capability-invocation", first.invocation_record_id)
+    body["invocation_record_id"] = duplicate
+    store.write_atomic(store.path_for("capability-invocation", duplicate), body)
+    outcome = _decide(store, inputs)
+    check(outcome.status == STATUS_REFUSED and outcome.reason == REASON_CORRUPT_EVIDENCE,
+          f"two authoritative records for one identity refuse ({outcome.reason})")
+
+# --- interruption between the two records ----------------------------------
+with TemporaryDirectory() as tmp:
+    store = _opened_capability(tmp)
+    inputs = dict(_prepared_inputs(tmp),
+                  evidence=EvidenceVerdict(False, "instance-not-admitted"))
+    original_write = CapabilityStore.write_atomic
+    calls = {"count": 0}
+
+    def _fail_second_write(self, destination, payload):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("interrupted before the result record")
+        return original_write(self, destination, payload)
+
+    CapabilityStore.write_atomic = _fail_second_write
+    try:
+        interrupted = None
+        try:
+            _decide(store, inputs)
+        except OSError:
+            interrupted = True
+    finally:
+        CapabilityStore.write_atomic = original_write
+
+    check(interrupted, "the fixture really interrupted the second write")
+    check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
+          f"the invocation record survives an interrupted refusal ({store.counts()})")
+    surviving = store.list_records("capability-invocation")[0]
+    check(surviving["evidence"]["outcome"] == OUTCOME_REFUSED,
+          "the surviving record already states it was refused, so it cannot read as prepared")
+    check(surviving["invocation_id"] == "inv-alpha",
+          "the interrupted invocation is attributable to its identity")
+
+    # The identity is consumed by the interrupted attempt; nothing is repaired.
+    after = _decide(store, inputs)
+    check(after.status in (STATUS_CONSUMED, STATUS_CONFLICT),
+          f"an interrupted invocation is not silently retryable ({after.status})")
+    check(store.counts()["capability-result"] == 0,
+          "the missing result record is not manufactured on a later presentation")
+
+with TemporaryDirectory() as tmp:
+    # An identity allocated and never written is spent, never recycled.
+    store = _opened_capability(tmp)
+    spent = store.allocate_id("capability-invocation")
+    inputs = _prepared_inputs(tmp)
+    decision = _decide(store, inputs)
+    check(decision.invocation_record_id != spent,
+          f"an allocated-but-unwritten identity is not reused ({decision.invocation_record_id})")
+
+# --- the critical section is entered exactly once --------------------------
+_evidence_module_source = (root / "tools" / "capability" / "evidence.py").read_text(encoding="utf-8")
+check(_evidence_module_source.count("invocation_critical_section") == 1,
+      f"the decision enters its critical section exactly once "
+      f"({_evidence_module_source.count('invocation_critical_section')})")
+check("request_critical_section" not in _evidence_module_source,
+      "the fabric request lock is never acquired")
+
+with TemporaryDirectory() as tmp:
+    # Lock contention, proven by event rather than by elapsed time.
+    store = _opened_capability(tmp)
+    inputs = _prepared_inputs(tmp)
+
+    class _WatchingStore(CapabilityStore):
+        def __init__(self, *args, **kwargs):
+            self.reached = threading.Event()
+            self.release = threading.Event()
+            self.hold = False
+            super().__init__(*args, **kwargs)
+
+        def invocation_critical_section(self, invocation_id):
+            outer = super().invocation_critical_section(invocation_id)
+
+            class _Section:
+                def __enter__(inner):
+                    outer.__enter__()
+                    if self.hold:
+                        self.reached.set()
+                        self.release.wait(20)
+                    return None
+
+                def __exit__(inner, *exc):
+                    return outer.__exit__(*exc)
+
+            return _Section()
+
+    holder = _WatchingStore(store.root, expected_uid=UID, expected_gid=GID)
+    holder.hold = True
+    outcomes = {}
+
+    def hold_section():
+        outcomes["holder"] = _decide(holder, inputs)
+
+    first = threading.Thread(target=hold_section, daemon=True)
+    first.start()
+    check(holder.reached.wait(20), "the first caller holds the capability critical section")
+
+    second_store = _opened_capability(tmp)
+    entered = threading.Event()
+
+    def contend():
+        outcomes["second"] = _decide(second_store, inputs)
+        entered.set()
+
+    second = threading.Thread(target=contend, daemon=True)
+    second.start()
+    check(not entered.wait(1.5),
+          "the second caller cannot decide while the first holds the section")
+    holder.release.set()
+    first.join(20)
+    second.join(20)
+    check(entered.is_set(), "the second caller proceeds once the section is released")
+    statuses = sorted(o.status for o in outcomes.values())
+    check(statuses == sorted([STATUS_PREPARED, STATUS_CONSUMED]),
+          f"one caller prepared and the other observed its durable state ({statuses})")
+    check(store.counts()["capability-invocation"] == 1,
+          "contention produced exactly one authoritative record")
+
+# --- concurrent exact and conflicting reuse --------------------------------
+for variant, description in (("exact", "exact reuse"), ("conflicting", "conflicting reuse")):
+    rounds = 8
+    callers = 8
+    anomalies = []
+    for index in range(rounds):
+        with TemporaryDirectory() as tmp:
+            store = _opened_capability(tmp)
+            base = _prepared_inputs(tmp, invocation_id=f"inv-race-{index}")
+            other = _prepared_inputs(tmp, invocation_id=f"inv-race-{index}",
+                                     payload={"text": "translate"})
+            results = []
+            notice = threading.Lock()
+
+            def race(slot):
+                handle = _opened_capability(tmp)
+                asked = base if (variant == "exact" or slot % 2 == 0) else \
+                    dict(base, binding_digest=other["binding_digest"])
+                try:
+                    outcome = _decide(handle, asked)
+                except BaseException as error:  # noqa: BLE001
+                    outcome = error
+                with notice:
+                    results.append(outcome)
+
+            threads = [threading.Thread(target=race, args=(slot,)) for slot in range(callers)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(30)
+            if any(t.is_alive() for t in threads):
+                anomalies.append(f"round {index}: a caller did not finish")
+                break
+            statuses = [getattr(r, "status", repr(r)) for r in results]
+            prepared = [s for s in statuses if s == STATUS_PREPARED]
+            records = store.counts()["capability-invocation"]
+            if len(prepared) != 1 or records != 1:
+                anomalies.append(f"round {index}: prepared={len(prepared)} records={records}")
+            if variant == "exact" and any(s == STATUS_CONFLICT for s in statuses):
+                anomalies.append(f"round {index}: exact reuse produced a conflict")
+            if variant == "conflicting" and not any(s == STATUS_CONFLICT for s in statuses):
+                anomalies.append(f"round {index}: conflicting reuse produced no conflict")
+    check(not anomalies,
+          f"concurrent {description}: one authoritative binding every round ({anomalies[:2]})")
+
+# --- neither the fabric nor the staged artefact is touched -----------------
+with TemporaryDirectory() as tmp:
+    store = _opened_capability(tmp)
+    inputs = _prepared_inputs(tmp)
+    fabric_root = _chain(tmp)
+    fabric_before = _fabric_inventory(fabric_root)
+    staged = Path(inputs["staged"].staged_path)
+    staged_before = (staged.lstat().st_ino, staged.lstat().st_mode,
+                     staged.lstat().st_uid, staged.read_bytes())
+    residue = staged.parent.parent / ".staging-residue.tmp"
+    residue.write_bytes(b"partial")
+    residue_before = (residue.lstat().st_ino, residue.read_bytes())
+
+    _decide(store, inputs)
+    _decide(store, inputs)
+    _decide(store, dict(inputs, binding_digest=bind(payload={"x": 1},
+                                                    invocation_id="inv-alpha",
+                                                    selection_id="CSEL-000001",
+                                                    instance_id="CINST-000001",
+                                                    capability_package_id="CPKG-0001",
+                                                    actor="operator:cschott")))
+    check(_fabric_inventory(fabric_root) == fabric_before,
+          "recording a decision leaves the fabric store byte-identical")
+    check((staged.lstat().st_ino, staged.lstat().st_mode, staged.lstat().st_uid,
+           staged.read_bytes()) == staged_before,
+          "the staged artefact is untouched by evidence persistence")
+    check((residue.lstat().st_ino, residue.read_bytes()) == residue_before,
+          "A4 staging residue is not cleaned by A5")
+
+# --- no mutable index namespace --------------------------------------------
+with TemporaryDirectory() as tmp:
+    store = _opened_capability(tmp)
+    _decide(store, _prepared_inputs(tmp))
+    present = sorted(p.name for p in store.root.iterdir())
+    check(present == ["capability-invocations", "capability-results", "sequences"],
+          f"the store grew no new namespace ({present})")
+    for forbidden in ("requests", "replay", "index", "ledger", "mapping", "cache"):
+        check(not (store.root / forbidden).exists(),
+              f"no {forbidden} namespace exists")
 print(f"__FAILURES__={failures}")
 STOREPY
 )"
