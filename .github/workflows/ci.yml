@@ -246,6 +246,11 @@ jobs:
       - name: Capability execution transition action tests
         run: bash tests/test-capability-execution-transition-action.sh
 
+      # Worker driven through a fake backend: no Podman, no subprocess, no
+      # container. Real execution is gate G6.
+      - name: Capability execution lifecycle tests
+        run: bash tests/test-capability-execution-lifecycle.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

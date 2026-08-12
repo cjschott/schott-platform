@@ -100,15 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 45 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 46 checks plus the closing summary. Quick mode drops
 # ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports. The five ENG-0005 execution suites are
 # always-on, so both totals rose by five.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=36
+  TOTAL_STEPS=37
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=47
+  TOTAL_STEPS=48
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -233,6 +233,11 @@ run "Capability execution helper policy" \
 # backend: no root, no sudo, no credential change. Real transition is gate G6.
 run "Capability execution transition action" \
   bash tests/test-capability-execution-transition-action.sh
+
+# ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
+# no subprocess, no container, no Podman. Real execution is gate G6.
+run "Capability execution lifecycle" \
+  bash tests/test-capability-execution-lifecycle.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
