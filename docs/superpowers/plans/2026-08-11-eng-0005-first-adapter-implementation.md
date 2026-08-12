@@ -800,6 +800,40 @@ Regression set unless stated otherwise:
 **Files:** `provisioning/image/Containerfile`, `provisioning/image/README.md`
 **Interfaces:** none (provisioning artefact)
 
+> **OPEN — reviewer ruling required before T19 may be implemented.** No base
+> image satisfies the locked contract, and the conflict is with T12's fixed
+> container command rather than with anything T19 chooses.
+>
+> T12 executes `/usr/bin/python3 /kyri/package/<entrypoint>`
+> (`worker.py:66,268`) as `--user 1000:1000`. §27 requires one fixed exact
+> Python patch version, standard library only, **no package manager, no
+> compiler, no shell**, and the T19 test list requires the *definition itself*
+> to contain no `pip`, package manager, compiler, `sudo`, SSH, `curl`, `wget`,
+> or shell. Every available base fails at least one:
+>
+> | Candidate | Conflict |
+> |---|---|
+> | `python:X.Y.Z-slim` | Interpreter is `/usr/local/bin/python3`; the slim variants carry **no** `/usr/bin/python3` at all, so T12's fixed command finds nothing. Also ships `apt` and a shell. |
+> | `python:X.Y.Z` (full) | Has a distro `/usr/bin/python3`, but it is a *different* interpreter from the tag's pinned `/usr/local/bin/python3` — the pinned patch version would not be the one executed. Ships `apt`, a compiler, `curl`, and a shell. |
+> | distroless `python3-debian12` | Provides `/usr/bin/python3` only as a **symlink** to `/usr/bin/python3.11`, which is the integrity question the reviewer named. The patch version floats with Debian rather than being declarable; `ENTRYPOINT` is preset; the `nonroot` variant is uid 65532, not 1000. |
+> | `debian:*-slim` + `apt`, or Alpine + `apk` | Puts a package manager in the definition, which the T19 test list forbids outright. The Track-B Alpine digest is additionally never promoted. |
+> | `FROM scratch` + assembled CPython | Needs a builder stage carrying a package manager or compiler, failing the same test, and the result cannot be statically validated for completeness. |
+>
+> §27 says the image is "purpose-built for Kyri" but no accepted source says
+> how it is built without a package manager appearing in its own definition.
+> That is a provisioning and supply-chain authority decision, which is what G4
+> exists for, so it is left unfixed rather than chosen here.
+>
+> What the ruling must settle: the base image and its pinning strategy; whether
+> `/usr/bin/python3` may be a symlink and, if so, what proves its integrity at
+> admission; or, alternatively, an amendment to T12's `CONTAINER_INTERPRETER`
+> — which would be a change to a released module and is explicitly **not** a
+> change T19 may make quietly.
+>
+> The per-`CINV` output byte and inode quota (design §34) remains unresolved and
+> is a separate G4/G5 item. The Containerfile does not address it and must not
+> be read as doing so: it is a host storage question, not an image one.
+
 - Failing tests (static, no build): the definition contains no pip, package
   manager, compiler, sudo, SSH, curl, wget, or shell; declares a fixed non-root
   UID/GID; pins an exact Python patch version; **contains no reference to the
