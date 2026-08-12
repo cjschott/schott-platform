@@ -202,7 +202,7 @@ def write(path, data):
 def admission_body(cimp, oci=None):
     return {
         'cimp': cimp,
-        'oci_digest': oci or ('sha256:' + 'a' * 64),
+        'oci_image_id': ('a' * 64) if oci is None else oci,
         'adapter_identity': 'python-podman-v1',
         'payload_schema_version': 1,
         'execution_profile_schema_version': 1,
@@ -283,7 +283,7 @@ admission = resolve_implementation(fd, 'CIMP-000001', generation=generation)
 os.close(fd)
 assert isinstance(admission, Admission)
 assert admission.cimp == 'CIMP-000001'
-assert admission.oci_digest == 'sha256:' + 'a' * 64
+assert admission.oci_image_id == 'a' * 64
 assert admission.adapter_identity == 'python-podman-v1'
 assert admission.payload_schema_version == 1
 assert admission.execution_profile_schema_version == 1
@@ -386,7 +386,7 @@ print('OK')
 run_case "admission digest disagreeing with the authority set fails closed" "${PRELUDE}
 root = build('admdig')
 path = os.path.join(root, 'implementations', 'CIMP-000001', 'admission')
-write(path, serialise(admission_body('CIMP-000001', oci='sha256:' + 'c' * 64)))
+write(path, serialise(admission_body('CIMP-000001', oci='c' * 64)))
 assert refuses(root)
 print('OK')
 "
@@ -517,6 +517,31 @@ run_case "a malformed canonical CIMP record fails closed" "${PRELUDE}
 root = build('malc')
 write(os.path.join(root, 'implementations', 'CIMP-000001', 'admission'), b'{not json')
 assert refuses(root)
+print('OK')
+"
+
+run_case "only a bare lowercase 64-hex image ID is accepted as authority" "${PRELUDE}
+# Every non-authoritative Podman value -- image .Digest, container
+# .ImageDigest, .RepoDigests -- arrives 'sha256:'-prefixed, so the prefixed
+# form must be structurally unrepresentable here. Tags and repository names
+# likewise carry no immutable identity.
+for bad in ('sha256:' + 'a' * 64, 'A' * 64, 'a' * 63, 'a' * 65, '',
+            'alpine:latest', 'docker.io/library/alpine',
+            'localhost/kyri-python@sha256:' + 'a' * 64, 'g' * 64):
+    root = build('badid' + str(abs(hash(bad)) % 100000))
+    body = admission_body('CIMP-000001', oci=bad)
+    data = serialise(body)
+    write(os.path.join(root, 'implementations', 'CIMP-000001', 'admission'), data)
+    entries = [{'cimp': 'CIMP-000001', 'admission': sha(data), 'retirement': None}]
+    aset = serialise({'entries': entries})
+    write(os.path.join(root, 'generations', GENESIS, 'authority-set'), aset)
+    gen = serialise({'cgen': GENESIS, 'predecessor_cgen': None,
+                     'predecessor_generation_digest': None,
+                     'authority_set_digest': sha(aset)})
+    write(os.path.join(root, 'generations', GENESIS, 'generation'), gen)
+    write(os.path.join(root, 'current-generation'),
+          serialise({'cgen': GENESIS, 'generation_digest': sha(gen)}))
+    assert refuses(root), 'accepted ' + repr(bad)
 print('OK')
 "
 
@@ -712,7 +737,7 @@ run_case "replacing the root path cannot redirect a descriptor-anchored validati
 good = build('anchor-good')
 evil = build('anchor-evil')
 write(os.path.join(evil, 'implementations', 'CIMP-000001', 'admission'),
-      serialise(admission_body('CIMP-000001', oci='sha256:' + 'e' * 64)))
+      serialise(admission_body('CIMP-000001', oci='e' * 64)))
 fd = open_root(good)
 # The name now refers to a different tree entirely.
 moved = os.path.join(WORK, 'anchor-good-moved')
@@ -721,7 +746,7 @@ os.rename(evil, good)
 try:
     generation = current_generation(fd)
     admission = resolve_implementation(fd, 'CIMP-000001', generation=generation)
-    assert admission.oci_digest == 'sha256:' + 'a' * 64, admission.oci_digest
+    assert admission.oci_image_id == 'a' * 64, admission.oci_image_id
     print('OK')
 finally:
     os.close(fd)

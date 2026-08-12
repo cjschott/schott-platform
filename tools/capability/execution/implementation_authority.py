@@ -109,7 +109,14 @@ class Admission:
     """One immutable implementation contract, as admitted."""
 
     cimp: str
-    oci_digest: str
+    # The immutable local image ID -- Podman `image inspect .Id` -- as bare
+    # lowercase hex with no algorithm prefix. Deliberately not a manifest
+    # digest: `.Digest`, `.RepoDigests`, and a container's `.ImageDigest` all
+    # describe how an image arrived rather than what it contains, are absent
+    # for a locally built image, and all arrive `sha256:`-prefixed. Requiring
+    # the bare form therefore makes every one of them structurally
+    # unrepresentable here rather than merely discouraged.
+    oci_image_id: str
     adapter_identity: str
     payload_schema_version: int
     execution_profile_schema_version: int
@@ -253,7 +260,7 @@ def _admission(body: bytes, cimp: str) -> Admission:
     document = _parse(body, f"{cimp} admission")
     _closed(document, {
         "cimp": str,
-        "oci_digest": str,
+        "oci_image_id": str,
         "adapter_identity": str,
         "payload_schema_version": int,
         "execution_profile_schema_version": int,
@@ -263,15 +270,15 @@ def _admission(body: bytes, cimp: str) -> Admission:
     if document["cimp"] != cimp:
         raise IntegrityFailure(
             f"admission at {cimp} declares {document['cimp']!r}")
-    oci = document["oci_digest"]
-    if not oci.startswith("sha256:") or not _is_digest(oci[7:]):
-        raise IntegrityFailure(f"{cimp} admission has a malformed OCI digest")
+    if not _is_digest(document["oci_image_id"]):
+        raise IntegrityFailure(
+            f"{cimp} admission has a malformed local image ID")
     if not _is_digest(document["provisioning_evidence_digest"]):
         raise IntegrityFailure(
             f"{cimp} admission has a malformed evidence commitment")
     return Admission(
         cimp=cimp,
-        oci_digest=oci,
+        oci_image_id=document["oci_image_id"],
         adapter_identity=document["adapter_identity"],
         payload_schema_version=document["payload_schema_version"],
         execution_profile_schema_version=document[

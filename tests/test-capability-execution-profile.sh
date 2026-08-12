@@ -147,10 +147,10 @@ from tools.capability.execution.profile import (
     TMPFS_OPTIONS, PACKAGE_MOUNT, PAYLOAD_MOUNT, OUTPUT_MOUNT)
 from tools.capability.execution.types import Classification
 
-IMAGE = 'sha256:' + 'a' * 64
+IMAGE = 'a' * 64
 
 def admission(cimp='CIMP-000001', image=IMAGE):
-    return Admission(cimp=cimp, oci_digest=image,
+    return Admission(cimp=cimp, oci_image_id=image,
                      adapter_identity='python-podman-v1',
                      payload_schema_version=1,
                      execution_profile_schema_version=PROFILE_SCHEMA_VERSION,
@@ -165,7 +165,7 @@ def profile(**kw):
 
 def observed_from(p, **overrides):
     fields = dict(
-        image_digest=p.image_digest, network=p.network,
+        oci_image_id=p.oci_image_id, network=p.network,
         read_only_rootfs=p.read_only_rootfs,
         no_new_privileges=p.no_new_privileges,
         dropped_capabilities=p.dropped_capabilities,
@@ -274,7 +274,7 @@ print('OK')
 
 run_case "the fingerprint carries the explicit security-critical fields too" "${PRELUDE}
 fp = fingerprint(profile())
-assert fp.image_digest == IMAGE
+assert fp.oci_image_id == IMAGE
 assert fp.cimp == 'CIMP-000001'
 assert fp.profile_schema_version == PROFILE_SCHEMA_VERSION
 assert fp.execution_uid == EXECUTION_UID and fp.execution_gid == EXECUTION_GID
@@ -303,7 +303,7 @@ changes = {
     'grace_seconds': 5, 'execution_uid': 0, 'execution_gid': 0,
     'hostname': 'other', 'tmpfs_bytes': 32 * 1024 * 1024,
     'tmpfs_mode': 0o777, 'tmpfs_options': ('noexec',),
-    'profile_schema_version': 2, 'image_digest': 'sha256:' + 'b' * 64,
+    'profile_schema_version': 2, 'oci_image_id': 'b' * 64,
     'cimp': 'CIMP-000002', 'adapter_identity': 'other-v2',
     'payload_schema_version': 9, 'privileged': True, 'host_network': True,
     'host_pid': True, 'gpu': True, 'devices': ('/dev/nvidia0',),
@@ -350,7 +350,7 @@ attempts = [
     {'network': 'host'}, {'memory': '1g'}, {'memory_bytes': 1}, {'cpus': '4'},
     {'pids_limit': 4096}, {'privileged': True}, {'devices': ['/dev/nvidia0']},
     {'cap_add': ['SYS_ADMIN']}, {'mounts': [{'src': '/', 'dst': '/host'}]},
-    {'image': 'alpine:latest'}, {'oci_digest': 'sha256:' + 'c' * 64},
+    {'image': 'alpine:latest'}, {'oci_image_id': 'c' * 64},
     {'user': '0:0'}, {'hostname': 'attacker'}, {'read_only': False},
     {'security_opt': ['seccomp=unconfined']}, {'timeout_seconds': 3600},
 ]
@@ -394,7 +394,7 @@ print('OK')
 run_case "each security-critical mismatch is refused" "${PRELUDE}
 p = profile()
 mismatches = {
-    'network': 'bridge', 'image_digest': 'sha256:' + 'b' * 64,
+    'network': 'bridge', 'oci_image_id': 'b' * 64,
     'read_only_rootfs': False, 'no_new_privileges': False,
     'memory_bytes': 257 * 1024 * 1024, 'memory_swap_bytes': 1,
     'cpu_quota_us': 100000, 'cpu_period_us': 1000, 'pids_limit': 4096,
@@ -495,7 +495,7 @@ print('OK')
 run_case "an admission declaring a different profile schema refuses at build" "${PRELUDE}
 from tools.capability.execution.implementation_authority import Admission
 bad = ProfileBinding(cinv='CINV-000042', admission=Admission(
-    cimp='CIMP-000001', oci_digest=IMAGE, adapter_identity='python-podman-v1',
+    cimp='CIMP-000001', oci_image_id=IMAGE, adapter_identity='python-podman-v1',
     payload_schema_version=1, execution_profile_schema_version=2,
     argv_contract_identity='fixed-python-entrypoint-v1',
     provisioning_evidence_digest='b' * 64))

@@ -235,7 +235,7 @@ def code_only():
 def record(**overrides):
     body = dict(
         cinv='CINV-000042', cimp='CIMP-000001',
-        oci_digest='sha256:' + 'a' * 64,
+        oci_image_id='a' * 64,
         handoff_root='/data/kyri/capability-handoff',
         profile_schema_version=1, commitment_digest='b' * 64,
         lifecycle_state='launch_authorized')
@@ -290,7 +290,7 @@ bad = [
     'CINV-000042\\n', 'CINV-000042\\t', 'CINV-00004a', 'CINV-+00042',
     '../../etc/passwd', '/etc/passwd', '/data/kyri', 'CINV-000042/x',
     'x/CINV-000042', '--help', '-h', '', 'CINV-', 'CINV-000042;id',
-    'CINV-000042\\x00', 'CIMP-000001', 'c' * 64, 'sha256:' + 'a' * 64,
+    'CINV-000042\\x00', 'CIMP-000001', 'c' * 64, 'a' * 64,
     'kyri-capability', '999', '0', 'python3', '/usr/bin/podman',
     'PATH=/tmp', 'CINV-000042 extra',
 ]
@@ -382,7 +382,7 @@ else:
 
 run_case "the record schema is closed and minimal" "${PRELUDE}
 assert set(helper.LAUNCH_RECORD_SCHEMA) == {
-    'cinv', 'cimp', 'oci_digest', 'handoff_root', 'profile_schema_version',
+    'cinv', 'cimp', 'oci_image_id', 'handoff_root', 'profile_schema_version',
     'commitment_digest', 'lifecycle_state'}, set(helper.LAUNCH_RECORD_SCHEMA)
 try:
     helper.check_launch_authorisation(record(extra='x'), 'CINV-000042')
@@ -427,8 +427,13 @@ print('OK')
 
 run_case "record identity and digest fields are grammar-checked" "${PRELUDE}
 for field, value in (('cimp', 'CIMP-00001'), ('cimp', 'cimp-000001'),
-                     ('oci_digest', 'sha256:' + 'g' * 64),
-                     ('oci_digest', 'a' * 64),
+                     ('oci_image_id', 'g' * 64),
+                     ('oci_image_id', 'sha256:' + 'a' * 64),
+                     ('oci_image_id', 'A' * 64),
+                     ('oci_image_id', 'a' * 63),
+                     ('oci_image_id', 'a' * 65),
+                     ('oci_image_id', 'alpine:latest'),
+                     ('oci_image_id', 'docker.io/library/alpine'),
                      ('commitment_digest', 'z' * 64),
                      ('commitment_digest', 'b' * 63),
                      ('profile_schema_version', '1'),

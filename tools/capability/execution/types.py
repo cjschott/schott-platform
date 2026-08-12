@@ -162,7 +162,7 @@ class ExecutionProfile:
     """
 
     cinv: str
-    image_digest: str
+    oci_image_id: str
     network: str
     memory_bytes: int
     memory_swap_bytes: int
@@ -207,7 +207,7 @@ class ExecutionFingerprint:
 
     cinv: str
     profile_digest: str
-    image_digest: str
+    oci_image_id: str
     cimp: str
     adapter_identity: str
     profile_schema_version: int

@@ -237,7 +237,7 @@ PROFILE_HELPER="
 import dataclasses
 from tools.capability.execution.types import Mount
 PROFILE_FIELDS = dict(
-    cinv='CINV-000042', image_digest='sha256:' + 'a' * 64, network='none',
+    cinv='CINV-000042', oci_image_id='a' * 64, network='none',
     memory_bytes=268435456, memory_swap_bytes=268435456, cpus='0.5',
     pids_limit=64, timeout_seconds=30, grace_seconds=2,
     read_only_rootfs=True, no_new_privileges=True, cap_drop_all=True,
@@ -252,7 +252,7 @@ PROFILE_FIELDS = dict(
     host_pid=False, gpu=False)
 FINGERPRINT_FIELDS = dict(
     cinv='CINV-000042', profile_digest='b' * 64,
-    image_digest='sha256:' + 'a' * 64, cimp='CIMP-000001',
+    oci_image_id='a' * 64, cimp='CIMP-000001',
     adapter_identity='python-podman-v1', profile_schema_version=1,
     execution_uid=999, execution_gid=987)
 "

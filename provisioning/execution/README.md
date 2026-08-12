@@ -584,6 +584,28 @@ actually exercised. They now build a canonical root from the install matrix in
 a temporary directory and run the real resolution logic against it, so the
 property is tested on every host and CI included.
 
+**Generation 3 — pending, from the `oci_image_id` correction (2026-08-12).**
+The execution-authority field was renamed from `oci_digest` and its syntax
+corrected to bare `^[0-9a-f]{64}$`, and the observation path was moved from
+Podman's `.ImageDigest` to `.Image`. Seven installed objects therefore differ
+from source and must be reinstalled together, because the profile canonical
+form, the `VERIFIED_PROFILE` message, and the launch authorisation record all
+commit the same field and a partial install would leave them disagreeing:
+
+| Repository source | Installed path |
+|---|---|
+| `tools/capability/execution/implementation_authority.py` | `/usr/lib/kyri/python/tools/capability/execution/implementation_authority.py` |
+| `tools/capability/execution/lifecycle.py` | `…/tools/capability/execution/lifecycle.py` |
+| `tools/capability/execution/profile.py` | `…/tools/capability/execution/profile.py` |
+| `tools/capability/execution/protocol.py` | `…/tools/capability/execution/protocol.py` |
+| `tools/capability/execution/types.py` | `…/tools/capability/execution/types.py` |
+| `tools/capability/execution/worker.py` | `…/tools/capability/execution/worker.py` |
+| `provisioning/execution/kyri-exec-transition.py` | `/usr/lib/kyri/python/kyri_exec_transition.py` |
+
+All `root:root 0444`. The three `/usr/libexec` entrypoints are byte-identical
+and **must not** be reinstalled. The remaining 38 matrix artefacts are
+unchanged. Re-provisioning is a separately reviewed operator event — see below.
+
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its
 digests — not the checkout — describe what runs. A later commit to

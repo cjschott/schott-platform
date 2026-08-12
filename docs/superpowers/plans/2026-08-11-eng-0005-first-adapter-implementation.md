@@ -967,6 +967,43 @@ are valid on a clean host and a G4-provisioned host alike. Gate state
 installed tree still carries the pre-correction generation until the operator
 performs the explicit re-provisioning; G4 is not reopened and no gate changes.
 
+### G5 implementation pass 1 — immutable image identity, 2026-08-12
+
+`oci_digest` became **`oci_image_id`** across every ENG-0005 execution-authority
+surface, with syntax `^[0-9a-f]{64}$` and no `sha256:` prefix. Authority is the
+local image ID (`podman image inspect .Id`); the post-create readback is
+`podman container inspect .Image`. Manifest digests, `.ImageDigest`,
+`.RepoDigests`, `.RepoTags`, `.ImageName`, tags, and repository names are all
+non-authoritative, and the bare syntax makes each of them structurally
+unrepresentable rather than merely discouraged. Ruled in design §5.
+
+The observation path was corrected with it. `lifecycle.observe` read
+`.ImageDigest` — a real Podman field, but one carrying a **registry manifest
+digest**, so a container was verified against a value that depends on how the
+image arrived and is absent for a locally built one. It now reads `.Image`.
+
+Renamed in `types.py`, `implementation_authority.py`, `profile.py`,
+`protocol.py`, `lifecycle.py`, `worker.py`, and
+`provisioning/execution/kyri-exec-transition.py`, so the profile canonical form
+and fingerprint, the `VERIFIED_PROFILE` message, and the bounded launch
+authorisation record parsed by root all commit the same field. No compatibility
+shim exists: no `CIMP` has ever been admitted, and a dual vocabulary in an
+authority schema is migration debt with no beneficiary.
+
+**REQUIRED BUT NOT YET IMPLEMENTED**, and deliberately not started in this
+pass: the inert-future-CIMP reader tolerance, the offline
+implementation-authority writer, the `/var/lib/kyri/implementation-authority`
+namespace and its control root, the canonical provisioning-evidence manifest,
+the governed adapter and argv identity constants, and the exported payload
+schema-version constant. Documentation of those describes **required future
+behaviour, not current runtime behaviour**.
+
+**Generation 3 is now required.** Six installed library modules and one
+installed internal module differ from source; the three `/usr/libexec`
+entrypoints are byte-identical and unchanged. The host runs generation 2 until
+a separately reviewed re-provisioning installs the delta recorded in the
+runbook. No gate changes: G5 stays closed.
+
 ## 6. Sequencing rules
 
 TDD throughout: production code never leads its test. Privileged components

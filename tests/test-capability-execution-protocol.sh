@@ -147,7 +147,7 @@ from tools.capability.execution.types import Classification
 
 CINV = 'CINV-000042'
 CID = 'c' * 64
-IMAGE = 'sha256:' + 'a' * 64
+IMAGE = 'a' * 64
 
 def created(cinv=CINV, container_id=CID):
     return Message(kind=MessageKind.CREATED, cinv=cinv,
@@ -156,7 +156,7 @@ def created(cinv=CINV, container_id=CID):
 def verified(cinv=CINV):
     return Message(kind=MessageKind.VERIFIED_PROFILE, cinv=cinv, fields=(
         ('container_id', CID), ('profile_digest', 'd' * 64),
-        ('image_digest', IMAGE), ('cimp', 'CIMP-000001'),
+        ('oci_image_id', IMAGE), ('cimp', 'CIMP-000001'),
         ('profile_schema_version', 1), ('execution_uid', 1000),
         ('execution_gid', 1000)))
 
@@ -392,8 +392,14 @@ for bad in ('C' * 64, 'c' * 63, 'c' * 65, '', 'deadbeef', '../x'):
     mutate(created(), 'container_id', bad)
 for bad in ('CIMP-00001', 'cimp-000001', ''):
     mutate(verified(), 'cimp', bad)
-for bad in ('sha256:' + 'g' * 64, 'a' * 64, 'sha512:' + 'a' * 64, ''):
-    mutate(verified(), 'image_digest', bad)
+# The governed identity is the bare local image ID. A 'sha256:'-prefixed value
+# is the shape every non-authoritative digest arrives in -- image .Digest,
+# container .ImageDigest, .RepoDigests -- so it is refused here rather than
+# accepted and compared.
+for bad in ('g' * 64, 'sha256:' + 'a' * 64, 'sha512:' + 'a' * 64, '',
+            'A' * 64, 'a' * 63, 'a' * 65, 'alpine:latest',
+            'docker.io/library/alpine'):
+    mutate(verified(), 'oci_image_id', bad)
 for bad in ('1', 1.5, None, True):
     mutate(verified(), 'profile_schema_version', bad)
 print('OK')

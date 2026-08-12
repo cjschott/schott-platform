@@ -211,7 +211,7 @@ from tools.capability.execution.types import Classification, Mount
 WORK = os.environ['WORKDIR']
 CINV = 'CINV-000042'
 CID = 'c' * 64
-IMAGE = 'sha256:' + 'a' * 64
+IMAGE = 'a' * 64
 
 def package(entrypoint='main.py', extra=()):
     from tools.capability.execution.package_contract import validate_package
@@ -234,7 +234,7 @@ def package(entrypoint='main.py', extra=()):
 
 def profile(cinv=CINV):
     return build_profile(ProfileBinding(cinv=cinv, admission=Admission(
-        cimp='CIMP-000001', oci_digest=IMAGE,
+        cimp='CIMP-000001', oci_image_id=IMAGE,
         adapter_identity='python-podman-v1', payload_schema_version=1,
         execution_profile_schema_version=1,
         argv_contract_identity='fixed-python-entrypoint-v1',
@@ -678,8 +678,14 @@ print('OK')
 
 run_case "the observed profile is mapped from Podman data, not from expectation" "${PRELUDE}
 expected = profile()
+# Podman container inspect shape. 'Image' is the immutable local image ID and
+# is the only image field that is authority; 'ImageDigest' is a registry
+# manifest digest and 'ImageName' is whatever mutable reference happened to be
+# used at create, so both are present here precisely to prove they are ignored.
 inspect_data = {
-    'Id': CID, 'ImageDigest': IMAGE, 'NetworkMode': 'none',
+    'Id': CID, 'Image': IMAGE, 'NetworkMode': 'none',
+    'ImageDigest': 'sha256:' + 'b' * 64,
+    'ImageName': 'localhost/kyri-python:latest',
     'ReadOnlyRootfs': True, 'NoNewPrivileges': True,
     'CapDrop': ['ALL'], 'EffectiveCaps': [], 'Memory': 268435456,
     'MemorySwap': 268435456, 'CpuQuota': 50000, 'CpuPeriod': 100000,
@@ -699,9 +705,66 @@ assert verify_observed(expected, observed) is None
 print('OK')
 "
 
+run_case "only Podman .Image supplies the observed execution identity" "${PRELUDE}
+# .Image absent: the observation must be missing rather than fall back to a
+# manifest digest or a tag that happen to be present and well-formed.
+data = {'Id': CID, 'ImageDigest': 'sha256:' + IMAGE,
+        'ImageName': 'localhost/kyri-python:latest'}
+observed = L.observe(FakeBackend(inspect=data), CID)
+assert observed.oci_image_id is None, observed.oci_image_id
+# .Image present: it wins outright, and neither decoy contributes.
+data['Image'] = IMAGE
+observed = L.observe(FakeBackend(inspect=data), CID)
+assert observed.oci_image_id == IMAGE, observed.oci_image_id
+print('OK')
+"
+
+run_case "a retagged or re-pushed image cannot change the observed identity" "${PRELUDE}
+from tools.capability.execution.profile import verify_observed, ProfileMismatch
+base = {
+    'Id': CID, 'Image': IMAGE, 'NetworkMode': 'none',
+    'ReadOnlyRootfs': True, 'NoNewPrivileges': True, 'CapDrop': ['ALL'],
+    'EffectiveCaps': [], 'Memory': 268435456, 'MemorySwap': 268435456,
+    'CpuQuota': 50000, 'CpuPeriod': 100000, 'PidsLimit': 64,
+    'User': '1000:1000', 'Hostname': 'trackb', 'Devices': [], 'Sockets': [],
+    'TmpfsSize': 16777216, 'TmpfsMode': 1023,
+    'TmpfsOptions': ['noexec', 'nosuid', 'nodev'],
+    'ProfileSchemaVersion': 1,
+    'Mounts': [
+        {'Destination': '/kyri/package', 'RW': False, 'Type': 'bind'},
+        {'Destination': '/run/kyri/input/payload', 'RW': False, 'Type': 'bind'},
+        {'Destination': '/kyri/output', 'RW': True, 'Type': 'bind'}],
+}
+# Moving the tag and changing the manifest digest leaves the identity intact,
+# because neither was ever consulted.
+for decoy in ({'ImageName': 'localhost/other:latest'},
+              {'ImageDigest': 'sha256:' + 'f' * 64},
+              {'RepoTags': ['localhost/kyri-python:v9']},
+              {'RepoDigests': ['localhost/x@sha256:' + 'e' * 64]}):
+    data = dict(base); data.update(decoy)
+    assert verify_observed(profile(), L.observe(FakeBackend(inspect=data), CID)) is None
+# A different local image ID is a refusal, and it is the image field that is named.
+data = dict(base); data['Image'] = 'd' * 64
+try:
+    verify_observed(profile(), L.observe(FakeBackend(inspect=data), CID))
+except ProfileMismatch as error:
+    assert 'oci_image_id' in error.differing_fields, error.differing_fields
+else:
+    raise AssertionError('a substituted image ID was accepted')
+# A prefixed value never equals the governed bare form, so it fails closed.
+data = dict(base); data['Image'] = 'sha256:' + IMAGE
+try:
+    verify_observed(profile(), L.observe(FakeBackend(inspect=data), CID))
+except ProfileMismatch as error:
+    assert 'oci_image_id' in error.differing_fields, error.differing_fields
+else:
+    raise AssertionError('a sha256-prefixed image identity was accepted')
+print('OK')
+"
+
 run_case "a missing observed field stays missing and is never filled" "${PRELUDE}
 base = {
-    'Id': CID, 'ImageDigest': IMAGE, 'NetworkMode': 'none',
+    'Id': CID, 'Image': IMAGE, 'NetworkMode': 'none',
     'ReadOnlyRootfs': True, 'NoNewPrivileges': True, 'CapDrop': ['ALL'],
     'EffectiveCaps': [], 'Memory': 268435456, 'MemorySwap': 268435456,
     'CpuQuota': 50000, 'CpuPeriod': 100000, 'PidsLimit': 64,
@@ -756,7 +819,7 @@ msgs = [
     Message(kind=MessageKind.CREATED, cinv=CINV, fields=(('container_id', CID),)),
     Message(kind=MessageKind.VERIFIED_PROFILE, cinv=CINV, fields=(
         ('container_id', CID), ('profile_digest', 'd' * 64),
-        ('image_digest', IMAGE), ('cimp', 'CIMP-000001'),
+        ('oci_image_id', IMAGE), ('cimp', 'CIMP-000001'),
         ('profile_schema_version', 1), ('execution_uid', 1000),
         ('execution_gid', 1000))),
     Message(kind=MessageKind.START_NOW, cinv=CINV, fields=(('container_id', CID),)),
@@ -777,7 +840,7 @@ msgs = [
     Message(kind=MessageKind.CREATED, cinv=CINV, fields=(('container_id', CID),)),
     Message(kind=MessageKind.VERIFIED_PROFILE, cinv=CINV, fields=(
         ('container_id', CID), ('profile_digest', 'd' * 64),
-        ('image_digest', IMAGE), ('cimp', 'CIMP-000001'),
+        ('oci_image_id', IMAGE), ('cimp', 'CIMP-000001'),
         ('profile_schema_version', 1), ('execution_uid', 1000),
         ('execution_gid', 1000))),
     Message(kind=MessageKind.START_NOW, cinv=CINV, fields=(('container_id', other),)),
@@ -798,7 +861,7 @@ msgs = [
     Message(kind=MessageKind.CREATED, cinv=CINV, fields=(('container_id', CID),)),
     Message(kind=MessageKind.VERIFIED_PROFILE, cinv=CINV, fields=(
         ('container_id', CID), ('profile_digest', 'd' * 64),
-        ('image_digest', IMAGE), ('cimp', 'CIMP-000001'),
+        ('oci_image_id', IMAGE), ('cimp', 'CIMP-000001'),
         ('profile_schema_version', 1), ('execution_uid', 1000),
         ('execution_gid', 1000))),
     Message(kind=MessageKind.START_NOW, cinv=CINV, fields=(('container_id', CID),)),
@@ -823,7 +886,7 @@ msgs = [
     Message(kind=MessageKind.CREATED, cinv=CINV, fields=(('container_id', CID),)),
     Message(kind=MessageKind.VERIFIED_PROFILE, cinv=CINV, fields=(
         ('container_id', CID), ('profile_digest', 'd' * 64),
-        ('image_digest', IMAGE), ('cimp', 'CIMP-000001'),
+        ('oci_image_id', IMAGE), ('cimp', 'CIMP-000001'),
         ('profile_schema_version', 1), ('execution_uid', 1000),
         ('execution_gid', 1000))),
     Message(kind=MessageKind.START_NOW, cinv=CINV, fields=(('container_id', CID),)),

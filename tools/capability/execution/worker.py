@@ -298,6 +298,6 @@ def create_argv(profile: ExecutionProfile, sources: HandoffSources,
                     f"dst={PAYLOAD_DESTINATION},ro=true"),
         "--mount", (f"type=bind,src={sources.output},"
                     f"dst={OUTPUT_DESTINATION},ro=false"),
-        profile.image_digest,
+        profile.oci_image_id,
         CONTAINER_INTERPRETER, entrypoint,
     )

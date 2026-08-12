@@ -106,9 +106,14 @@ def _is_container_id(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and set(value) <= _HEX
 
 
-def _is_oci_digest(value: Any) -> bool:
-    return (isinstance(value, str) and value.startswith("sha256:")
-            and len(value) == 71 and set(value[7:]) <= _HEX)
+def _is_oci_image_id(value: Any) -> bool:
+    """The immutable local image ID, bare lowercase hex and nothing else.
+
+    A `sha256:` prefix is refused rather than tolerated: every value that
+    carries one is a manifest digest or a repository reference, none of which
+    identifies the local bytes Podman will run.
+    """
+    return isinstance(value, str) and len(value) == 64 and set(value) <= _HEX
 
 
 def _is_sha256(value: Any) -> bool:
@@ -160,7 +165,7 @@ MESSAGE_SCHEMAS: dict[MessageKind, dict[str, Any]] = {
     MessageKind.VERIFIED_PROFILE: {
         "container_id": _is_container_id,
         "profile_digest": _is_sha256,
-        "image_digest": _is_oci_digest,
+        "oci_image_id": _is_oci_image_id,
         "cimp": _is_cimp,
         "profile_schema_version": _is_version,
         "execution_uid": _is_uid,

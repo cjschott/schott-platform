@@ -107,9 +107,31 @@ commitments. **Retirement** is a separate create-once immutable record and is
 permanent — no reactivation, no mutation. Any change to digest, image build,
 executable mapping, schema, or profile requires a **new CIMP**.
 
-`CIMP` identifies the *governance decision*; the OCI digest identifies the
+`CIMP` identifies the *governance decision*; `oci_image_id` identifies the
 *immutable bytes*. One governed implementation version maps to exactly one
-digest.
+image ID.
+
+**`oci_image_id`, ruled 2026-08-12 and implemented.** The admitted execution
+identity is the **immutable local image ID** — what `podman image inspect`
+reports as `.Id` — written as **bare lowercase hex**, `^[0-9a-f]{64}$`, with no
+algorithm prefix. The post-create readback is `podman container inspect`
+`.Image`, which reports the same identity for the container actually created.
+
+Explicitly **not** execution authority: an image's `.Digest` or `.RepoDigests`,
+a container's `.ImageDigest`, `.RepoTags`, `.ImageName`, any tag, any
+repository name, and any registry manifest digest. All of these describe how an
+image *arrived* rather than what it *contains*; `.RepoDigests` is plural and
+empty for a locally built image, and a manifest digest changes when a manifest
+is re-serialised while the bytes do not.
+
+The bare form is load-bearing rather than cosmetic: every non-authoritative
+value above arrives `sha256:`-prefixed, so requiring no prefix makes each of
+them **structurally unrepresentable** wherever `oci_image_id` is required,
+instead of merely discouraged. A prefixed value is refused, not stripped.
+
+This supersedes the earlier field name `oci_digest`, whose syntax admitted a
+manifest digest and whose observation path read `.ImageDigest`. No production
+`CIMP` had been admitted, so no migration path was owed and none was kept.
 
 **Retirement vs removal are separate decisions.** Retirement answers *may new
 `CINV` bind this `CIMP`?* and becomes authoritative immediately once its record
@@ -322,7 +344,7 @@ or Health; mutate Fabric; or become a general Capability Runtime API.
 determine `launch_authorized`, that is a **halt-and-rule event**, not a design
 problem to solve by growing the helper. The mitigation is a single
 coordinator-written, create-once **launch authorisation record** whose schema
-the helper reads: `CINV`, `CIMP`, OCI digest, handoff root, profile schema
+the helper reads: `CINV`, `CIMP`, `oci_image_id`, handoff root, profile schema
 version, and the coordinator's commitment digest. The helper understands that
 one record and nothing else.
 
@@ -632,7 +654,7 @@ mismatch or ambiguity fails closed. **No replacement creation.**
 canonical execution-profile SHA-256 and the explicit security-critical fields,
 built from adapter-owned values only. Recovery independently reconstructs the
 observed Podman profile and requires exact agreement on: immutable container ID
-after adoption, `CINV` association, exact OCI digest, `CIMP`, adapter/schema/
+after adoption, `CINV` association, exact `oci_image_id`, `CIMP`, adapter/schema/
 profile identities, execution UID and user namespace, network none, read-only
 rootfs, capabilities, no-new-privileges, PIDs, memory, CPU, mounts and their
 RO/RW disposition, tmpfs policy, and the absence of prohibited devices and
@@ -878,7 +900,7 @@ not hold the lifecycle lock.
 `start_reconciled_terminal` · `execution_lifecycle_integrity_failure` ·
 `execution_cleanup_incomplete` · `execution_protocol_violation`.
 
-**`execution_image_unavailable`** — the exact immutable OCI digest bound to the
+**`execution_image_unavailable`** — the exact immutable `oci_image_id` bound to the
 governed `CINV`/`CIMP` execution contract is not present in the
 `kyri-capability` rootless store at a required availability check. It
 authorises **no** pull, registry access, mutable-tag lookup, substitute digest,
@@ -939,7 +961,7 @@ Outcome classes remain the released vocabulary of design §9 — `completed`,
 ## 26. Audit and evidence
 
 Every execution durably records: caller identity from the authenticated
-transition, `CINV`, attempt identity, `CIMP`, exact OCI digest, artefact
+transition, `CINV`, attempt identity, `CIMP`, exact `oci_image_id`, artefact
 digest, payload digest, `profile_schema_version` and execution-profile digest,
 container name, immutable container ID, created and started timestamps,
 terminal state, exit code where a start was proven, timeout or kill state,

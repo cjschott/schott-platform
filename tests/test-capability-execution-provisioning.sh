@@ -167,7 +167,7 @@ assert 'from tools.capability.execution import worker' in code, \
     'the worker does not delegate to the accepted library'
 # Execution policy belongs to the library. A second copy here is the failure.
 for token in ('--network', '--cap-drop', 'create_argv', 'podman', 'Podman',
-              '--user', '--mount', 'PYTHONHASHSEED', 'image_digest'):
+              '--user', '--mount', 'PYTHONHASHSEED', 'oci_image_id'):
     assert token not in code, token
 # Naming its own installed path is fine; building a container name is not.
 assert chr(39) + 'kyri-' + chr(39) not in code, 'the worker builds a container name'

@@ -81,7 +81,7 @@ _HEX = frozenset("0123456789abcdef")
 # if the helper needs broad A1-A5 semantics to decide, that is a halt-and-rule
 # event rather than a bigger record.
 LAUNCH_RECORD_SCHEMA = (
-    "cinv", "cimp", "oci_digest", "handoff_root", "profile_schema_version",
+    "cinv", "cimp", "oci_image_id", "handoff_root", "profile_schema_version",
     "commitment_digest", "lifecycle_state",
 )
 
@@ -192,10 +192,10 @@ def check_launch_authorisation(record: Any, cinv: str) -> None:
              and cimp.startswith("CIMP-") and not (set(cimp[5:]) - _DIGITS),
              "the launch record has a malformed CIMP")
 
-    digest = record["oci_digest"]
-    _require(isinstance(digest, str) and digest.startswith("sha256:")
-             and len(digest) == 71 and not (set(digest[7:]) - _HEX),
-             "the launch record has a malformed OCI digest")
+    image_id = record["oci_image_id"]
+    _require(isinstance(image_id, str) and len(image_id) == 64
+             and not (set(image_id) - _HEX),
+             "the launch record has a malformed local image ID")
 
     commitment = record["commitment_digest"]
     _require(isinstance(commitment, str) and len(commitment) == 64

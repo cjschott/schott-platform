@@ -115,7 +115,13 @@ def observe(backend: Any, container_id: str) -> ObservedProfile:
     effective = data.get("EffectiveCaps")
 
     return ObservedProfile(
-        image_digest=data.get("ImageDigest"),
+        # Podman container inspect reports `Image` as the immutable local
+        # image ID the container was actually instantiated from. `ImageDigest`
+        # is a registry manifest digest and `ImageName` is whatever mutable
+        # reference was used at create, so neither is read: a retag or a
+        # re-push must not be able to move the identity a container is
+        # verified against. An absent `Image` stays absent and fails.
+        oci_image_id=data.get("Image"),
         network=data.get("NetworkMode"),
         read_only_rootfs=data.get("ReadOnlyRootfs"),
         no_new_privileges=data.get("NoNewPrivileges"),

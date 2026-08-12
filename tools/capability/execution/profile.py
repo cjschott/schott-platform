@@ -70,7 +70,7 @@ _GOVERNED_KEYS = frozenset({
     "network", "memory", "memory_bytes", "memory_swap", "cpus", "cpu",
     "cpu_quota_us", "cpu_period_us", "pids_limit", "pids", "privileged",
     "devices", "device", "gpu", "cap_add", "cap_drop", "capabilities",
-    "mounts", "mount", "volumes", "image", "oci_digest", "user", "uid", "gid",
+    "mounts", "mount", "volumes", "image", "oci_image_id", "user", "uid", "gid",
     "hostname", "read_only", "read_only_rootfs", "security_opt",
     "no_new_privileges", "timeout_seconds", "grace_seconds", "tmpfs",
     "sockets", "host_network", "host_pid",
@@ -127,7 +127,7 @@ class ObservedProfile:
     can be defaulted.
     """
 
-    image_digest: Any
+    oci_image_id: Any
     network: Any
     read_only_rootfs: Any
     no_new_privileges: Any
@@ -176,7 +176,7 @@ def build_profile(binding: ProfileBinding,
 
     return ExecutionProfile(
         cinv=binding.cinv,
-        image_digest=admission.oci_digest,
+        oci_image_id=admission.oci_image_id,
         network=NETWORK,
         memory_bytes=MEMORY_BYTES,
         memory_swap_bytes=MEMORY_SWAP_BYTES,
@@ -235,7 +235,7 @@ def canonical_profile(profile: ExecutionProfile) -> bytes:
         "cinv": profile.cinv,
         "adapter_identity": profile.adapter_identity,
         "cimp": profile.cimp,
-        "image_digest": profile.image_digest,
+        "oci_image_id": profile.oci_image_id,
         "payload_schema_version": profile.payload_schema_version,
         "network": profile.network,
         "read_only_rootfs": profile.read_only_rootfs,
@@ -276,7 +276,7 @@ def fingerprint(profile: ExecutionProfile) -> ExecutionFingerprint:
     return ExecutionFingerprint(
         cinv=profile.cinv,
         profile_digest=hashlib.sha256(canonical_profile(profile)).hexdigest(),
-        image_digest=profile.image_digest,
+        oci_image_id=profile.oci_image_id,
         cimp=profile.cimp,
         adapter_identity=profile.adapter_identity,
         profile_schema_version=profile.profile_schema_version,
@@ -304,7 +304,7 @@ def verify_observed(profile: ExecutionProfile,
         if seen is None or seen != expected:
             differing.append(field)
 
-    compare("image_digest", profile.image_digest, observed.image_digest)
+    compare("oci_image_id", profile.oci_image_id, observed.oci_image_id)
     compare("network", profile.network, observed.network)
     compare("read_only_rootfs", profile.read_only_rootfs,
             observed.read_only_rootfs)
