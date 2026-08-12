@@ -33,6 +33,7 @@ import os
 import stat as stat_module
 from typing import Any, Protocol, Sequence
 
+from .package_contract import PackageBinding
 from .types import ExecutionProfile
 
 PODMAN = "/usr/bin/podman"
@@ -60,8 +61,8 @@ PACKAGE_NAME = "package"
 PAYLOAD_NAME = "payload"
 OUTPUT_NAME = "out"
 
-# The container command is adapter-owned. The image provides the interpreter;
-# the entrypoint is the governed package's, mounted read-only.
+# The interpreter is adapter-owned; the script is the governed package's
+# entrypoint, already validated and bound by the package contract.
 CONTAINER_INTERPRETER = "/usr/bin/python3"
 
 EXPECTED_MODES = {
@@ -198,22 +199,49 @@ def verify_handoff(cinv: str, *, root_fd: int) -> HandoffSources:
     )
 
 
-def create_argv(profile: ExecutionProfile,
-                sources: HandoffSources) -> tuple[str, ...]:
+def _container_script(package: PackageBinding) -> str:
+    """The container-side path of the governed entrypoint.
+
+    The package contract already proved the entrypoint is relative, `.py`,
+    traversal-free, and present in the validated tree, so this does not
+    re-validate it with a second, weaker scheme. The assertions below are
+    defensive only: they restate the invariant at the boundary where a
+    violation would become an argument, and would catch a `PackageBinding`
+    that reached here without passing through that contract.
+    """
+    entrypoint = package.entrypoint
+    if not isinstance(entrypoint, str) or not entrypoint:
+        raise WorkerRefused("the package binding carries no entrypoint")
+    if entrypoint.startswith("/") or not entrypoint.endswith(".py"):
+        raise WorkerRefused("the bound entrypoint is not a relative .py path")
+    if any(part in ("", ".", "..") for part in entrypoint.split("/")):
+        raise WorkerRefused("the bound entrypoint is not traversal-free")
+    return f"{PACKAGE_DESTINATION}/{entrypoint}"
+
+
+def create_argv(profile: ExecutionProfile, sources: HandoffSources,
+                package: PackageBinding) -> tuple[str, ...]:
     """The complete creation arguments, closed against everything else.
 
     Every security-critical control is stated explicitly even where Podman's
     default happens to match. A default is a decision somebody else can change;
     a flag is one this adapter owns.
+
+    The three inputs stay separate because they are three different things:
+    the profile is the sandbox, the sources are the verified bind mounts, and
+    the package is the governed capability identity. Only the last carries an
+    entrypoint, and it arrives already validated.
     """
     if not isinstance(profile, ExecutionProfile):
         raise WorkerRefused("a built ExecutionProfile is required")
     if not isinstance(sources, HandoffSources):
         raise WorkerRefused("verified HandoffSources are required")
+    if not isinstance(package, PackageBinding):
+        raise WorkerRefused("a validated PackageBinding is required")
     if profile.cinv != sources.cinv:
         raise WorkerRefused("the profile and handoff name different invocations")
 
-    entrypoint = f"{PACKAGE_DESTINATION}/main.py"
+    entrypoint = _container_script(package)
     return (
         PODMAN, "create",
         "--name", container_name(profile.cinv),

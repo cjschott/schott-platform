@@ -189,6 +189,25 @@ CINV = 'CINV-000042'
 CID = 'c' * 64
 IMAGE = 'sha256:' + 'a' * 64
 
+def package(entrypoint='main.py', extra=()):
+    from tools.capability.execution.package_contract import validate_package
+    import uuid
+    base = os.path.join(WORK, 'pkg-' + entrypoint.replace('/', '_'))
+    if os.path.isdir(base):
+        shutil.rmtree(base)
+    os.makedirs(os.path.dirname(os.path.join(base, entrypoint)) or base,
+                exist_ok=True)
+    with open(os.path.join(base, entrypoint), 'wb') as h:
+        h.write(b'def run():\n    return {}\n')
+    for name in extra:
+        with open(os.path.join(base, name), 'wb') as h:
+            h.write(b'X = 1\n')
+    fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return validate_package(fd, entrypoint=entrypoint)
+    finally:
+        os.close(fd)
+
 def profile(cinv=CINV):
     return build_profile(ProfileBinding(cinv=cinv, admission=Admission(
         cimp='CIMP-000001', oci_digest=IMAGE,
@@ -318,7 +337,7 @@ print('OK')
 
 run_case "the Podman executable is a fixed absolute constant" "${PRELUDE}
 assert W.PODMAN == '/usr/bin/podman', W.PODMAN
-argv = W.create_argv(profile(), sources('exe'))
+argv = W.create_argv(profile(), sources('exe'), package())
 assert argv[0] == '/usr/bin/podman', argv[0]
 code = code_of(W)
 for banned in ('which', 'os.pathsep', 'expanduser', 'realpath', 'os.environ'):
@@ -420,7 +439,7 @@ finally:
 # --- create argv ------------------------------------------------------------------
 
 run_case "create and start are separate, and podman run appears nowhere" "${PRELUDE}
-argv = W.create_argv(profile(), sources('sep'))
+argv = W.create_argv(profile(), sources('sep'), package())
 assert argv[1] == 'create', argv[1]
 assert 'run' not in argv, argv
 for module in (W, L):
@@ -430,7 +449,7 @@ print('OK')
 "
 
 run_case "the container name is derived solely from the CINV" "${PRELUDE}
-argv = W.create_argv(profile(), sources('name'))
+argv = W.create_argv(profile(), sources('name'), package())
 assert W.container_name(CINV) == 'kyri-CINV-000042'
 index = argv.index('--name')
 assert argv[index + 1] == 'kyri-CINV-000042', argv[index + 1]
@@ -442,7 +461,7 @@ print('OK')
 "
 
 run_case "the image is the exact bound digest, never a tag" "${PRELUDE}
-argv = W.create_argv(profile(), sources('img'))
+argv = W.create_argv(profile(), sources('img'), package())
 assert IMAGE in argv, argv
 assert not any(a.endswith(':latest') for a in argv), argv
 assert not any(a == 'latest' for a in argv)
@@ -453,7 +472,7 @@ print('OK')
 "
 
 run_case "every accepted security flag is explicit in the argv" "${PRELUDE}
-argv = W.create_argv(profile(), sources('flags'))
+argv = W.create_argv(profile(), sources('flags'), package())
 text = ' '.join(argv)
 required = [
     '--network none', '--read-only', '--cap-drop ALL',
@@ -467,7 +486,7 @@ print('OK')
 "
 
 run_case "the tmpfs carries its exact accepted options" "${PRELUDE}
-argv = W.create_argv(profile(), sources('tmpfs'))
+argv = W.create_argv(profile(), sources('tmpfs'), package())
 index = argv.index('--tmpfs')
 spec = argv[index + 1]
 assert spec.startswith('/tmp:'), spec
@@ -478,7 +497,7 @@ print('OK')
 
 run_case "the three mounts carry the exact sources, destinations and access" "${PRELUDE}
 found = sources('mounts')
-argv = W.create_argv(profile(), found)
+argv = W.create_argv(profile(), found, package())
 mounts = [argv[i + 1] for i, a in enumerate(argv) if a == '--mount']
 assert len(mounts) == 3, mounts
 joined = ' '.join(mounts)
@@ -494,7 +513,7 @@ print('OK')
 "
 
 run_case "no device, privileged, host-network or socket flag appears" "${PRELUDE}
-argv = W.create_argv(profile(), sources('none'))
+argv = W.create_argv(profile(), sources('none'), package())
 text = ' '.join(argv)
 for banned in ('--device', '--privileged', '--network host', '--pid host',
                '--cap-add', '--gpus', '--security-opt seccomp=unconfined',
@@ -504,7 +523,7 @@ print('OK')
 "
 
 run_case "the container command is adapter-owned with no caller argv" "${PRELUDE}
-argv = W.create_argv(profile(), sources('cmd'))
+argv = W.create_argv(profile(), sources('cmd'), package())
 tail = list(argv[argv.index(IMAGE) + 1:])
 assert tail == ['/usr/bin/python3', '/kyri/package/main.py'], tail
 for banned in ('sh', '-c', 'bash', '--'):
@@ -512,9 +531,46 @@ for banned in ('sh', '-c', 'bash', '--'):
 print('OK')
 "
 
+# The entrypoint is the governed one the package contract validated, not a
+# constant. A nested entrypoint must survive intact into the container path.
+run_case "the script argument comes from the bound package entrypoint" "${PRELUDE}
+nested = package('pkg/main.py')
+argv = W.create_argv(profile(), sources('nested'), nested)
+tail = list(argv[argv.index(IMAGE) + 1:])
+assert tail == ['/usr/bin/python3', '/kyri/package/pkg/main.py'], tail
+flat = package('main.py')
+argv = W.create_argv(profile(), sources('flat'), flat)
+assert list(argv[argv.index(IMAGE) + 1:]) == [
+    '/usr/bin/python3', '/kyri/package/main.py']
+# Two different bindings produce their own script argument.
+deep = package('a/b/entry.py')
+argv = W.create_argv(profile(), sources('deep'), deep)
+assert list(argv[argv.index(IMAGE) + 1:])[1] == '/kyri/package/a/b/entry.py'
+print('OK')
+"
+
+run_case "no hard-coded entrypoint remains, and none is caller-supplied" "${PRELUDE}
+import inspect
+code = code_of(W)
+assert '/kyri/package/main.py' not in code, 'a hard-coded entrypoint remains'
+assert 'main.py' not in code, 'the worker names a specific script'
+params = list(inspect.signature(W.create_argv).parameters)
+assert params == ['profile', 'sources', 'package'], params
+assert 'entrypoint' not in params, params
+# The entrypoint cannot arrive as a raw string.
+from tools.capability.execution.worker import WorkerRefused
+for bad in ('main.py', None, 42, {'entrypoint': 'main.py'}):
+    try:
+        W.create_argv(profile(), sources('raw'), bad)
+    except WorkerRefused:
+        continue
+    raise AssertionError(f'accepted {bad!r} as a package binding')
+print('OK')
+"
+
 run_case "no pull, and the argv is closed against extra flags" "${PRELUDE}
 assert 'pull' not in code_of(W).lower(), 'the worker can pull'
-argv = W.create_argv(profile(), sources('closed'))
+argv = W.create_argv(profile(), sources('closed'), package())
 # Every element is a constant, a governed identity, or a derived source.
 assert isinstance(argv, tuple), type(argv)
 try:
@@ -529,7 +585,7 @@ else:
 
 run_case "create returns the full 64-hex container ID" "${PRELUDE}
 backend = FakeBackend()
-container_id = L.create(backend, W.create_argv(profile(), sources('create')),
+container_id = L.create(backend, W.create_argv(profile(), sources('create'), package()),
                         W.ENVIRONMENT)
 assert container_id == CID
 assert names(backend) == ['create']
@@ -540,7 +596,7 @@ run_case "a short or malformed container ID is refused as authority" "${PRELUDE}
 for bad in ('c' * 12, 'c' * 63, 'c' * 65, 'C' * 64, '', 'deadbeef', None, 42):
     backend = FakeBackend(container_id=bad)
     try:
-        L.create(backend, W.create_argv(profile(), sources('short')), W.ENVIRONMENT)
+        L.create(backend, W.create_argv(profile(), sources('short'), package()), W.ENVIRONMENT)
     except L.LifecycleRefused:
         continue
     raise AssertionError(f'accepted container id {bad!r}')
@@ -550,7 +606,7 @@ print('OK')
 run_case "create failure never retries, recreates, or falls back" "${PRELUDE}
 backend = FakeBackend(create_error=OSError('create refused'))
 try:
-    L.create(backend, W.create_argv(profile(), sources('fail')), W.ENVIRONMENT)
+    L.create(backend, W.create_argv(profile(), sources('fail'), package()), W.ENVIRONMENT)
 except L.LifecycleRefused:
     pass
 else:
