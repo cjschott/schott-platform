@@ -485,6 +485,37 @@ for fragment in required:
 print('OK')
 "
 
+run_case "the fixed Python environment is passed as adapter-owned --env" "${PRELUDE}
+import os
+argv = W.create_argv(profile(), sources('env'), package())
+pairs = [argv[index + 1] for index, value in enumerate(argv) if value == '--env']
+assert pairs == ['LC_ALL=C.UTF-8', 'PYTHONDONTWRITEBYTECODE=1',
+                 'PYTHONHASHSEED=0', 'PYTHONUTF8=1'], pairs
+# §9 requires all four, and the read-only package mount depends on the third.
+assert 'PYTHONDONTWRITEBYTECODE=1' in pairs
+# Every --env precedes the image, so none of it can become a capability
+# argument.
+assert max(i for i, v in enumerate(argv) if v == '--env') < argv.index(IMAGE)
+print('OK')
+"
+
+run_case "the container environment is inherited from nothing" "${PRELUDE}
+import os
+os.environ['PYTHONHASHSEED'] = '99'
+os.environ['LC_ALL'] = 'en_US.UTF-8'
+os.environ['PYTHONUTF8'] = '0'
+argv = W.create_argv(profile(), sources('noinherit'), package())
+pairs = [argv[index + 1] for index, value in enumerate(argv) if value == '--env']
+assert 'PYTHONHASHSEED=0' in pairs, pairs
+assert 'LC_ALL=C.UTF-8' in pairs, pairs
+assert 'PYTHONUTF8=1' in pairs, pairs
+for pair in pairs:
+    assert '99' not in pair and 'en_US' not in pair, pair
+# The host process environment is a different thing and stays what it was.
+assert W.CONTAINER_ENVIRONMENT != W.ENVIRONMENT
+print('OK')
+"
+
 run_case "the tmpfs carries its exact accepted options" "${PRELUDE}
 argv = W.create_argv(profile(), sources('tmpfs'), package())
 index = argv.index('--tmpfs')

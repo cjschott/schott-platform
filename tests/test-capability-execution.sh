@@ -207,7 +207,7 @@ assert_backstop_coverage() {
                  "package_contract.py" "handoff.py" "profile.py"
                  "protocol.py" "worker.py" "lifecycle.py" "collector.py"
                  "quarantine.py" "cleanup.py" "admin.py"
-                 "adapter.py")
+                 "adapter.py" "quota.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

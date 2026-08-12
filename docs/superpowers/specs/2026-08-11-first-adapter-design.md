@@ -474,6 +474,8 @@ ignored.
 
 | Control | Value |
 |---|---|
+| Python environment | `PYTHONHASHSEED=0` · `PYTHONUTF8=1` · `LC_ALL=C.UTF-8` · `PYTHONDONTWRITEBYTECODE=1`, fixed `--env`, inherited from nothing |
+| Output quota | project `1_000_000 + CINV`, 32 MiB / 512 inodes on `out/` (§34) |
 | Runtime | rootless Podman, direct CLI, no socket, no API |
 | Network | `--network none` |
 | Rootfs | `--read-only`, `--read-only-tmpfs=false` |
@@ -1101,20 +1103,60 @@ backing-store config · provisioned `CADM` counter · `/data/kyri/capability-han
 per §13 · `…/execution/` and `…/quarantine/` per §13 · the admitted production
 image present in the rootless store. **No systemd unit. No service. No daemon.**
 
-**Open hardening item — per-`CINV` output byte and inode quota.** Recorded
-2026-08-12, to be resolved at G4/G5 before the first real G6 execution. §12
-bounds memory, CPU, and PIDs, and §11 bounds what collection will *accept*, but
-nothing bounds what a workload may *write* into the read-write `/kyri/output`
-bind mount during its 30 seconds. `/data` is XFS, and XFS project quotas can
-impose byte and inode limits, but they need filesystem quota configuration and
-root-side project assignment — a storage and provisioning authority decision
-that deserves its own contract rather than being added quietly inside cleanup.
+**Per-`CINV` output containment — resolved 2026-08-12 at the G4 review.** §12
+bounds memory, CPU, and PIDs and §11 bounds what collection will *accept*, but
+nothing bounded what a workload may *write* into the read-write `/kyri/output`
+mount during its 30 seconds. XFS project quotas close that, applied to the
+`out/` leaf **only** — never the whole handoff tree, since §8 permits a package
+of 64 MiB and 1,024 entries and a tree-wide quota would refuse packages the
+package contract already accepted.
 
-Until then the mitigations are explicit and partial: §19's deletion-work bounds
-cap the cost of removal, the 30-second timeout caps how long residue can be
-generated, and `/data` free space remains an operational signal rather than an
-enforced limit. **No `xfs_quota` invocation, project ID, mount-option
-assumption, or storage override is introduced by ENG-0005.**
+| Control | Value |
+|---|---|
+| Scope | `/data/kyri/capability-handoff/<CINV>/out` |
+| Project ID | `1_000_000 + numeric part of CINV` — derived, never allocated |
+| Hard block limit | 32 MiB |
+| Hard inode limit | 512 |
+
+The limits are a **write-time envelope at twice the §11 acceptance policy**, so
+a capability that writes a temporary file and renames it over its result is not
+failed for behaving ordinarily, while a workload cannot consume gigabytes or
+millions of inodes before anything judges its output. `CINV` identities are
+never reused, so derived project IDs never alias; project 0 is never produced,
+because 0 is the filesystem default and would silently mean *unlimited*.
+
+**Mechanism, chosen with the care `no_new_privs` was.** Two halves, split so
+that only one of them is a runtime privilege:
+
+- **Limits are provisioned, once, by an operator at G4:**
+  `xfs_quota -x -c 'limit -p -d bhard=32m ihard=512' /data`, which sets the
+  filesystem's *default* project limits. Enforcement requires `prjquota` on
+  `/data`, verified at provisioning.
+- **The runtime privileged operation is a single `ioctl`.** With the limits
+  already default, the runtime only states *which project a tree belongs to*:
+  `FS_IOC_FSSETXATTR` with `fsx_projid` and `FS_XFLAG_PROJINHERIT` on the
+  already-open, empty `out/` descriptor, read-modify-write so no other flag is
+  disturbed. Inheritance makes it one-shot — every file the workload creates is
+  accounted by the filesystem, with no tree walk and no second pass.
+
+This deliberately keeps `quotactl` and `xfs_quota` **out of the runtime path
+entirely**. There is no subprocess, no shell, and no `ctypes`: `fcntl.ioctl`
+and `struct` are standard library. The privileged source is
+`provisioning/execution/kyri-exec-quota.py`, installed by nothing, and it takes
+**one validated `CINV`** — no path, no project ID, no limit — reaching the leaf
+descriptor-relative from a compiled-in root. It does not import the runtime
+package: root reading from a tree the execution identity can influence is the
+wrong direction.
+
+Policy shared by both sides lives in `tools/capability/execution/quota.py`,
+which is pure and sets nothing.
+
+**Still required at G4 provisioning:** `prjquota` enabled and verified on
+`/data`, and the default project limits established, **before** the first real
+G6 execution. Until both hold, the containment is defined but not enforced, and
+the partial mitigations stand: §19's deletion-work bounds cap removal cost, the
+30-second timeout caps how long residue can be generated, and `/data` free
+space remains an operational signal.
 
 ## 35. Implementation stop conditions
 

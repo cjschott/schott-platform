@@ -53,6 +53,27 @@ ENVIRONMENT: tuple[tuple[str, str], ...] = (
     ("XDG_RUNTIME_DIR", "/run/user/999"),
 )
 
+# §9, added at the G4 review of 2026-08-12. The container's Python environment
+# is adapter-owned and complete: inherited from nothing -- not the host process,
+# not the payload, not the package, not the protocol -- and stated here as
+# literals so there is no path by which any of them could contribute a value.
+#
+# `PYTHONDONTWRITEBYTECODE=1` is the load-bearing one. `/kyri/package` is
+# mounted read-only, so an interpreter that tried to write `__pycache__` beside
+# a module would fail on import of an ordinary capability rather than on
+# anything hostile. The other three make execution reproducible: a fixed hash
+# seed, UTF-8 regardless of the host's locale, and a locale that agrees with it.
+#
+# Sorted by key, because the argv this becomes is compared field by field
+# against what Podman reports and a stable order is what makes that comparison
+# a fact rather than a coincidence.
+CONTAINER_ENVIRONMENT: tuple[tuple[str, str], ...] = (
+    ("LC_ALL", "C.UTF-8"),
+    ("PYTHONDONTWRITEBYTECODE", "1"),
+    ("PYTHONHASHSEED", "0"),
+    ("PYTHONUTF8", "1"),
+)
+
 PACKAGE_DESTINATION = "/kyri/package"
 PAYLOAD_DESTINATION = "/run/kyri/input/payload"
 OUTPUT_DESTINATION = "/kyri/output"
@@ -250,6 +271,10 @@ def create_argv(profile: ExecutionProfile, sources: HandoffSources,
         raise WorkerRefused("the profile and handoff name different invocations")
 
     entrypoint = _container_script(package)
+    environment: tuple[str, ...] = tuple(
+        argument
+        for name, value in CONTAINER_ENVIRONMENT
+        for argument in ("--env", f"{name}={value}"))
     return (
         PODMAN, "create",
         "--name", container_name(profile.cinv),
@@ -266,6 +291,7 @@ def create_argv(profile: ExecutionProfile, sources: HandoffSources,
         "--user", f"{CONTAINER_UID}:{CONTAINER_GID}",
         "--tmpfs", (f"/tmp:size=16m,mode=1777,"
                     + ",".join(profile.tmpfs_options)),
+        *environment,
         "--mount", (f"type=bind,src={sources.package},"
                     f"dst={PACKAGE_DESTINATION},ro=true"),
         "--mount", (f"type=bind,src={sources.payload},"

@@ -75,6 +75,14 @@ Copied from the specification. Where this plan and the specification differ,
   rootless store. **The Track-B Alpine digest is TEST-ONLY and never promoted.**
 - Secret-free; `--network none`; no devices or GPU. Each requires separate
   governance.
+- Container Python environment is adapter-owned and fixed: `PYTHONHASHSEED=0`,
+  `PYTHONUTF8=1`, `LC_ALL=C.UTF-8`, `PYTHONDONTWRITEBYTECODE=1`, passed as
+  `--env` and inherited from nothing. The last is load-bearing: `/kyri/package`
+  is read-only.
+- Per-`CINV` output containment: XFS project quota on `out/` only, project ID
+  `1_000_000 + CINV`, 32 MiB and 512 inodes, limits provisioned as filesystem
+  defaults and the runtime privilege reduced to one `FS_IOC_FSSETXATTR` ioctl.
+  **No `xfs_quota`, `quotactl`, `ctypes`, or subprocess in the runtime path.**
 - No new filesystem root inherits a mode by convention (Deferred G).
 
 ## 2. Controlling sources

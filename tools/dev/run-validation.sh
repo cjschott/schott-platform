@@ -100,15 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 53 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 54 checks plus the closing summary. Quick mode drops
 # ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=44
+  TOTAL_STEPS=45
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=55
+  TOTAL_STEPS=56
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -278,6 +278,12 @@ run "Capability execution adapter" \
 # building is gate G5 and admission is a governed operator step after it.
 run "Capability execution image definition" \
   bash tests/test-capability-execution-image.sh
+
+# ENG-0005 G4 increment. Per-invocation output containment policy and the
+# privileged quota source. Sets no quota, opens no device, needs no XFS, and
+# installs nothing: the privileged operation is source only behind G2/G3.
+run "Capability execution output quota" \
+  bash tests/test-capability-execution-quota.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
