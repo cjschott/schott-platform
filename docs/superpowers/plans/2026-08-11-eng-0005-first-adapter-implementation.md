@@ -630,8 +630,63 @@ Regression set unless stated otherwise:
 
 ### T16 — Cleanup and recovery
 
-**Files:** `tools/capability/execution/cleanup.py`
-**Interfaces:** `cleanup(cinv) -> None`, `recover(root) -> list[Finding]`
+**Files:** `tools/capability/execution/cleanup.py`,
+`tests/test-capability-execution-cleanup.sh`
+**Interfaces:** `cleanup(root, handoff, cinv) -> None`,
+`recover(root) -> list[Finding]`
+
+> **Interfaces corrected 2026-08-12, before implementation.** `cleanup(cinv)`
+> held no root at all, so the tree it removes would have been derived from a
+> pathname — the one thing §19 forbids. Under the standing descriptor rule it
+> takes the verified authority root, whose durable state says whether cleanup
+> may run, and the verified handoff parent, beneath which the per-`CINV`
+> subtree is derived internally. No caller path reaches either.
+>
+> **Cleanup-owned objects, settled 2026-08-12.** §19 says "internally derived
+> per-`CINV` roots" without enumerating them; §13 does enumerate every per-`CINV`
+> object, so the set is derived rather than chosen: the handoff subtree
+> `/data/kyri/capability-handoff/<CINV>/` and what §14 puts inside it —
+> `package/`, `payload`, and `out/`. Nothing else is per-`CINV` and removable.
+> Quarantine is excluded by §15, which gives v1 no deletion path at all, and
+> execution state under `…/execution/` is the durable authority cleanup depends
+> on. Cleanup is `collected` → `cleaned`; capacity release stays T7's.
+>
+> **Missing, malformed, substituted, symlinked, or ambiguous is
+> `execution_cleanup_incomplete`** with the slot held, per the reviewer's T16
+> ruling. Note for the record: because cleanup removes only what it enumerates,
+> a partially cleaned tree still presents a root, so `retry-cleanup` re-runs
+> normally. The one case a missing root can arise is a crash between removing
+> the root and committing `cleaned`, which fails closed to `retain-residue` —
+> the non-destructive escape hatch §19 already provides.
+
+> **OPEN — reviewer ruling required before T16 may be implemented.** Cleanup
+> has no traversal bound, and the subtree it must remove is the one place in
+> this design where an adversary controls the shape without limit.
+>
+> `…/<CINV>/out/` is `/kyri/output` inside the container, a bind mount onto
+> `/data` rather than the 16 MiB tmpfs. §12 sets memory, CPU, and PID limits but
+> **no disk quota**, and §11's 32 files / 16 MiB / depth 16 / 256 entries bound
+> what collection will *accept*, not what the workload may *write*. A capability
+> may therefore leave millions of files, or a directory chain thousands deep,
+> and it is cleanup that then has to face the tree. Row 10 of §26 covers this at
+> collection; nothing covers it at removal.
+>
+> The T14 primitive does not answer it: `walk_tree` reads every file's bytes to
+> return them, which is right for collecting 16 MiB and wrong for deleting a
+> 64 MiB package. Removal needs its own bounded, streaming, descriptor-relative
+> enumeration, and a bound no accepted source supplies. §8's 1,024 entries
+> governs the package and implies its depth; `out/` has neither.
+>
+> What the ruling must settle: the maximum depth and entry count cleanup will
+> traverse before refusing, and confirmation that exceeding them is
+> `execution_cleanup_incomplete` with the slot held and `retain-residue` as the
+> operator's move. The consequence is the reason this is not a value to choose
+> during implementation: with two slots and no queue, a bound set low enough to
+> be safe is also low enough that two capabilities writing ordinary-but-numerous
+> output files wedge the platform until an operator intervenes. A bound set high
+> enough to avoid that is a long unbounded-in-practice deletion holding a slot.
+> Adding a disk quota or an `out/` write-time limit to §12 would remove the
+> tension at the source and is worth considering as part of the same ruling.
 
 - Failing tests: descriptor-safe, no-follow, internally derived roots only, no
   caller path accepted; no privileged recursive deletion fallback exists;
