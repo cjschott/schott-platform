@@ -63,7 +63,15 @@ OUTPUT_NAME = "out"
 
 # The interpreter is adapter-owned; the script is the governed package's
 # entrypoint, already validated and bound by the package contract.
-CONTAINER_INTERPRETER = "/usr/bin/python3"
+#
+# `/usr/bin/python`, not `/usr/bin/python3`: corrected at the G4 image ruling of
+# 2026-08-12. The minimal runtime base admitted for v1 has no shell and no
+# package manager, and configures its interpreter at `/usr/bin/python`. Keeping
+# the old name would have meant either carrying a package manager into the final
+# image to create it or resolving it through a path the base does not define --
+# deforming the sandbox to preserve a pathname. This is the container-side
+# interpreter only; `WORKER_INTERPRETER` on the host is untouched.
+CONTAINER_INTERPRETER = "/usr/bin/python"
 
 EXPECTED_MODES = {
     "invocation": 0o555,

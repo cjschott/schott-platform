@@ -800,39 +800,35 @@ Regression set unless stated otherwise:
 **Files:** `provisioning/image/Containerfile`, `provisioning/image/README.md`
 **Interfaces:** none (provisioning artefact)
 
-> **OPEN — reviewer ruling required before T19 may be implemented.** No base
-> image satisfies the locked contract, and the conflict is with T12's fixed
-> container command rather than with anything T19 chooses.
+> **Base image ruled 2026-08-12, before implementation.** T19 stopped here: no
+> base satisfied both T12's fixed `/usr/bin/python3` and §27's ban on a package
+> manager, compiler, or shell. The slim official variants carry no
+> `/usr/bin/python3` at all, the full ones resolve it to a different interpreter
+> from the pinned one, distroless floats its patch version, and building from a
+> distro base puts a package manager into the definition.
 >
-> T12 executes `/usr/bin/python3 /kyri/package/<entrypoint>`
-> (`worker.py:66,268`) as `--user 1000:1000`. §27 requires one fixed exact
-> Python patch version, standard library only, **no package manager, no
-> compiler, no shell**, and the T19 test list requires the *definition itself*
-> to contain no `pip`, package manager, compiler, `sudo`, SSH, `curl`, `wget`,
-> or shell. Every available base fails at least one:
+> The reviewer ruled the interpreter path adapts to the image rather than the
+> reverse: `CONTAINER_INTERPRETER` becomes **`/usr/bin/python`**, an authorised
+> correction to a released module, with the host `WORKER_INTERPRETER`
+> untouched. The base family is the minimal Chainguard Python runtime, supplied
+> as a digest-pinned `BASE_IMAGE` argument with **no default**; governed Python
+> is **3.14.6**, proven three independent ways at admission; and
+> `/usr/bin/python` **may** be a symlink because the OCI digest commits the link
+> and its target together, with resolution and an interpreter digest recorded as
+> provisioning evidence. Recorded in design §27.
 >
-> | Candidate | Conflict |
-> |---|---|
-> | `python:X.Y.Z-slim` | Interpreter is `/usr/local/bin/python3`; the slim variants carry **no** `/usr/bin/python3` at all, so T12's fixed command finds nothing. Also ships `apt` and a shell. |
-> | `python:X.Y.Z` (full) | Has a distro `/usr/bin/python3`, but it is a *different* interpreter from the tag's pinned `/usr/local/bin/python3` — the pinned patch version would not be the one executed. Ships `apt`, a compiler, `curl`, and a shell. |
-> | distroless `python3-debian12` | Provides `/usr/bin/python3` only as a **symlink** to `/usr/bin/python3.11`, which is the integrity question the reviewer named. The patch version floats with Debian rather than being declarable; `ENTRYPOINT` is preset; the `nonroot` variant is uid 65532, not 1000. |
-> | `debian:*-slim` + `apt`, or Alpine + `apk` | Puts a package manager in the definition, which the T19 test list forbids outright. The Track-B Alpine digest is additionally never promoted. |
-> | `FROM scratch` + assembled CPython | Needs a builder stage carrying a package manager or compiler, failing the same test, and the result cannot be statically validated for completeness. |
+> The forbidden-tooling rule is also clarified there: it governs the **final
+> runtime image**, not whether the definition may mention a build stage. The
+> earlier reading was stronger than intended. This image needs no build stage
+> regardless.
 >
-> §27 says the image is "purpose-built for Kyri" but no accepted source says
-> how it is built without a package manager appearing in its own definition.
-> That is a provisioning and supply-chain authority decision, which is what G4
-> exists for, so it is left unfixed rather than chosen here.
+> **Files corrected.** `tests/test-capability-execution-image.sh` is added, for
+> the same reason every increment since T14 has its own suite. T12's
+> `worker.py` and `tests/test-capability-execution-lifecycle.sh` change with the
+> interpreter correction.
 >
-> What the ruling must settle: the base image and its pinning strategy; whether
-> `/usr/bin/python3` may be a symlink and, if so, what proves its integrity at
-> admission; or, alternatively, an amendment to T12's `CONTAINER_INTERPRETER`
-> — which would be a change to a released module and is explicitly **not** a
-> change T19 may make quietly.
->
-> The per-`CINV` output byte and inode quota (design §34) remains unresolved and
-> is a separate G4/G5 item. The Containerfile does not address it and must not
-> be read as doing so: it is a host storage question, not an image one.
+> The per-`CINV` output byte and inode quota (design §34) stays unresolved and
+> is a G4/G5 host-storage item. The image does not address it.
 
 - Failing tests (static, no build): the definition contains no pip, package
   manager, compiler, sudo, SSH, curl, wget, or shell; declares a fixed non-root

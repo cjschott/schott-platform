@@ -279,6 +279,10 @@ jobs:
       - name: Capability execution adapter tests
         run: bash tests/test-capability-execution-adapter.sh
 
+      # Static image-definition validation. Builds nothing and pulls nothing.
+      - name: Capability execution image definition tests
+        run: bash tests/test-capability-execution-image.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

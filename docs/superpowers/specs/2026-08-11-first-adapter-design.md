@@ -963,6 +963,47 @@ manager, no compiler or toolchain, no sudo, no SSH, no curl or wget, no
 shell**, and nothing general-purpose beyond runtime needs. The absence of a
 shell is compatible with §9 because Podman `exec`s the interpreter directly.
 
+**These are properties of the final runtime image**, clarified at the G4 ruling
+of 2026-08-12. They do not forbid a build stage from carrying tooling; the
+earlier reading, which forbade the definition from mentioning it at all, was
+stronger than intended and unsatisfiable. For the v1 image no build stage is
+needed, because the admitted base already is the runtime.
+
+**Base family and pinning, ruled 2026-08-12.** The minimal Chainguard Python
+runtime (`cgr.dev/chainguard/python`), whose runtime variant has no shell and no
+package manager and configures its interpreter at **`/usr/bin/python`**. T12's
+`CONTAINER_INTERPRETER` was corrected from `/usr/bin/python3` to match, rather
+than the image being deformed to preserve a pathname — keeping the old name
+would have meant carrying a package manager into the final image purely to
+create it. The host-side `WORKER_INTERPRETER` is a different thing and is
+unchanged.
+
+The authoritative definition names **no base**: `BASE_IMAGE` is a build argument
+with no default, and the G5 procedure accepts only
+`cgr.dev/chainguard/python@sha256:<64-hex>`. A tag may be used during
+provisioning discovery to identify a candidate digest and must never reach a
+build, because the vendor's tags float.
+
+**Governed Python is 3.14.6.** Admission must independently prove all three of:
+the OCI base digest equals the expected candidate; the SBOM reports Python
+3.14.6; and `/usr/bin/python` reports 3.14.6. Any disagreement refuses
+admission. A distribution package revision (`-rN`) may differ as the vendor
+rebuilds the same upstream version — the OCI digest identifies the artefact
+while `3.14.6` fixes the governed upstream semantics.
+
+**`/usr/bin/python` may be a symlink.** The whole image filesystem, link and
+target together, is committed by the immutable OCI digest, which is stronger
+evidence than forbidding symlinks would be. Admission verifies that it resolves
+entirely inside the image rootfs, traverses nothing outside it, terminates at a
+regular executable file, and reports 3.14.6; and records as provisioning
+evidence the image digest, the link value, the resolved target path, the SHA-256
+of the resolved interpreter, the reported version, and the SBOM Python package.
+
+**The image default user is not execution authority.** The base defaults to
+`65532:65532`; T12 launches every container with an explicit `--user 1000:1000`
+and the profile verification compares what Podman reported against that, so the
+image's own default is metadata.
+
 **The Track-B Alpine digest is TEST-ONLY and is never promoted.**
 
 ## 28. Implementation retirement relationship

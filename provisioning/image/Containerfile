@@ -1,0 +1,47 @@
+# The production capability execution image for ENG-0005.
+#
+# NOT BUILT BY THIS REPOSITORY. No test, validator, or script builds, pulls,
+# loads, or admits this. Building it is gate G5, and admitting its digest as a
+# CIMP is a separate governed step an operator performs — see README.md.
+#
+# There is no default base. `BASE_IMAGE` has no value here on purpose: a
+# floating tag baked into an authoritative definition would mean the image
+# Kyri admitted and the image Kyri later built were the same text and different
+# bytes. The G5 procedure supplies a digest-pinned reference and refuses
+# anything that is not one, so this file cannot name a mutable base even by
+# accident.
+#
+# The base family is the minimal runtime variant admitted at the G4 ruling of
+# 2026-08-12: no shell, no package manager, and its interpreter configured at
+# /usr/bin/python. T12's container command was corrected to match it rather
+# than the image being deformed to preserve /usr/bin/python3, which would have
+# meant carrying a package manager into the final image to create a pathname.
+#
+# Governed by docs/superpowers/specs/2026-08-11-first-adapter-design.md §9, §27.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Bind-mount destinations, present in the image so that creation against a
+# read-only rootfs does not depend on the runtime materialising them. WORKDIR
+# is used rather than RUN mkdir because the base has no shell to run: this is
+# the builder creating a directory, not a command executing inside the image.
+WORKDIR /kyri/package
+WORKDIR /kyri/output
+WORKDIR /run/kyri/input
+WORKDIR /
+
+# Cleared deliberately. The base configures its interpreter as the entrypoint,
+# and T12 passes the interpreter and the governed entrypoint as the container
+# command; an inherited entrypoint would prepend a second interpreter to that
+# command and the invocation would fail in a way nobody would read as a
+# configuration error.
+ENTRYPOINT []
+CMD []
+
+# Metadata only. The execution identity is not established here: T12 launches
+# every container with an explicit `--user 1000:1000`, and the profile
+# verification compares what Podman reported against that. This line states
+# that the image's own default is unprivileged, so an image inspected outside
+# Kyri is not mistaken for one that would run as root.
+USER 65532:65532

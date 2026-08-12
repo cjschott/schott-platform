@@ -525,9 +525,10 @@ print('OK')
 run_case "the container command is adapter-owned with no caller argv" "${PRELUDE}
 argv = W.create_argv(profile(), sources('cmd'), package())
 tail = list(argv[argv.index(IMAGE) + 1:])
-assert tail == ['/usr/bin/python3', '/kyri/package/main.py'], tail
-for banned in ('sh', '-c', 'bash', '--'):
+assert tail == ['/usr/bin/python', '/kyri/package/main.py'], tail
+for banned in ('sh', '-c', 'bash', '--', '/usr/bin/python3'):
     assert banned not in tail, banned
+assert tail[0] == W.CONTAINER_INTERPRETER, 'the command bypasses the constant'
 print('OK')
 "
 
@@ -537,11 +538,11 @@ run_case "the script argument comes from the bound package entrypoint" "${PRELUD
 nested = package('pkg/main.py')
 argv = W.create_argv(profile(), sources('nested'), nested)
 tail = list(argv[argv.index(IMAGE) + 1:])
-assert tail == ['/usr/bin/python3', '/kyri/package/pkg/main.py'], tail
+assert tail == ['/usr/bin/python', '/kyri/package/pkg/main.py'], tail
 flat = package('main.py')
 argv = W.create_argv(profile(), sources('flat'), flat)
 assert list(argv[argv.index(IMAGE) + 1:]) == [
-    '/usr/bin/python3', '/kyri/package/main.py']
+    '/usr/bin/python', '/kyri/package/main.py']
 # Two different bindings produce their own script argument.
 deep = package('a/b/entry.py')
 argv = W.create_argv(profile(), sources('deep'), deep)
