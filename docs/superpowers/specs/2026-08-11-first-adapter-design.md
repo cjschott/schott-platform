@@ -555,12 +555,29 @@ dedicated quarantine-capacity lock. The full reservation is held until the
 terminal collection record is durably committed; actual usage never reduces it
 incrementally; future admission always rechecks actual physical free space.
 
+**Structural bounds — the same hostile-tree contract as §11.** Ruled
+2026-08-12: maximum depth **16**, maximum **256** total entries, the root at
+depth 0 and not itself an entry, every encountered child counted whatever its
+type, and entry 257 refused immediately. The content limits above — 32 regular
+files, 2 MiB per file, 16 MiB aggregate — remain independent of these.
+
+Quarantine traversal reuses `tools/common/trusted_source.walk_tree` rather than
+introducing a second walker, so normal output collection and quarantine sealing
+rest on one audited filesystem-safety primitive. A second bespoke geometry would
+mean two hostile-tree contracts to keep correct, and the one that is exercised
+less often is the one that would rot.
+
 **Crash before the terminal manifest** is `quarantine_collection_incomplete`:
 no resume, no append, no overwrite, no automatic deletion. The 16 MiB
 reservation and the execution slot both remain held. Disposition
 `retain-quarantine-incomplete` may seal only if the partial namespace is within
-32 files / 2 MiB per file / 16 MiB aggregate; unexpected object, overflow, or
-ambiguity is `quarantine_incomplete_integrity_failure`. The final v1 escape
+32 files / 2 MiB per file / 16 MiB aggregate **and within the depth and entry
+bounds above**; unexpected object, overflow, depth or entry violation, hard-link
+anomaly, or ambiguity is `quarantine_incomplete_integrity_failure`. No new
+classification is added: that member already means the partial namespace cannot
+be safely sealed as validated forensic evidence, and the operator's fallback is
+unchanged — `retain-quarantine-residue` turns the whole tree into opaque
+operator-managed residue with no further enumeration. The final v1 escape
 hatch `retain-quarantine-residue` transfers an opaque tree to operator-managed
 residue — no manifest, no continued enumeration, no deletion authority — after
 which the logical reservation may release while physical free-space

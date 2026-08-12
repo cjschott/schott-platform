@@ -579,9 +579,41 @@ Regression set unless stated otherwise:
 
 ### T15 — Quarantine
 
-**Files:** `tools/capability/execution/quarantine.py`
-**Interfaces:** `admit(root) -> QuarantineReservation`, `collect(reservation, out_fd)`,
-`seal(reservation) -> None`
+**Files:** `tools/capability/execution/quarantine.py`,
+`tools/capability/execution/state.py` (additive lock kind),
+`tools/capability/execution/mutation.py` (additive target kinds),
+`tests/test-capability-execution-quarantine.sh`
+**Interfaces:** `admit(root, cinv) -> QuarantineReservation`,
+`collect(root, reservation, out_fd) -> QuarantineManifest`,
+`seal(root, reservation, manifest) -> None`,
+`seal_incomplete(root, reservation) -> QuarantineManifest`,
+`retain_residue(root, reservation) -> None`
+
+> **Structural bounds ruled 2026-08-12, before implementation.** T15 reuses
+> T14's hostile-tree geometry rather than inventing a quarantine-specific one:
+> depth 16, 256 total entries, 32 regular files, 2 MiB per file, 16 MiB
+> aggregate, through `tools/common/trusted_source.walk_tree`. During
+> `retain-quarantine-incomplete` sealing, any depth, entry, size, type, or link
+> violation maps to the already-accepted
+> `quarantine_incomplete_integrity_failure`; no new classification is added.
+> The bounds are imported from `collector.py` rather than restated, so the two
+> paths cannot drift apart into two contracts.
+>
+> **Interfaces settled 2026-08-12, before implementation.** The originals named
+> no root and no `CINV`, so a reservation had nothing to be *for* and no
+> verified authority root to be written through; every other execution module
+> takes the `RootDescriptor` the backing store verified, and quarantine writes,
+> so it needs one more than most. The two administrative dispositions the
+> failing-test list already requires — `retain-quarantine-incomplete` and
+> `retain-quarantine-residue` — are named as operations here; T17 binds the
+> verbs to them and owns the `CADM` record.
+>
+> **Lock order, refused rather than chosen.** §23 lists a quarantine-capacity
+> lock but fixes an order only for global capacity → per-`CINV`. Rather than
+> invent a position for the third kind, `admit` takes the quarantine lock only
+> when no other lock is held and refuses otherwise, so T15 adds no ordering to
+> the specification and the ambiguous nesting fails closed. If a later increment
+> genuinely needs to nest them, the order is a reviewer question at that point.
 
 - Failing tests: reserve `16 MiB + max(1 GiB, 5%)` respected; each collection
   durably reserves 16 MiB held until the terminal record commits; usage never
