@@ -38,6 +38,7 @@ from .types import LifecycleState
 TRANSITIONS_DIRECTORY = "transitions"
 LOCKS_DIRECTORY = "locks"
 CAPACITY_LOCK = "capacity"
+QUARANTINE_LOCK = "quarantine-capacity"
 STATE_SCHEMA_VERSION = 1
 
 _LOCK_FLAGS = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -105,12 +106,19 @@ class _LockOrder:
     crash without meaning a thing. Only the kernel lock serialises.
     """
 
+    # What this *process* holds, across every instance. `flock` serialises
+    # actors, and an instance only knows its own history, so an order taken by
+    # two instances in one process would satisfy both and still be an
+    # inversion. The order rule is about the process, so the record is too.
+    _process_held: set[str] = set()
+
     def __init__(self) -> None:
         self._held: list[tuple[str, int]] = []
 
     @property
     def holds_cinv(self) -> bool:
-        return any(name != CAPACITY_LOCK for name, _ in self._held)
+        return any(name not in (CAPACITY_LOCK, QUARANTINE_LOCK)
+                   for name in _LockOrder._process_held)
 
     def _acquire(self, root: RootDescriptor, name: str) -> None:
         base = os.open(LOCKS_DIRECTORY, _DIR_FLAGS, dir_fd=root.fd)
@@ -123,26 +131,55 @@ class _LockOrder:
         except BaseException:
             os.close(handle)
             raise
+        self._take(name, handle)
+
+    def _take(self, name: str, handle: int) -> None:
         self._held.append((name, handle))
+        _LockOrder._process_held.add(name)
 
     def acquire_capacity(self, root: RootDescriptor | None = None) -> None:
         if self.holds_cinv:
             raise LockOrderViolation(
                 "the capacity lock must be taken before any CINV lock")
+        if QUARANTINE_LOCK in _LockOrder._process_held:
+            raise LockOrderViolation(
+                "the quarantine lock may not be held while taking another lock")
         if root is not None:
             self._acquire(root, CAPACITY_LOCK)
         else:
-            self._held.append((CAPACITY_LOCK, -1))
+            self._take(CAPACITY_LOCK, -1)
+
+    def acquire_quarantine(self, root: RootDescriptor | None = None) -> None:
+        """Take the quarantine-capacity lock, and only on its own.
+
+        §23 lists this lock but fixes an order only for global capacity before
+        per-`CINV`. Rather than invent a position for a third kind, this
+        refuses to nest with either: quarantine admission is a decision about
+        the filesystem, taken by a caller holding nothing else. An increment
+        that genuinely needs the nesting has found a specification question,
+        and should get an answer rather than an ordering chosen here.
+        """
+        if _LockOrder._process_held:
+            raise LockOrderViolation(
+                "the quarantine lock may not be taken while another lock is held")
+        if root is not None:
+            self._acquire(root, QUARANTINE_LOCK)
+        else:
+            self._take(QUARANTINE_LOCK, -1)
 
     def acquire_cinv(self, cinv: str, root: RootDescriptor | None = None) -> None:
+        if QUARANTINE_LOCK in _LockOrder._process_held:
+            raise LockOrderViolation(
+                "the quarantine lock may not be held while taking another lock")
         if root is not None:
             self._acquire(root, cinv)
         else:
-            self._held.append((cinv, -1))
+            self._take(cinv, -1)
 
     def release_all(self) -> None:
         while self._held:
-            _, handle = self._held.pop()
+            name, handle = self._held.pop()
+            _LockOrder._process_held.discard(name)
             if handle >= 0:
                 try:
                     fcntl.flock(handle, fcntl.LOCK_UN)

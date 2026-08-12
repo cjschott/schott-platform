@@ -91,7 +91,13 @@ FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__"}
 # descriptor-relative only, create-once -- and that is asserted by
 # tests/test-capability-execution-mutation.sh rather than here.
 WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py",
-                        "mutation.py", "state.py", "handoff.py"}
+                        "mutation.py", "state.py", "handoff.py",
+                        # T15. Quarantine copies forensic evidence into the
+                        # coordinator-owned namespace, which it cannot do
+                        # without writing. Its own backstop forbids the half
+                        # this set does not: no deletion, no mode or owner
+                        # change, and no execution.
+                        "quarantine.py"}
 # Authority planes this package may never reach, by import or by symbol.
 FORBIDDEN_PLANES = ("tools.trust", "..trust", "TrustStore", "TrustGateway",
                     "trust_adapter", "tools.health", "..health",

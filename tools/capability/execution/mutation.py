@@ -44,6 +44,8 @@ FIRST_CMUT = "CMUT-000000000001"
 _MUTATIONS = "mutations"
 _STATE = "state"
 _TRANSITIONS = "transitions"
+_QUARANTINE_RESERVATIONS = "quarantine-reservations"
+_QUARANTINE_RELEASES = "quarantine-releases"
 _INTENT = "intent"
 _OUTCOME = "outcome"
 
@@ -92,10 +94,18 @@ class TargetKind(enum.Enum):
     # Added at T6. Lifecycle state is append-only because install is
     # create-once, so each transition needs its own sequenced name.
     EXECUTION_TRANSITION = "execution-transition"
+    # Added at T15. A logical quarantine reservation and its release are two
+    # records rather than one mutable one, for the same reason transitions are:
+    # install is create-once, so a reservation that could be edited back down
+    # would need an authority this journal deliberately does not have.
+    QUARANTINE_RESERVATION = "quarantine-reservation"
+    QUARANTINE_RELEASE = "quarantine-release"
 
 
 _TARGET_DIRECTORY = {TargetKind.EXECUTION_STATE: _STATE,
-                     TargetKind.EXECUTION_TRANSITION: _TRANSITIONS}
+                     TargetKind.EXECUTION_TRANSITION: _TRANSITIONS,
+                     TargetKind.QUARANTINE_RESERVATION: _QUARANTINE_RESERVATIONS,
+                     TargetKind.QUARANTINE_RELEASE: _QUARANTINE_RELEASES}
 
 
 def _is_cinv(name: str) -> bool:
@@ -110,7 +120,9 @@ def _is_sequenced_cinv(name: str) -> bool:
 
 
 _TARGET_GRAMMAR = {TargetKind.EXECUTION_STATE: _is_cinv,
-                   TargetKind.EXECUTION_TRANSITION: _is_sequenced_cinv}
+                   TargetKind.EXECUTION_TRANSITION: _is_sequenced_cinv,
+                   TargetKind.QUARANTINE_RESERVATION: _is_cinv,
+                   TargetKind.QUARANTINE_RELEASE: _is_cinv}
 
 
 @dataclasses.dataclass(frozen=True)

@@ -100,15 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 48 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 49 checks plus the closing summary. Quick mode drops
 # ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=39
+  TOTAL_STEPS=40
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=50
+  TOTAL_STEPS=51
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -249,6 +249,12 @@ run "Capability execution terminal" \
 # deletes, and executes nothing.
 run "Capability execution collector" \
   bash tests/test-capability-execution-collector.sh
+
+# ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
+# and seals inside the suite's own directory. Deletes nothing and, being v1,
+# has no deletion path at all.
+run "Capability execution quarantine" \
+  bash tests/test-capability-execution-quarantine.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
