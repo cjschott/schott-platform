@@ -187,9 +187,54 @@ from a compiled-in root and the validated `CINV`, with **no caller-supplied
 path component**; read the minimum immutable evidence required to confirm the
 invocation exists, is `launch_authorized`, is not refused, not conflicting, and
 not already attempted; verify the handoff exists with expected ownership and
-modes and establish the ownership root cannot; `setgroups([987])`,
-`setgid(987)`, `setuid(999)`, verify the transition took effect; set
-`no_new_privs`; `execve` the worker with an explicitly constructed environment.
+modes and establish the ownership root cannot; then the credential sequence
+below.
+
+**The credential sequence, in this exact order.** Nothing here is reordered for
+convenience; each step exists because the one before it has already happened.
+
+1. `setgroups([987])` — supplementary groups restricted before anything else,
+   because dropping uid first would make this impossible.
+2. `setgid(987)`
+3. `setuid(999)` — after the gid, since the reverse order loses the privilege
+   needed to set the gid.
+4. **verify** real, effective, and saved uid/gid and the group set, refusing if
+   any component still carries privilege.
+5. `PR_SET_NO_NEW_PRIVS` — **after** the permanent drop. The operation does not
+   require root, so there is no reason to exercise it while the process still
+   holds uid 0.
+6. **verify** `PR_GET_NO_NEW_PRIVS == 1`. Calling the setter and assuming it
+   worked is not setting it.
+7. final privilege-loss verification.
+8. `execve` the worker with an explicitly constructed environment.
+
+**The `no_new_privs` mechanism is `ctypes` calling libc `prctl(2)`, and only
+that.** Python 3.12 exposes no binding for `PR_SET_NO_NEW_PRIVS`, and the
+alternatives each cost more than they save: a C helper adds an installed
+binary, a build step, an integrity object, and a provisioning item; `setpriv`
+reintroduces a subprocess and an exec before the drop; moving the bit to the
+worker changes the accepted transition boundary. `ctypes` adds **no new host
+artefact** — it reaches the system libc already loaded by the running
+interpreter.
+
+The exception is narrow and does not legalise FFI in the helper generally:
+
+| Constraint | Value |
+|---|---|
+| Constants | `PR_SET_NO_NEW_PRIVS = 38`, `PR_GET_NO_NEW_PRIVS = 39` |
+| Setter | `prctl(38, 1, 0, 0, 0)` |
+| Getter | `prctl(39, 0, 0, 0, 0)`, must return `1` |
+| Library binding | the current process only — never a caller-selected path |
+| Symbols | `prctl` and nothing else |
+| Wrappers | none: no `call_libc(name, *args)`, no dynamic symbol names, no reusable FFI abstraction |
+| Scope | the privileged action module only; policy code and the execution package remain forbidden from importing `ctypes` |
+
+Any setter or verification failure refuses before `execve`.
+
+**Inherited descriptors are exactly `(0, 1, 2)`**: stdin carries
+coordinator→worker protocol, stdout carries worker→coordinator protocol, and
+stderr carries bounded diagnostics. There are no dedicated protocol descriptors
+in v1, and everything else is closed before the drop.
 
 **The installed paths are fixed, because "the worker" was previously unnamed.**
 

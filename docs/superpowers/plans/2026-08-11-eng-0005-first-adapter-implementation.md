@@ -434,7 +434,15 @@ Regression set unless stated otherwise:
 
 ### T11 — Transition helper: privileged skeleton
 
-**Files:** `provisioning/execution/kyri-exec-transition.py` (transition path)
+**Files:** `provisioning/execution/kyri-exec-transition-action.py`
+
+> **File split 2026-08-12, before implementation.** T11 was planned to add the
+> transition path to the T10 policy file. It cannot: the T10 policy-only
+> backstop scans that file and forbids every privilege syscall, `execve`, and
+> `ctypes`, and the T11 ruling requires that backstop to remain **unchanged**.
+> The privileged action therefore lives in its own module with its own narrowly
+> scoped backstop, and the policy module keeps its guard intact. Packaging the
+> two into one installed helper is a G2 concern, not a source-layout one.
 **Interfaces:** `establish_context() -> CallerContext`, `drop_privileges() -> None`
 
 - Failing tests: refuses when not running with root privilege; refuses when the

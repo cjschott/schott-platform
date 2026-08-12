@@ -137,7 +137,7 @@ Root does the minimum that only root can do, then leaves:
 | 2 | root | validate the argument against `^CINV-[0-9]{6}$` — total, no path resolution |
 | 3 | root | read the prepared record; confirm `execution-prepared`, not refused, not conflicting, not already attempted |
 | 4 | root | chown the pre-created handoff to the execution identity, read-only |
-| 5 | root | `setgroups([987])`, `setgid(987)`, `setuid(999)`, verify the transition took, set `no_new_privs` |
+| 5 | root | `setgroups([987])`, `setgid(987)`, `setuid(999)`, verify the drop, then `PR_SET_NO_NEW_PRIVS` via `ctypes`/libc `prctl` and verify `PR_GET_NO_NEW_PRIVS == 1` |
 | 6 | **unprivileged** | `execve` the worker as `kyri-capability` |
 
 **Root never runs Podman.** Root never constructs container arguments, never
