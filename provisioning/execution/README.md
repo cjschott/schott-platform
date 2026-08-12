@@ -312,10 +312,20 @@ fall through to another tree and run its module-level code.
 | `provisioning/execution/kyri-exec-transition.py` | `/usr/lib/kyri/python/kyri_exec_transition.py` | `root:root` | `0444` |
 | `provisioning/execution/kyri-exec-transition-action.py` | `/usr/lib/kyri/python/kyri_exec_transition_action.py` | `root:root` | `0444` |
 | `provisioning/execution/kyri-exec-worker.py` | `/usr/libexec/kyri-exec-worker.py` | `root:root` | `0444` |
+| `tools/__init__.py` | `/usr/lib/kyri/python/tools/__init__.py` | `root:root` | `0444` |
 | `tools/capability/execution/*.py` | `/usr/lib/kyri/python/tools/capability/execution/*.py` | `root:root` | `0444` |
 | `tools/capability/*.py`, `tools/common/*.py` | `/usr/lib/kyri/python/tools/...` (same relative layout) | `root:root` | `0444` |
 | `provisioning/execution/kyri-exec-quota.py` | `/usr/libexec/kyri-exec-quota` | `root:root` | `0555` |
 | `provisioning/execution/kyri-exec-quota.py` | `/usr/lib/kyri/python/kyri_exec_quota.py` | `root:root` | `0444` |
+
+`tools/__init__.py` is in the matrix for a security reason, not a packaging
+one. Without it `tools` installs as a *namespace* package, and a namespace
+portion does not terminate the import search — so a regular `tools` package
+found later on `sys.path` wins even though both entrypoints insert the
+canonical root at position 0, and its module-level code runs before the
+post-import `realpath` check can refuse. Installing it makes the canonical root
+a regular package, so the first match is the only match. Omitting it from a
+future re-provisioning would silently reopen the gap.
 
 The quota source has **two destinations and one implementation**: the standalone
 executable specified earlier, and the internal module the transition imports.
@@ -506,10 +516,25 @@ fix belongs in a review of the matrix — either narrow it to the real closure o
 extend it to cover `tools/fabric/` — and must not be applied by widening the
 installed tree without that review.
 
-**2. `tools` installs as a namespace package, so a regular `tools` package
-elsewhere on the path wins.** Found while validating after G4, and confirmed
-directly. Neither the repository nor the §8.2 matrix carries `tools/__init__.py`,
-so `/usr/lib/kyri/python/tools` is a *namespace* portion. A namespace portion
+> **Re-evaluated after `tools/__init__.py` was added.** The failure mode changed
+> and the severity dropped. While `tools` was a namespace package this was not
+> a failure at all: with the checkout anywhere on `sys.path`, `tools.__path__`
+> resolved to `/opt/schott-platform/tools` and the module loaded from the
+> coordinator-writable tree. Now that the installed root is a regular package,
+> `tools.__path__` is pinned to `/usr/lib/kyri/python/tools` and the same import
+> is a clean `ModuleNotFoundError: No module named 'tools.fabric'` —
+> fail-closed, and confined to the uninstalled subpackage. The worker closure
+> (`worker`, `types`, `package_contract`) resolves entirely from the canonical
+> root and is unaffected. The module stays outside the sanctioned execution
+> closure, so this remains a packaging-hygiene follow-up and **`tools/fabric` is
+> deliberately not installed.**
+
+**2. `tools` installed as a namespace package, so a regular `tools` package
+elsewhere on the path won.** Found while validating after G4, and confirmed
+directly. **Corrected in source; the installed tree carries the fix only after
+the re-provisioning described below.** At the time of G4 neither the repository
+nor the §8.2 matrix carried `tools/__init__.py`,
+so `/usr/lib/kyri/python/tools` was a *namespace* portion. A namespace portion
 does not terminate the import search, so a **regular** package named `tools`
 found later on `sys.path` takes precedence over the installed one — even though
 both entrypoints insert `/usr/lib/kyri/python` at position 0. Demonstrated: with
@@ -520,29 +545,44 @@ The post-import `realpath` check in both entrypoints does then refuse — but
 only *after* the foreign module-level code has run, which is precisely the
 sequence the entrypoints' own pre-import existence check exists to prevent.
 
-**Not reachable through the sanctioned path**, which is why this does not
+**Not reachable through the sanctioned path**, which is why this did not
 invalidate G4: the transition execs the worker with a closed environment that
-carries no `PYTHONPATH`, and the installed tree is root-owned and read-only. It
-is a defence-in-depth property the design claims and does not currently deliver.
-The fix is a source decision — install a `tools/__init__.py` so the installed
-tree is a regular package, or have the entrypoints resolve the module by
-explicit file path rather than by package name — and requires a reviewed
-re-provisioning to take effect. **Do not patch the installed tree in place.**
+carries no `PYTHONPATH`, and the installed tree is root-owned and read-only.
 
-**3. The validation suite encodes "G4 has not been executed" as an invariant.**
-On a G4-provisioned host, five suites fail — `helper-policy`, `lifecycle`,
-`provisioning`, `quota`, and `transition-action` — because each asserts that
-production paths such as `/data/kyri/capability-handoff`,
-`/data/kyri/capability-runtime/execution`, `/usr/lib/kyri/python`,
-`/usr/libexec/kyri-exec-transition`, and `/usr/libexec/kyri-exec-worker.py` do
-**not exist**. The intent is sound — a test must never provision a production
-root — but the assertion conflates *"this suite did not create it"* with *"it
-does not exist"*, and only the first is a property of the tests. The suites pass
-in CI and on any unprovisioned host, and passed at `34c18a7` before the
-maintenance window; they now fail on `schai` for a correct reason. Rework should
-assert that the suite made no change to those paths, not that they are absent.
-Until then, **CI on a clean host is the reference result**, and a full-validator
-run on `schai` is expected to stop early.
+A second measurement made the severity clearer. With the checkout on
+`sys.path` at all, the namespace `tools.__path__` resolved to
+`/opt/schott-platform/tools` outright — so it was not only a decoy on
+`PYTHONPATH` that could win, but the coordinator-writable checkout itself.
+
+**Corrected by `tools/__init__.py`**, now in the repository and in the §8.2
+matrix, which makes the canonical root a regular package so the first match is
+the only match. Both the pre-import existence check and the post-import
+`realpath` check are unchanged — this closes the window between them. The
+alternative, resolving by explicit file path, was not taken: it was not needed
+once the regular-package property held. **The installed tree does not carry the
+fix until it is re-provisioned; do not patch it in place.**
+
+**3. The validation suite encoded "G4 has not been executed" as an invariant.**
+**Corrected.** Five suites — `helper-policy`, `lifecycle`, `provisioning`,
+`quota`, and `transition-action` — proved they had not provisioned anything by
+asserting that production paths do **not exist**. The intent was sound but the
+assertion conflated *"this suite did not create it"* with *"it does not
+exist"*, and only the first is a property of a test. Each now snapshots
+`(mode, uid, gid, size, mtime_ns, ctime_ns)` for the paths it must not touch
+before the first case, and compares after the last — so a write, a `chmod`, or
+a `chown` all fail the check, on a clean host and a provisioned one alike. This
+matches the validator's own long-standing production-path backstop.
+
+Gate state is treated differently from provisioned state: `/etc/sudoers.d/kyri-exec`
+and `/run/kyri` must be absent on *every* host until G3 opens, so those keep an
+absolute absence assertion rather than a snapshot comparison.
+
+The import-boundary cases were rebuilt the same way. They previously ran the
+worker against the real `/usr/lib/kyri/python`, which meant that on a clean host
+they passed because nothing was installed to redirect — the property was never
+actually exercised. They now build a canonical root from the install matrix in
+a temporary directory and run the real resolution logic against it, so the
+property is tested on every host and CI included.
 
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its

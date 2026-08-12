@@ -41,6 +41,36 @@ run_case() {
   fi
 }
 
+# Paths this suite must never touch, split by what is actually being claimed.
+#
+# G4 legitimately installs the quota helper and the handoff root, so their
+# invariant is that this suite does not change them -- compared before and
+# after. The sudoers policy and the runtime directory are different: they are
+# gate state that must be absent on every host, provisioned or not, so those
+# keep an absolute absence assertion.
+PRODUCTION_PATHS=(
+  /usr/libexec/kyri-exec-quota
+  /data/kyri/capability-handoff
+)
+PRODUCTION_BEFORE="$(mktemp)"
+trap 'rm -f "${PRODUCTION_BEFORE}"' EXIT
+snapshot_production() {
+  python3 -c '
+import json, os, sys
+state = {}
+for path in sys.argv[1:]:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        state[path] = None
+        continue
+    state[path] = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+                   info.st_mtime_ns, info.st_ctime_ns]
+print(json.dumps(state, sort_keys=True))
+' "$@"
+}
+snapshot_production "${PRODUCTION_PATHS[@]}" > "${PRODUCTION_BEFORE}"
+
 # ===========================================================================
 # The quota backstop
 # ===========================================================================
@@ -374,12 +404,26 @@ for later in ('close_extra_descriptors', 'setgroups', 'setgid', 'setuid',
 print('OK')
 "
 
-run_case "nothing is installed and no quota was established" "${PRELUDE}
-import os
+run_case "nothing was installed and no quota was established" "${PRELUDE}
+import json, os
 assert os.getuid() != 0, 'this suite must not run privileged'
-for path in ('/usr/libexec/kyri-exec-quota', '/etc/sudoers.d/kyri-exec',
-             '/run/kyri', '/data/kyri/capability-handoff'):
+# Gate state: absent on every host until G3 opens, so absence is still the
+# correct assertion for these two.
+for path in ('/etc/sudoers.d/kyri-exec', '/run/kyri'):
     assert not Path(path).exists(), path + ' exists'
+# G4 artifacts: present on a provisioned host by design, so the claim is that
+# this suite left them alone.
+with open('${PRODUCTION_BEFORE}', encoding='utf-8') as handle:
+    baseline = json.load(handle)
+assert baseline, 'the production baseline is empty'
+for path, recorded in sorted(baseline.items()):
+    try:
+        info = os.lstat(path)
+        current = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+                   info.st_mtime_ns, info.st_ctime_ns]
+    except FileNotFoundError:
+        current = None
+    assert current == recorded, path + ' changed while this suite ran'
 print('OK')
 "
 

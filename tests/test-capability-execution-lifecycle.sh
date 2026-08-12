@@ -161,6 +161,30 @@ WORK="$(mktemp -d)"
 cleanup() { chmod -R u+rwX "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"; }
 trap cleanup EXIT
 
+# Production roots this suite must never touch. Compared before and after
+# rather than asserted absent: absence only asked whether G4 had run, and
+# stopped being true when it did. Non-mutation is the real claim.
+PRODUCTION_PATHS=(
+  /data/kyri/capability-handoff
+)
+PRODUCTION_BEFORE="${WORK}/production-before.json"
+snapshot_production() {
+  python3 -c '
+import json, os, sys
+state = {}
+for path in sys.argv[1:]:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        state[path] = None
+        continue
+    state[path] = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+                   info.st_mtime_ns, info.st_ctime_ns]
+print(json.dumps(state, sort_keys=True))
+' "$@"
+}
+snapshot_production "${PRODUCTION_PATHS[@]}" > "${PRODUCTION_BEFORE}"
+
 run_case() {
   local label="$1" script="$2" actual
   if actual="$(cd "${ROOT}" && WORKDIR="${WORK}" python3 -c "${script}" 2>&1)"; then
@@ -877,12 +901,23 @@ print('OK')
 "
 
 run_case "no real Podman, subprocess, or container touched these tests" "${PRELUDE}
+import json
 for module in (W, L):
     code = code_of(module)
     assert 'subprocess' not in code, module.__name__
     assert 'Popen' not in code
-assert not os.path.exists('/data/kyri/capability-handoff')
 assert os.getuid() != 0
+with open('${PRODUCTION_BEFORE}', encoding='utf-8') as handle:
+    before = json.load(handle)
+assert before, 'the production baseline is empty'
+for path, recorded in sorted(before.items()):
+    try:
+        info = os.lstat(path)
+        current = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+                   info.st_mtime_ns, info.st_ctime_ns]
+    except FileNotFoundError:
+        current = None
+    assert current == recorded, path + ' changed while this suite ran'
 print('OK')
 "
 

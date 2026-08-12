@@ -236,6 +236,32 @@ run_case() {
   fi
 }
 
+# Installed helpers this suite must never touch. Compared before and after
+# rather than asserted absent: absence only asked whether G4 had run, and
+# stopped being true when it did.
+PRODUCTION_PATHS=(
+  /usr/libexec/kyri-exec-transition
+  /usr/libexec/kyri-exec-worker.py
+)
+PRODUCTION_BEFORE="$(mktemp)"
+trap 'rm -f "${PRODUCTION_BEFORE}"' EXIT
+snapshot_production() {
+  python3 -c '
+import json, os, sys
+state = {}
+for path in sys.argv[1:]:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        state[path] = None
+        continue
+    state[path] = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+                   info.st_mtime_ns, info.st_ctime_ns]
+print(json.dumps(state, sort_keys=True))
+' "$@"
+}
+snapshot_production "${PRODUCTION_PATHS[@]}" > "${PRODUCTION_BEFORE}"
+
 PRELUDE="
 import dataclasses, importlib.util, os, sys
 
@@ -583,9 +609,18 @@ assert os.getuid() != 0, 'must not run as root'
 recorder = Recorder(); run(recorder)
 after = (os.getuid(), os.geteuid(), os.getgid(), os.getegid(), tuple(os.getgroups()))
 assert before == after, 'the test changed process credentials'
-for production in ('/usr/libexec/kyri-exec-transition',
-                   '/usr/libexec/kyri-exec-worker.py'):
-    assert not os.path.exists(production), production
+import json
+with open('${PRODUCTION_BEFORE}', encoding='utf-8') as handle:
+    baseline = json.load(handle)
+assert baseline, 'the production baseline is empty'
+for production, recorded in sorted(baseline.items()):
+    try:
+        info = os.lstat(production)
+        current = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+                   info.st_mtime_ns, info.st_ctime_ns]
+    except FileNotFoundError:
+        current = None
+    assert current == recorded, production + ' changed while this suite ran'
 print('OK')
 "
 

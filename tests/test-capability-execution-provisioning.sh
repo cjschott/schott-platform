@@ -78,6 +78,75 @@ def stripped(path):
                 and isinstance(body[0].value.value, str)):
             del body[0]
     return ast.unparse(tree)
+
+
+CANONICAL_ROOT = '/usr/lib/kyri/python'
+ROOT_ASSIGNMENT = 'RUNTIME_LIBRARY_ROOT = ' + chr(34) + CANONICAL_ROOT + chr(34)
+MARK = 'LIBRARY' + '_REDIRECTED'
+DECOY_SOURCE = chr(10).join([
+    'import sys',
+    'sys.stderr.write(' + repr(MARK) + ')',
+    'class WorkerRefused(ValueError):',
+    '    pass',
+    'def require_worker_identity(**kwargs):',
+    '    return None',
+    'def container_name(cinv):',
+    '    return None',
+])
+
+
+def mirror_canonical_root(destination):
+    '''Build a library root from the install matrix, not from the checkout.
+
+    The matrix decides what the installed root contains, so a test that
+    recursively copied the checkout would give the mirror a shape the real root
+    does not have -- and would prove a property production does not hold.
+    '''
+    import shutil
+    sources = []
+    top = Path('tools/__init__.py')
+    if top.exists():
+        sources.append(top)
+    for base in (Path('tools/capability'), Path('tools/common')):
+        sources.extend(sorted(path for path in base.rglob('*.py')
+                              if '__pycache__' not in path.parts))
+    for source in sources:
+        target = Path(destination) / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    return destination
+
+
+def worker_rooted_at(root, destination):
+    '''The real worker source with only the compiled-in root literal changed.
+
+    The root is deliberately not configurable in production, so a host
+    independent test cannot ask the real file to look elsewhere. Rewriting the
+    single assignment keeps every line of the resolution logic under test and
+    changes only where it looks; the two assertions are what keep that honest.
+    '''
+    original = WORKER.read_text(encoding='utf-8')
+    assert original.count(ROOT_ASSIGNMENT) == 1, 'the compiled-in root moved'
+    patched = original.replace(
+        ROOT_ASSIGNMENT, 'RUNTIME_LIBRARY_ROOT = ' + repr(str(root)))
+    assert CANONICAL_ROOT not in patched, 'the production root survived'
+    Path(destination).write_text(patched, encoding='utf-8')
+    return destination
+
+
+def build_decoy(directory):
+    '''A regular package named tools, carrying a worker that proves execution.
+
+    Regular rather than namespace on purpose: a namespace portion loses to
+    anything, so a namespace decoy would pass against a broken root and prove
+    nothing.
+    '''
+    package = Path(directory) / 'tools' / 'capability' / 'execution'
+    package.mkdir(parents=True)
+    for part in ('tools', 'tools/capability', 'tools/capability/execution'):
+        (Path(directory) / part / '__init__.py').write_text('', encoding='utf-8')
+    (package / 'worker.py').write_text(DECOY_SOURCE, encoding='utf-8')
+    return directory
 "
 
 # --- the worker entrypoint ---------------------------------------------------
@@ -206,55 +275,92 @@ assert 'origin' in code or '__file__' in code, \\
 print('OK')
 "
 
+run_case "the canonical library root is a regular package, not a namespace" "${PRELUDE}
+# A namespace portion does not terminate the import search, so a regular
+# package of the same name found later on sys.path wins outright -- inserting
+# the canonical root at position 0 does not help. The installed tree must
+# therefore be a regular package, which means the matrix must carry this file.
+top = Path('tools/__init__.py')
+assert top.exists(), 'tools/__init__.py is absent: tools installs as a namespace package'
+rows = [line for line in RUNBOOK.read_text(encoding='utf-8').splitlines()
+        if 'tools/__init__.py' in line and '|' in line]
+assert rows, 'the install matrix does not carry tools/__init__.py'
+for row in rows:
+    assert '/usr/lib/kyri/python/tools/__init__.py' in row, row
+    assert '0444' in row, row
+    assert 'root:root' in row, row
+print('OK')
+"
+
 run_case "PYTHONPATH cannot redirect the production import" "${PRELUDE}
 import subprocess, tempfile
-assert WORKER.resolve().is_absolute()
-MARK = 'LIBRARY' + '_REDIRECTED'
-DECOY = (chr(10).join(['import sys', 'sys.stderr.write(' + repr(MARK) + ')','class WorkerRefused(ValueError):', '    pass','def require_worker_identity(**kwargs):', '    return None','def container_name(cinv):', '    return None',]))
-with tempfile.TemporaryDirectory() as decoy:
-    package = Path(decoy) / 'tools' / 'capability' / 'execution'
-    package.mkdir(parents=True)
-    for part in ('tools', 'tools/capability', 'tools/capability/execution'):
-        (Path(decoy) / part / '__init__.py').write_text('', encoding='utf-8')
-    (package / 'worker.py').write_text(DECOY, encoding='utf-8')
+assert os.getuid() != 0, 'this case reads the unprivileged refusal'
+with tempfile.TemporaryDirectory() as work:
+    canonical = mirror_canonical_root(str(Path(work) / 'canonical'))
+    decoy = build_decoy(str(Path(work) / 'decoy'))
+    script = worker_rooted_at(canonical, str(Path(work) / 'worker.py'))
     outcome = subprocess.run(
-        ['/usr/bin/python3', str(WORKER.resolve()), 'CINV-000001'],
-        cwd='/', env={'PYTHONPATH': decoy, 'PATH': '/usr/bin:/bin'},
+        ['/usr/bin/python3', script, 'CINV-000001'],
+        cwd='/', env={'PYTHONPATH': decoy, 'PATH': '/usr/bin:/bin',
+                      'PYTHONDONTWRITEBYTECODE': '1'},
         capture_output=True, text=True)
 combined = outcome.stdout + outcome.stderr
 assert outcome.returncode != 0, combined
-assert MARK not in combined, 'the decoy library was imported'
+# The property is that the decoy never runs -- not that it runs and is then
+# rejected. Module-level code has already had its effect by the time a
+# post-import check can object.
+assert MARK not in combined, 'the decoy library executed: ' + combined
+# Positive half: the refusal can only come from the governed library, so its
+# presence proves resolution reached the canonical root rather than nothing.
+assert 'refused:' in combined, 'the governed library was not reached: ' + combined
 print('OK')
 "
 
 run_case "the working directory cannot redirect the production import" "${PRELUDE}
 import subprocess, tempfile
-assert WORKER.resolve().is_absolute()
-MARK = 'LIBRARY' + '_REDIRECTED'
-DECOY = (chr(10).join(['import sys', 'sys.stderr.write(' + repr(MARK) + ')','class WorkerRefused(ValueError):', '    pass','def require_worker_identity(**kwargs):', '    return None','def container_name(cinv):', '    return None',]))
-with tempfile.TemporaryDirectory() as decoy:
-    package = Path(decoy) / 'tools' / 'capability' / 'execution'
-    package.mkdir(parents=True)
-    for part in ('tools', 'tools/capability', 'tools/capability/execution'):
-        (Path(decoy) / part / '__init__.py').write_text('', encoding='utf-8')
-    (package / 'worker.py').write_text(DECOY, encoding='utf-8')
+assert os.getuid() != 0, 'this case reads the unprivileged refusal'
+with tempfile.TemporaryDirectory() as work:
+    canonical = mirror_canonical_root(str(Path(work) / 'canonical'))
+    decoy = build_decoy(str(Path(work) / 'decoy'))
+    script = worker_rooted_at(canonical, str(Path(work) / 'worker.py'))
     outcome = subprocess.run(
-        ['/usr/bin/python3', str(WORKER.resolve()), 'CINV-000001'],
-        cwd=decoy, env={'PATH': '/usr/bin:/bin'},
+        ['/usr/bin/python3', script, 'CINV-000001'],
+        cwd=decoy, env={'PATH': '/usr/bin:/bin',
+                        'PYTHONDONTWRITEBYTECODE': '1'},
         capture_output=True, text=True)
 combined = outcome.stdout + outcome.stderr
 assert outcome.returncode != 0, combined
-assert MARK not in combined, 'the working directory redirected the import'
+assert MARK not in combined, 'the working directory redirected the import: ' + combined
+assert 'refused:' in combined, 'the governed library was not reached: ' + combined
 print('OK')
 "
 
-run_case "an absent installed library fails closed" "${PRELUDE}
-import subprocess
-outcome = subprocess.run(
-    ['/usr/bin/python3', str(WORKER.resolve()), 'CINV-000001'],
-    cwd='/', env={'PATH': '/usr/bin:/bin'}, capture_output=True, text=True)
-assert outcome.returncode != 0, outcome.stdout
-assert not Path('/usr/lib/kyri/python').exists(), 'the library root was installed'
+run_case "an absent library refuses before importing anything" "${PRELUDE}
+import subprocess, tempfile
+# Host-independent by construction: the root under test is one this case
+# creates and never creates anything at, so the answer does not depend on
+# whether G4 has run. The old form asserted /usr/lib/kyri/python was absent,
+# which only asked whether provisioning had happened -- not a property of this
+# suite, and false from the moment it did.
+#
+# Whether the *installed* tree holds these properties is verified against the
+# host after each re-provisioning, not here; a source suite that asserted it
+# could never be green before the install it is meant to authorise.
+with tempfile.TemporaryDirectory() as work:
+    missing = str(Path(work) / 'nowhere')
+    decoy = build_decoy(str(Path(work) / 'decoy'))
+    script = worker_rooted_at(missing, str(Path(work) / 'worker.py'))
+    outcome = subprocess.run(
+        ['/usr/bin/python3', script, 'CINV-000001'],
+        cwd='/', env={'PYTHONPATH': decoy, 'PATH': '/usr/bin:/bin',
+                      'PYTHONDONTWRITEBYTECODE': '1'},
+        capture_output=True, text=True)
+combined = outcome.stdout + outcome.stderr
+assert outcome.returncode != 0, combined
+assert 'not installed' in combined, combined
+# The refusal must come before the import, so an available decoy is never
+# reached even when the canonical root holds nothing.
+assert MARK not in combined, 'the decoy executed while failing closed: ' + combined
 print('OK')
 "
 

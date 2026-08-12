@@ -932,22 +932,40 @@ that predate G4 by roughly 29–30 hours. They are **not** evidence that G5 or G
 opened: physical emptiness of the historical rootless store is not a G5 or G6
 requirement. Their removal is G7 work and stays deferred.
 
-**Validation does not pass on the provisioned host, and this is expected.** Five
-execution suites assert that production paths are *absent* as their way of
-proving the tests did not provision anything; G4 legitimately created those
-paths, so the assertions now fail on `schai`. All 36 other suites pass. CI on a
-clean host remains the reference result. One further failure is **not** in that
-class: `tools` installs as a namespace package, so a regular `tools` package on
-`PYTHONPATH` can shadow the installed one and run its module-level code before
-the entrypoint's resolution check refuses. It is unreachable through the
-sanctioned path — the transition execs with a closed environment — but it is a
-real gap against a claimed property.
+Validation after provisioning surfaced two defects, **both since corrected in
+source** by the reviewed correction between G4 and G5 (see below). Two
+follow-ups remain recorded in the runbook and deliberately unactioned: the
+installed dependency closure is wider than the real import closure, and
+source/installed drift must only ever be resolved by an explicit reviewed
+re-provisioning event.
 
-Four follow-ups are recorded in the runbook and deliberately not actioned here:
-the installed dependency closure is wider than the real import closure; the
-namespace-package shadowing gap; the validation suites' absence-based guards;
-and source/installed drift, which must only ever be resolved by an explicit
-reviewed re-provisioning event.
+### G4→G5 correction — namespace-package import gap, 2026-08-12
+
+`tools` shipped without an `__init__.py`, so the installed
+`/usr/lib/kyri/python/tools` was a **namespace** package. A namespace portion
+does not terminate the import search, so a *regular* `tools` package found
+later on `sys.path` won outright — despite both entrypoints inserting the
+canonical root at position 0. Measured twice: a decoy on `PYTHONPATH` had its
+module-level code execute before the post-import `realpath` check refused, and,
+more seriously, with the checkout on `sys.path` at all `tools.__path__`
+resolved to `/opt/schott-platform/tools` — the coordinator-writable tree the
+authority split exists to exclude.
+
+Corrected by adding an intentionally empty `tools/__init__.py` to source and to
+the §8.2 install matrix. Both existing checks are unchanged; this closes the
+window between them. Proven RED then GREEN by import-boundary tests that build
+a canonical root from the matrix in a temporary directory, so the property is
+now exercised on every host — previously it was only ever exercised on a
+provisioned one, and passed vacuously in CI.
+
+Five suites that proved non-provisioning by asserting production paths are
+*absent* were reworked to snapshot and compare path metadata instead, so they
+are valid on a clean host and a G4-provisioned host alike. Gate state
+(`/etc/sudoers.d/kyri-exec`, `/run/kyri`) keeps its absolute absence assertion.
+
+**Source is green: 41/41 suites and the full validator at 57/57.** The
+installed tree still carries the pre-correction generation until the operator
+performs the explicit re-provisioning; G4 is not reopened and no gate changes.
 
 ## 6. Sequencing rules
 

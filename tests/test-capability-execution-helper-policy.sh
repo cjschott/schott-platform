@@ -153,6 +153,37 @@ assert_policy_only
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
+# Production roots this suite must never touch.
+#
+# Proven by comparing a snapshot taken before the first case with one taken
+# after the last. The previous form asserted these paths did not exist, which
+# only ever asked whether G4 had run -- not a property of this suite, and false
+# from the moment provisioning completed. Non-mutation is the actual claim, and
+# it is checkable on a clean host and a provisioned one alike.
+PRODUCTION_PATHS=(
+  /data/kyri/capability-handoff
+  /data/kyri/capability-runtime/execution
+  /usr/libexec/kyri-exec-transition
+  /usr/libexec/kyri-exec-worker.py
+)
+PRODUCTION_BEFORE="${WORK}/production-before.json"
+snapshot_production() {
+  python3 -c '
+import json, os, sys
+state = {}
+for path in sys.argv[1:]:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        state[path] = None
+        continue
+    state[path] = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+                   info.st_mtime_ns, info.st_ctime_ns]
+print(json.dumps(state, sort_keys=True))
+' "$@"
+}
+snapshot_production "${PRODUCTION_PATHS[@]}" > "${PRODUCTION_BEFORE}"
+
 run_case() {
   local label="$1" script="$2" actual
   if actual="$(cd "${ROOT}" && WORKDIR="${WORK}" python3 -c "${script}" 2>&1)"; then
@@ -619,13 +650,30 @@ print('OK')
 
 # --- the tests themselves are unprivileged ---------------------------------------------
 
-run_case "the fixture runs as an ordinary user and touches no production root" "${PRELUDE}
+run_case "the fixture runs as an ordinary user and mutates no production root" "${PRELUDE}
+import json
 assert os.getuid() != 0, 'these tests must not run as root'
-for production in ('/data/kyri/capability-handoff',
-                   '/data/kyri/capability-runtime/execution',
-                   '/usr/libexec/kyri-exec-transition',
-                   '/usr/libexec/kyri-exec-worker.py'):
-    assert not os.path.exists(production), f'{production} exists: T10 must not provision'
+with open('${PRODUCTION_BEFORE}', encoding='utf-8') as handle:
+    before = json.load(handle)
+assert before, 'the production baseline is empty'
+
+
+def observe(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return [info.st_mode, info.st_uid, info.st_gid, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns]
+
+
+for path, recorded in sorted(before.items()):
+    current = observe(path)
+    # st_ctime_ns is in the tuple so a chmod or chown is caught as well as a
+    # write; comparing existence alone would miss both.
+    assert current == recorded, path + ' changed while this suite ran'
+    if recorded is None:
+        assert current is None, path + ' was created by this suite'
 print('OK')
 "
 
