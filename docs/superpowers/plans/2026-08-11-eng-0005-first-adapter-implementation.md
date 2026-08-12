@@ -1004,6 +1004,75 @@ entrypoints are byte-identical and unchanged. The host runs generation 2 until
 a separately reviewed re-provisioning installs the delta recorded in the
 runbook. No gate changes: G5 stays closed.
 
+### G5 governance — interrupted admission resolved, 2026-08-12
+
+The last open G5 decision is closed. A published-but-unlisted CIMP is **not** a
+permanent steady state; it is an unresolved interrupted transaction requiring
+explicit operator disposition. The earlier "permanently inert future CIMP"
+ruling is withdrawn, because it contradicted its own fail-closed list: an
+abandoned inert CIMP became an integrity finding the moment a later admission
+raised the high-water mark past it.
+
+The reader gains a third classification — VALID,
+VALID_WITH_PENDING_DISPOSITION, INVALID — and the full model is recorded in
+design §5.1–§5.7: high-water semantics, the `CIMP-000000` reservation, COMPLETE
+and RETIRE ceremonies, orphan-generation handling, the staging boundary, the
+normal transaction, the crash-point matrix, and the namespace and control
+matrices. Three refinements were derived while validating it:
+
+- **Superseded generations are not orphans.** Every ancestor of the current
+  generation is non-current, so "non-current implies pending" would leave any
+  namespace with history permanently pending. The distinction is the ancestry
+  chain, and because the reader never enumerates `generations/`, orphan
+  detection belongs to the offline writer rather than the runtime path.
+- **All pending CIMPs must be dispositioned in one successor generation.**
+  Doing them sequentially would raise the high-water mark past a still-pending
+  lower ordinal — the INVALID condition — so the ceremony would transit through
+  global freeze.
+- **Retirement cannot record why.** The record is a closed `{"cimp": …}` schema
+  and is not extended; the generation chain already distinguishes *never
+  authorised* from *later withdrawn*, and immutable history is better evidence
+  than a field that would have to be trusted.
+
+**Test boundary.** `tests/test-capability-execution-implementation-authority.sh`
+case *"an on-disk CIMP absent from the manifest fails closed"* asserts today's
+behaviour: it publishes `CIMP-000002` beside a listed `CIMP-000001` and
+requires a refusal. Under this ruling that exact fixture becomes
+VALID_WITH_PENDING_DISPOSITION. The test is **correct for the current
+implementation and was deliberately left unchanged** — it changes in the
+implementation pass that introduces the tolerance, not in the pass that
+documents it.
+
+#### G5 ruling status
+
+| Ruling | Status |
+|---|---|
+| `oci_image_id` replaces execution-authority `oci_digest` | **IMPLEMENTED** (`affbc86`) |
+| syntax `^[0-9a-f]{64}$`, `sha256:` prefix refused | **IMPLEMENTED** |
+| Podman image `.Id` is the authority source | **IMPLEMENTED** (recorded contract) |
+| Podman container `.Image` is the execution readback | **IMPLEMENTED** |
+| tags, manifest digests, `.ImageDigest`, `.RepoDigests` non-authoritative | **IMPLEMENTED** |
+| image presence ≠ authority · tag ≠ authority | **IMPLEMENTED** |
+| worker chooses no image; no runtime pull or fetch | **IMPLEMENTED** |
+| corruption remains globally fail-closed | **IMPLEMENTED** |
+| `PROFILE_SCHEMA_VERSION = 1` | **IMPLEMENTED** |
+| three-state reader model and pending disposition | REQUIRED, NOT YET IMPLEMENTED |
+| `CIMP-000000` reserved; semantic rejection | REQUIRED, NOT YET IMPLEMENTED |
+| high-water rule, empty genesis set = 0 | REQUIRED, NOT YET IMPLEMENTED |
+| independent persistent CIMP and CGEN counters | REQUIRED, NOT YET IMPLEMENTED |
+| `CGEN-000000000000` genesis with empty authority set | REQUIRED, NOT YET IMPLEMENTED |
+| normal allocation begins at `CIMP-000001` / `CGEN-000000000001` | REQUIRED, NOT YET IMPLEMENTED |
+| permanent identifier gaps | REQUIRED, NOT YET IMPLEMENTED |
+| offline writer, COMPLETE and RETIRE ceremonies | REQUIRED, NOT YET IMPLEMENTED |
+| orphan-generation reconciliation | REQUIRED, NOT YET IMPLEMENTED |
+| authority and control namespaces on disk | REQUIRED, NOT YET IMPLEMENTED |
+| canonical provisioning-evidence manifest, 15 fields | REQUIRED, NOT YET IMPLEMENTED |
+| `provisioning_evidence_digest` = SHA-256 of canonical bytes | REQUIRED, NOT YET IMPLEMENTED |
+| `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | REQUIRED, NOT YET IMPLEMENTED |
+| exported payload schema-version constant | REQUIRED, NOT YET IMPLEMENTED |
+| coordinator resolves authority; root and worker do not | REQUIRED, NOT YET IMPLEMENTED |
+| Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
+
 ## 6. Sequencing rules
 
 TDD throughout: production code never leads its test. Privileged components

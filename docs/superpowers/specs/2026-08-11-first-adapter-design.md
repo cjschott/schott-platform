@@ -193,6 +193,233 @@ renumbering, no omission of retired history, no automatic second namespace, no
 automatic schema expansion. Expansion requires an explicit provisioning schema
 migration that preserves historical authority.
 
+### 5.1 Interrupted admission and namespace classification
+
+**Ruled 2026-08-12. REQUIRED BUT NOT YET IMPLEMENTED** — the live reader still
+treats every published-but-unlisted CIMP as a global integrity failure, and the
+writer does not exist. Nothing below describes current runtime behaviour.
+
+Admission publishes a CIMP record and then advances `current-generation`. Those
+are two atomic steps, so an interruption between them is reachable by ordinary
+power loss. Because the reader cross-checks the implementations namespace
+against the current authority set, that window would otherwise freeze
+implementation authority globally — making a routine crash require the
+extraordinary recovery ceremony reserved for corruption.
+
+**Publication and authority stay distinct.** Publication makes an object
+immutable; `current-generation` decides what is authoritative. Existence never
+grants authority. The reader therefore classifies the namespace into three
+states rather than two.
+
+**VALID.** The current generation completely accounts for every published CIMP:
+each is represented in the current authority set either as eligible under the
+existing admission rules or as retired under the existing retirement rules. No
+published-but-unlisted CIMP exists. This is the only ordinary steady state.
+
+**VALID_WITH_PENDING_DISPOSITION.** One or more published CIMP admissions are
+structurally sound but unaccounted for by the current generation. A CIMP is
+*pending* only when **all** of these hold: the identifier is syntactically
+valid and is not `CIMP-000000`; the directory contains no unexpected object and
+no prohibited symlink; the admission record parses as canonical bytes,
+validates against the closed schema, and its digest validates; its governed
+commitments validate as normally required; the CIMP is absent from the current
+authority set; its ordinal is strictly greater than the current high-water
+mark; and no current authority derives from it.
+
+Pending CIMPs are **interrupted transactions awaiting disposition** — not
+eligible, not authorised, not retired by implication, never automatically
+included in a later authority set, never automatically deleted, never
+automatically repaired. They must never resolve as execution authority.
+Runtime resolution continues against the already-current authority set, so
+valid pending state does **not** disable implementations that are already
+authoritative. That is the point of the classification: a crash must not
+revoke authority that was correctly granted before it.
+
+**INVALID.** Everything else, unchanged and global. `CIMP-000000` physically
+present; a malformed identifier, admission, or retirement; non-canonical bytes;
+any digest mismatch; a prohibited symlink; an unexpected object; a CIMP the
+current authority set names but disk does not supply, or supplies altered; an
+authority-set or generation mismatch; an unlisted CIMP whose ordinal is **less
+than or equal to** the high-water mark; a pending candidate that fails any
+structural or commitment check; and every pre-existing integrity finding.
+INVALID freezes implementation authority globally, the writer refuses, nothing
+is repaired automatically, and recovery remains a separate reviewed ceremony.
+
+**High-water mark.** For a non-empty current authority set it is the maximum
+numeric ordinal among **every** CIMP the set represents, retired entries
+included. For the empty genesis authority set it is **0**, not −1, because
+`CIMP-000000` is reserved and normal allocation begins at `CIMP-000001` — so
+the first legitimately published CIMP still satisfies *ordinal > high-water*
+while an ordinal-0 directory can never qualify as pending.
+
+**`CIMP-000000` is permanently reserved.** The lexical parser may keep
+recognising six digits generally, but governed semantic validation rejects
+`CIMP-000000` wherever a real implementation identifier is required. Its
+physical presence is an integrity finding: never pending, never eligible, never
+automatically retired. This is unrelated to `CGEN-000000000000`, which remains
+the legitimate genesis generation.
+
+**Multiple pending CIMPs.** Under normal operation at most one can exist,
+because the writer refuses ordinary mutation while any pending CIMP is present,
+so a second interrupted admission cannot be started. Their physical presence is
+still handled deterministically: the reader reports **all** pending
+identifiers, the writer refuses ordinary mutation while any exists, and a
+disposition ceremony must account for every one of them before the namespace
+returns to VALID. None may disappear from accounting.
+
+**All pending CIMPs must be dispositioned in a single successor generation.**
+Disposing of them one generation at a time would raise the high-water mark past
+a still-pending lower ordinal, which is precisely the INVALID condition above —
+so a sequential ceremony would transit through global freeze. One ceremony, one
+successor generation, every pending CIMP explicitly COMPLETE or RETIRE.
+
+### 5.2 Disposition ceremonies
+
+**COMPLETE** resumes an interrupted admission. A valid admission record proves
+only that the record was written, never that the later authority-publication
+prerequisites ran, so the ceremony **re-performs** them: the §27 three-way
+agreement — OCI base digest, SBOM Python version, and the interpreter's own
+reported version — plus the provisioning-evidence commitment, before any
+authority is granted. On success it allocates a fresh `CGEN`, constructs the
+complete successor authority set listing the pending CIMP as eligible,
+publishes the immutable generation, atomically replaces `current-generation`,
+reads back through the normal reader, and proves the CIMP resolves exactly as
+intended. **The original CIMP identifier is retained**; COMPLETE never
+allocates a new one.
+
+**RETIRE** decides that a published admission must never become eligible. The
+existing grammar supports this without change: an authority-set entry carries
+both an admission digest and a retirement digest, the reader validates both and
+excludes the entry from `eligible`, and nothing requires the CIMP to have been
+listed previously. The ceremony creates the normal immutable retirement record,
+allocates a fresh `CGEN`, builds the complete successor authority set
+representing the CIMP with **both** commitments, publishes, replaces the
+pointer, and reads back to prove the CIMP is accounted for and ineligible.
+
+RETIRE here means *published admission deliberately prevented from becoming
+eligible*, which is not the same fact as *previously authorised implementation
+later withdrawn*. The retirement record is a closed `{"cimp": …}` schema and
+cannot carry that distinction, and it is not extended to: the generation chain
+already preserves it. Generation directories are create-once and never removed,
+and each generation names its predecessor and that predecessor's digest, so
+walking the chain shows whether any earlier current authority set ever listed
+the CIMP as eligible. The fact is recoverable from immutable history rather
+than restated in a record that would then have to be trusted.
+
+### 5.3 Published non-current generations
+
+A successor generation can be published and never become current. This is
+**not** the same as a superseded generation: every generation that the current
+one descends from is also non-current, and treating "non-current" as pending
+would make every namespace with history permanently pending. The distinction is
+the ancestry chain — a generation reachable from `current-generation` by
+following `predecessor_cgen` is history, and one that is not is an orphaned
+interrupted-transaction artifact.
+
+**The reader does not classify orphans; the writer reconciles them.** The
+reader opens `generations/<CGEN>` by name and never enumerates the directory,
+so an orphan is invisible to it — which is sound, because authority flows only
+through `current-generation` and an orphan therefore grants nothing. Making the
+reader walk the whole chain on every resolution would add cost and failure
+modes to the runtime path for no security gain. The writer, which is offline
+and already enumerating, refuses ordinary mutation while an orphan generation
+exists and requires explicit disposition. A namespace may consequently be VALID
+to the reader while the writer sees pending work; that asymmetry is intended
+and safe, because pending state never grants authority.
+
+**Disposition always allocates a fresh `CGEN`.** An orphan is never adopted,
+even when its authority set would match the intended one: adopting would mean
+proving byte-for-byte that a partially-completed transaction produced exactly
+the generation now intended, which is extra verification for no security gain,
+while `CGEN` identifiers are 12 digits and permanent gaps are already the rule.
+The orphan remains as inert immutable state, accounted for by the ceremony and
+never deleted or reused.
+
+### 5.4 Staging and the publication boundary
+
+Objects under root-only staging have not crossed the publication boundary, are
+invisible to the reader, and grant nothing. Unexpected staging makes the writer
+refuse ordinary mutation. A separate explicit unpublished-state cleanup action
+may remove *verified* staging material; the normal writer never does it
+automatically, and no cleanup may ever touch published CIMP or CGEN state. An
+identifier already allocated stays burned even when its staging is discarded.
+
+### 5.5 The normal admission transaction
+
+Acquire the root-only lifecycle lock · require VALID and refuse if any pending
+disposition or orphan generation exists · allocate the next `CIMP` and burn it ·
+stage the admission · fsync · validate the staged canonical bytes and digest ·
+atomically publish `implementations/<CIMP>/` · fsync `implementations/` · read
+the published CIMP back · perform the authority-publication prerequisites in
+full · allocate the next `CGEN` · build the complete successor authority set ·
+stage the generation · fsync · validate · atomically publish the generation
+directory · fsync `generations/` · read the non-current generation back ·
+construct the canonical `current-generation` bytes · write the temporary
+pointer · fsync it · atomically rename it over `current-generation` · fsync the
+authority root · read the whole namespace through the normal reader · require
+VALID · prove the intended CIMP resolves · release the lock.
+
+The prerequisites are re-performed at authority-publication time rather than at
+record-write time, which is what makes COMPLETE's re-verification meaningful:
+publishing the admission record commits bytes, and only the generation commits
+authority.
+
+### 5.6 Crash-point matrix
+
+Authority visible to runtime is the current generation at every row; no row
+grants authority to an interrupted artifact.
+
+| Crash point | Classification | Identifier burned | Ordinary admission allowed | Required action |
+|---|---|---|---|---|
+| before CIMP allocation | VALID | no | yes | none |
+| after allocation, before staging | VALID | CIMP | yes | none; gap is permanent |
+| during staging | VALID | CIMP | **no** | unpublished-state cleanup |
+| after staged validation, before publication | VALID | CIMP | **no** | unpublished-state cleanup |
+| after CIMP publication | PENDING | CIMP | **no** | COMPLETE or RETIRE |
+| after CIMP publication and readback | PENDING | CIMP | **no** | COMPLETE or RETIRE |
+| after CGEN allocation | PENDING | CIMP, CGEN | **no** | COMPLETE or RETIRE, fresh CGEN |
+| during CGEN staging | PENDING | CIMP, CGEN | **no** | as above, plus staging cleanup |
+| after generation publication, before pointer | PENDING + orphan CGEN | CIMP, CGEN | **no** | as above; orphan never adopted |
+| during temporary pointer creation | PENDING + orphan CGEN | CIMP, CGEN | **no** | as above, plus staging cleanup |
+| after pointer fsync, before rename | PENDING + orphan CGEN | CIMP, CGEN | **no** | as above |
+| after pointer rename, before root fsync | VALID (pointer may not survive) | CIMP, CGEN | yes if VALID | re-read; if the pointer did not survive, treat as the row above |
+| after root fsync, before final readback | VALID | CIMP, CGEN | yes | none; transaction succeeded |
+| after readback, before lock release | VALID | CIMP, CGEN | yes | stale lock released on process exit |
+
+### 5.7 Authority namespace on disk
+
+Published authority lives at `/var/lib/kyri/implementation-authority`;
+directories `root:cschott 0750` and immutable records `root:cschott 0440`.
+`/var/lib/kyri` stays `root:root 0711`. Read — not merely traverse — is
+required because the reader enumerates `implementations/`. The coordinator
+reads and never writes; `kyri-capability` gets no access at all; every ancestor
+is root-owned and non-writable by both, so neither can rename, replace, or
+shadow the namespace.
+
+Operator-only mutable control state is structurally separate, at
+`/var/lib/kyri/implementation-authority-control` (`root:root 0700`), holding
+`cimp-counter` and `cgen-counter` (`root:root 0600`), the `implementation-lifecycle`
+lock (`root:root 0600`), and `staging/` (`root:root 0700`). The coordinator
+requires no access to any of it. Keeping counters and lock outside the
+published namespace means coordinator-invisibility is structural rather than
+dependent on the reader happening not to enumerate the authority root.
+
+**Immutable and create-once:** CIMP admission records, retirement records,
+authority sets, generation records, and generation directories.
+**Atomically replaceable:** `current-generation`, and only that. It is a
+regular canonical-JSON file, never a symlink, read under the existing no-follow
+discipline, and updated only by durable atomic replacement. It is a pointer,
+not an immutable record, and must not be described as one.
+
+**Counters** are independent, persistent, root-only, and monotonic. Allocation
+never scans the namespace for a maximum. Identifiers are never reused, failed
+or abandoned allocations burn theirs permanently, and gaps are valid and
+expected. Normal allocation begins at `CIMP-000001` and `CGEN-000000000001`;
+`CGEN-000000000000` is genesis, published with a valid empty authority set as
+an explicit provisioning ceremony before any admission, and the counter must
+never allocate it again. Runtime never creates genesis and never initialises a
+counter.
+
 ## 6. Transition helper contract
 
 ```

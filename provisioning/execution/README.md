@@ -584,13 +584,60 @@ actually exercised. They now build a canonical root from the install matrix in
 a temporary directory and run the real resolution logic against it, so the
 property is tested on every host and CI included.
 
-**Generation 3 — pending, from the `oci_image_id` correction (2026-08-12).**
-The execution-authority field was renamed from `oci_digest` and its syntax
-corrected to bare `^[0-9a-f]{64}$`, and the observation path was moved from
-Podman's `.ImageDigest` to `.Image`. Seven installed objects therefore differ
-from source and must be reinstalled together, because the profile canonical
-form, the `VERIFIED_PROFILE` message, and the launch authorisation record all
-commit the same field and a partial install would leave them disagreeing:
+## Implementation-authority namespace — ruled, NOT YET PROVISIONED
+
+**Nothing below exists on the host, and this runbook does not create it.**
+Provisioning it is part of G5 and has not been authorised. The contracts are
+recorded here so the eventual ceremony has one authoritative source; the model
+itself is in [design §5.1–§5.7](../../docs/superpowers/specs/2026-08-11-first-adapter-design.md).
+
+Published authority — the coordinator reads it, nothing else touches it:
+
+| Path | Owner | Mode |
+|---|---|---|
+| `/var/lib/kyri` | `root:root` | `0711` (already exists, unchanged) |
+| `/var/lib/kyri/implementation-authority` | `root:cschott` | `0750` |
+| `…/implementations/`, `…/generations/`, `…/generations/<CGEN>/` | `root:cschott` | `0750` |
+| `…/current-generation` | `root:cschott` | `0440` |
+| admission, retirement, `authority-set`, `generation` records | `root:cschott` | `0440` |
+
+Operator-only control state, deliberately **outside** the published namespace so
+that coordinator-invisibility is structural rather than incidental:
+
+| Path | Owner | Mode |
+|---|---|---|
+| `/var/lib/kyri/implementation-authority-control` | `root:root` | `0700` |
+| `…/cimp-counter`, `…/cgen-counter` | `root:root` | `0600` |
+| `…/implementation-lifecycle` (lock) | `root:root` | `0600` |
+| `…/staging/` | `root:root` | `0700` |
+
+`0750` on the authority directories is required rather than generous: the reader
+enumerates `implementations/`, which needs the read bit and not merely traverse.
+The coordinator needs no access to the control namespace, and
+`kyri-capability` needs none to either. Every ancestor is root-owned and
+non-writable by `cschott` and `kyri-capability`, so neither can rename, replace,
+or shadow the namespace — which is why this lives under `/var/lib/kyri` and not
+beneath the coordinator-owned `/data/kyri/capability-runtime/execution`.
+
+The lock is named `implementation-lifecycle` to match existing convention —
+`capacity`, `quarantine-capacity`, `cadm-counter`, `cmut-counter` are all
+unprefixed and lowercase. It is acquired only by offline root tooling and never
+by a runtime reader, so it needs no ordering against the coordinator's
+`capacity` and `quarantine-capacity` locks; the two sets are never held by the
+same process, and keeping them in separate roots means no cross-root
+acquisition can arise.
+
+Records are create-once and immutable. `current-generation` is the single
+exception and is **not** an immutable record: it is a regular canonical-JSON
+file, never a symlink, replaced only by durable atomic rename.
+
+**Generation 3 — installed and accepted 2026-08-12**, from the `oci_image_id`
+correction. The execution-authority field was renamed from `oci_digest` and its
+syntax corrected to bare `^[0-9a-f]{64}$`, and the observation path was moved
+from Podman's `.ImageDigest` to `.Image`. Seven installed objects differed from
+source and were reinstalled **together**, because the profile canonical form,
+the `VERIFIED_PROFILE` message, and the launch authorisation record all commit
+the same field and a partial install would leave them disagreeing:
 
 | Repository source | Installed path |
 |---|---|
@@ -602,9 +649,28 @@ commit the same field and a partial install would leave them disagreeing:
 | `tools/capability/execution/worker.py` | `…/tools/capability/execution/worker.py` |
 | `provisioning/execution/kyri-exec-transition.py` | `/usr/lib/kyri/python/kyri_exec_transition.py` |
 
-All `root:root 0444`. The three `/usr/libexec` entrypoints are byte-identical
-and **must not** be reinstalled. The remaining 38 matrix artefacts are
-unchanged. Re-provisioning is a separately reviewed operator event — see below.
+All installed `root:root 0444` at the reviewed digests. The three
+`/usr/libexec` entrypoints were byte-identical and were **not** reinstalled;
+the remaining 38 matrix artefacts were unchanged.
+
+Verified after installation: the import boundary still holds, the installed
+tree carries the bare-64-hex `oci_image_id` contract and the `.Image`
+observation mapping, no bytecode is present, project quota accounting and
+enforcement remain ON, and `/etc/kyri/backing-store.json` is unchanged at
+`root:root 0444`. The generation-3 library manifest holds **42** Python files
+with manifest digest
+`93adb7a760b7f438db344c155fd8607f15a95588d09547c54689bf45f4cc5b38`; evidence is
+at `/root/kyri-gen3-library-digests.txt` and `/root/kyri-gen3-helper-digests.txt`,
+with the G4 and G4c evidence preserved separately. `/etc/sudoers.d/kyri-exec`
+and `/var/lib/kyri/implementation-authority` remain absent and no CIMP/CGEN
+state exists, so **generation 3 changes no gate**.
+
+The Podman inventory probe emitted `cannot chdir to /opt/schott-platform:
+Permission denied` because `runuser` inherited the coordinator checkout as its
+working directory. That is informational — `kyri-capability` legitimately
+cannot traverse the coordinator's tree, which is the authority split working —
+and it did not affect the installation or its verification. Run that probe from
+a directory the execution identity can traverse, such as `/tmp`.
 
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its
