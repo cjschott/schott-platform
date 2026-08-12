@@ -103,7 +103,13 @@ WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py",
                         # forbids creating, writing, renaming, and changing a
                         # mode or owner, and requires every removal to be
                         # descriptor-relative.
-                        "cleanup.py"}
+                        "cleanup.py",
+                        # T17. The CADM ledger is written here: counter,
+                        # create-once intent and outcome, reconciliation
+                        # entries, and the inspection audit event. Its own
+                        # backstop forbids deletion, privilege, repair, replay,
+                        # and every Podman surface.
+                        "admin.py"}
 # Authority planes this package may never reach, by import or by symbol.
 FORBIDDEN_PLANES = ("tools.trust", "..trust", "TrustStore", "TrustGateway",
                     "trust_adapter", "tools.health", "..health",

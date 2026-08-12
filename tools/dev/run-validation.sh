@@ -100,15 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 50 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 51 checks plus the closing summary. Quick mode drops
 # ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=41
+  TOTAL_STEPS=42
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=52
+  TOTAL_STEPS=53
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -261,6 +261,12 @@ run "Capability execution quarantine" \
 # only inside its own fixture; contacts no runtime.
 run "Capability execution cleanup" \
   bash tests/test-capability-execution-cleanup.sh
+
+# ENG-0005 T17. Administrative dispatch and CADM over a temporary namespace,
+# with an injected destruction backend. Installs no helper, touches no sudoers,
+# and authenticates nothing. Gates G2 and G3 stay closed.
+run "Capability execution administrative" \
+  bash tests/test-capability-execution-admin.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
