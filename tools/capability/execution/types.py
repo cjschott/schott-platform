@@ -57,8 +57,13 @@ class Classification(enum.Enum):
     EXECUTION_PROTOCOL_VIOLATION = "execution_protocol_violation"
 
     # Result and output
+    # The two result members are about one document: the tree was valid and the
+    # canonical result was absent, or it was present and failed its contract.
+    # A hostile tree shape is neither, and is kept separate so that an attack on
+    # the privileged reader is never reported as a capability's malformed JSON.
     RESULT_MISSING = "result_missing"
     RESULT_INVALID = "result_invalid"
+    OUTPUT_TREE_POLICY_VIOLATION = "output_tree_policy_violation"
 
     # Quarantine
     QUARANTINE_COLLECTION_INCOMPLETE = "quarantine_collection_incomplete"

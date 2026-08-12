@@ -60,6 +60,7 @@ SPEC_CLASSIFICATIONS=(
   execution_protocol_violation
   result_missing
   result_invalid
+  output_tree_policy_violation
   quarantine_collection_incomplete
   quarantine_incomplete_integrity_failure
   quarantine_backing_store_mismatch
