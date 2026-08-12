@@ -443,7 +443,9 @@ _, path, argv, environment = call
 assert path == '/usr/bin/python3', path
 assert argv == ('/usr/bin/python3', '/usr/libexec/kyri-exec-worker.py',
                 'CINV-000042'), argv
-assert environment == (), environment
+# Exactly the two rootless Podman needs; nothing inherited.
+assert dict(environment) == {'HOME': '/data/kyri/capability',
+                             'XDG_RUNTIME_DIR': '/run/user/999'}, environment
 print('OK')
 "
 
