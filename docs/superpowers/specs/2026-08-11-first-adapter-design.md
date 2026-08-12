@@ -231,6 +231,56 @@ The exception is narrow and does not legalise FFI in the helper generally:
 
 Any setter or verification failure refuses before `execve`.
 
+**The worker environment is exactly two variables**, promoted from the
+validated Track-B configuration and adapter-owned:
+
+```
+HOME=/data/kyri/capability
+XDG_RUNTIME_DIR=/run/user/999
+```
+
+That is the complete v1 set. No `CONTAINERS_*`, `XDG_DATA_HOME`,
+`XDG_CONFIG_HOME`, `DOCKER_HOST`, `CONTAINER_HOST`, or storage override is
+added: with `XDG_DATA_HOME` unset, rootless Podman derives storage from
+`$HOME/.local/share/containers/storage`, which is the graphroot Track B
+provisioned and proved, and `XDG_RUNTIME_DIR` carries its rootless runtime
+state. Nothing is inherited — `/usr/bin/podman` is absolute, so `PATH` is not
+execution authority.
+
+**Bind-mount sources are compiled-in paths derived from the validated `CINV`**,
+not descriptors:
+
+```
+/data/kyri/capability-handoff/CINV-nnnnnn/package   → /kyri/package   (ro)
+/data/kyri/capability-handoff/CINV-nnnnnn/payload   → /run/kyri/input/payload (ro)
+/data/kyri/capability-handoff/CINV-nnnnnn/out       → /kyri/output    (rw)
+```
+
+Podman's bind interface consumes a host pathname, so one must exist. It is
+adapter-owned constant plus fixed-grammar `CINV` — never supplied by the
+caller, payload, protocol, or package. `/proc/self/fd/N` is **rejected**:
+descriptor resolution through Podman's helper and runtime process chain is
+unvalidated here, and depending on it would add an undocumented platform
+dependency.
+
+Before building the create arguments the worker **re-establishes the handoff
+boundary descriptor-safely**: compiled-in root → validated `CINV` → no-follow
+open and stat → expected type, mode, and access → expected package and payload
+identity → only then the fixed bind-source string.
+
+**`HandoffBinding` stays path-free.** T7's descriptor proved publication
+reached the trusted object; the worker is a different process after the
+privilege transition, and only descriptors 0, 1 and 2 survive it, so descriptor
+continuity cannot cross the boundary in any case. The worker re-establishes
+trust from the fixed root, the validated `CINV`, and the immutable commitments
+— and the derived pathname is a Podman argument, not filesystem authority
+arriving from outside.
+
+Nothing else crosses the transition: argv is
+`(/usr/bin/python3, /usr/libexec/kyri-exec-worker.py, CINV-nnnnnn)`, the
+environment is the two variables above, and the protocol is descriptors 0, 1
+and 2.
+
 **Inherited descriptors are exactly `(0, 1, 2)`**: stdin carries
 coordinator→worker protocol, stdout carries worker→coordinator protocol, and
 stderr carries bounded diagnostics. There are no dedicated protocol descriptors

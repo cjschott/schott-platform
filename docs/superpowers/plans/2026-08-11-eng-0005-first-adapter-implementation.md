@@ -459,9 +459,28 @@ Regression set unless stated otherwise:
 ### T12 — Unprivileged worker and create/verify/start
 
 **Files:** `tools/capability/execution/{worker,lifecycle}.py`
-**Interfaces:** `Worker.run(session) -> None`,
-`create(profile) -> ContainerId`, `verify(container_id, fingerprint) -> None`,
-`start(container_id) -> None`
+**Interfaces:**
+`verify_handoff(cinv: str, *, root_fd: int) -> HandoffSources`,
+`create_argv(profile: ExecutionProfile, sources: HandoffSources) -> tuple[str, ...]`,
+`create(backend, argv) -> str`, `observe(backend, container_id) -> ObservedProfile`,
+`start(backend, container_id) -> None`,
+`observe_lifecycle(backend, container_id) -> LifecycleObservation`,
+`Worker.run(session, *, backend, root_fd) -> None`
+
+> **Interfaces settled 2026-08-12, before implementation.** The originals named
+> no backend, no handoff, and no root, so there was nowhere for the injected
+> Podman seam or the verified handoff to enter. Handoff verification takes an
+> already-open root descriptor and is descriptor-relative from there; the
+> bind-source *strings* come from the compiled-in root plus the validated
+> `CINV`, because Podman's bind interface consumes a pathname and
+> `/proc/self/fd/N` is rejected as an unvalidated platform dependency.
+> `HandoffBinding` stays path-free — descriptor continuity cannot cross the
+> transition, since only descriptors 0, 1 and 2 survive it.
+>
+> **Subprocess binding is not assigned to T12.** The plan gives it no
+> subprocess step, so the backend stays abstract and the T12 backstop forbids
+> subprocess outright. Binding `/usr/bin/podman` to a real process is a later
+> increment behind G6.
 
 - Failing tests: `podman run` appears nowhere (source discovery); name derived
   solely from `CINV`; pre-launch collision → `execution_container_name_collision`,

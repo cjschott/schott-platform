@@ -57,10 +57,15 @@ COORDINATOR_UID = 1000
 LAUNCH_RECORD_NAME = "launch-authorisation"
 LAUNCH_AUTHORIZED = "launch_authorized"
 
-# The worker receives nothing from the caller's environment. An empty set is
-# the policy; the worker derives everything else from compiled-in roots and the
-# descriptors it inherits.
-ENVIRONMENT: tuple[tuple[str, str], ...] = ()
+# Adapter-owned and complete. Nothing is inherited from the caller; these two
+# exist because rootless Podman needs them and for no other reason. With
+# XDG_DATA_HOME unset, storage resolves to $HOME/.local/share/containers/storage
+# -- the graphroot Track B provisioned -- and XDG_RUNTIME_DIR carries rootless
+# runtime state. No CONTAINERS_*, no storage override, no socket selector.
+ENVIRONMENT: tuple[tuple[str, str], ...] = (
+    ("HOME", "/data/kyri/capability"),
+    ("XDG_RUNTIME_DIR", "/run/user/999"),
+)
 
 # Only the protocol descriptors cross. No ambient inheritance, and no caller
 # may name a descriptor number.
