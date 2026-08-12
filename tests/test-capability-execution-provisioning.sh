@@ -184,6 +184,126 @@ for value in (policy.WORKER_SCRIPT, policy.WORKER_INTERPRETER,
 print('OK')
 "
 
+# --- the installed runtime library boundary ----------------------------------
+
+run_case "the canonical installed library root is fixed and compiled in" "${PRELUDE}
+W = load(WORKER, 'kyri_exec_worker')
+assert W.RUNTIME_LIBRARY_ROOT == '/usr/lib/kyri/python', W.RUNTIME_LIBRARY_ROOT
+code = stripped(WORKER)
+assert 'RUNTIME_LIBRARY_ROOT' in code
+head = code.split('def main')[0]
+for source in ('getenv', 'environ', 'getcwd', 'PYTHONPATH'):
+    assert source not in head, source
+print('OK')
+"
+
+run_case "the production worker cannot import policy from the checkout" "${PRELUDE}
+code = stripped(WORKER)
+for token in ('/opt/schott-platform', 'schott-platform', 'site-packages'):
+    assert token not in code, token
+assert 'origin' in code or '__file__' in code, \\
+    'the worker does not verify where its library resolved from'
+print('OK')
+"
+
+run_case "PYTHONPATH cannot redirect the production import" "${PRELUDE}
+import subprocess, tempfile
+assert WORKER.resolve().is_absolute()
+MARK = 'LIBRARY' + '_REDIRECTED'
+DECOY = (chr(10).join(['import sys', 'sys.stderr.write(' + repr(MARK) + ')','class WorkerRefused(ValueError):', '    pass','def require_worker_identity(**kwargs):', '    return None','def container_name(cinv):', '    return None',]))
+with tempfile.TemporaryDirectory() as decoy:
+    package = Path(decoy) / 'tools' / 'capability' / 'execution'
+    package.mkdir(parents=True)
+    for part in ('tools', 'tools/capability', 'tools/capability/execution'):
+        (Path(decoy) / part / '__init__.py').write_text('', encoding='utf-8')
+    (package / 'worker.py').write_text(DECOY, encoding='utf-8')
+    outcome = subprocess.run(
+        ['/usr/bin/python3', str(WORKER.resolve()), 'CINV-000001'],
+        cwd='/', env={'PYTHONPATH': decoy, 'PATH': '/usr/bin:/bin'},
+        capture_output=True, text=True)
+combined = outcome.stdout + outcome.stderr
+assert outcome.returncode != 0, combined
+assert MARK not in combined, 'the decoy library was imported'
+print('OK')
+"
+
+run_case "the working directory cannot redirect the production import" "${PRELUDE}
+import subprocess, tempfile
+assert WORKER.resolve().is_absolute()
+MARK = 'LIBRARY' + '_REDIRECTED'
+DECOY = (chr(10).join(['import sys', 'sys.stderr.write(' + repr(MARK) + ')','class WorkerRefused(ValueError):', '    pass','def require_worker_identity(**kwargs):', '    return None','def container_name(cinv):', '    return None',]))
+with tempfile.TemporaryDirectory() as decoy:
+    package = Path(decoy) / 'tools' / 'capability' / 'execution'
+    package.mkdir(parents=True)
+    for part in ('tools', 'tools/capability', 'tools/capability/execution'):
+        (Path(decoy) / part / '__init__.py').write_text('', encoding='utf-8')
+    (package / 'worker.py').write_text(DECOY, encoding='utf-8')
+    outcome = subprocess.run(
+        ['/usr/bin/python3', str(WORKER.resolve()), 'CINV-000001'],
+        cwd=decoy, env={'PATH': '/usr/bin:/bin'},
+        capture_output=True, text=True)
+combined = outcome.stdout + outcome.stderr
+assert outcome.returncode != 0, combined
+assert MARK not in combined, 'the working directory redirected the import'
+print('OK')
+"
+
+run_case "an absent installed library fails closed" "${PRELUDE}
+import subprocess
+outcome = subprocess.run(
+    ['/usr/bin/python3', str(WORKER.resolve()), 'CINV-000001'],
+    cwd='/', env={'PATH': '/usr/bin:/bin'}, capture_output=True, text=True)
+assert outcome.returncode != 0, outcome.stdout
+assert not Path('/usr/lib/kyri/python').exists(), 'the library root was installed'
+print('OK')
+"
+
+# --- the transition public interface -----------------------------------------
+
+run_case "exactly one privileged public transition entrypoint exists" "${PRELUDE}
+ENTRY = Path('provisioning/execution/kyri-exec-transition-entrypoint.py')
+assert ENTRY.exists(), str(ENTRY) + ' is absent'
+E = load(ENTRY, 'kyri_exec_transition_entrypoint')
+assert E.HELPER_PATH == '/usr/libexec/kyri-exec-transition', E.HELPER_PATH
+assert E.RUNTIME_LIBRARY_ROOT == '/usr/lib/kyri/python', E.RUNTIME_LIBRARY_ROOT
+import inspect
+assert list(inspect.signature(E.main).parameters) == ['argv'], \\
+    inspect.signature(E.main)
+print('OK')
+"
+
+run_case "the transition action stays an internal library component" "${PRELUDE}
+prose = RUNBOOK.read_text(encoding='utf-8')
+# Checked as a mapping, not as wording: the runbook may say the action is
+# not a command, and saying so must not read as doing so.
+rows = [line for line in prose.splitlines()
+        if 'kyri-exec-transition-action' in line and '|' in line]
+assert rows, 'the action has no installed destination'
+for row in rows:
+    assert '/usr/libexec' not in row, row
+    assert '/usr/lib/kyri/python' in row, row
+action = Path('provisioning/execution/kyri-exec-transition-action.py')
+assert '__main__' not in action.read_text(encoding='utf-8'), \\
+    'the action carries its own command entry point'
+print('OK')
+"
+
+run_case "the transition entrypoint takes nothing but one CINV" "${PRELUDE}
+ENTRY = Path('provisioning/execution/kyri-exec-transition-entrypoint.py')
+E = load(ENTRY, 'kyri_exec_transition_entrypoint')
+for argv in ([], ['x'], ['x', 'CINV-000001', 'extra'],
+             ['x', 'CINV-000001', '--library-root=/tmp']):
+    try:
+        E.main(argv)
+    except SystemExit:
+        continue
+    raise AssertionError('accepted argv ' + repr(argv))
+code = stripped(ENTRY)
+for token in ('getenv', 'environ', 'getcwd', 'PYTHONPATH', 'schott-platform'):
+    assert token not in code, token
+print('OK')
+"
+
 # --- the backing-store example -----------------------------------------------
 
 run_case "the backing-store example matches the accepted closed schema" "${PRELUDE}

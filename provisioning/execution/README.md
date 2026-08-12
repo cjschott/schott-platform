@@ -217,21 +217,68 @@ printf '000000\n'       | sudo -u cschott tee …/execution/cadm-counter >/dev/n
 
 ---
 
-## 8. Install the helpers — without executing them
+## 8. Install the runtime library and the helpers — without executing them
 
-| Repository source | Installed path | Owner | Mode |
+**The repository checkout is source material, not production execution
+authority.** `/opt/schott-platform` is owned by `cschott`; the worker runs as
+`kyri-capability`, which holds rootless Podman authority `cschott` must never
+have. Production execution must therefore never import from the checkout — an
+import from a coordinator-writable tree would hand the coordinator arbitrary
+execution as the execution identity. The operator installs **root-owned copies**
+and those copies are the runtime authority.
+
+### 8.1 The canonical installed library root
+
+```
+/usr/lib/kyri/python
+```
+
+Compiled into both entrypoints and configurable nowhere. Neither entrypoint
+takes a library root, module name, interpreter, or action name from argv, the
+environment, the working directory, package data, or the protocol, and neither
+adds an inherited `PYTHONPATH`. Each refuses when the expected module is not
+present under this root, **before** attempting any import, so a search can never
+fall through to another tree and run its module-level code.
+
+### 8.2 Canonical source → installed path
+
+| Repository source (canonical) | Installed path | Owner | Mode |
 |---|---|---|---|
-| `kyri-exec-transition.py` + `kyri-exec-transition-action.py` | `/usr/libexec/kyri-exec-transition` | `root:root` | `0555` |
-| `kyri-exec-worker.py` | `/usr/libexec/kyri-exec-worker.py` | `root:root` | `0444` |
-| `kyri-exec-quota.py` | `/usr/libexec/kyri-exec-quota` | `root:root` | `0555` |
+| `provisioning/execution/kyri-exec-transition-entrypoint.py` | `/usr/libexec/kyri-exec-transition` | `root:root` | `0555` |
+| `provisioning/execution/kyri-exec-transition.py` | `/usr/lib/kyri/python/kyri_exec_transition.py` | `root:root` | `0444` |
+| `provisioning/execution/kyri-exec-transition-action.py` | `/usr/lib/kyri/python/kyri_exec_transition_action.py` | `root:root` | `0444` |
+| `provisioning/execution/kyri-exec-worker.py` | `/usr/libexec/kyri-exec-worker.py` | `root:root` | `0444` |
+| `tools/capability/execution/*.py` | `/usr/lib/kyri/python/tools/capability/execution/*.py` | `root:root` | `0444` |
+| `tools/capability/*.py`, `tools/common/*.py` | `/usr/lib/kyri/python/tools/...` (same relative layout) | `root:root` | `0444` |
+| `provisioning/execution/kyri-exec-quota.py` | `/usr/libexec/kyri-exec-quota` | `root:root` | `0555` |
+| `provisioning/execution/kyri-exec-quota.py` | `/usr/lib/kyri/python/kyri_exec_quota.py` | `root:root` | `0444` |
 
-`/usr/libexec` is already `root:root` on this host. Every writable ancestor of
-each installed path must be `root:root` and non-writable by `cschott`,
-`kyri-capability`, or any unprivileged user or group.
+The quota source has **two destinations and one implementation**: the standalone
+executable specified earlier, and the internal module the transition imports.
+They are copies of the same canonical file — not a fork, and not a second
+implementation. No artifact in this table is a divergent duplicate of another.
 
-**The worker is `0444` and carries no executable bit**, because it is never
-directly executed: the transition names the interpreter explicitly and passes
-the script to it, which removes the shebang line from the trust chain.
+The transition's **action is an internal library component**, never a second
+privileged executable. There is no `/usr/libexec/kyri-exec-transition-action`,
+and there must never be one: the public privileged interface is exactly
+
+```
+/usr/libexec/kyri-exec-transition CINV-nnnnnn
+```
+
+### 8.3 Directory and file modes
+
+| Object | Owner | Mode |
+|---|---|---|
+| `/usr/lib/kyri` and every directory beneath it | `root:root` | `0755` |
+| every installed Python source file beneath `/usr/lib/kyri/python` | `root:root` | `0444` |
+| `/usr/libexec/kyri-exec-transition` | `root:root` | `0555` |
+| `/usr/libexec/kyri-exec-quota` | `root:root` | `0555` |
+| `/usr/libexec/kyri-exec-worker.py` | `root:root` | `0444` |
+
+The worker is `0444` and carries no executable bit, because it is never directly
+executed: the transition names the interpreter explicitly and passes the script
+to it, which keeps the shebang line out of the trust chain.
 
 ```
 execve("/usr/bin/python3",
@@ -239,19 +286,21 @@ execve("/usr/bin/python3",
        CLOSED_ENVIRONMENT)
 ```
 
+**Do not generate or ship `.pyc` artifacts.** Installed sources are read-only and
+the container environment sets `PYTHONDONTWRITEBYTECODE=1`; a writable
+`__pycache__` beside a root-owned module would be the one mutable thing in the
+tree. Copy `.py` files only, and never a `__pycache__` directory.
+
+```bash
+sudo install -d -o root -g root -m 0755 /usr/lib/kyri /usr/lib/kyri/python
+# ... mirror the tools/ tree with directories 0755 and files 0444,
+#     excluding every __pycache__ directory and every .pyc file.
+sudo find /usr/lib/kyri -type d -exec chmod 0755 {} +
+sudo find /usr/lib/kyri -type f -exec chmod 0444 {} +
+sudo chown -R root:root /usr/lib/kyri
+```
+
 **Do not invoke any of them.** Installation is G4; execution is G6.
-
-**Open question before this step can be completed:** the installed worker
-imports `tools.capability.execution.worker`, and the worker environment carries
-no `PYTHONPATH` by design. Where that library lives on the host — and, more
-importantly, **who owns it** — is not yet fixed by the accepted design. It must
-not be the `cschott`-owned repository checkout: the worker runs as
-`kyri-capability`, which holds rootless Podman authority that `cschott` must
-never have, so importing coordinator-writable code would hand `cschott`
-arbitrary execution as `kyri-capability` and break the §3 authority split. See
-"Remaining decisions" below.
-
----
 
 ## 9. Verify what was installed
 
@@ -269,6 +318,33 @@ namei -l /usr/libexec/kyri-exec-transition
 
 Record every digest with the provisioning evidence. `/usr/libexec/kyri-exec-worker.py`
 must read `root:root 444`, and the other two `root:root 555`.
+
+**Digest-capture the installed library too**, not only the three helpers — the
+installed copies are the runtime authority, so they are what evidence must
+describe:
+
+```bash
+sudo find /usr/lib/kyri/python -type f -name '*.py' -print0 \
+  | sort -z | xargs -0 sha256sum | sudo tee /root/kyri-g4-library-digests.txt
+
+# No .pyc anywhere, and nothing writable by anyone but root.
+sudo find /usr/lib/kyri -name '__pycache__' -o -name '*.pyc' | grep . && echo "FAIL: bytecode present"
+sudo find /usr/lib/kyri ! -user root -o ! -group root | grep . && echo "FAIL: wrong owner"
+sudo find /usr/lib/kyri -perm /022 | grep . && echo "FAIL: group or world writable"
+```
+
+**Verify ancestry all the way to each installed file.** Every component of every
+installed path must be `root:root` and non-writable by `cschott`,
+`kyri-capability`, or any unprivileged user or group:
+
+```bash
+namei -l /usr/libexec/kyri-exec-transition
+namei -l /usr/libexec/kyri-exec-worker.py
+namei -l /usr/libexec/kyri-exec-quota
+namei -l /usr/lib/kyri/python/tools/capability/execution/worker.py
+```
+
+A single writable component voids the grant, and a digest cannot repair it.
 
 ---
 

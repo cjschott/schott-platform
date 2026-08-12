@@ -49,23 +49,61 @@ import sys
 
 USAGE = "usage: /usr/bin/python3 /usr/libexec/kyri-exec-worker.py CINV-nnnnnn"
 
+# The canonical installed library root, compiled in and not configurable.
+#
+# It is a literal because every other way of arriving at it is something an
+# attacker or an accident can influence: argv, an environment variable, the
+# working directory, package data, or the protocol. The execution identity must
+# load its policy from one root-owned tree, and this is the only statement of
+# which one.
+#
+# It is emphatically **not** the repository checkout. That tree is owned by the
+# coordinator, and the worker holds rootless Podman authority the coordinator
+# must never have — so importing coordinator-writable code here would hand the
+# coordinator arbitrary execution as the execution identity and collapse the
+# authority split the whole transition exists to create.
+RUNTIME_LIBRARY_ROOT = "/usr/lib/kyri/python"
+
 
 def _library():
-    """The accepted worker implementation, or a refusal.
+    """The accepted worker implementation from the installed tree, or refuse.
 
-    Imported rather than reimplemented. The import is attempted against the
-    interpreter's own search path and **nothing is added to it here**: the
-    worker environment is closed and carries no `PYTHONPATH`, and a path
-    compiled in at this point would decide, without review, which tree the
-    execution identity loads its code from. Where that tree lives is a
-    provisioning question — see `README.md` — and until it is answered this
-    refuses instead of guessing.
+    Imported rather than reimplemented, and imported from one place. The
+    canonical root goes to the front of the search path so it wins against
+    anything already there, and then the module is asked where it actually came
+    from: a search path is a preference, and this needs a fact.
+
+    Resolution from anywhere else — a stale entry, an inherited `PYTHONPATH`
+    that should not exist, a directory that happened to be first — is refused
+    rather than used. Ambiguity here is indistinguishable from substitution.
     """
+    # Checked before the import, not after. A search that falls through to
+    # somebody else's tree has already executed that tree's module-level code
+    # by the time anything downstream could object, so the refusal has to come
+    # first: if the canonical root does not hold the module, there is nothing
+    # to import and no search to run.
+    expected = os.path.join(RUNTIME_LIBRARY_ROOT, "tools", "capability",
+                            "execution", "worker.py")
+    if not os.path.isdir(RUNTIME_LIBRARY_ROOT) or not os.path.isfile(expected):
+        raise SystemExit(
+            f"the governed worker library is not installed at {expected}")
+
+    if RUNTIME_LIBRARY_ROOT not in sys.path:
+        sys.path.insert(0, RUNTIME_LIBRARY_ROOT)
+
     try:
         from tools.capability.execution import worker
     except ImportError as error:
         raise SystemExit(
-            f"the governed worker library is not importable: {error}") from None
+            f"the governed worker library is not importable from "
+            f"{RUNTIME_LIBRARY_ROOT}: {error}") from None
+
+    resolved = getattr(worker, "__file__", None)
+    if not resolved or not os.path.realpath(resolved).startswith(
+            os.path.realpath(RUNTIME_LIBRARY_ROOT) + os.sep):
+        raise SystemExit(
+            f"the worker library resolved outside {RUNTIME_LIBRARY_ROOT} "
+            f"({resolved}); refusing rather than executing it")
     return worker
 
 
