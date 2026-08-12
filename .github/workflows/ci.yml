@@ -251,6 +251,9 @@ jobs:
       - name: Capability execution lifecycle tests
         run: bash tests/test-capability-execution-lifecycle.sh
 
+      - name: Capability execution terminal classification tests
+        run: bash tests/test-capability-execution-terminal.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

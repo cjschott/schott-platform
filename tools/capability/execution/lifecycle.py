@@ -27,11 +27,12 @@ Governed by ``docs/superpowers/specs/2026-08-11-first-adapter-design.md`` §17.
 from __future__ import annotations
 
 import dataclasses
+import enum
 from typing import Any, Sequence
 
 from .profile import ObservedProfile
 from .protocol import MessageKind, ProtocolViolation, Session
-from .types import Mount
+from .types import Classification, Mount
 
 _HEX = frozenset("0123456789abcdef")
 
@@ -187,3 +188,181 @@ def observe_lifecycle(backend: Any, container_id: str) -> LifecycleObservation:
         started_proven=started_proven,
         exit_code_trustworthy=started_proven,
     )
+
+
+# --- terminal classification (T13) ------------------------------------------
+
+TIMEOUT_SECONDS = 30
+GRACE_SECONDS = 2
+
+# Bounded polling during the grace. A fixed number of attempts rather than an
+# open loop: the grace is two seconds whatever the runtime does, and a loop
+# that could outlast it would be a way to extend a timeout.
+_GRACE_POLLS = 8
+
+# The runtime words a lifecycle report may use. Anything else is not a state
+# this adapter can reason about, and guessing would be worse than refusing.
+_VALID_STATES = ("created", "running", "exited", "stopped", "paused", "unknown")
+_TERMINAL_STATES = ("exited", "stopped")
+
+
+class TerminalDisposition(enum.Enum):
+    """What the lifecycle says happened, before any exit code is read."""
+
+    NEVER_STARTED = "never_started"
+    RUNNING = "running"
+    COMPLETED_ZERO = "completed_zero"
+    COMPLETED_NONZERO = "completed_nonzero"
+    UNTRUSTWORTHY_EXIT = "untrustworthy_exit"
+    TIMED_OUT = "timed_out"
+    INTEGRITY_FAILURE = "integrity_failure"
+
+
+# Each disposition maps to one released outcome class. Nothing new is invented:
+# a launch that never ran is the adapter's failure, a capability that ran and
+# exited nonzero is the provider's, and a container still running when asked
+# has produced no terminal result at all.
+_OUTCOME = {
+    TerminalDisposition.NEVER_STARTED: "adapter-error",
+    TerminalDisposition.RUNNING: "interrupted",
+    TerminalDisposition.COMPLETED_ZERO: "completed",
+    TerminalDisposition.COMPLETED_NONZERO: "provider-error",
+    TerminalDisposition.UNTRUSTWORTHY_EXIT: "adapter-error",
+    TerminalDisposition.TIMED_OUT: "timeout",
+    TerminalDisposition.INTEGRITY_FAILURE: "adapter-error",
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class TerminalClassification:
+    """What the lifecycle establishes, and what it permits next.
+
+    ``succeeded`` is always ``False`` here, and deliberately so: T13 knows the
+    workload exited cleanly, not that the invocation succeeded. That needs a
+    valid result and a valid output tree, which the collector owns. Reporting
+    success at this point would be reporting it one verification too early.
+    """
+
+    container_id: str
+    disposition: TerminalDisposition
+    outcome_class: str
+    classification: Classification | None
+    started_proven: bool
+    exit_code_considered: bool
+    exit_code: Any
+    started_at: Any
+    finished_at: Any
+    may_collect_result: bool
+    succeeded: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class TerminationOutcome:
+    """Whether the grace expired and a force kill was needed."""
+
+    killed: bool
+
+
+def _contradicted(observed: LifecycleObservation) -> bool:
+    """Whether the report disagrees with itself.
+
+    Only internal consistency is examined. Timestamps are compared as the
+    equal-format strings the runtime reported, never parsed against a wall
+    clock: whether the host's clock is correct is not a security question, and
+    making it one would fail invocations for the wrong reason.
+    """
+    state = observed.state
+    if state not in _VALID_STATES or state == "unknown":
+        return True
+    if observed.started_proven and observed.started_at is None:
+        return True
+    if state in _TERMINAL_STATES and (observed.finished_at is None
+                                      or observed.exit_code is None):
+        return True
+    started, finished = observed.started_at, observed.finished_at
+    if isinstance(started, str) and isinstance(finished, str) and finished < started:
+        return True
+    return False
+
+
+def _disposition(observed: LifecycleObservation,
+                 timed_out: bool) -> TerminalDisposition:
+    # Timeout outranks everything. Once the threshold has fired the invocation
+    # is a timeout, and a workload that exits during the grace has changed its
+    # manners rather than its outcome.
+    if timed_out:
+        return TerminalDisposition.TIMED_OUT
+    if _contradicted(observed):
+        return TerminalDisposition.INTEGRITY_FAILURE
+    if not observed.started_proven:
+        return TerminalDisposition.NEVER_STARTED
+    if not observed.exit_code_trustworthy:
+        return TerminalDisposition.UNTRUSTWORTHY_EXIT
+    if observed.state not in _TERMINAL_STATES:
+        return TerminalDisposition.RUNNING
+    if observed.exit_code == 0:
+        return TerminalDisposition.COMPLETED_ZERO
+    return TerminalDisposition.COMPLETED_NONZERO
+
+
+def classify(observed: LifecycleObservation, *,
+             timed_out: bool = False) -> TerminalClassification:
+    """Interpret one lifecycle observation.
+
+    The order is the point: whether the workload started is settled first, and
+    only a proven start with trustworthy evidence allows the exit code to be
+    read at all. `Created` with exit 0 is the case this exists for -- a
+    container that never ran reports success by exit code alone.
+    """
+    if not isinstance(observed, LifecycleObservation):
+        raise LifecycleRefused("a LifecycleObservation is required")
+
+    disposition = _disposition(observed, timed_out)
+    considered = disposition in (TerminalDisposition.COMPLETED_ZERO,
+                                 TerminalDisposition.COMPLETED_NONZERO)
+    classification = (Classification.EXECUTION_LIFECYCLE_INTEGRITY_FAILURE
+                      if disposition is TerminalDisposition.INTEGRITY_FAILURE
+                      else None)
+    return TerminalClassification(
+        container_id=observed.container_id,
+        disposition=disposition,
+        outcome_class=_OUTCOME[disposition],
+        classification=classification,
+        started_proven=bool(observed.started_proven) and not timed_out,
+        exit_code_considered=considered,
+        exit_code=observed.exit_code,
+        started_at=observed.started_at,
+        finished_at=observed.finished_at,
+        may_collect_result=disposition is TerminalDisposition.COMPLETED_ZERO,
+        succeeded=False,
+    )
+
+
+def timed_out(*, elapsed: float) -> bool:
+    """Whether the accepted wall timeout has been reached."""
+    return elapsed >= TIMEOUT_SECONDS
+
+
+def terminate_after_timeout(backend: Any, container_id: str, *,
+                            clock: Any) -> TerminationOutcome:
+    """Ask the container to stop, then force it if the grace expires.
+
+    Both actions name the recorded immutable identity and nothing else: not the
+    deterministic name, not a label, not a process group. The grace is bounded
+    by a fixed number of polls as well as by elapsed time, so nothing here can
+    wait longer than the accepted two seconds.
+    """
+    recorded = _require_container_id(container_id)
+    start = clock()
+    backend.terminate(recorded)
+
+    for _ in range(_GRACE_POLLS):
+        if not backend.still_active(recorded):
+            return TerminationOutcome(killed=False)
+        if clock() - start >= GRACE_SECONDS:
+            break
+
+    if backend.still_active(recorded):
+        backend.kill(recorded)
+        return TerminationOutcome(killed=True)
+    return TerminationOutcome(killed=False)
