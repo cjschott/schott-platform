@@ -709,8 +709,40 @@ Regression set unless stated otherwise:
 `provisioning/execution/kyri-exec-admin.py`,
 `tests/test-capability-execution-admin.sh`
 **Interfaces:** `allocate_cadm(root) -> str`,
-`record_intent(cadm, verb, target) -> None`, `record_outcome(cadm, result) -> None`,
-`inspect_admin_integrity(root) -> Summary`
+`record_intent(root, cadm, verb, cinv, target) -> None`,
+`record_outcome(root, cadm, result) -> None`,
+`record_reconciliation(root, cadm, note) -> str`,
+`unknown_outcomes(root) -> tuple[str, ...]`,
+`read_binding(root, cinv) -> BoundTarget | None`,
+`perform(context, authorisation, cinv) -> AdminOutcome`,
+`inspect_admin_integrity(root, *, audit) -> Summary`
+
+> **Interfaces settled 2026-08-12, before implementation.** The originals took
+> no root on three of four calls, so a record would have been written through a
+> pathname; under the standing rule every one takes the verified
+> `RootDescriptor`. `perform` is the verb dispatcher the plan's failing tests
+> require but never named, and it takes an `AdminContext` bundling the verified
+> execution, handoff, and quarantine roots plus the injected destruction
+> backend, so no verb can reach a root it was not given. `record_reconciliation`
+> and `unknown_outcomes` are likewise named for behaviour the failing tests
+> already demand.
+>
+> **The destruction binding is read, not accepted.** §20 permits destroying only
+> an immutable object "already durably bound to the relevant condition", which
+> is unverifiable if the caller hands the identity in — so `read_binding`
+> reads it from the create-once `state/<CINV>` record that
+> `TargetKind.EXECUTION_STATE` already reserves and nothing yet writes. §17
+> assigns that write to whoever persists the container ID after creation, which
+> is the coordinator in T18. Until then every destroying verb refuses for want
+> of a binding, which is the fail-closed direction and exactly what the absent
+> record should mean. T17 settles the read contract — `cinv`, `schema_version`,
+> `container_id`, `condition` — and T18 must satisfy it.
+>
+> **Authentication is modelled, not performed.** `Authorisation` is the value
+> the interactive-authenticated helper presents, naming the operator and the one
+> verb it was granted for. T17 implements the policy and dispatch; the helper
+> source is written but never installed, no sudoers is touched, and no test
+> authenticates. Gates G2 and G3 stay closed.
 
 - Failing tests: only the §20 verb set exists; no shell, no arbitrary path, no
   arbitrary container ID, no Podman passthrough, no environment override; CADM
