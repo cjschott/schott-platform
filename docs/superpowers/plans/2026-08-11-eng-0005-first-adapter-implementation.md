@@ -508,9 +508,59 @@ Regression set unless stated otherwise:
 
 ### T14 — Result and output-tree collector
 
-**Files:** `tools/capability/execution/collector.py`
+**Files:** `tools/capability/execution/collector.py`,
+`tools/common/trusted_source.py` (additive, read-only)
 **Interfaces:** `collect(out_fd: int) -> OutputTree`,
-`read_result(tree) -> dict`
+`read_result(tree: OutputTree, terminal: TerminalClassification) -> TrustedResult`
+
+> **Files corrected 2026-08-12, before implementation.** The failing-test list
+> below already requires T14 to extend `tools/common/trusted_source.py` rather
+> than reimplement the walk, but the Files line named only `collector.py`, so
+> the released Track-A module would have been modified without appearing in the
+> plan's own file map. The extension is **additive and read-only**: an existing
+> exported signature changes in no way, no existing caller widens, and the
+> module's no-write backstop in `tests/test-capability-runtime.sh` stands
+> unchanged. Execution-specific meaning — the 32-file and 16 MiB policy,
+> `result.json`, trust, and classification — stays in `collector.py`; the common
+> module receives only generic descriptor-relative traversal mechanics with
+> caller-supplied bounds.
+>
+> **Interfaces settled 2026-08-12, before implementation.** `read_result`
+> originally took the tree alone and returned a bare `dict`. Two properties the
+> design requires were unexpressible in that shape. First, T13's
+> `may_collect_result` is the gate for authoritative collection, so the terminal
+> classification is an argument rather than something a caller may forget to
+> consult. Second, §11 makes a valid result from a failed execution *untrusted
+> diagnostic material*, and a `dict` carries no such distinction — a boolean
+> beside it is a flag downstream code can ignore by accident. So `collect`
+> returns an `OutputTree` that is structurally untrusted whatever it contains,
+> and only `read_result` — refusing unless the classification permits it — can
+> produce the distinct `TrustedResult` type. Nothing in the result bytes selects
+> a path, alters a bound, or reaches the classification.
+
+> **OPEN — reviewer ruling required before T14 may be implemented.** The
+> accepted spec bounds the output tree by **regular files** only: 32 files,
+> 2 MiB per file, 16 MiB aggregate (design §11; §1 above). It permits
+> subdirectories and fixes **no directory-depth and no total-entry bound**. The
+> two are not the same bound: a hostile capability can satisfy every accepted
+> limit with zero regular files and still present an arbitrarily deep directory
+> chain, or a single directory holding millions of empty children. Descriptor-
+> relative traversal of such a tree exhausts descriptors, stack, or time before
+> any file bound is consulted, so the common primitive needs a traversal bound
+> that the accepted sources do not supply.
+>
+> Neighbouring bounds exist but govern other objects and are not transferable:
+> §8's 1,024 entries bounds the **package**, and §20's 10,000-entry ceiling
+> bounds **administrative record** scanning. Adopting either here would be a new
+> output-tree policy chosen during implementation.
+>
+> The bound is therefore left unfixed rather than invented, and T14 stops here.
+> What the ruling must settle: whether the bound is a maximum directory depth, a
+> maximum total entry count counting every enumerated entry of every type, or
+> both; the value of each; and the classification a violation carries. The
+> common primitive takes whichever bounds are settled as caller-supplied
+> arguments, so the ruling changes `collector.py` and this plan, not the shape
+> of Track-A.
 
 - Failing tests: symlink, FIFO, socket, device, hard-link anomaly, traversal,
   absolute path, and directory-rename escape each rejected; 32 files / 16 MiB /
