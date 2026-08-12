@@ -264,6 +264,11 @@ jobs:
       - name: Capability execution quarantine tests
         run: bash tests/test-capability-execution-quarantine.sh
 
+      # Cleanup and recovery classification. Deletes only inside its own
+      # fixture and contacts no runtime.
+      - name: Capability execution cleanup tests
+        run: bash tests/test-capability-execution-cleanup.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

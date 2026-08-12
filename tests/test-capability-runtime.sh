@@ -97,7 +97,13 @@ WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py",
                         # without writing. Its own backstop forbids the half
                         # this set does not: no deletion, no mode or owner
                         # change, and no execution.
-                        "quarantine.py"}
+                        "quarantine.py",
+                        # T16. Cleanup removes the per-CINV handoff subtree,
+                        # which is the inverse authority: its own backstop
+                        # forbids creating, writing, renaming, and changing a
+                        # mode or owner, and requires every removal to be
+                        # descriptor-relative.
+                        "cleanup.py"}
 # Authority planes this package may never reach, by import or by symbol.
 FORBIDDEN_PLANES = ("tools.trust", "..trust", "TrustStore", "TrustGateway",
                     "trust_adapter", "tools.health", "..health",
