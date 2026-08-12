@@ -291,6 +291,89 @@ assert projid == 1000001 and xflags & H.FS_XFLAG_PROJINHERIT
 print('OK')
 "
 
+run_case "the decision refuses an existing foreign project assignment" "${PRELUDE}
+# Unassigned or already ours is fine; anybody else's is not, because taking it
+# over would move their accounted usage onto this invocation.
+assert H.decide(0, 0, 1000042) == H.FS_XFLAG_PROJINHERIT
+assert H.decide(0, 1000042, 1000042) == H.FS_XFLAG_PROJINHERIT
+for foreign in (7, 1, 1000041, 999999):
+    try:
+        H.decide(0, foreign, 1000042)
+    except H.QuotaRefused:
+        continue
+    raise AssertionError('accepted an existing project ' + str(foreign))
+print('OK')
+"
+
+run_case "the decision preserves every unrelated inode flag" "${PRELUDE}
+# 0x1 is FS_XFLAG_REALTIME, 0x8 is FS_XFLAG_APPEND: neither is ours to clear.
+existing = 0x1 | 0x8
+updated = H.decide(existing, 0, 1000042)
+assert updated & existing == existing, hex(updated)
+assert updated & H.FS_XFLAG_PROJINHERIT
+print('OK')
+"
+
+run_case "a successful setter call is not accepted as evidence" "${PRELUDE}
+project = 1000042
+# The readback must show exactly this project.
+H.confirm(0, H.FS_XFLAG_PROJINHERIT, project, project)
+for observed_projid in (0, 7, project + 1, project - 1):
+    try:
+        H.confirm(0, H.FS_XFLAG_PROJINHERIT, observed_projid, project)
+    except H.QuotaRefused:
+        continue
+    raise AssertionError('accepted a readback of project ' + str(observed_projid))
+# Inheritance must actually be set.
+try:
+    H.confirm(0, 0, project, project)
+except H.QuotaRefused:
+    pass
+else:
+    raise AssertionError('accepted a readback without PROJINHERIT')
+# And nothing else may have changed underneath.
+try:
+    H.confirm(0x1, H.FS_XFLAG_PROJINHERIT, project, project)
+except H.QuotaRefused:
+    pass
+else:
+    raise AssertionError('accepted a readback that cleared an unrelated flag')
+try:
+    H.confirm(0, H.FS_XFLAG_PROJINHERIT | 0x8, project, project)
+except H.QuotaRefused:
+    pass
+else:
+    raise AssertionError('accepted a readback that added an unrelated flag')
+print('OK')
+"
+
+run_case "the transition cannot reach execve without an established project" "${PRELUDE}
+import ast
+source = Path('provisioning/execution/kyri-exec-transition-action.py').read_text(
+    encoding='utf-8')
+tree = ast.parse(source)
+transition = [n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == 'perform_transition']
+assert len(transition) == 1, transition
+taken = [a.arg for a in transition[0].args.args] + \\
+        [a.arg for a in transition[0].args.kwonlyargs]
+assert 'quota' in taken, taken
+# Mandatory: a default would be a path through the transition with no project.
+assert all(d is None for d in transition[0].args.kw_defaults), \\
+    'the quota seam carries a default'
+# The quota call precedes every credential-spending call in source order.
+lines = {}
+for node in ast.walk(transition[0]):
+    if isinstance(node, ast.Attribute) and node.attr in (
+            'apply', 'setgroups', 'setgid', 'setuid', 'execve',
+            'close_extra_descriptors'):
+        lines.setdefault(node.attr, node.lineno)
+for later in ('close_extra_descriptors', 'setgroups', 'setgid', 'setuid',
+              'execve'):
+    assert lines['apply'] < lines[later], (later, lines)
+print('OK')
+"
+
 run_case "nothing is installed and no quota was established" "${PRELUDE}
 import os
 assert os.getuid() != 0, 'this suite must not run privileged'

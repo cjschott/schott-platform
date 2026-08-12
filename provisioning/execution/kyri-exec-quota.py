@@ -78,43 +78,79 @@ def project_id(cinv: str) -> int:
     return derived
 
 
-def establish(descriptor: int, project: int) -> None:
-    """Set the project ID and inheritance flag on one open directory.
+class QuotaRefused(Exception):
+    """The project could not be established, or could not be proven."""
 
-    Read, modify, write: the existing attributes are fetched first so this sets
-    the two fields it owns and preserves every other flag rather than
-    overwriting the structure with assumptions about what was there.
 
-    Inheritance is what makes this a one-shot operation. The directory is empty
-    at this point, and every file the workload creates beneath it is accounted
-    to the project by the filesystem — so nothing has to walk the tree
-    afterwards, and there is no second privileged pass to get wrong.
+def decide(current_xflags: int, current_projid: int, project: int) -> int:
+    """The xflags to write, or refuse. Pure, so the decision is testable.
+
+    An existing assignment to a *different* project is refused rather than
+    overwritten: the tree would already be accounted somewhere, and taking it
+    over would silently move somebody else's usage onto this invocation.
     """
-    current = fcntl.ioctl(descriptor, FS_IOC_FSGETXATTR,
-                          struct.pack(FSXATTR_FORMAT, 0, 0, 0, 0, 0, b"\0" * 8))
-    xflags, extsize, nextents, _projid, cowextsize, pad = struct.unpack(
-        FSXATTR_FORMAT, current)
-    updated = struct.pack(FSXATTR_FORMAT, xflags | FS_XFLAG_PROJINHERIT,
-                          extsize, nextents, project, cowextsize, pad)
-    fcntl.ioctl(descriptor, FS_IOC_FSSETXATTR, updated)
+    if current_projid not in (0, project):
+        raise QuotaRefused(
+            f"the directory already carries project {current_projid}")
+    return current_xflags | FS_XFLAG_PROJINHERIT
 
 
-def main(argv: list[str]) -> int:
-    """Establish the project on exactly one `CINV`'s output leaf.
+def confirm(original_xflags: int, observed_xflags: int, observed_projid: int,
+            project: int) -> None:
+    """Verify the read-back, or refuse. Pure, and deliberately strict.
+
+    A successful setter call is not evidence. What is checked is what the
+    filesystem now reports: the exact project, inheritance actually set, and
+    every unrelated flag exactly as it was — a setter that cleared something
+    else would have quietly changed the file's behaviour.
+    """
+    if observed_projid != project:
+        raise QuotaRefused(
+            f"the project read back as {observed_projid}, expected {project}")
+    if not observed_xflags & FS_XFLAG_PROJINHERIT:
+        raise QuotaRefused("inheritance did not read back as set")
+    if observed_xflags & ~FS_XFLAG_PROJINHERIT != original_xflags & ~FS_XFLAG_PROJINHERIT:
+        raise QuotaRefused("unrelated inode flags were altered")
+
+
+def _get(descriptor: int) -> tuple[int, ...]:
+    packed = fcntl.ioctl(descriptor, FS_IOC_FSGETXATTR,
+                         struct.pack(FSXATTR_FORMAT, 0, 0, 0, 0, 0, b"\0" * 8))
+    return struct.unpack(FSXATTR_FORMAT, packed)
+
+
+def establish(descriptor: int, project: int) -> None:
+    """Set the project and inheritance on one open directory, then prove it.
+
+    Read, modify, write, read again. Inheritance is what makes this one-shot:
+    the directory is empty now, and the filesystem accounts everything created
+    beneath it afterwards, so nothing walks the tree and there is no second
+    privileged pass to get wrong.
+    """
+    xflags, extsize, nextents, projid, cowextsize, pad = _get(descriptor)
+    updated = decide(xflags, projid, project)
+    fcntl.ioctl(descriptor, FS_IOC_FSSETXATTR,
+                struct.pack(FSXATTR_FORMAT, updated, extsize, nextents,
+                            project, cowextsize, pad))
+    seen_xflags, _, _, seen_projid, _, _ = _get(descriptor)
+    confirm(xflags, seen_xflags, seen_projid, project)
+
+
+def apply(cinv: str) -> int:
+    """Establish and prove the project for one `CINV`, returning its ID.
 
     The descriptor walk is deliberate: the handoff root is opened without
     following a link, then the `CINV` directory relative to it, then `out`
     relative to that. No pathname is assembled and re-resolved, so replacing a
-    component after a check redirects nothing.
+    component after a check redirects nothing. `O_DIRECTORY` and `O_NOFOLLOW`
+    are what refuse an `out` that is missing, a symlink, or not a directory.
     """
-    if len(argv) != 2:
-        raise SystemExit(USAGE)
-    cinv = validate_cinv(argv[1])
-    project = project_id(cinv)
+    identity = validate_cinv(cinv)
+    project = project_id(identity)
 
     root = os.open(HANDOFF_ROOT, _DIR_FLAGS)
     try:
-        invocation = os.open(cinv, _DIR_FLAGS, dir_fd=root)
+        invocation = os.open(identity, _DIR_FLAGS, dir_fd=root)
     finally:
         os.close(root)
     try:
@@ -125,6 +161,18 @@ def main(argv: list[str]) -> int:
         establish(leaf, project)
     finally:
         os.close(leaf)
+    return project
+
+
+def main(argv: list[str]) -> int:
+    """Establish the project on exactly one `CINV`'s output leaf.
+
+    Every failure below is raised before any credential drop, so a caller can
+    state that nothing executed.
+    """
+    if len(argv) != 2:
+        raise SystemExit(USAGE)
+    apply(validate_cinv(argv[1]))
     return 0
 
 

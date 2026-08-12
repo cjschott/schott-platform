@@ -1151,6 +1151,42 @@ wrong direction.
 Policy shared by both sides lives in `tools/capability/execution/quota.py`,
 which is pure and sets nothing.
 
+**Wired into the transition, not optional.** Ruled 2026-08-12: establishing the
+project is a mandatory step between handoff preparation and the credential drop.
+
+```
+T10 policy accepted → verify/open exact CINV handoff
+  → establish XFS project on out/ → verify projid + PROJINHERIT
+  → close descriptors not inherited
+  → setgroups → setgid → setuid → verify permanent drop
+  → set + verify no_new_privs → execve worker
+```
+
+The invariant this buys: **the worker can never reach Podman unless its
+`/kyri/output` backing directory is already bound to the deterministic `CINV`
+project.** `perform_transition` takes the quota component as a required
+collaborator with no default, so an unquotaed execution is not a path anybody
+could forget to take — there is no signature that reaches `execve` without one.
+
+Any of these prevents the drop: the expected filesystem absent, project quotas
+not enabled, `out/` missing or the wrong type, an existing foreign project
+assignment, the ioctl failing, a project that disagrees with the `CINV`, a
+readback that does not confirm, or `PROJINHERIT` unset. Every one occurs before
+any privilege is spent, so execution is conclusively excluded and the refusal is
+`transition_failed_before_execution`. **There is no fallback to unquotaed
+execution:** a quota failure costs availability, never containment.
+
+Verification never trusts the setter. After `FS_IOC_FSSETXATTR` the attributes
+are read back with `FS_IOC_FSGETXATTR` and must show the exact project,
+inheritance set, and every unrelated xflag exactly as it was.
+
+The privileged operation stays a **separate component**
+(`provisioning/execution/kyri-exec-quota.py`), invoked through a fixed seam
+rather than inlined, so the transition helper does not become a filesystem
+administration interface. Its effective authority remains: validated `CINV` →
+internally derived `out/` descriptor → deterministic project ID → exactly one
+`FS_IOC_FSSETXATTR`.
+
 **Still required at G4 provisioning:** `prjquota` enabled and verified on
 `/data`, and the default project limits established, **before** the first real
 G6 execution. Until both hold, the containment is defined but not enforced, and

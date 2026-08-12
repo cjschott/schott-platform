@@ -306,12 +306,34 @@ class Recorder:
             raise self._exec_error
         raise action.WorkerExecuted(path)
 
+class Quota:
+    '''The injected quota component. Establishes nothing real.'''
+
+    DERIVE = object()
+
+    def __init__(self, error=None, project=DERIVE):
+        self.calls = []
+        self._error = error
+        self._project = project
+
+    def project_id(self, cinv):
+        return 1_000_000 + int(cinv[5:])
+
+    def apply(self, cinv):
+        self.calls.append(('apply', cinv))
+        if self._error is not None:
+            raise self._error
+        return (self.project_id(cinv) if self._project is Quota.DERIVE
+                else self._project)
+
 def names(recorder):
     return [call[0] for call in recorder.calls]
 
-def run(recorder, policy=POLICY, root=True):
+def run(recorder, policy=POLICY, root=True, quota=None):
     try:
-        action.perform_transition(policy, backend=recorder, assume_root=root)
+        action.perform_transition(policy, backend=recorder,
+                                  quota=Quota() if quota is None else quota,
+                                  assume_root=root)
     except action.WorkerExecuted:
         return 'executed'
     except policy_mod.TransitionRefused as error:
@@ -323,7 +345,8 @@ def run(recorder, policy=POLICY, root=True):
 run_case "a validated TransitionPolicy is required" "${PRELUDE}
 for bad in ('CINV-000042', None, {'cinv': 'CINV-000042'}, ['CINV-000042'], 42):
     try:
-        action.perform_transition(bad, backend=Recorder(), assume_root=True)
+        action.perform_transition(bad, backend=Recorder(), quota=Quota(),
+                                  assume_root=True)
     except policy_mod.TransitionRefused:
         continue
     raise AssertionError(f'accepted {bad!r} in place of a policy')
@@ -333,7 +356,9 @@ print('OK')
 run_case "the action layer accepts no independent execution input" "${PRELUDE}
 import inspect
 params = list(inspect.signature(action.perform_transition).parameters)
-assert params == ['policy', 'backend', 'assume_root'], params
+# The quota seam joined this set when the output project became a
+# mandatory transition step; it is a collaborator, not an execution input.
+assert params == ['policy', 'backend', 'quota', 'assume_root'], params
 for banned in ('cinv', 'uid', 'gid', 'user', 'command', 'argv', 'executable',
                'environment', 'cwd', 'image', 'path'):
     assert banned not in params, banned
@@ -561,6 +586,87 @@ assert before == after, 'the test changed process credentials'
 for production in ('/usr/libexec/kyri-exec-transition',
                    '/usr/libexec/kyri-exec-worker.py'):
     assert not os.path.exists(production), production
+print('OK')
+"
+
+# --- the output quota is established before any privilege is spent ----------
+
+run_case "the quota is established before the credential drop" "${PRELUDE}
+recorder = Recorder()
+quota = Quota()
+assert run(recorder, quota=quota) == 'executed'
+assert quota.calls == [('apply', POLICY.cinv)], quota.calls
+# Before close_extra_descriptors, and therefore before setgroups/setgid/setuid.
+assert names(recorder)[0] == 'close_extra_descriptors', names(recorder)
+print('OK')
+"
+
+run_case "no worker exec is reachable when the quota is not established" "${PRELUDE}
+for error in (OSError(1, 'operation not permitted'),
+              OSError(2, 'no such file or directory'),
+              RuntimeError('the project read back as 0, expected 1000042'),
+              ValueError('the directory already carries project 7')):
+    recorder = Recorder()
+    outcome = run(recorder, quota=Quota(error=error))
+    assert isinstance(outcome, policy_mod.TransitionRefused), outcome
+    assert 'execve' not in names(recorder), names(recorder)
+    assert 'setuid' not in names(recorder), names(recorder)
+    assert 'setgroups' not in names(recorder), names(recorder)
+print('OK')
+"
+
+run_case "a quota failure excludes execution and classifies as such" "${PRELUDE}
+outcome = run(Recorder(), quota=Quota(error=OSError(1, 'refused')))
+assert outcome.execution_excluded is True, outcome.execution_excluded
+assert outcome.classification is not None
+assert outcome.classification.value == 'transition_failed_before_execution', \\
+    outcome.classification
+print('OK')
+"
+
+run_case "a project that disagrees with the CINV prevents the drop" "${PRELUDE}
+recorder = Recorder()
+# The component reported success but returned somebody else's project.
+outcome = run(recorder, quota=Quota(project=1_000_999))
+assert isinstance(outcome, policy_mod.TransitionRefused), outcome
+assert 'setuid' not in names(recorder), names(recorder)
+assert outcome.execution_excluded is True
+for bad in (None, 0, '1000042', -1):
+    recorder = Recorder()
+    outcome = run(recorder, quota=Quota(project=bad))
+    assert isinstance(outcome, policy_mod.TransitionRefused), (bad, outcome)
+    assert 'execve' not in names(recorder), bad
+print('OK')
+"
+
+run_case "there is no unquotaed path through the transition at all" "${PRELUDE}
+import inspect
+params = list(inspect.signature(action.perform_transition).parameters)
+assert 'quota' in params, params
+signature = inspect.signature(action.perform_transition)
+assert signature.parameters['quota'].default is inspect.Parameter.empty, \\
+    'the quota step has a default and can be skipped'
+# Omitting it is an error rather than a quiet no-quota execution.
+try:
+    action.perform_transition(POLICY, backend=Recorder(), assume_root=True)
+except TypeError:
+    pass
+else:
+    raise AssertionError('the transition ran without a quota component')
+print('OK')
+"
+
+run_case "the quota component receives only the validated CINV" "${PRELUDE}
+import inspect
+recorder = Recorder()
+quota = Quota()
+run(recorder, quota=quota)
+assert quota.calls == [('apply', 'CINV-000042')], quota.calls
+# One call, one CINV, and nothing else crosses: no path, no ID, no limit.
+source = inspect.getsource(action.perform_transition)
+for token in ('bhard', 'ihard', 'projid', 'ioctl', 'FS_IOC', 'xfs_quota',
+              '/data/'):
+    assert token not in source, token
 print('OK')
 "
 

@@ -144,13 +144,18 @@ def ambiguous(reason: str) -> Exception:
     return _policy().TransitionRefused(reason, execution_excluded=False)
 
 
-def perform_transition(policy: Any, *, backend: Any,
+def perform_transition(policy: Any, *, backend: Any, quota: Any,
                        assume_root: bool) -> NoReturn:
     """Perform the accepted credential drop and exec, or refuse.
 
     ``assume_root`` is what a caller asserts about holding privilege; the
     production entry point derives it from the observed credentials rather than
     from anything a caller said.
+
+    ``quota`` is required rather than optional, and that is the point: there is
+    no signature here that reaches ``execve`` without an established output
+    project, so an unquotaed execution is not a path somebody could forget to
+    take — it does not exist.
     """
     module = _policy()
     refused = module.TransitionRefused
@@ -159,6 +164,27 @@ def perform_transition(policy: Any, *, backend: Any,
         raise refused("a validated TransitionPolicy is required")
     if not assume_root:
         raise refused("the transition requires root and does not hold it")
+
+    # Before any privilege is spent, and before the worker could exist. Every
+    # failure below is conclusive: nothing has run, so the refusal keeps its
+    # default `execution_excluded`, which is what makes
+    # `transition_failed_before_execution` honest here.
+    #
+    # There is no fallback to unquotaed execution. A quota failure costs
+    # availability; the alternative would be a container writing into a tree
+    # nothing is accounting, which costs the containment this whole boundary
+    # exists for.
+    try:
+        established = quota.apply(policy.cinv)
+        expected = quota.project_id(policy.cinv)
+    except Exception as error:  # noqa: BLE001 — any failure is a refusal
+        raise refused(f"the output quota was not established: {error}") from None
+    if not isinstance(established, int) or isinstance(established, bool):
+        raise refused("the output quota reported no project identity")
+    if established != expected:
+        raise refused(
+            f"the output quota established project {established}, and "
+            f"{policy.cinv} derives {expected}")
 
     try:
         backend.close_extra_descriptors(policy.inherited_descriptors)
