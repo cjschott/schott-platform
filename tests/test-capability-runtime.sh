@@ -3757,10 +3757,33 @@ with TemporaryDirectory() as tmp:
     check(not stat.S_IMODE(staged.lstat().st_mode) & 0o111,
           "the staged hostile artefact is not executable")
 
-# --- there is no adapter to look up ----------------------------------------
+# --- there is exactly one adapter, and the top level is not it --------------
+# Updated at T18. Track A asserted that no adapter existed anywhere. One now
+# does, in the execution subpackage, so the claim becomes the stronger and more
+# useful one: the top-level package still holds no execution surface, and the
+# subpackage holds exactly one module that may execute. A registry, a plugin
+# path, or a second adapter would each fail this.
 _all_production = sorted((root / "tools" / "capability").glob("*.py"))
 check(len(_all_production) == 12,
       f"the package holds exactly the twelve Track-A modules ({len(_all_production)})")
+
+_execution_modules = sorted((root / "tools" / "capability" / "execution").glob("*.py"))
+_adapters = [p.name for p in _execution_modules
+             if "class PythonPodmanAdapter" in p.read_text(encoding="utf-8")]
+check(_adapters == ["adapter.py"],
+      f"exactly one module defines the governed adapter ({_adapters})")
+_execution_source = "\n".join(p.read_text(encoding="utf-8")
+                              for p in _execution_modules)
+for token, description in (("ADAPTERS", "an adapter table"),
+                           ("entry_points", "a plugin entry point"),
+                           ("pkgutil", "a plugin walker"),
+                           ("import_module", "a dynamic import")):
+    check(token not in _execution_source,
+          f"no execution module contains {description}")
+# The coordinator reaches the adapter it is handed and looks none up.
+_coordinator = (root / "tools" / "capability" / "coordinator.py").read_text(encoding="utf-8")
+check("import" not in _coordinator.split("def prepare_invocation")[1],
+      "the coordinator imports nothing at execution time")
 _combined = "\n".join(p.read_text(encoding="utf-8") for p in _all_production)
 for token, description in (
         ("import subprocess", "a subprocess import"),

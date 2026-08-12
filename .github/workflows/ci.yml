@@ -274,6 +274,11 @@ jobs:
       - name: Capability execution administrative tests
         run: bash tests/test-capability-execution-admin.sh
 
+      # The adapter driven through an injected backend. No Podman, no
+      # container, no provisioned runtime.
+      - name: Capability execution adapter tests
+        run: bash tests/test-capability-execution-adapter.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

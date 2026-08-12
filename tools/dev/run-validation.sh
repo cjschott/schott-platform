@@ -100,15 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 51 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 52 checks plus the closing summary. Quick mode drops
 # ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=42
+  TOTAL_STEPS=43
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=53
+  TOTAL_STEPS=54
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -267,6 +267,11 @@ run "Capability execution cleanup" \
 # and authenticates nothing. Gates G2 and G3 stay closed.
 run "Capability execution administrative" \
   bash tests/test-capability-execution-admin.sh
+
+# ENG-0005 T18. The adapter driven through an injected backend: no Podman, no
+# subprocess, no container, and no provisioned runtime. Gates G4-G6 stay closed.
+run "Capability execution adapter" \
+  bash tests/test-capability-execution-adapter.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no

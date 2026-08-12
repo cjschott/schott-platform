@@ -37,12 +37,20 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
                        coordinator_uid: Any, selection_id: Any,
                        instance_id: Any, capability_package_id: Any,
                        invocation_id: Any, payload: Any, actor: Any,
-                       request_id: Any, requested_at: datetime):
-    """Prepare one governed invocation, and stop at the execution boundary.
+                       request_id: Any, requested_at: datetime,
+                       adapter: Any = None, execution_binding: Any = None):
+    """Prepare one governed invocation, and execute it only if it may be.
 
     Returns the durable decision. A `prepared` status carries
-    `no_authorised_adapter` as its reason: the preparation succeeded and there
-    is nothing authorised to run it.
+    `no_authorised_adapter` as its reason whenever execution is not available,
+    and execution needs **both** an authorised mechanism and a governed
+    binding: an adapter with nothing bound to it has nothing to run, and a
+    binding with no adapter has nothing to run it. Either missing is the same
+    honest refusal it has always been.
+
+    The invocation record is committed before the adapter is reached, so a
+    crash during execution leaves a decision that was durably made rather than
+    one nobody can account for.
     """
     # The operator claims what they believe was selected; verification is what
     # decides whether the claim is true. A coordinator that read the instance
@@ -72,6 +80,21 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
         actor=actor, request_id=request_id, requested_at=requested_at)
 
     if decision.status == STATUS_PREPARED:
+        if adapter is not None and execution_binding is not None:
+            # The record above is already durable. What comes back is carried,
+            # never reinterpreted: the outcome class was concluded by T13 and
+            # copied through the adapter, and this module adds no judgement of
+            # its own to it.
+            outcome = adapter.execute(execution_binding)
+            return type(decision)(
+                decision.status, outcome.outcome_class,
+                invocation_record_id=decision.invocation_record_id,
+                result_record_id=decision.result_record_id,
+                invocation_id=decision.invocation_id,
+                binding_digest=decision.binding_digest,
+                payload_digest=decision.payload_digest,
+                artifact_digest=decision.artifact_digest,
+                staged_path=decision.staged_path)
         # Preparation succeeded. Execution has not been authorised, and this is
         # where the flow ends -- before any surface that could run anything.
         return type(decision)(

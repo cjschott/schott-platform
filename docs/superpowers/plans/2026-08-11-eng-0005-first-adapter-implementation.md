@@ -765,9 +765,24 @@ Regression set unless stated otherwise:
 
 ### T18 — Adapter and CLI wiring
 
-**Files:** `tools/capability/execution/adapter.py`, `tools/capability/cli.py`,
-`tools/capability/coordinator.py`, `tools/capability/errors.py`
+**Files:** `tools/capability/execution/adapter.py`,
+`tools/capability/coordinator.py`,
+`tests/test-capability-execution-adapter.sh`
 **Interfaces:** `PythonPodmanAdapter.execute(binding) -> AdapterOutcome`
+
+> **Files corrected 2026-08-12, before implementation.** `cli.py` and
+> `errors.py` are listed but need no change: the CLI must reach no adapter
+> while G4–G6 are closed, so leaving it untouched is the behaviour rather than
+> an omission, and the adapter's refusals are execution-domain types beside
+> every other increment's. The adapter's own suite is added for the same reason
+> T14–T17 each have one — the execution modules are tested in
+> `tests/test-capability-execution-*.sh`, not in the Track-A suite.
+>
+> **The coordinator seam takes both an adapter and a binding.** Execution needs
+> an authorised mechanism *and* something governed for it to run; an adapter
+> with nothing bound to it has nothing to execute, and the coordinator cannot
+> assemble a binding without the provisioned runtime G4 gates. Either absent is
+> `no_authorised_adapter`, unchanged.
 
 - Failing tests: `invoke` no longer returns `no_authorised_adapter` when a
   governed implementation is available, and **still refuses** when it is not;
