@@ -56,12 +56,14 @@ Copied from the specification. Where this plan and the specification differ,
   repaired. Success requires start proven, valid terminal lifecycle, no
   timeout, no policy violation, exit 0, valid result, and a valid complete
   output tree. **Timeout always fails.**
-- Output tree: 32 regular files, 16 MiB aggregate, 2 MiB per file, stdout and
-  stderr 2 MiB each with independent `truncated=true`. Collector is
-  descriptor-relative and no-follow, regular files only, rejecting symlinks,
-  hard-link anomalies, FIFOs, sockets, devices, traversal, absolute paths, and
-  directory-rename escape. **Any output-policy violation fails the invocation;
-  a valid result never overrides it.**
+- Output tree: 32 regular files, 16 MiB aggregate, 2 MiB per file, maximum
+  depth 16, maximum 256 total entries of every type, stdout and stderr 2 MiB
+  each with independent `truncated=true`. Collector is descriptor-relative and
+  no-follow, regular files only, rejecting symlinks, hard-link anomalies,
+  FIFOs, sockets, devices, traversal, absolute paths, and directory-rename
+  escape. Structural refusals are `output_tree_policy_violation`. **Any
+  output-policy violation fails the invocation; a valid result never overrides
+  it.**
 - Lifecycle precedes `ExitCode`, always. `Created` with exit 0 is a
   never-started launch failure.
 - Once `reserved` is durably committed the `CINV` is permanently consumed. **No
@@ -538,37 +540,39 @@ Regression set unless stated otherwise:
 > produce the distinct `TrustedResult` type. Nothing in the result bytes selects
 > a path, alters a bound, or reaches the classification.
 
-> **OPEN — reviewer ruling required before T14 may be implemented.** The
-> accepted spec bounds the output tree by **regular files** only: 32 files,
-> 2 MiB per file, 16 MiB aggregate (design §11; §1 above). It permits
-> subdirectories and fixes **no directory-depth and no total-entry bound**. The
-> two are not the same bound: a hostile capability can satisfy every accepted
-> limit with zero regular files and still present an arbitrarily deep directory
-> chain, or a single directory holding millions of empty children. Descriptor-
-> relative traversal of such a tree exhausts descriptors, stack, or time before
-> any file bound is consulted, so the common primitive needs a traversal bound
-> that the accepted sources do not supply.
+> **Traversal bounds ruled 2026-08-12, before implementation.** T14 stopped
+> here: the accepted spec bounded the output tree by **regular files** only, so
+> a tree with zero regular files could satisfy every byte and file limit while
+> presenting unbounded depth or unbounded breadth, and traversal would exhaust
+> descriptors, stack, or time before any file bound was consulted. The
+> neighbouring ceilings were not transferable — §8's 1,024 entries bounds the
+> package, §20's 10,000 bounds administrative scanning — so the value was left
+> unfixed rather than chosen during implementation.
 >
-> Neighbouring bounds exist but govern other objects and are not transferable:
-> §8's 1,024 entries bounds the **package**, and §20's 10,000-entry ceiling
-> bounds **administrative record** scanning. Adopting either here would be a new
-> output-tree policy chosen during implementation.
+> The reviewer ruled **both** bounds, the two exhaustion shapes being
+> independent: `OUTPUT_TREE_MAX_DEPTH = 16` and
+> `OUTPUT_TREE_MAX_ENTRIES = 256`, now recorded in design §11. Depth 0 is the
+> root, an entry directly beneath it is depth 1, and every enumerated entry
+> counts toward 256 whatever its type, enumeration stopping at entry 257. The
+> regular-file bounds are unchanged and independent.
 >
-> The bound is therefore left unfixed rather than invented, and T14 stops here.
-> What the ruling must settle: whether the bound is a maximum directory depth, a
-> maximum total entry count counting every enumerated entry of every type, or
-> both; the value of each; and the classification a violation carries. The
-> common primitive takes whichever bounds are settled as caller-supplied
-> arguments, so the ruling changes `collector.py` and this plan, not the shape
-> of Track-A.
+> One classification is added to the closed §25 vocabulary,
+> `output_tree_policy_violation`, taking it from 32 members to 33. It carries
+> every **structural** refusal. `result_missing` and `result_invalid` keep their
+> narrower meanings — tree valid but the canonical result absent, and result
+> present but failing its document contract — so that a hostile filesystem shape
+> is never reported as a malformed document. T1's vocabulary test takes the
+> corresponding narrow update before T14 is implemented.
 
 - Failing tests: symlink, FIFO, socket, device, hard-link anomaly, traversal,
   absolute path, and directory-rename escape each rejected; 32 files / 16 MiB /
-  2 MiB per file enforced; the **complete** tree is validated before a result is
-  accepted; a valid `result.json` inside a violating tree still fails the
-  invocation; missing → `result_missing`; malformed → `result_invalid`; nothing
-  is repaired or normalised; extends `tools/common/trusted_source.py` rather
-  than reimplementing the walk.
+  2 MiB per file enforced; depth 16 and 256 total entries enforced, with a tree
+  carrying **no** regular file still refused on depth or entry count alone;
+  every structural refusal → `output_tree_policy_violation`; the **complete**
+  tree is validated before a result is accepted; a valid `result.json` inside a
+  violating tree still fails the invocation; missing → `result_missing`;
+  malformed → `result_invalid`; nothing is repaired or normalised; extends
+  `tools/common/trusted_source.py` rather than reimplementing the walk.
 - **RED:** `AssertionError: symlink in output tree was collected`
 - **GREEN:** `bash tests/test-capability-execution-collector.sh`
 - **Commit:** `feat(execution): add the descriptor-safe output collector`

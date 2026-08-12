@@ -435,6 +435,29 @@ subdirectories permitted. Bounds — result 2 MiB; **32** regular files maximum;
 `stdout`/`stderr` are diagnostic only and each may truncate independently with
 an explicit `truncated=true`.
 
+**Traversal bounds — maximum depth 16, maximum 256 total entries.** Added
+2026-08-12; the original bounds counted regular files and their bytes only.
+Those two shapes of exhaustion are independent of this one: a tree with **zero**
+regular files satisfies every byte and file limit above while presenting an
+arbitrarily deep directory chain, or one directory holding millions of empty
+children, and traversal exhausts descriptors, stack, or time before any file
+bound is ever consulted.
+
+Depth 0 is the output root; an entry directly beneath `/kyri/output` is at
+depth 1; nothing may exist deeper than depth 16. **Every** enumerated directory
+entry counts toward the 256 ceiling whatever its type — regular file,
+directory, symlink, FIFO, socket, device, or unexpected object — because an
+object refused for its type has still been enumerated, and a ceiling that
+counted only the acceptable ones would not bound the work. The root itself is
+not an entry. Enumeration stops when entry 257 is encountered rather than
+completing the scan and reporting afterwards.
+
+The regular-file limits remain independent and are enforced alongside these:
+32 files, 2 MiB per file, 16 MiB aggregate. 256 entries and 16 levels leave
+room for legitimate nested diagnostic output while staying far below the §8
+package and §20 administrative scan ceilings; a capability with 32 useful files
+does not need thousands of directory nodes.
+
 **Collector:** descriptor-relative, no-follow, regular files only by default;
 rejects symlinks, hard-link anomalies, FIFOs, sockets, devices, traversal,
 absolute paths, and directory-rename escape; enforces count, size, and
@@ -833,7 +856,23 @@ terminal classification and governed cleanup. **If `launch_authorized` may have
 been issued, or execution cannot be excluded, this classification MUST NOT be
 used** — enter the corresponding fail-closed reconciliation path instead.
 
-**Result/output:** `result_missing` · `result_invalid`.
+**Result/output:** `result_missing` · `result_invalid` ·
+`output_tree_policy_violation`.
+
+**`output_tree_policy_violation`** — added 2026-08-12. Every **structural**
+output-tree refusal: depth beyond 16, more than 256 total entries, a 33rd
+regular file, aggregate beyond 16 MiB, a regular file beyond 2 MiB, a symlink,
+FIFO, socket, or device, a hard-link anomaly, a traversal or type race, and any
+other forbidden tree structure.
+
+It is deliberately **separate** from the two result classifications, which keep
+their existing and narrower meanings. `result_missing` means the complete tree
+was structurally valid and the canonical root-level `result.json` was absent;
+`result_invalid` means that file existed and failed its document contract.
+Folding structural refusals into `result_invalid` would make it a catch-all in
+which a hostile filesystem shape and a malformed document are indistinguishable
+— and the first is an attack on the privileged reader while the second is a
+capability bug.
 
 **Quarantine:** `quarantine_collection_incomplete` ·
 `quarantine_incomplete_integrity_failure` · `quarantine_backing_store_mismatch` ·
@@ -935,6 +974,7 @@ on this one. The same applies to secrets (§31), devices, and GPU.
 | 8 | symlink escape from package or output | descriptor-relative `O_NOFOLLOW` walk |
 | 9 | output symlink attacking privileged reader | collector rejects non-regular files; Track-B Finding A |
 | 10 | output count/size exhaustion | 32 files / 16 MiB / 2 MiB per file; violation fails invocation |
+| 10a | output tree depth or entry exhaustion | depth 16 / 256 total entries of every type; independent of the file bounds |
 | 11 | `stdout`/`stderr` flood | 2 MiB each, independent truncation flags |
 | 12 | fork bomb | `--pids-limit 64`, proven enforced in Track B |
 | 13 | memory or CPU exhaustion | 256 MiB with OOM kill, 0.5 CPU, both proven |
@@ -996,7 +1036,7 @@ fit both bounds; or any accepted decision conflicts with another.
 4. Worker demonstrably cannot write any authority root.
 5. Profile fields verified against observed Podman state, field by field.
 6. Payload canonicalisation rejects duplicates at depth, non-integer numbers, U+0000, unpaired surrogates.
-7. Output collector rejects symlink, FIFO, socket, device, traversal, and over-bound trees.
+7. Output collector rejects symlink, FIFO, socket, device, traversal, and over-bound trees, including trees over-bound by depth or entry count alone.
 8. Timeout classification is permanent across a grace-period exit.
 9. `Created` with exit 0 classifies as launch failure.
 10. Capacity honours 2 and refuses the third.
