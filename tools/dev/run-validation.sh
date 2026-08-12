@@ -100,15 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 54 checks plus the closing summary. Quick mode drops
+# Counted, not guessed: 55 checks plus the closing summary. Quick mode drops
 # ten of them. A validation tool that miscounts its own steps invites doubt
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=45
+  TOTAL_STEPS=46
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=56
+  TOTAL_STEPS=57
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -284,6 +284,12 @@ run "Capability execution image definition" \
 # installs nothing: the privileged operation is source only behind G2/G3.
 run "Capability execution output quota" \
   bash tests/test-capability-execution-quota.sh
+
+# ENG-0005 G4 artifacts. Static validation of the installed worker entrypoint,
+# the backing-store and sudoers examples, and the provisioning runbook.
+# Installs nothing, mounts nothing, and creates no sudoers policy.
+run "Capability execution provisioning artifacts" \
+  bash tests/test-capability-execution-provisioning.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
