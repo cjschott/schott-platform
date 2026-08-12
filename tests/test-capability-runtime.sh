@@ -1604,6 +1604,471 @@ check("fstat" in _source_module,
       "validation is performed on the descriptor rather than the path")
 
 # ===========================================================================
+# Deferred E2 — bounded traversal of a directory nobody trusts
+# ===========================================================================
+# The section above trusts a directory and checks that it deserves it. This one
+# is the opposite problem: a tree written by something hostile, which must be
+# enumerated without the enumeration itself becoming the attack. So there is no
+# expected uid here and no mode requirement -- ownership is not the anchor, and
+# pretending it were would be a claim about a directory the attacker owns.
+#
+# What is checked instead is structural: every component opened relative to a
+# descriptor and never followed, every object's type established before it is
+# touched, every bound supplied by the caller. The module learns no policy; it
+# is handed one.
+
+import socket as _socket  # noqa: E402  (test harness only, never production)
+import inspect as _inspect  # noqa: E402
+
+from tools.common.trusted_source import (  # noqa: E402
+    EntryKind, TraversalReason, TraversalRefused, walk_tree)
+
+# Deliberately not the execution numbers. The primitive is generic, so the
+# suite proves it with bounds no specification uses.
+_BOUNDS = dict(maximum_depth=4, maximum_entries=16, maximum_files=4,
+               maximum_file_bytes=64, maximum_total_bytes=256)
+
+
+def _walk(out_root, **overrides):
+    bounds = dict(_BOUNDS)
+    bounds.update(overrides)
+    handle = os.open(out_root, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+    try:
+        return walk_tree(handle, **bounds)
+    finally:
+        os.close(handle)
+
+
+def refuses_walk(action, reason, message):
+    try:
+        action()
+    except TraversalRefused as error:
+        if error.reason is reason:
+            ok(message)
+        else:
+            bad(f"{message} (refused as {error.reason.value}, "
+                f"expected {reason.value})")
+    except Exception as error:  # noqa: BLE001
+        bad(f"{message} (raised {type(error).__name__}: {error})")
+    else:
+        bad(f"{message} (was accepted instead of refused)")
+
+
+def _tree(tmp):
+    out_root = Path(tmp) / "out"
+    out_root.mkdir(mode=0o755)
+    return out_root
+
+
+def _paths(tree):
+    return [walked.relative_path for walked in tree.files]
+
+
+# --- an already-open directory descriptor, never a name ---------------------
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "a.txt").write_bytes(b"alpha")
+
+    for supplied, description in ((str(out_root), "a pathname"),
+                                  (Path(out_root), "a Path"),
+                                  (None, "nothing"),
+                                  (True, "a boolean wearing an int")):
+        refuses_walk(lambda s=supplied: walk_tree(s, **_BOUNDS),
+                     TraversalReason.INVALID_ROOT,
+                     f"{description} is refused as a root descriptor")
+
+    handle = os.open(out_root / "a.txt", os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        refuses_walk(lambda: walk_tree(handle, **_BOUNDS),
+                     TraversalReason.INVALID_ROOT,
+                     "a descriptor that is not a directory is refused")
+    finally:
+        os.close(handle)
+
+    # The caller opened it; the caller closes it. A primitive that consumed the
+    # descriptor would make the second call after a refusal undefined.
+    handle = os.open(out_root, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+    try:
+        walk_tree(handle, **_BOUNDS)
+        check(stat.S_ISDIR(os.fstat(handle).st_mode),
+              "the root descriptor is still open after the walk")
+    finally:
+        os.close(handle)
+
+# --- the valid case, nested and deterministically ordered -------------------
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "b.txt").write_bytes(b"bravo")
+    (out_root / "a.txt").write_bytes(b"alpha")
+    nested = out_root / "c"
+    nested.mkdir(mode=0o755)
+    (nested / "d.txt").write_bytes(b"delta!")
+    (nested / "0.txt").write_bytes(b"zero")
+
+    tree = _walk(out_root)
+    check(_paths(tree) == [("a.txt",), ("b.txt",), ("c", "0.txt"), ("c", "d.txt")],
+          "regular files are returned in deterministic relative-path order")
+    check(tree.directories == (("c",),), "a nested directory is reported")
+    check([walked.data for walked in tree.files]
+          == [b"alpha", b"bravo", b"zero", b"delta!"],
+          "each accepted file yields exactly its bytes")
+    check([walked.size for walked in tree.files] == [5, 5, 4, 6],
+          "each accepted file yields its exact byte count")
+    check(tree.total_bytes == 20, "the aggregate is the sum of accepted bytes")
+    check(tree.entry_count == 5,
+          "every entry counts, the directory included, the root excluded")
+
+    # Deterministic means repeatable, not merely sorted once.
+    check(_paths(_walk(out_root)) == _paths(tree),
+          "a second walk of the same tree returns the same order")
+
+with TemporaryDirectory() as tmp:
+    empty_root = _tree(tmp)
+    empty = _walk(empty_root)
+    check(empty.files == () and empty.directories == ()
+          and empty.entry_count == 0 and empty.total_bytes == 0,
+          "an empty directory walks to an empty tree rather than refusing")
+
+# --- every object that is not a regular file or a directory -----------------
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "keep.txt").write_bytes(b"kept")
+    os.symlink("keep.txt", out_root / "link")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.UNEXPECTED_OBJECT,
+                 "a symlink in the tree is refused rather than followed")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    os.symlink("/etc/shadow", out_root / "escape")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.UNEXPECTED_OBJECT,
+                 "a symlink pointing outside the tree is refused")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    nested = out_root / "sub"
+    nested.mkdir(mode=0o755)
+    os.symlink("..", nested / "up")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.UNEXPECTED_OBJECT,
+                 "a symlink to the parent is refused rather than traversed")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    os.mkfifo(out_root / "pipe")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.UNEXPECTED_OBJECT,
+                 "a FIFO in the tree is refused")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    _bound = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        _bound.bind(str(out_root / "sock"))
+        refuses_walk(lambda: _walk(out_root), TraversalReason.UNEXPECTED_OBJECT,
+                     "a unix socket in the tree is refused")
+    finally:
+        _bound.close()
+
+# Device nodes cannot be created without privilege, so the refusal is proven
+# where it is decided -- the type classifier every entry passes through -- and
+# by a real node when the suite happens to run privileged.
+check(EntryKind.of(stat.S_IFCHR | 0o600) is EntryKind.DEVICE,
+      "a character device classifies as a device")
+check(EntryKind.of(stat.S_IFBLK | 0o600) is EntryKind.DEVICE,
+      "a block device classifies as a device")
+check(EntryKind.of(stat.S_IFIFO | 0o600) is EntryKind.FIFO,
+      "a FIFO classifies as a FIFO")
+check(EntryKind.of(stat.S_IFSOCK | 0o600) is EntryKind.SOCKET,
+      "a socket classifies as a socket")
+check(EntryKind.of(stat.S_IFLNK | 0o777) is EntryKind.SYMLINK,
+      "a symlink classifies as a symlink")
+check(EntryKind.of(stat.S_IFREG | 0o644) is EntryKind.REGULAR,
+      "a regular file classifies as regular")
+check(EntryKind.of(stat.S_IFDIR | 0o755) is EntryKind.DIRECTORY,
+      "a directory classifies as a directory")
+check({EntryKind.REGULAR, EntryKind.DIRECTORY}
+      == {kind for kind in EntryKind if kind.traversable},
+      "only regular files and directories are traversable")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    try:
+        os.mknod(out_root / "chr", 0o600 | stat.S_IFCHR, os.makedev(1, 3))
+    except (PermissionError, OSError):
+        ok("a device node cannot be created unprivileged "
+           "(refusal proven by the classifier above)")
+    else:
+        refuses_walk(lambda: _walk(out_root), TraversalReason.UNEXPECTED_OBJECT,
+                     "a character device in the tree is refused")
+
+# --- hard-link anomaly ------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "one.txt").write_bytes(b"once")
+    os.link(out_root / "one.txt", out_root / "two.txt")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.LINK_ANOMALY,
+                 "a second link to the same bytes is refused")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    outside = Path(tmp) / "outside.txt"
+    outside.write_bytes(b"elsewhere")
+    os.link(outside, out_root / "aliased.txt")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.LINK_ANOMALY,
+                 "a link aliasing bytes outside the tree is refused")
+
+# --- the bounds, each independently -----------------------------------------
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "big.txt").write_bytes(b"x" * 65)
+    refuses_walk(lambda: _walk(out_root), TraversalReason.FILE_TOO_LARGE,
+                 "a file beyond the per-file bound is refused")
+    check(_walk(out_root, maximum_file_bytes=65).total_bytes == 65,
+          "the same file is accepted when the caller raises the bound")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    for index in range(4):
+        (out_root / f"f{index}.txt").write_bytes(b"y" * 40)
+    refuses_walk(lambda: _walk(out_root, maximum_total_bytes=100),
+                 TraversalReason.TOTAL_TOO_LARGE,
+                 "the aggregate bound refuses before the tree is consumed")
+    check(_walk(out_root).total_bytes == 160,
+          "the same files are accepted under an aggregate that admits them")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    for index in range(5):
+        (out_root / f"f{index}.txt").write_bytes(b"z")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.FILE_LIMIT_EXCEEDED,
+                 "the file-count bound refuses the file beyond it")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    for index in range(17):
+        (out_root / f"e{index:02d}").mkdir(mode=0o755)
+    refuses_walk(lambda: _walk(out_root), TraversalReason.ENTRY_LIMIT_EXCEEDED,
+                 "the entry bound counts directories holding no file at all")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    deep = out_root
+    for level in range(5):
+        deep = deep / "d"
+        deep.mkdir(mode=0o755)
+    refuses_walk(lambda: _walk(out_root), TraversalReason.DEPTH_EXCEEDED,
+                 "the depth bound refuses a tree carrying no regular file")
+    check(_walk(out_root, maximum_depth=5).entry_count == 5,
+          "the same chain is accepted at the depth the caller permits")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    deep = out_root
+    for level in range(4):
+        deep = deep / "d"
+        deep.mkdir(mode=0o755)
+    tree = _walk(out_root)
+    check(tree.files == () and tree.entry_count == 4,
+          "a directory at the maximum depth is allowed while empty")
+    (deep / "toodeep.txt").write_bytes(b"!")
+    refuses_walk(lambda: _walk(out_root), TraversalReason.DEPTH_EXCEEDED,
+                 "an entry one level beyond the maximum depth is refused")
+
+# --- races between looking and opening --------------------------------------
+# Deterministic injection: the module's own `os.stat` is wrapped so the tree
+# changes in the window the primitive is built to survive -- after the entry
+# has been described and before it has been opened.
+import tools.common.trusted_source as _ts  # noqa: E402
+
+
+class _RacingOS:
+    """The real ``os``, with one call chosen to disturb the tree afterwards.
+
+    ``skip`` exists because the primitive legitimately measures the root before
+    it measures anything hostile; the interesting call is the next one.
+    """
+
+    def __init__(self, real, attribute, hook, skip):
+        self._real = real
+        self._attribute = attribute
+        self._hook = hook
+        self._skip = skip
+        self._fired = False
+
+    def __getattr__(self, name):
+        real = getattr(self._real, name)
+        if name != self._attribute or self._fired:
+            return real
+
+        def wrapped(*arguments, **keywords):
+            outcome = real(*arguments, **keywords)
+            if self._skip > 0:
+                self._skip -= 1
+            elif not self._fired:
+                self._fired = True
+                self._hook(*arguments, **keywords)
+            return outcome
+
+        return wrapped
+
+
+def racing(hook, action, *, attribute="stat", skip=0):
+    real = _ts.os
+    _ts.os = _RacingOS(real, attribute, hook, skip)
+    try:
+        return action()
+    finally:
+        _ts.os = real
+
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "a.txt").write_bytes(b"small")
+
+    def _to_symlink(name, dir_fd=None, **_ignored):
+        os.unlink(name, dir_fd=dir_fd)
+        os.symlink("/etc/hostname", name, dir_fd=dir_fd)
+
+    refuses_walk(lambda: racing(_to_symlink, lambda: _walk(out_root)),
+                 TraversalReason.RACED,
+                 "a file replaced by a symlink after it was described is refused")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "a.txt").write_bytes(b"small")
+
+    # The replacement is created before the original is displaced, so the two
+    # genuinely hold different inodes: unlinking first would let the filesystem
+    # hand the same inode number straight back and the substitution would be
+    # invisible to any checker, including this one.
+    def _replace_inode(name, dir_fd=None, **_ignored):
+        handle = os.open("decoy", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=dir_fd)
+        os.write(handle, b"other")
+        os.close(handle)
+        os.rename("decoy", name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+
+    refuses_walk(lambda: racing(_replace_inode, lambda: _walk(out_root)),
+                 TraversalReason.RACED,
+                 "a file whose inode changed before the open is refused")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "a.txt").write_bytes(b"small")
+
+    def _grow_past_bound(name, dir_fd=None, **_ignored):
+        handle = os.open(name, os.O_WRONLY | os.O_APPEND, dir_fd=dir_fd)
+        os.write(handle, b"g" * 200)
+        os.close(handle)
+
+    refuses_walk(lambda: racing(_grow_past_bound, lambda: _walk(out_root)),
+                 TraversalReason.FILE_TOO_LARGE,
+                 "a file grown beyond the bound after its size was read is refused")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "a.txt").write_bytes(b"small")
+
+    # Hooked on `fstat` rather than `stat`, and one call in: the size that
+    # matters is the one measured on the open descriptor, so the disturbance
+    # has to land after that measurement to be the race worth testing. The
+    # first fstat is the root's, which is not hostile and is skipped.
+    def _grow_within_bound(descriptor, **_ignored):
+        handle = os.open("a.txt", os.O_WRONLY | os.O_APPEND, dir_fd=out_fd)
+        os.write(handle, b"g" * 8)
+        os.close(handle)
+
+    out_fd = os.open(out_root, os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+    try:
+        refuses_walk(lambda: racing(_grow_within_bound, lambda: _walk(out_root),
+                                    attribute="fstat", skip=1),
+                     TraversalReason.RACED,
+                     "a file grown after it was measured is refused as changed")
+    finally:
+        os.close(out_fd)
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "a.txt").write_bytes(b"small")
+
+    def _add_link(name, dir_fd=None, **_ignored):
+        os.link(name, "second.txt", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+
+    refuses_walk(lambda: racing(_add_link, lambda: _walk(out_root)),
+                 TraversalReason.LINK_ANOMALY,
+                 "a second link appearing before the open is refused")
+
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    nested = out_root / "sub"
+    nested.mkdir(mode=0o755)
+    (nested / "a.txt").write_bytes(b"nested")
+
+    def _directory_to_file(name, dir_fd=None, **_ignored):
+        os.rmdir(name, dir_fd=dir_fd)
+        handle = os.open(name, os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=dir_fd)
+        os.close(handle)
+
+    refuses_walk(lambda: racing(_directory_to_file, lambda: _walk(out_root)),
+                 TraversalReason.RACED,
+                 "a directory entry replaced during traversal is refused")
+
+# --- the walk mutates nothing, including when it refuses --------------------
+with TemporaryDirectory() as tmp:
+    out_root = _tree(tmp)
+    (out_root / "a.txt").write_bytes(b"alpha")
+    nested = out_root / "c"
+    nested.mkdir(mode=0o755)
+    (nested / "b.txt").write_bytes(b"bravo")
+    os.mkfifo(out_root / "pipe")
+
+    before = source_inventory(tmp)
+    try:
+        _walk(out_root)
+    except TraversalRefused:
+        pass
+    check(source_inventory(tmp) == before,
+          "walking and refusing creates, changes, and removes nothing")
+
+# --- the bounds are the caller's, and the module holds no policy ------------
+_signature = _inspect.signature(walk_tree)
+_bound_names = ("maximum_depth", "maximum_entries", "maximum_files",
+                "maximum_file_bytes", "maximum_total_bytes")
+for _name in _bound_names:
+    _parameter = _signature.parameters[_name]
+    check(_parameter.kind is _inspect.Parameter.KEYWORD_ONLY,
+          f"{_name} is supplied by keyword")
+    check(_parameter.default is _inspect.Parameter.empty,
+          f"{_name} has no default the module could call its own policy")
+check(list(_signature.parameters)[0] == "root_fd",
+      "the walk is rooted on a descriptor named as one")
+
+for _token, _description in (("2097152", "the 2 MiB per-file bound"),
+                             ("16777216", "the 16 MiB aggregate bound"),
+                             ("result.json", "the result document"),
+                             ("kyri", "the container layout"),
+                             ("output_tree_policy_violation",
+                              "the execution classification"),
+                             ("CINV", "the invocation identity")):
+    check(_token not in _source_module,
+          f"the traversal primitive does not know about {_description}")
+
+# The no-write backstop above scans the whole module and already covers the
+# addition; these are the mechanisms the new primitive must be built from.
+check("scandir" in _source_module or "listdir" in _source_module,
+      "enumeration is descriptor-relative")
+check("dir_fd" in _source_module,
+      "children are opened relative to their parent's descriptor")
+
+# --- the released interface is untouched ------------------------------------
+_released = _inspect.signature(open_trusted_regular_file)
+check(list(_released.parameters)
+      == ["approved_root", "name", "expected_uid", "require_single_link",
+          "maximum_bytes", "refuse_oversize"],
+      "the released trusted-source signature is unchanged")
+check(_released.parameters["require_single_link"].default is False
+      and _released.parameters["maximum_bytes"].default is None
+      and _released.parameters["refuse_oversize"].default is False,
+      "the released trusted-source defaults are unchanged")
+
+# ===========================================================================
 # A4 — executable package resolution, integrity, and content-addressed staging
 # ===========================================================================
 # Turning a governed package into verified bytes, or refusing. The source path
