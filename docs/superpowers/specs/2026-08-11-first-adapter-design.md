@@ -692,6 +692,29 @@ internally derived per-`CINV` roots only, no caller paths, and **no privileged
 recursive deletion fallback**. Cleanup runs only after the required evidence or
 administrative reconciliation is durably committed.
 
+**Deletion-work bounds — maximum depth 32, maximum 8,192 total entries.** Ruled
+2026-08-12, and deliberately larger than the §11 and §15 figures: those are
+acceptance limits for output that might be trusted, while cleanup exists to
+face residue that has *already* violated them. The bounds apply to the whole
+internally derived per-`CINV` handoff subtree —`package/`, `payload`, `out/`,
+directories, and every unexpected object. The `CINV` root is depth 0 and is not
+itself an entry, direct children are depth 1, nothing below depth 32 is
+traversed, every encountered entry counts whatever its type, and entry 8,193
+stops traversal immediately. There is no pagination, no continuation cursor,
+and no "remove the first 8,192 and return later".
+
+Exceeding either bound is `execution_cleanup_incomplete`: stop deleting, do not
+broaden traversal, do not retry, keep the `CINV` consumed and its slot held, and
+preserve what remains. Partial deletion before the bound was reached is
+acceptable only because cleanup is idempotent over its own internally derived
+subtree; what is left is still residue, and a later `retry-cleanup` runs the
+same bounded algorithm with no broader authority.
+
+Cleanup does **not** reuse the §11 collection primitive. That primitive reads
+file contents because its purpose is evidence, which is the wrong tool for
+removal; the cleanup walker is descriptor-relative, streaming, post-order, and
+reads no regular-file bytes at all.
+
 Failure is `execution_cleanup_incomplete`; the slot remains held. Dispositions
 are `retain-residue` and `retry-cleanup`. `retry-cleanup` is interactive
 authenticated, uses the same cleanup algorithm with no broader authority, and
@@ -1036,6 +1059,21 @@ interactive-authenticated admin with fixed verbs) · root-owned immutable
 backing-store config · provisioned `CADM` counter · `/data/kyri/capability-handoff`
 per §13 · `…/execution/` and `…/quarantine/` per §13 · the admitted production
 image present in the rootless store. **No systemd unit. No service. No daemon.**
+
+**Open hardening item — per-`CINV` output byte and inode quota.** Recorded
+2026-08-12, to be resolved at G4/G5 before the first real G6 execution. §12
+bounds memory, CPU, and PIDs, and §11 bounds what collection will *accept*, but
+nothing bounds what a workload may *write* into the read-write `/kyri/output`
+bind mount during its 30 seconds. `/data` is XFS, and XFS project quotas can
+impose byte and inode limits, but they need filesystem quota configuration and
+root-side project assignment — a storage and provisioning authority decision
+that deserves its own contract rather than being added quietly inside cleanup.
+
+Until then the mitigations are explicit and partial: §19's deletion-work bounds
+cap the cost of removal, the 30-second timeout caps how long residue can be
+generated, and `/data` free space remains an operational signal rather than an
+enforced limit. **No `xfs_quota` invocation, project ID, mount-option
+assumption, or storage override is introduced by ENG-0005.**
 
 ## 35. Implementation stop conditions
 

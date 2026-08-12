@@ -659,34 +659,39 @@ Regression set unless stated otherwise:
 > the root and committing `cleaned`, which fails closed to `retain-residue` —
 > the non-destructive escape hatch §19 already provides.
 
-> **OPEN — reviewer ruling required before T16 may be implemented.** Cleanup
-> has no traversal bound, and the subtree it must remove is the one place in
-> this design where an adversary controls the shape without limit.
+> **Deletion-work bounds ruled 2026-08-12, before implementation.** T16 stopped
+> here: cleanup had no traversal bound, and `out/` is the one place an adversary
+> controls the shape without limit, since §11 governs what collection accepts
+> rather than what the workload may write and §12 sets no disk quota.
 >
-> `…/<CINV>/out/` is `/kyri/output` inside the container, a bind mount onto
-> `/data` rather than the 16 MiB tmpfs. §12 sets memory, CPU, and PID limits but
-> **no disk quota**, and §11's 32 files / 16 MiB / depth 16 / 256 entries bound
-> what collection will *accept*, not what the workload may *write*. A capability
-> may therefore leave millions of files, or a directory chain thousands deep,
-> and it is cleanup that then has to face the tree. Row 10 of §26 covers this at
-> collection; nothing covers it at removal.
+> The reviewer ruled `CLEANUP_MAX_DEPTH = 32` and `CLEANUP_MAX_ENTRIES = 8192`
+> over the whole per-`CINV` handoff subtree, deliberately larger than the
+> acceptance limits because cleanup exists to face residue that has already
+> broken them. Violation is `execution_cleanup_incomplete` with the slot held,
+> no broadening, no automatic retry, and `retain-residue` as the operator's
+> move. Recorded in design §19.
 >
-> The T14 primitive does not answer it: `walk_tree` reads every file's bytes to
-> return them, which is right for collecting 16 MiB and wrong for deleting a
-> 64 MiB package. Removal needs its own bounded, streaming, descriptor-relative
-> enumeration, and a bound no accepted source supplies. §8's 1,024 entries
-> governs the package and implies its depth; `out/` has neither.
+> **The destructive walker lives in `cleanup.py`, not in `trusted_source.py`.**
+> Deletion is deliberately not a trusted-source responsibility: that module is
+> read-only and its no-write backstop is worth more than the reuse would be
+> worth. `walk_tree` is also the wrong shape, since it returns file bytes for
+> evidence and removal needs none. The cleanup walker is descriptor-relative,
+> streaming, post-order, and buffers no more of the namespace than the entry
+> budget already allows.
 >
-> What the ruling must settle: the maximum depth and entry count cleanup will
-> traverse before refusing, and confirmation that exceeding them is
-> `execution_cleanup_incomplete` with the slot held and `retain-residue` as the
-> operator's move. The consequence is the reason this is not a value to choose
-> during implementation: with two slots and no queue, a bound set low enough to
-> be safe is also low enough that two capabilities writing ordinary-but-numerous
-> output files wedge the platform until an operator intervenes. A bound set high
-> enough to avoid that is a long unbounded-in-practice deletion holding a slot.
-> Adding a disk quota or an `out/` write-time limit to §12 would remove the
-> tension at the source and is worth considering as part of the same ruling.
+> **Non-directory objects are unlinked, not refused.** The T16 brief listed
+> "symlinked" among the ambiguous states, and the walker ruling asked for "no
+> traversal through symlinks"; the two readings differ, and this takes the
+> second. `os.unlink` on a descriptor-relative name removes the link and never
+> the target, so it is not the broader deletion the first reading guards
+> against — while refusing instead would let one symlink in `out/`, the most
+> ordinary hostile artefact there is, permanently consume one of two slots.
+> Directories are the only kind ever opened, and only after their identity is
+> confirmed on the descriptor.
+>
+> **The per-`CINV` output quota gap is out of scope here** and recorded in
+> design §34 as a G4/G5 hardening item. ENG-0005 introduces no `xfs_quota`, no
+> project ID, no mount-option assumption, and no storage override.
 
 - Failing tests: descriptor-safe, no-follow, internally derived roots only, no
   caller path accepted; no privileged recursive deletion fallback exists;
