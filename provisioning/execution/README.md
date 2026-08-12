@@ -8,6 +8,65 @@ Gates: **G4 is what this runbook prepares.** G1, G3, G5, G6, and G7 stay closed
 throughout — no sudoers policy, no image build or admission, no transition
 invocation, and no capability execution.
 
+---
+
+## G4 execution record — executed and accepted on 2026-08-12
+
+Executed against source checkpoint `34c18a7` on `schai`, in two stages: a
+maintenance window for steps 1–4, then host provisioning for steps 5–10. The
+procedure below is retained unchanged as the record of what was performed; this
+section records the outcome so a later reader does not mistake the runbook's
+preconditions for current host state.
+
+**Backing store.** `/data` is `/dev/sdb1`, XFS, UUID
+`c5ea4a36-fc61-4978-8d9e-3a83c29f9a00`, mounted `prjquota`. Project quota
+accounting **ON** and enforcement **ON**.
+
+**Backing-store identity.** `/etc/kyri/backing-store.json` exists `root:root`
+`0444`, populated only from independently observed live facts. Verification
+through the normal `verify_backing_store` path reproduced the observed identity
+**twice** — once from the repository source, and again from the installed
+runtime authority at `/usr/lib/kyri/python`, with the module asserted to have
+resolved from that root. The runtime did not and cannot self-enrol.
+
+**Quota enforcement, proven rather than configured.** Default project limits are
+32 MiB / 512 inodes. Disposable project `999000` — outside the reserved runtime
+range `1_000_001`–`1_999_999`, so it can never collide with a derived per-`CINV`
+project — proved byte hard-limit enforcement and inode hard-limit enforcement by
+actual filesystem refusal, not by command success. The fixture, its directory,
+its project assignment, and its project-specific limits were fully removed and
+the removal verified. No real `CINV` was used.
+
+**Installed authority.** `/usr/lib/kyri/python` is the runtime execution
+authority: `root:root`, read-only, no symlinks, no `.pyc`, no `__pycache__`.
+`/usr/libexec/kyri-exec-transition` and `/usr/libexec/kyri-exec-quota` are
+`root:root` `0555`; `/usr/libexec/kyri-exec-worker.py` is `root:root` `0444` and
+carries no executable bit. `/usr/libexec/kyri-exec-transition-action` does not
+exist and must never be created. No installed path resolves through
+`/opt/schott-platform`. None of the three helpers was executed.
+
+**Digests.** SHA-256 commitments for the three helpers and the complete
+installed library manifest were captured on the host at
+`/root/kyri-g4-library-digests.txt`. **The digest values are deliberately not
+transcribed into this repository**, because a digest copied into a tree that can
+drift from the installed artefacts is a claim nobody re-checks. The on-host
+capture is the evidence; see the re-provisioning item below.
+
+**Gates.** G4 is **closed**. G1, G3, G5, G6, and G7 remain closed:
+`/etc/sudoers.d/kyri-exec` is absent, no production image was built or admitted,
+and neither the transition nor the worker was invoked.
+
+**Track-B residue.** The `kyri-capability` rootless Podman store is not empty. It
+holds pre-existing Track-B test artefacts created roughly 29–30 hours before
+G4 — an untagged Alpine image and the containers `trackb-exit0`,
+`trackb-exit42`, `trackb-timeout`, `trackb-badcmd`, `trackb-kill`,
+`trackb-pids`, and `trackb-pids-v2`. These predate G4 and are **not** evidence
+that G5 or G6 opened during it: G5 is closed because no production execution
+image was built or admitted, and G6 is closed because the ENG-0005
+transition/worker path was never invoked. Physical emptiness of the historical
+rootless store is not a G5 or G6 requirement. Removing this residue is **G7**
+work and is deferred; it was deliberately not removed in this increment.
+
 Governed by [the first adapter design](../../docs/superpowers/specs/2026-08-11-first-adapter-design.md)
 §13, §22, §34 and the
 [execution transition boundary](../../docs/superpowers/specs/2026-08-11-execution-transition-boundary.md)
@@ -16,6 +75,11 @@ Governed by [the first adapter design](../../docs/superpowers/specs/2026-08-11-f
 ---
 
 ## 0. Blocking precondition — `/data` is mounted `noquota`
+
+> **Resolved on 2026-08-12.** `/data` now mounts `prjquota` with project quota
+> accounting and enforcement ON. The section is kept as written because it
+> records why a remount was refused as a fix; read it as history, not as a
+> description of the host.
 
 As observed on `schai`:
 
@@ -414,12 +478,78 @@ Confirm at the end of the window:
 
 ---
 
-## Remaining decisions before G4 can be executed
+## Decisions that blocked G4 — all resolved
 
-1. **`/data` maintenance window** — steps 2–4. The blocking item.
-2. **Worker library location and ownership** — step 8. Needs a ruling: the
-   installed worker must import governed code from a root-owned tree, not from
-   the coordinator-writable checkout.
-3. **Installed helper form** — `kyri-exec-transition.py` and its action module
-   are two files in the repository and one installed path; how they are combined
-   is a G2 packaging decision that this runbook records but does not choose.
+1. **`/data` maintenance window** — steps 2–4. Executed 2026-08-12; `/data`
+   mounts `prjquota` with accounting and enforcement ON.
+2. **Worker library location and ownership** — step 8. Ruled: the canonical
+   installed root `/usr/lib/kyri/python` is compiled into both entrypoints and
+   is configurable nowhere. The checkout is source material only.
+3. **Installed helper form** — ruled by the §8.2 matrix: one privileged public
+   entrypoint, with the policy and action installed as internal library
+   modules rather than as a second privileged command.
+
+## Follow-up items — recorded here, not actioned
+
+Neither item invalidates G4. Both need source review in a later increment and
+neither authorises a host change on its own.
+
+**1. Installed dependency closure is wider than the import closure.** The §8.2
+matrix installs all of `tools/capability/*.py`, which includes
+`fabric_evidence.py`; that module imports `tools.fabric.inspection`, and
+`tools/fabric/` is not in the matrix. The installed module therefore cannot be
+imported. This is a package-hygiene and dependency-closure defect in the
+source→destination matrix, not a runtime authority defect: the accepted
+worker and transition execution closure never reaches the module, and it is
+installed `root:root` `0444` like everything else, so it grants nothing. The
+fix belongs in a review of the matrix — either narrow it to the real closure or
+extend it to cover `tools/fabric/` — and must not be applied by widening the
+installed tree without that review.
+
+**2. `tools` installs as a namespace package, so a regular `tools` package
+elsewhere on the path wins.** Found while validating after G4, and confirmed
+directly. Neither the repository nor the §8.2 matrix carries `tools/__init__.py`,
+so `/usr/lib/kyri/python/tools` is a *namespace* portion. A namespace portion
+does not terminate the import search, so a **regular** package named `tools`
+found later on `sys.path` takes precedence over the installed one — even though
+both entrypoints insert `/usr/lib/kyri/python` at position 0. Demonstrated: with
+a decoy `tools/` package on `PYTHONPATH`, the decoy's `worker.py` module-level
+code executed and `tools.capability.execution.worker` resolved to the decoy.
+
+The post-import `realpath` check in both entrypoints does then refuse — but
+only *after* the foreign module-level code has run, which is precisely the
+sequence the entrypoints' own pre-import existence check exists to prevent.
+
+**Not reachable through the sanctioned path**, which is why this does not
+invalidate G4: the transition execs the worker with a closed environment that
+carries no `PYTHONPATH`, and the installed tree is root-owned and read-only. It
+is a defence-in-depth property the design claims and does not currently deliver.
+The fix is a source decision — install a `tools/__init__.py` so the installed
+tree is a regular package, or have the entrypoints resolve the module by
+explicit file path rather than by package name — and requires a reviewed
+re-provisioning to take effect. **Do not patch the installed tree in place.**
+
+**3. The validation suite encodes "G4 has not been executed" as an invariant.**
+On a G4-provisioned host, five suites fail — `helper-policy`, `lifecycle`,
+`provisioning`, `quota`, and `transition-action` — because each asserts that
+production paths such as `/data/kyri/capability-handoff`,
+`/data/kyri/capability-runtime/execution`, `/usr/lib/kyri/python`,
+`/usr/libexec/kyri-exec-transition`, and `/usr/libexec/kyri-exec-worker.py` do
+**not exist**. The intent is sound — a test must never provision a production
+root — but the assertion conflates *"this suite did not create it"* with *"it
+does not exist"*, and only the first is a property of the tests. The suites pass
+in CI and on any unprovisioned host, and passed at `34c18a7` before the
+maintenance window; they now fail on `schai` for a correct reason. Rework should
+assert that the suite made no change to those paths, not that they are absent.
+Until then, **CI on a clean host is the reference result**, and a full-validator
+run on `schai` is expected to stop early.
+
+**4. Repository source and installed runtime may legitimately drift.** The
+installed tree is the authority for the active deployment generation, and its
+digests — not the checkout — describe what runs. A later commit to
+`provisioning/execution/` or `tools/capability/` does **not** change the
+installed artefacts, and nothing should make it. Replacing the installed tree is
+an explicit, reviewed re-provisioning event that re-runs this runbook and
+re-captures digests. **No automatic synchronisation between the checkout and
+`/usr/lib/kyri/python` is authorised**, and a drift check that silently
+reinstalls would defeat the authority split the installed tree exists to create.

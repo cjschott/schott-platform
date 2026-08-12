@@ -899,7 +899,7 @@ Regression set unless stated otherwise:
 | **G1** | any sudoers change | after T10, before any policy is installed |
 | **G2** | installing either helper to a root-owned path | T11 |
 | **G3** | any setuid or file-capability decision | T17 — the accepted design uses **neither**; introducing one is a re-ruling |
-| **G4** | host runtime-directory provisioning (`capability-handoff`, `execution`, `quarantine`, backing-store config, CADM counter) | T19 |
+| **G4** | host runtime-directory provisioning (`capability-handoff`, `execution`, `quarantine`, backing-store config, CADM counter) | T19 — **CLOSED 2026-08-12**, see below |
 | **G5** | production image build and CIMP admission | T19 |
 | **G6** | the first real privileged transition, and the first real Podman execution through Kyri | T20 |
 | **G7** | cleanup of retained Track-B evidence, and any merge, tag, or release | T22 |
@@ -907,6 +907,47 @@ Regression set unless stated otherwise:
 Tests **never** edit sudoers, install a helper, provision a runtime directory,
 build or admit an image, or perform a privileged transition. Any task that
 appears to require one has hit a gate.
+
+### G4 — executed and accepted, 2026-08-12
+
+Host provisioning was performed on `schai` from source checkpoint `34c18a7`
+against [the G4 runbook](../../../provisioning/execution/README.md), which
+carries the full evidence record. In summary: `/data` mounts `prjquota` with
+project quota accounting and enforcement ON; `/etc/kyri/backing-store.json` is
+installed `root:root` `0444` from independently observed facts and verified
+through the normal `verify_backing_store` path from both the repository source
+and the installed authority; default project limits are 32 MiB / 512 inodes;
+byte and inode enforcement were **proven by actual filesystem refusal** on
+disposable project `999000`, which was then fully cleaned up; the runtime roots
+carry the §13 ownership and modes; and `/usr/lib/kyri/python` plus the three
+`/usr/libexec` helpers are installed `root:root` and read-only, resolving
+nowhere through `/opt/schott-platform`.
+
+**Provisioning is not execution.** No helper was invoked. **G1, G3, G5, G6, and
+G7 remain closed** — no sudoers policy exists, no production image was built or
+admitted, and the transition and worker were never run.
+
+The `kyri-capability` rootless Podman store still holds Track-B test artefacts
+that predate G4 by roughly 29–30 hours. They are **not** evidence that G5 or G6
+opened: physical emptiness of the historical rootless store is not a G5 or G6
+requirement. Their removal is G7 work and stays deferred.
+
+**Validation does not pass on the provisioned host, and this is expected.** Five
+execution suites assert that production paths are *absent* as their way of
+proving the tests did not provision anything; G4 legitimately created those
+paths, so the assertions now fail on `schai`. All 36 other suites pass. CI on a
+clean host remains the reference result. One further failure is **not** in that
+class: `tools` installs as a namespace package, so a regular `tools` package on
+`PYTHONPATH` can shadow the installed one and run its module-level code before
+the entrypoint's resolution check refuses. It is unreachable through the
+sanctioned path — the transition execs with a closed environment — but it is a
+real gap against a claimed property.
+
+Four follow-ups are recorded in the runbook and deliberately not actioned here:
+the installed dependency closure is wider than the real import closure; the
+namespace-package shadowing gap; the validation suites' absence-based guards;
+and source/installed drift, which must only ever be resolved by an explicit
+reviewed re-provisioning event.
 
 ## 6. Sequencing rules
 
