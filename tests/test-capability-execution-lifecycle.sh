@@ -126,9 +126,13 @@ for target in targets:
         elif isinstance(node, ast.Attribute) and node.attr in ("environ", "environb"):
             findings.append(f"{rel}: reads the environment")
 
-    permitted_os = {"open", "read", "close", "fstat", "stat", "scandir",
-                    "getuid", "geteuid", "getgid", "getegid", "O_RDONLY",
-                    "O_NOFOLLOW", "O_CLOEXEC", "O_DIRECTORY", "error"}
+    # `pread` joined this set with Pass 3B-ii: the sealed profile arrives on an
+    # inherited descriptor, and reading it at an absolute offset is what keeps
+    # the result independent of a file offset the worker did not set.
+    permitted_os = {"open", "read", "pread", "close", "fstat", "stat",
+                    "scandir", "getuid", "geteuid", "getgid", "getegid",
+                    "O_RDONLY", "O_NOFOLLOW", "O_CLOEXEC", "O_DIRECTORY",
+                    "error"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
                 and node.value.id == "os" and node.attr not in permitted_os:

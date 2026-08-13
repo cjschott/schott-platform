@@ -476,8 +476,11 @@ from a compiled-in root and the validated `CINV`, with **no caller-supplied
 path component**; read the minimum immutable evidence required to confirm the
 invocation exists, is `launch_authorized`, is not refused, not conflicting, and
 not already attempted; verify the handoff exists with expected ownership and
-modes and establish the ownership root cannot; then the credential sequence
-below.
+modes and establish the ownership root cannot; **authenticate and seal the
+governed profile as §14.1.7 orders it**; then the credential sequence below.
+The authenticated record is a closed value, not a mapping: the `CIMP` and
+profile digest that reach the worker come from it and there is no other route
+by which they could arrive.
 
 **The credential sequence, in this exact order.** Nothing here is reordered for
 convenience; each step exists because the one before it has already happened.
@@ -565,15 +568,19 @@ trust from the fixed root, the validated `CINV`, and the immutable commitments
 — and the derived pathname is a Podman argument, not filesystem authority
 arriving from outside.
 
-Nothing else crosses the transition: argv is
-`(/usr/bin/python3, /usr/libexec/kyri-exec-worker.py, CINV-nnnnnn)`, the
-environment is the two variables above, and the protocol is descriptors 0, 1
-and 2.
+Nothing else crosses the transition: argv is the five-element tuple ruled in
+§14.1, the environment is the two variables above, and the protocol is
+descriptors 0, 1 and 2.
 
-**Inherited descriptors are exactly `(0, 1, 2)`**: stdin carries
-coordinator→worker protocol, stdout carries worker→coordinator protocol, and
-stderr carries bounded diagnostics. There are no dedicated protocol descriptors
-in v1, and everything else is closed before the drop.
+**Inherited descriptors are exactly `(0, 1, 2, 3)`**: stdin carries
+coordinator→worker protocol, stdout carries worker→coordinator protocol,
+stderr carries bounded diagnostics, and descriptor 3 carries the sealed,
+root-authored profile object §14.1 rules. There are no dedicated protocol
+descriptors in v1, and everything else is closed before the drop. Descriptor 3
+is a governed exception rather than a return to ambient inheritance: root opens
+the object itself, authenticates it before it is inheritable, and fixes the
+number — no caller may name a descriptor, and a caller descriptor occupying a
+governed number is replaced rather than honoured.
 
 **The installed paths are fixed, because "the worker" was previously unnamed.**
 
@@ -593,9 +600,14 @@ The execution tuple is exactly:
 
 ```
 execve("/usr/bin/python3",
-       ("/usr/bin/python3", "/usr/libexec/kyri-exec-worker.py", "CINV-nnnnnn"),
+       ("/usr/bin/python3", "/usr/libexec/kyri-exec-worker.py",
+        "CINV-nnnnnn", "CIMP-nnnnnn", "<64 lowercase hex profile_digest>"),
        CLOSED_ENVIRONMENT)
 ```
+
+The last two elements are taken by root from the launch record it has already
+authenticated, for the reason §14.1.5 gives: the worker cannot check the
+profile against itself, and must not read the coordinator-owned record.
 
 Neither path is ever selected through `PATH`, and neither is ever loaded from
 the repository checkout — `tools/capability/execution/worker.py` is source, and
@@ -611,9 +623,12 @@ or Health; mutate Fabric; or become a general Capability Runtime API.
 determine `launch_authorized`, that is a **halt-and-rule event**, not a design
 problem to solve by growing the helper. The mitigation is a single
 coordinator-written, create-once **launch authorisation record** whose schema
-the helper reads: `CINV`, `CIMP`, `oci_image_id`, handoff root, profile schema
-version, and the coordinator's commitment digest. The helper understands that
-one record and nothing else.
+the helper reads: `CINV`, `CIMP`, `profile_digest`, handoff root, profile
+schema version, and the coordinator's commitment digest. The helper understands
+that one record and nothing else. `profile_digest` replaced `oci_image_id` in
+the §14.1 amendment: root commits to *bytes* and stays opaque to what they say,
+so an image identity in the privileged parser would be a control root neither
+needs nor may interpret.
 
 Environment: absolute paths only for every security-sensitive executable and
 configuration reference; no reliance on `PATH` or `secure_path`; `PATH`,

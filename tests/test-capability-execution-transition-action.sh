@@ -69,10 +69,21 @@ FORBIDDEN_IMPORTS = {
 }
 # Exactly the privileged operations the accepted transition needs, and no
 # others. Anything absent from this set is forbidden.
+#
+# Pass 3B-ii added the sealed profile transport, so this set grew by
+# enumeration rather than by relaxing the rule: reading the two governed
+# objects descriptor-relatively (open/read/fstat with the no-follow flags),
+# copying them into an anonymous sealable object (memfd_create/write/lseek),
+# proving the copy (pread), and fixing its descriptor number (dup2,
+# get_inheritable). Nothing here can create, remove, rename, or change the mode
+# of anything -- those calls remain forbidden below.
 PERMITTED_OS = {
     "setgroups", "setgid", "setuid", "getgroups", "getresuid", "getresgid",
     "getuid", "geteuid", "getgid", "getegid", "execve", "closerange",
     "close", "set_inheritable", "get_inheritable", "fstat", "error",
+    "open", "read", "write", "pread", "lseek", "dup2", "memfd_create",
+    "O_RDONLY", "O_NOFOLLOW", "O_CLOEXEC", "O_DIRECTORY", "O_NONBLOCK",
+    "MFD_CLOEXEC", "MFD_ALLOW_SEALING", "SEEK_SET",
 }
 FORBIDDEN_CALLS = {
     "system", "popen", "spawnv", "spawnl", "posix_spawn", "posix_spawnp",
@@ -223,9 +234,14 @@ assert_no_ctypes_in_package
 # Behaviour
 # ===========================================================================
 
+WORK="$(mktemp -d)"
+# The fixtures reproduce the production 0555 invocation directory, which its
+# owner cannot delete from until it restores write access.
+trap 'chmod -R u+w "${WORK}" >/dev/null 2>&1 || true; rm -rf "${WORK}"' EXIT
+
 run_case() {
   local label="$1" script="$2" actual
-  if actual="$(cd "${ROOT}" && python3 -c "${script}" 2>&1)"; then
+  if actual="$(cd "${ROOT}" && WORKDIR="${WORK}" python3 -c "${script}" 2>&1)"; then
     if [[ "${actual}" == "OK" ]]; then
       pass "${label}"
     else
@@ -263,7 +279,7 @@ print(json.dumps(state, sort_keys=True))
 snapshot_production "${PRODUCTION_PATHS[@]}" > "${PRODUCTION_BEFORE}"
 
 PRELUDE="
-import dataclasses, importlib.util, os, sys
+import dataclasses, hashlib, importlib.util, json, os, sys, tempfile
 
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -278,13 +294,60 @@ action = load('kyri_exec_transition_action',
               'provisioning/execution/kyri-exec-transition-action.py')
 
 POLICY = policy_mod.policy_for(['prog', 'CINV-000042'])
+WORK = os.environ['WORKDIR']
+
+# Deliberately not a real ExecutionProfile. Root is opaque to what these bytes
+# say, so a fixture that handed it a parseable profile would be testing a
+# property this layer does not have. Any bytes will do, and that is the point.
+PROFILE_BYTES = b'{\"opaque\":\"the privileged layer never parses this\"}'
+PROFILE_DIGEST = hashlib.sha256(PROFILE_BYTES).hexdigest()
+
+def scene(cinv='CINV-000042'):
+    '''A temporary execution root and handoff root, published for real.
+
+    The transition reads both, so they have to exist. Everything below the two
+    root descriptors -- the no-follow opens, the ownership and mode checks, the
+    read, the hash, the copy, and the seals -- is production code running
+    unprivileged against this tree.
+    '''
+    base = tempfile.mkdtemp(dir=WORK)
+    execution = os.path.join(base, 'execution', cinv)
+    invocation = os.path.join(base, 'handoff', cinv)
+    os.makedirs(execution)
+    os.makedirs(invocation)
+
+    published = os.path.join(invocation, policy_mod.PROFILE_NAME)
+    with open(published, 'wb') as handle:
+        handle.write(PROFILE_BYTES)
+    os.chmod(published, 0o444)
+
+    document = {
+        'cinv': cinv, 'cimp': 'CIMP-000001', 'profile_digest': PROFILE_DIGEST,
+        'handoff_root': policy_mod.HANDOFF_ROOT, 'profile_schema_version': 1,
+        'commitment_digest': 'b' * 64, 'lifecycle_state': 'launch_authorized',
+    }
+    record = os.path.join(execution, policy_mod.LAUNCH_RECORD_NAME)
+    with open(record, 'wb') as handle:
+        handle.write(json.dumps(document).encode('utf-8'))
+    os.chmod(record, 0o600)
+    os.chmod(invocation, 0o555)
+
+    return {policy_mod.EXECUTION_ROOT: os.path.join(base, 'execution'),
+            policy_mod.HANDOFF_ROOT: os.path.join(base, 'handoff')}
 
 class Recorder:
-    '''A backend that records what it was asked to do and does none of it.'''
+    '''A backend that records what it was asked to do and does none of it.
+
+    One exception, and it is not privilege: open_directory hands back a real
+    descriptor to a temporary tree. The governed roots are compiled in, so a
+    test cannot ask the transition to look elsewhere without this seam, and
+    stubbing the read instead would leave the part that matters unexercised.
+    '''
 
     def __init__(self, fail_at=None, uid=999, gid=987, groups=(987,),
-                 nnp=1, exec_error=None):
+                 nnp=1, exec_error=None, roots=None):
         self.calls = []
+        self.roots = scene() if roots is None else roots
         self._fail_at = fail_at
         self._uid, self._gid, self._groups = uid, gid, groups
         self._nnp = nnp
@@ -295,6 +358,14 @@ class Recorder:
         self.calls.append((name,) + detail)
         if self._fail_at == name:
             raise OSError(1, f'{name} refused')
+
+    def open_directory(self, path):
+        self.calls.append(('open_directory', path))
+        target = self.roots.get(path)
+        if target is None:
+            raise OSError(2, 'no such governed root', path)
+        return os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                       | os.O_DIRECTORY)
 
     def close_extra_descriptors(self, allowlist):
         self._step('close_extra_descriptors', tuple(allowlist))
@@ -355,9 +426,27 @@ class Quota:
 def names(recorder):
     return [call[0] for call in recorder.calls]
 
-def run(recorder, policy=POLICY, root=True, quota=None):
+def steps(recorder):
+    '''The recorded privileged steps, without the directory seam.
+
+    open_directory is how this fixture substitutes a temporary tree for a
+    compiled-in root. It is not a step in the accepted sequence, so the
+    ordering assertions read the sequence without it.
+    '''
+    return [name for name in names(recorder) if name != 'open_directory']
+
+def authenticated(recorder, policy=POLICY):
+    return action.authenticate_launch(policy, backend=recorder)
+
+def run(recorder, policy=POLICY, root=True, quota=None, launch=None):
     try:
-        action.perform_transition(policy, backend=recorder,
+        authorisation = (launch if launch is not None
+                         else action.authenticate_launch(policy, backend=recorder))
+    except policy_mod.TransitionRefused as error:
+        return error
+    try:
+        action.perform_transition(policy, launch_authorisation=authorisation,
+                                  backend=recorder,
                                   quota=Quota() if quota is None else quota,
                                   assume_root=root)
     except action.WorkerExecuted:
@@ -369,9 +458,12 @@ def run(recorder, policy=POLICY, root=True, quota=None):
 # --- policy is required --------------------------------------------------------
 
 run_case "a validated TransitionPolicy is required" "${PRELUDE}
+recorder = Recorder()
+launch = authenticated(recorder)
 for bad in ('CINV-000042', None, {'cinv': 'CINV-000042'}, ['CINV-000042'], 42):
     try:
-        action.perform_transition(bad, backend=Recorder(), quota=Quota(),
+        action.perform_transition(bad, launch_authorisation=launch,
+                                  backend=Recorder(), quota=Quota(),
                                   assume_root=True)
     except policy_mod.TransitionRefused:
         continue
@@ -379,15 +471,46 @@ for bad in ('CINV-000042', None, {'cinv': 'CINV-000042'}, ['CINV-000042'], 42):
 print('OK')
 "
 
+run_case "an authenticated launch record is required and cannot be fabricated" "${PRELUDE}
+import types as pytypes
+# The CIMP and the profile digest the worker is told to trust come from this
+# object, so a value that merely looks checked must not be usable as one.
+forged = pytypes.SimpleNamespace(
+    cinv='CINV-000042', cimp='CIMP-000009', profile_digest='c' * 64,
+    handoff_root=policy_mod.HANDOFF_ROOT, profile_schema_version=1,
+    commitment_digest='b' * 64, lifecycle_state='launch_authorized')
+for bad in (forged, dict(vars(forged)), None, 'CIMP-000009', 42):
+    recorder = Recorder()
+    try:
+        action.perform_transition(POLICY, launch_authorisation=bad,
+                                  backend=recorder, quota=Quota(),
+                                  assume_root=True)
+    except policy_mod.TransitionRefused:
+        assert 'execve' not in names(recorder), names(recorder)
+        continue
+    except action.WorkerExecuted:
+        raise AssertionError('a fabricated launch record reached execve')
+    raise AssertionError(f'accepted {bad!r} as an authenticated record')
+print('OK')
+"
+
 run_case "the action layer accepts no independent execution input" "${PRELUDE}
 import inspect
 params = list(inspect.signature(action.perform_transition).parameters)
 # The quota seam joined this set when the output project became a
-# mandatory transition step; it is a collaborator, not an execution input.
-assert params == ['policy', 'backend', 'quota', 'assume_root'], params
-for banned in ('cinv', 'uid', 'gid', 'user', 'command', 'argv', 'executable',
-               'environment', 'cwd', 'image', 'path'):
+# mandatory transition step; the authenticated record joined it when the CIMP
+# and profile digest had to reach the worker. Both are closed collaborators,
+# not execution inputs: one is a component, the other a type only the policy
+# layer can build.
+assert params == ['policy', 'launch_authorisation', 'backend', 'quota',
+                  'assume_root'], params
+for banned in ('cinv', 'cimp', 'digest', 'uid', 'gid', 'user', 'command',
+               'argv', 'executable', 'environment', 'cwd', 'image', 'path',
+               'record', 'descriptor', 'fd'):
     assert banned not in params, banned
+signature = inspect.signature(action.perform_transition)
+assert signature.parameters['launch_authorisation'].default \\
+    is inspect.Parameter.empty, 'the authenticated record can be omitted'
 print('OK')
 "
 
@@ -395,7 +518,8 @@ run_case "the transition refuses unless it holds root" "${PRELUDE}
 recorder = Recorder()
 outcome = run(recorder, root=False)
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
-assert names(recorder) == [], names(recorder)
+# The launch record was read before the call, and nothing privileged followed.
+assert steps(recorder) == [], steps(recorder)
 print('OK')
 "
 
@@ -404,10 +528,14 @@ print('OK')
 run_case "the accepted credential sequence runs in exactly the accepted order" "${PRELUDE}
 recorder = Recorder()
 assert run(recorder) == 'executed'
-assert names(recorder) == [
+assert steps(recorder) == [
     'close_extra_descriptors', 'setgroups', 'setgid', 'setuid', 'credentials',
     'set_no_new_privs', 'get_no_new_privs', 'credentials', 'execve'
-], names(recorder)
+], steps(recorder)
+# The whole profile transport happens before the first privileged step: the
+# governed roots are read while root is still held and while a refusal can
+# still prove nothing ran.
+assert names(recorder)[:2] == ['open_directory', 'open_directory'], names(recorder)
 print('OK')
 "
 
@@ -423,14 +551,14 @@ print('OK')
 
 run_case "setgroups precedes setgid, which precedes setuid" "${PRELUDE}
 recorder = Recorder(); run(recorder)
-order = names(recorder)
+order = steps(recorder)
 assert order.index('setgroups') < order.index('setgid') < order.index('setuid')
 print('OK')
 "
 
 run_case "no_new_privs is set after the permanent drop, not before" "${PRELUDE}
 recorder = Recorder(); run(recorder)
-order = names(recorder)
+order = steps(recorder)
 assert order.index('setuid') < order.index('set_no_new_privs'), order
 assert order.index('set_no_new_privs') < order.index('get_no_new_privs')
 assert order.index('get_no_new_privs') < order.index('execve')
@@ -441,11 +569,13 @@ print('OK')
 
 run_case "descriptors are closed before any credential change" "${PRELUDE}
 recorder = Recorder(); run(recorder)
-order = names(recorder)
+order = steps(recorder)
 assert order[0] == 'close_extra_descriptors', order
 assert order.index('close_extra_descriptors') < order.index('setgroups')
 calls = dict((c[0], c[1:]) for c in recorder.calls if len(c) > 1)
-assert calls['close_extra_descriptors'] == ((0, 1, 2),), calls['close_extra_descriptors']
+# vNext: the sealed profile object crosses on descriptor 3, so the inherited
+# set is one wider -- by a number the transition owns, not one a caller named.
+assert calls['close_extra_descriptors'] == ((0, 1, 2, 3),), calls['close_extra_descriptors']
 print('OK')
 "
 
@@ -458,7 +588,7 @@ for step in sequence:
     recorder = Recorder(fail_at=step)
     outcome = run(recorder)
     assert isinstance(outcome, policy_mod.TransitionRefused), (step, outcome)
-    order = names(recorder)
+    order = steps(recorder)
     assert 'execve' not in order, (step, order)
     later = sequence[sequence.index(step) + 1:]
     for name in later:
@@ -492,8 +622,12 @@ recorder = Recorder(); run(recorder)
 call = [c for c in recorder.calls if c[0] == 'execve'][0]
 _, path, argv, environment = call
 assert path == '/usr/bin/python3', path
+# vNext: five elements. The CIMP and the profile digest come from the record
+# root authenticated, because the worker cannot check the profile against
+# itself and must not read the coordinator-owned launch record.
 assert argv == ('/usr/bin/python3', '/usr/libexec/kyri-exec-worker.py',
-                'CINV-000042'), argv
+                'CINV-000042', 'CIMP-000001', PROFILE_DIGEST), argv
+assert len(argv) == 5, argv
 # Exactly the two rootless Podman needs; nothing inherited.
 assert dict(environment) == {'HOME': '/data/kyri/capability',
                              'XDG_RUNTIME_DIR': '/run/user/999'}, environment
@@ -531,12 +665,18 @@ for node in ast.walk(tree):
                 body.append(ast.Pass())
 ast.fix_missing_locations(tree)
 code = ast.unparse(tree)
-# No loop and no recursion around the exec: one attempt, structurally.
-assert 'while ' not in code, 'the action layer contains a loop'
+# No loop and no recursion around the exec, or around any credential change:
+# one attempt, structurally. The blanket ban on loops was retired with Pass
+# 3B-ii -- copying bytes needs a bounded write loop, and forbidding the keyword
+# would have forbidden a correct short-write check rather than a retry. What
+# actually mattered is asserted directly instead.
 for node in ast.walk(tree):
     if isinstance(node, (ast.For, ast.While)):
         inner = ast.unparse(node)
-        assert 'execve' not in inner, 'execve sits inside a loop'
+        for banned in ('execve', 'setuid', 'setgid', 'setgroups',
+                       'set_no_new_privs', 'F_ADD_SEALS', 'memfd_create',
+                       'dup2'):
+            assert banned not in inner, f'{banned} sits inside a loop'
 # Exactly one exec call site in the transition path itself.
 fn = [n for n in ast.walk(tree)
       if isinstance(n, ast.FunctionDef) and n.name == 'perform_transition'][0]
@@ -632,7 +772,7 @@ quota = Quota()
 assert run(recorder, quota=quota) == 'executed'
 assert quota.calls == [('apply', POLICY.cinv)], quota.calls
 # Before close_extra_descriptors, and therefore before setgroups/setgid/setuid.
-assert names(recorder)[0] == 'close_extra_descriptors', names(recorder)
+assert steps(recorder)[0] == 'close_extra_descriptors', steps(recorder)
 print('OK')
 "
 
@@ -644,9 +784,9 @@ for error in (OSError(1, 'operation not permitted'),
     recorder = Recorder()
     outcome = run(recorder, quota=Quota(error=error))
     assert isinstance(outcome, policy_mod.TransitionRefused), outcome
-    assert 'execve' not in names(recorder), names(recorder)
-    assert 'setuid' not in names(recorder), names(recorder)
-    assert 'setgroups' not in names(recorder), names(recorder)
+    assert 'execve' not in steps(recorder), steps(recorder)
+    assert 'setuid' not in steps(recorder), steps(recorder)
+    assert 'setgroups' not in steps(recorder), steps(recorder)
 print('OK')
 "
 
@@ -664,7 +804,7 @@ recorder = Recorder()
 # The component reported success but returned somebody else's project.
 outcome = run(recorder, quota=Quota(project=1_000_999))
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
-assert 'setuid' not in names(recorder), names(recorder)
+assert 'setuid' not in steps(recorder), steps(recorder)
 assert outcome.execution_excluded is True
 for bad in (None, 0, '1000042', -1):
     recorder = Recorder()
@@ -682,8 +822,10 @@ signature = inspect.signature(action.perform_transition)
 assert signature.parameters['quota'].default is inspect.Parameter.empty, \\
     'the quota step has a default and can be skipped'
 # Omitting it is an error rather than a quiet no-quota execution.
+recorder = Recorder()
 try:
-    action.perform_transition(POLICY, backend=Recorder(), assume_root=True)
+    action.perform_transition(POLICY, launch_authorisation=authenticated(recorder),
+                              backend=recorder, assume_root=True)
 except TypeError:
     pass
 else:

@@ -36,6 +36,11 @@ from .types import Classification, ExecutionFingerprint, ExecutionProfile, Mount
 
 PROFILE_SCHEMA_VERSION = 1
 
+# The bound applied to canonical profile bytes before they are parsed. The
+# governed profile is a fixed shape of a few hundred bytes; anything near this
+# is already not the document it claims to be.
+MAXIMUM_PROFILE_BYTES = 65536
+
 NETWORK = "none"
 HOSTNAME = "trackb"
 EXECUTION_UID = 1000
@@ -91,6 +96,16 @@ class UnsupportedProfileSchema(ProfileError):
     """A profile schema version this build does not implement."""
 
     classification = Classification.EXECUTION_PROFILE_VERSION_UNSUPPORTED
+
+
+class ProfileNotCanonical(ProfileError):
+    """Bytes that are not the exact canonical form of the profile they decode to.
+
+    Separate from a malformed document on purpose: the digest is taken over
+    canonical bytes, so a document that parses but re-serialises differently is
+    one whose identity nobody can agree on — and accepting it would let two
+    spellings of the same profile carry two different commitments.
+    """
 
 
 class ProfileMismatch(ProfileError):
@@ -264,6 +279,140 @@ def canonical_profile(profile: ExecutionProfile) -> bytes:
         "devices": sorted(profile.devices),
         "sockets": sorted(profile.sockets),
     })
+
+
+def _text(document: Mapping[str, Any], key: str) -> str:
+    value = document[key]
+    if not isinstance(value, str) or not value:
+        raise ProfileError(f"the profile field {key!r} is not text")
+    return value
+
+
+def _number(document: Mapping[str, Any], key: str) -> int:
+    value = document[key]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProfileError(f"the profile field {key!r} is not an integer")
+    return value
+
+
+def _flag(document: Mapping[str, Any], key: str) -> bool:
+    value = document[key]
+    if not isinstance(value, bool):
+        raise ProfileError(f"the profile field {key!r} is not a boolean")
+    return value
+
+
+def _words(document: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    value = document[key]
+    if not isinstance(value, list) or not all(
+            isinstance(item, str) and item for item in value):
+        raise ProfileError(f"the profile field {key!r} is not a list of text")
+    return tuple(value)
+
+
+def _mounts(document: Mapping[str, Any]) -> tuple[Mount, ...]:
+    value = document["mounts"]
+    if not isinstance(value, list):
+        raise ProfileError("the profile mounts are not a list")
+    built: list[Mount] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {
+                "destination", "read_only", "source_kind"}:
+            raise ProfileError("a profile mount has the wrong shape")
+        if not isinstance(item["destination"], str) \
+                or not isinstance(item["source_kind"], str) \
+                or not isinstance(item["read_only"], bool):
+            raise ProfileError("a profile mount has a wrongly typed field")
+        built.append(Mount(destination=item["destination"],
+                           read_only=item["read_only"],
+                           source_kind=item["source_kind"]))
+    return tuple(built)
+
+
+def parse_canonical_profile(data: bytes) -> ExecutionProfile:
+    """The profile ``data`` is the canonical form of, or refuse.
+
+    The inverse of ``canonical_profile`` and deliberately nothing more. It
+    accepts no partial document, fills in no absent field, and coerces no type
+    — every value comes from the bytes or the bytes are refused.
+
+    The last check is the one that matters: the decoded profile is
+    re-serialised and required to be **byte-identical** to the input. That is
+    what makes the digest meaningful across the privilege boundary. Without it
+    a document could parse to the right values while its bytes committed to
+    something else, and the reader would have verified a digest over one
+    document while acting on another.
+    """
+    try:
+        document = canonical_json.parse(data, maximum_bytes=MAXIMUM_PROFILE_BYTES)
+    except canonical_json.CanonicalJSONError as error:
+        # Re-raised in this module's vocabulary rather than propagated. A
+        # caller holding a profile refusal must not have to know which encoder
+        # this module happens to use to catch "these bytes are not a profile".
+        raise ProfileError(f"the profile document is not canonical JSON: {error}") from None
+
+    expected = {
+        "schema", "cinv", "adapter_identity", "cimp", "oci_image_id",
+        "payload_schema_version", "network", "read_only_rootfs",
+        "no_new_privileges", "cap_drop_all", "dropped_capabilities",
+        "privileged", "host_network", "host_pid", "gpu", "memory_bytes",
+        "memory_swap_bytes", "cpus", "cpu_quota_us", "cpu_period_us",
+        "pids_limit", "timeout_seconds", "grace_seconds", "execution_uid",
+        "execution_gid", "hostname", "tmpfs_bytes", "tmpfs_mode",
+        "tmpfs_options", "mounts", "devices", "sockets",
+    }
+    if set(document) != expected:
+        missing = sorted(expected - set(document))
+        unknown = sorted(set(document) - expected)
+        raise ProfileError(
+            f"the profile document is not the governed field set "
+            f"(missing {missing}, unknown {unknown})")
+
+    version = _number(document, "schema")
+    if version != PROFILE_SCHEMA_VERSION:
+        raise UnsupportedProfileSchema(
+            f"no reader for profile schema {version}, and this build "
+            f"implements only {PROFILE_SCHEMA_VERSION}")
+
+    profile = ExecutionProfile(
+        cinv=_text(document, "cinv"),
+        oci_image_id=_text(document, "oci_image_id"),
+        network=_text(document, "network"),
+        memory_bytes=_number(document, "memory_bytes"),
+        memory_swap_bytes=_number(document, "memory_swap_bytes"),
+        cpus=_text(document, "cpus"),
+        pids_limit=_number(document, "pids_limit"),
+        timeout_seconds=_number(document, "timeout_seconds"),
+        grace_seconds=_number(document, "grace_seconds"),
+        read_only_rootfs=_flag(document, "read_only_rootfs"),
+        no_new_privileges=_flag(document, "no_new_privileges"),
+        cap_drop_all=_flag(document, "cap_drop_all"),
+        tmpfs_bytes=_number(document, "tmpfs_bytes"),
+        profile_schema_version=version,
+        cimp=_text(document, "cimp"),
+        adapter_identity=_text(document, "adapter_identity"),
+        payload_schema_version=_number(document, "payload_schema_version"),
+        execution_uid=_number(document, "execution_uid"),
+        execution_gid=_number(document, "execution_gid"),
+        hostname=_text(document, "hostname"),
+        cpu_quota_us=_number(document, "cpu_quota_us"),
+        cpu_period_us=_number(document, "cpu_period_us"),
+        tmpfs_mode=_number(document, "tmpfs_mode"),
+        tmpfs_options=_words(document, "tmpfs_options"),
+        dropped_capabilities=_words(document, "dropped_capabilities"),
+        mounts=_mounts(document),
+        devices=_words(document, "devices"),
+        sockets=_words(document, "sockets"),
+        privileged=_flag(document, "privileged"),
+        host_network=_flag(document, "host_network"),
+        host_pid=_flag(document, "host_pid"),
+        gpu=_flag(document, "gpu"),
+    )
+
+    if canonical_profile(profile) != bytes(data):
+        raise ProfileNotCanonical(
+            "the profile document is not the canonical form of what it decodes to")
+    return profile
 
 
 def fingerprint(profile: ExecutionProfile) -> ExecutionFingerprint:

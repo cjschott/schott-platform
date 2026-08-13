@@ -86,13 +86,24 @@ MARK = 'LIBRARY' + '_REDIRECTED'
 DECOY_SOURCE = chr(10).join([
     'import sys',
     'sys.stderr.write(' + repr(MARK) + ')',
+    'PROFILE_FD = 3',
     'class WorkerRefused(ValueError):',
     '    pass',
     'def require_worker_identity(**kwargs):',
     '    return None',
     'def container_name(cinv):',
     '    return None',
+    'def require_launch_context(**kwargs):',
+    '    return None',
+    'def profile_from_descriptor(context, descriptor=3):',
+    '    return None',
 ])
+
+# The vNext invocation, used wherever a subprocess must reach the library: the
+# argument shape is checked before anything is imported, so a legacy one-CINV
+# command line now refuses before resolution happens and would prove nothing
+# about which library won.
+WORKER_ARGV = ['CINV-000001', 'CIMP-000001', 'a' * 64]
 
 
 def mirror_canonical_root(destination):
@@ -174,14 +185,27 @@ assert chr(39) + 'kyri-' + chr(39) not in code, 'the worker builds a container n
 print('OK')
 "
 
-run_case "the worker takes exactly one CINV and nothing else" "${PRELUDE}
+run_case "the worker takes exactly the five governed elements and nothing else" "${PRELUDE}
 W = load(WORKER, 'kyri_exec_worker')
 import inspect
 assert list(inspect.signature(W.main).parameters) == ['argv'], \\
     inspect.signature(W.main)
-for argv in ([], ['x'], ['x', 'CINV-000001', 'extra'], ['x', ''],
-             ['x', 'CINV-00001'], ['x', 'CINV-0000001'], ['x', 'cinv-000001'],
-             ['x', '../etc'], ['x', '/data/kyri'], ['x', 'CINV-00000a']):
+digest = 'a' * 64
+# vNext: no optional three-element form. Accepting one would mean accepting a
+# profile nobody had bound to an implementation.
+for argv in ([], ['x'], ['x', 'CINV-000001'], ['x', 'CINV-000001', 'CIMP-000001'],
+             ['x', 'CINV-000001', 'CIMP-000001', digest, 'extra'],
+             ['x', ''], ['x', 'CINV-00001', 'CIMP-000001', digest],
+             ['x', 'CINV-0000001', 'CIMP-000001', digest],
+             ['x', 'cinv-000001', 'CIMP-000001', digest],
+             ['x', '../etc', 'CIMP-000001', digest],
+             ['x', '/data/kyri', 'CIMP-000001', digest],
+             ['x', 'CINV-00000a', 'CIMP-000001', digest],
+             ['x', 'CINV-000001', 'CIMP-00001', digest],
+             ['x', 'CINV-000001', 'CIMP-000000', digest],
+             ['x', 'CINV-000001', 'CIMP-000001', digest.upper()],
+             ['x', 'CINV-000001', 'CIMP-000001', 'sha256:' + digest],
+             ['x', 'CINV-000001', 'CIMP-000001', 'a' * 63]):
     try:
         W.main(argv)
     except SystemExit:
@@ -194,7 +218,7 @@ run_case "the worker fails closed when it is not the execution identity" "${PREL
 W = load(WORKER, 'kyri_exec_worker')
 assert os.getuid() != 999, 'this suite must not run as the execution identity'
 try:
-    W.main(['kyri-exec-worker.py', 'CINV-000001'])
+    W.main(['kyri-exec-worker.py', 'CINV-000001', 'CIMP-000001', 'a' * 64])
 except SystemExit:
     pass
 else:
@@ -238,7 +262,9 @@ assert Path(policy.WORKER_SCRIPT).name == WORKER.name, \\
 assert policy.WORKER_INTERPRETER == '/usr/bin/python3', policy.WORKER_INTERPRETER
 # And the argv is exactly interpreter, script, CINV.
 built = policy.build_policy if hasattr(policy, 'build_policy') else None
-assert policy.INHERITED_DESCRIPTORS == (0, 1, 2), policy.INHERITED_DESCRIPTORS
+# vNext: descriptor 3 carries the sealed profile object the transition authors.
+assert policy.INHERITED_DESCRIPTORS == (0, 1, 2, 3), policy.INHERITED_DESCRIPTORS
+assert policy.PROFILE_FD == 3, policy.PROFILE_FD
 print('OK')
 "
 
@@ -300,7 +326,7 @@ with tempfile.TemporaryDirectory() as work:
     decoy = build_decoy(str(Path(work) / 'decoy'))
     script = worker_rooted_at(canonical, str(Path(work) / 'worker.py'))
     outcome = subprocess.run(
-        ['/usr/bin/python3', script, 'CINV-000001'],
+        ['/usr/bin/python3', script] + WORKER_ARGV,
         cwd='/', env={'PYTHONPATH': decoy, 'PATH': '/usr/bin:/bin',
                       'PYTHONDONTWRITEBYTECODE': '1'},
         capture_output=True, text=True)
@@ -324,7 +350,7 @@ with tempfile.TemporaryDirectory() as work:
     decoy = build_decoy(str(Path(work) / 'decoy'))
     script = worker_rooted_at(canonical, str(Path(work) / 'worker.py'))
     outcome = subprocess.run(
-        ['/usr/bin/python3', script, 'CINV-000001'],
+        ['/usr/bin/python3', script] + WORKER_ARGV,
         cwd=decoy, env={'PATH': '/usr/bin:/bin',
                         'PYTHONDONTWRITEBYTECODE': '1'},
         capture_output=True, text=True)
@@ -351,7 +377,7 @@ with tempfile.TemporaryDirectory() as work:
     decoy = build_decoy(str(Path(work) / 'decoy'))
     script = worker_rooted_at(missing, str(Path(work) / 'worker.py'))
     outcome = subprocess.run(
-        ['/usr/bin/python3', script, 'CINV-000001'],
+        ['/usr/bin/python3', script] + WORKER_ARGV,
         cwd='/', env={'PYTHONPATH': decoy, 'PATH': '/usr/bin:/bin',
                       'PYTHONDONTWRITEBYTECODE': '1'},
         capture_output=True, text=True)

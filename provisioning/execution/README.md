@@ -356,9 +356,15 @@ to it, which keeps the shebang line out of the trust chain.
 
 ```
 execve("/usr/bin/python3",
-       ("/usr/bin/python3", "/usr/libexec/kyri-exec-worker.py", "CINV-nnnnnn"),
+       ("/usr/bin/python3", "/usr/libexec/kyri-exec-worker.py",
+        "CINV-nnnnnn", "CIMP-nnnnnn", "<64 lowercase hex profile_digest>"),
        CLOSED_ENVIRONMENT)
 ```
+
+The `CIMP` and the profile digest come from the launch record the transition
+authenticated, and the governed profile itself crosses as a sealed anonymous
+object on **descriptor 3** — so the inherited set is `(0, 1, 2, 3)`. Neither
+value and no descriptor number is supplied by the caller.
 
 **Do not generate or ship `.pyc` artifacts.** Installed sources are read-only and
 the container environment sets `PYTHONDONTWRITEBYTECODE=1`; a writable
@@ -716,14 +722,43 @@ the reader's three states, the two pending subtypes, the authorisation seam, and
 the bare-hex `oci_image_id` contract were each verified in the installed tree;
 `tools/provisioning` is absent from it, as it must remain.
 
-**Generation 5 will be required** by the Pass 3B profile handoff, and it
-installs **Pass 3B-i and 3B-ii together as one generation** — the coordinator
-publisher and the privilege-boundary change must agree about what authorises
-execution. Pass 3B-i is implemented (`handoff.py` publishes the canonical
-profile); Pass 3B-ii is not. It changes the
-launch-record schema, the root helper, the inherited-descriptor set
-(`0,1,2,3`), and the worker exec tuple (five elements). Ruled in design §14.1
-and not yet implemented.
+**Generation 5 is required and is not installed.** Both passes are now
+implemented in source, and they install **together as one generation** — the
+coordinator publisher and the privilege-boundary change must agree about what
+authorises execution, and a host carrying one without the other has a
+coordinator publishing bytes nothing authenticates, or a helper authenticating
+bytes nobody published. Generation 5 changes the launch-record schema, the root
+helper, the inherited-descriptor set (`0,1,2,3`), and the worker exec tuple
+(five elements). Ruled in design §14.1.
+
+**The exact generation-5 delta versus accepted generation 4 is seven installed
+objects.** No file is added or removed, so the library manifest stays at 43
+Python files and the three `/usr/libexec` entrypoints keep their paths, owners,
+and modes:
+
+| Repository source | Installed path | Pass |
+|---|---|---|
+| `tools/capability/execution/handoff.py` | `…/tools/capability/execution/handoff.py` | 3B-i |
+| `tools/capability/execution/profile.py` | `…/tools/capability/execution/profile.py` | 3B-ii |
+| `tools/capability/execution/worker.py` | `…/tools/capability/execution/worker.py` | 3B-ii |
+| `provisioning/execution/kyri-exec-transition.py` | `/usr/lib/kyri/python/kyri_exec_transition.py` | 3B-ii |
+| `provisioning/execution/kyri-exec-transition-action.py` | `/usr/lib/kyri/python/kyri_exec_transition_action.py` | 3B-ii |
+| `provisioning/execution/kyri-exec-transition-entrypoint.py` | `/usr/libexec/kyri-exec-transition` | 3B-ii |
+| `provisioning/execution/kyri-exec-worker.py` | `/usr/libexec/kyri-exec-worker.py` | 3B-ii |
+
+All seven are **privilege-boundary objects and must be installed as one
+generation.** They are three sides of one agreement: the coordinator publishes
+canonical profile bytes, root authenticates and seals them, and the worker
+consumes the sealed copy against a digest root took from the launch record.
+A partial install breaks it in a way nothing detects at install time — an old
+worker receives a five-element argv it refuses, an old helper builds a
+three-element one the new worker refuses, and an old policy module reads a
+record schema the coordinator no longer writes.
+
+**Everything else in the pass is source-only or operator-only and installs
+nowhere**: the test suites, `tools/dev/run-validation.sh`, the CI workflow, the
+design and plan documents, and this runbook. `tools/provisioning/` remains
+outside the matrix, as it must.
 
 Two earlier handoff models were accepted and then disproved empirically — a
 root-owned path freeze and descriptor anchoring to the coordinator's inode.
@@ -732,6 +767,15 @@ authenticate the coordinator's bytes and copy them into a sealed `memfd`, so
 the published profile file stops being authority the moment the copy verifies.
 `payload` and `package/` are unaffected and their mutation exposure remains an
 open hardening follow-up.
+
+Both disproofs are now regression tests rather than prose. A retained writable
+descriptor is used to rewrite, shorten, and then replace the published profile
+*after* root authenticated it, and the worker still reads the original bytes
+and digest; and the `dup2(3, 3)` trap is demonstrated across a real
+`fork`/`execve`, where the governed placement arrives sealed and intact while a
+control arm relying on `dup2` alone leaves `FD_CLOEXEC` set and the child finds
+`EBADF`. Neither is provable by inspection, which is why neither is asserted by
+inspection.
 
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its

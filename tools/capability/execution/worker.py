@@ -7,10 +7,21 @@ G6, so the absence of `subprocess` is a property of this file rather than a
 gap in it.
 
 **Everything crossing into this worker is already narrow.** After the privilege
-transition it receives one `CINV`, two environment variables, and descriptors
-0, 1 and 2. Nothing else arrives, so nothing else can be trusted or misused —
-the bind sources below are rebuilt from a compiled-in root and the validated
-identity, not read from anything that travelled.
+transition it receives one `CINV`, one `CIMP`, one profile digest, two
+environment variables, and descriptors 0, 1, 2 and 3. Nothing else arrives, so
+nothing else can be trusted or misused — the bind sources below are rebuilt
+from a compiled-in root and the validated identity, not read from anything that
+travelled.
+
+**The profile arrives on a sealed descriptor and is verified, not trusted.**
+It cannot be checked against itself: `profile.cimp` and the digest have to be
+compared with values that did *not* come from the profile, which is why the
+transition passes both in argv from a record it authenticated. The worker
+cannot read that record — `…/execution/` is coordinator-owned — and must not
+try. What it does instead is confirm the descriptor carries the mandatory
+seals, read it once, require the bytes to be exactly canonical, recompute the
+fingerprint, and require it to equal the digest it was told. The seals stop the
+bytes changing; the digest is the actual authority.
 
 **Trust is re-established, not inherited.** The worker is a different process
 from the one that published the handoff, and descriptor continuity cannot cross
@@ -29,11 +40,14 @@ Governed by ``docs/superpowers/specs/2026-08-11-first-adapter-design.md`` §7, �
 from __future__ import annotations
 
 import dataclasses
+import fcntl
 import os
 import stat as stat_module
 from typing import Any, Protocol, Sequence
 
 from .package_contract import PackageBinding
+from .profile import (MAXIMUM_PROFILE_BYTES, ProfileError, fingerprint,
+                      parse_canonical_profile)
 from .types import ExecutionProfile
 
 PODMAN = "/usr/bin/podman"
@@ -41,6 +55,17 @@ HANDOFF_ROOT = "/data/kyri/capability-handoff"
 
 WORKER_UID = 999
 WORKER_GID = 987
+
+# The governed profile descriptor and the seals it must carry. Both are stated
+# here rather than imported: the transition helper installs beneath a different
+# root and this side of the boundary cannot import from it, so the constants
+# are duplicated deliberately and the tests hold the two copies together.
+PROFILE_FD = 3
+F_SEAL_SEAL = 0x0001
+F_SEAL_SHRINK = 0x0002
+F_SEAL_GROW = 0x0004
+F_SEAL_WRITE = 0x0008
+REQUIRED_SEALS = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
 
 CONTAINER_UID = 1000
 CONTAINER_GID = 1000
@@ -102,6 +127,8 @@ EXPECTED_MODES = {
 }
 
 _DIGITS = frozenset("0123456789")
+_HEX = frozenset("0123456789abcdef")
+UNALLOCATED_CIMP = "CIMP-000000"
 _READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
 _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 
@@ -136,6 +163,95 @@ class HandoffSources:
     package: str
     payload: str
     output: str
+
+
+@dataclasses.dataclass(frozen=True)
+class LaunchContext:
+    """The governed identities the transition passed in argv.
+
+    None of these came from the profile, and that is their entire purpose:
+    checking a document against itself proves nothing, so the values it must
+    agree with have to arrive from the record root authenticated.
+    """
+
+    cinv: str
+    cimp: str
+    profile_digest: str
+
+
+def require_launch_context(*, cinv: Any, cimp: Any,
+                           profile_digest: Any) -> LaunchContext:
+    """The validated worker context, or refuse.
+
+    Grammar only. Whether these identities are *authorised* was settled by the
+    record root read; what is settled here is that they are well formed, so a
+    malformed token never reaches a comparison, a path, or an argument.
+    """
+    validated = _validate_cinv(cinv)
+    if not isinstance(cimp, str) or len(cimp) != 11 \
+            or not cimp.startswith("CIMP-") or set(cimp[5:]) - _DIGITS:
+        raise WorkerRefused(f"{cimp!r} is not a CIMP identity")
+    if cimp == UNALLOCATED_CIMP:
+        raise WorkerRefused("the unallocated CIMP names no implementation")
+    if not isinstance(profile_digest, str) or len(profile_digest) != 64 \
+            or set(profile_digest) - _HEX:
+        raise WorkerRefused(
+            f"{profile_digest!r} is not a 64-character lowercase hex digest")
+    return LaunchContext(cinv=validated, cimp=cimp,
+                         profile_digest=profile_digest)
+
+
+def profile_from_descriptor(context: LaunchContext, *,
+                            descriptor: int = PROFILE_FD) -> ExecutionProfile:
+    """The governed profile from the sealed descriptor, or refuse.
+
+    Read from the descriptor and nowhere else. There is no path here, no
+    reopen, and no second source to prefer: the published file the transition
+    authenticated stopped being authority the moment the sealed copy was
+    verified, and consulting it again would reintroduce exactly the race the
+    seal exists to close.
+
+    ``pread`` rather than ``read`` so the result cannot depend on an inherited
+    file offset — the offset is somebody else's state, and reading from it
+    would make a correct object return the wrong bytes.
+    """
+    if not isinstance(context, LaunchContext):
+        raise WorkerRefused("a validated LaunchContext is required")
+    try:
+        seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+    except OSError as error:
+        raise WorkerRefused(
+            f"the profile descriptor is not a sealed object: {error}") from None
+    if seals & REQUIRED_SEALS != REQUIRED_SEALS:
+        raise WorkerRefused(
+            "the profile descriptor does not carry the mandatory seals")
+
+    try:
+        info = os.fstat(descriptor)
+        body = os.pread(descriptor, MAXIMUM_PROFILE_BYTES + 1, 0)
+    except OSError as error:
+        raise WorkerRefused(
+            f"the profile descriptor is unreadable: {error}") from None
+    if not stat_module.S_ISREG(info.st_mode):
+        raise WorkerRefused("the profile descriptor is not regular storage")
+    if len(body) > MAXIMUM_PROFILE_BYTES or len(body) != info.st_size:
+        raise WorkerRefused("the profile descriptor did not read back completely")
+
+    try:
+        profile = parse_canonical_profile(body)
+    except ProfileError as error:
+        raise WorkerRefused(f"the sealed profile is not governed: {error}") from None
+
+    if fingerprint(profile).profile_digest != context.profile_digest:
+        raise WorkerRefused(
+            "the sealed profile does not match the authorised digest")
+    if profile.cinv != context.cinv:
+        raise WorkerRefused("the sealed profile names a different invocation")
+    if profile.cimp != context.cimp:
+        raise WorkerRefused("the sealed profile names a different implementation")
+    if len(profile.oci_image_id) != 64 or set(profile.oci_image_id) - _HEX:
+        raise WorkerRefused("the sealed profile carries a malformed image ID")
+    return profile
 
 
 def require_worker_identity(*, uid: int, gid: int) -> None:

@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=46
+  TOTAL_STEPS=47
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=61
+  TOTAL_STEPS=62
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -233,6 +233,12 @@ run "Capability execution helper policy" \
 # backend: no root, no sudo, no credential change. Real transition is gate G6.
 run "Capability execution transition action" \
   bash tests/test-capability-execution-transition-action.sh
+
+# ENG-0005 Pass 3B-ii. The sealed profile transport across the privilege
+# boundary. Real memfds, real seals, and one real execve into a controlled
+# child -- but no privilege: credentials and the worker exec are injected.
+run "Capability execution profile transport" \
+  bash tests/test-capability-execution-profile-transport.sh
 
 # ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
 # no subprocess, no container, no Podman. Real execution is gate G6.

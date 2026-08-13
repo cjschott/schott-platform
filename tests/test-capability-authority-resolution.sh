@@ -483,10 +483,12 @@ run_case "the launch record and worker contracts are untouched by this pass" "${
 from pathlib import Path
 helper = Path('provisioning/execution/kyri-exec-transition.py').read_text(encoding='utf-8')
 assert 'LAUNCH_RECORD_SCHEMA = (' in helper
-for field in ('cinv', 'cimp', 'oci_image_id', 'handoff_root',
+# Pass 3B-ii replaced oci_image_id with profile_digest; resolution neither
+# caused that nor may depend on it. The count is what this pass asserts: the
+# record stays exactly seven fields, so nothing here grew the privileged parser.
+for field in ('cinv', 'cimp', 'profile_digest', 'handoff_root',
               'profile_schema_version', 'commitment_digest', 'lifecycle_state'):
     assert chr(34) + field + chr(34) in helper, field
-# The schema is still exactly seven fields: Pass 3B extends it, not this pass.
 schema = helper.split('LAUNCH_RECORD_SCHEMA = (')[1].split(')')[0]
 assert schema.count(chr(34)) == 14, schema
 worker = Path('provisioning/execution/kyri-exec-worker.py').read_text(encoding='utf-8')

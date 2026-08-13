@@ -1096,9 +1096,9 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | exported payload schema-version constant | **IMPLEMENTED** (Pass 2C) |
 | coordinator resolves authority; root and worker do not | **IMPLEMENTED** (Pass 3A) |
 | coordinator profile publication | **IMPLEMENTED** (Pass 3B-i) |
-| sealed privilege-boundary profile transport | **RULED** (Pass 3B-ii), not yet implemented |
-| root helper launch-record schema extension | REQUIRED, NOT YET IMPLEMENTED |
-| worker governed-profile consumption | REQUIRED, NOT YET IMPLEMENTED |
+| sealed privilege-boundary profile transport | **IMPLEMENTED** (Pass 3B-ii) |
+| root helper launch-record schema vNext | **IMPLEMENTED** (Pass 3B-ii) |
+| worker governed-profile consumption | **IMPLEMENTED** (Pass 3B-ii) |
 | production G5 image build and CIMP admission | NOT STARTED |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
@@ -1358,6 +1358,74 @@ surface.
 
 Payload and package publication, ownership, modes, and lifetime are unchanged,
 and their replacement exposure remains the open hardening follow-up.
+
+### Pass 3B-ii — sealed profile transport, implemented
+
+The privilege boundary now carries the governed profile as a **root-authored
+sealed object on descriptor 3**, exactly as design §14.1 rules. Root
+authenticates the coordinator's published bytes, copies them into a `memfd`
+nobody else has ever written, seals it `F_SEAL_WRITE | F_SEAL_GROW |
+F_SEAL_SHRINK | F_SEAL_SEAL`, and hands that across `execve`. The published
+file stops being authority the moment that copy verifies.
+
+**The launch record is vNext seven fields**: `profile_digest` replaced
+`oci_image_id`, and the image identity is not reintroduced anywhere in the
+helper. `CIMP-000000` is refused by name rather than left to look admissible,
+and the digest must be exactly 64 lowercase hex — no `sha256:` prefix, no case
+folding, no second spelling of one commitment.
+
+**`check_launch_authorisation` now returns an `AuthenticatedLaunch`**, a closed
+type only it can construct: `__slots__`, blocked `__setattr__`/`__delattr__`,
+and a module-private token in `__init__`. `perform_transition` accepts nothing
+else and rebinds the record to the invocation being transitioned, so a
+caller-supplied `CIMP` or digest cannot reach the worker having skipped the
+check, and an *authentic* record for a different `CINV` is no more usable than
+a forged one. This closed the structural gap the survey found: the function had
+no caller in the action path at all.
+
+**The wiring is one chain and no new privileged entrypoint.** The single
+`sudo` command still takes one `CINV`; the entrypoint reads and authenticates
+the record through the action's descriptor seam, then hands the result to
+`perform_transition`. `authenticate_launch` and the transport helpers are
+internal library functions, not separately authorised commands.
+
+**Root stays policy-opaque.** It opens, stats, reads, hashes, copies, seals,
+and places — and parses nothing. Asserted structurally: the action module
+imports no `tools` package, no canonical-JSON encoder, and no `json` at all,
+and its code names no `ExecutionProfile`, image, mount, network, or limit.
+
+**One defect the tests found, not inspection.** Opening a FIFO for reading
+blocks until a writer arrives, so a coordinator that replaced the published
+profile with a named pipe would have hung the privileged helper before it ever
+reached the check that refuses it. The governed read now carries `O_NONBLOCK`,
+which is a no-op on the regular file it is supposed to be.
+
+**Two empirical tests, because inspection cannot settle either question.**
+A retained `O_RDWR` descriptor from before publication is used to rewrite,
+shorten, and replace the source after authentication, and the worker still
+reads the original bytes and digest. And the measured `dup2(3, 3)` trap is
+demonstrated across a real `fork`/`execve`: the governed placement arrives with
+all four seals and the exact bytes, while a control arm that relies on `dup2`
+alone leaves `FD_CLOEXEC` set and the child finds `EBADF`. The explicit
+`fcntl(3, F_SETFD, 0)` is what separates them.
+
+**The worker's five-element argv** is built by the policy layer from the
+authenticated record. The worker validates the shape, requires the mandatory
+seals on descriptor 3, `pread`s it at absolute offset 0 so no inherited file
+offset can change the answer, requires an exact canonical round-trip,
+recomputes `fingerprint(profile).profile_digest`, and binds `profile.cinv` and
+`profile.cimp` to argv. Every substitution in the §14.1 threat matrix fails
+before any Podman argument is constructed.
+
+`parse_canonical_profile` joins `canonical_profile` in `profile.py`, because a
+decoder living anywhere else would be a second answer to "what are these
+bytes". It is pure, refuses non-canonical spellings rather than normalising
+them, and re-raises encoder errors in the profile vocabulary.
+
+`ExecutionProfile`, its schema version, the payload schema, the
+coordinator↔worker protocol, and the `CIMP`/`CGEN` schemas are unchanged.
+`payload` and `package/` are untouched and their replacement exposure remains
+the open hardening follow-up.
 
 ## 6. Sequencing rules
 

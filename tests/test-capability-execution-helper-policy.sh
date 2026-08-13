@@ -235,7 +235,7 @@ def code_only():
 def record(**overrides):
     body = dict(
         cinv='CINV-000042', cimp='CIMP-000001',
-        oci_image_id='a' * 64,
+        profile_digest='a' * 64,
         handoff_root='/data/kyri/capability-handoff',
         profile_schema_version=1, commitment_digest='b' * 64,
         lifecycle_state='launch_authorized')
@@ -344,8 +344,70 @@ print('OK')
 
 # --- launch authorisation ---------------------------------------------------------
 
-run_case "a launch_authorized record is accepted" "${PRELUDE}
-assert helper.check_launch_authorisation(record(), 'CINV-000042') is None
+run_case "a launch_authorized record is accepted and returned as a closed type" "${PRELUDE}
+authenticated = helper.check_launch_authorisation(record(), 'CINV-000042')
+# vNext: the check returns the authenticated projection rather than None. The
+# privileged action needs the CIMP and the profile digest, and a return value
+# only this function can produce is what stops those values arriving from
+# anywhere else.
+assert isinstance(authenticated, helper.AuthenticatedLaunch), authenticated
+assert authenticated.cinv == 'CINV-000042'
+assert authenticated.cimp == 'CIMP-000001'
+assert authenticated.profile_digest == 'a' * 64
+assert authenticated.lifecycle_state == 'launch_authorized'
+print('OK')
+"
+
+run_case "the authenticated record cannot be constructed, mutated, or copied" "${PRELUDE}
+authenticated = helper.check_launch_authorisation(record(), 'CINV-000042')
+try:
+    helper.AuthenticatedLaunch(**record())
+except Exception:
+    pass
+else:
+    raise AssertionError('an authenticated record was constructed directly')
+for field in helper.LAUNCH_RECORD_SCHEMA:
+    try:
+        setattr(authenticated, field, 'x')
+    except Exception:
+        continue
+    raise AssertionError('the authenticated record was mutated at ' + field)
+try:
+    delattr(authenticated, 'cimp')
+except Exception:
+    pass
+else:
+    raise AssertionError('a field was deleted from the authenticated record')
+# And it is rebound to the invocation being transitioned, so an authentic
+# record for a different CINV is no more usable than a forged one.
+assert helper.require_authenticated(authenticated, 'CINV-000042') is authenticated
+for stand_in in (dict(record()), None, 'CINV-000042', 42):
+    try:
+        helper.require_authenticated(stand_in, 'CINV-000042')
+    except helper.TransitionRefused:
+        continue
+    raise AssertionError('an unauthenticated stand-in was accepted')
+try:
+    helper.require_authenticated(authenticated, 'CINV-000043')
+except helper.TransitionRefused:
+    print('OK')
+else:
+    raise AssertionError('a record for another invocation was accepted')
+"
+
+run_case "the launch record is parsed bounded, and refuses what is not one document" "${PRELUDE}
+import json
+body = json.dumps(record()).encode('utf-8')
+assert helper.parse_launch_record(body) == record()
+for bad in (b'not json', b'[]', b'{}{}', b'{\"cinv\": \"CINV-000042\",}',
+            b'{\"cinv\":\"CINV-000042\",\"cinv\":\"CINV-000042\"}',
+            b'{' + b'\"x\":1,' * 4096 + b'}', 'a string', None, 42):
+    try:
+        document = helper.parse_launch_record(bad)
+    except helper.TransitionRefused:
+        continue
+    if isinstance(document, dict) and set(document) == set(record()):
+        raise AssertionError('accepted ' + repr(bad)[:40])
 print('OK')
 "
 
@@ -381,9 +443,15 @@ else:
 "
 
 run_case "the record schema is closed and minimal" "${PRELUDE}
-assert set(helper.LAUNCH_RECORD_SCHEMA) == {
-    'cinv', 'cimp', 'oci_image_id', 'handoff_root', 'profile_schema_version',
-    'commitment_digest', 'lifecycle_state'}, set(helper.LAUNCH_RECORD_SCHEMA)
+# vNext, ruled in design §14.1: still exactly seven fields, with profile_digest
+# in place of oci_image_id. Root commits to bytes and stays opaque to what they
+# say, so an image identity has no business in the privileged parser.
+assert helper.LAUNCH_RECORD_SCHEMA == (
+    'cinv', 'cimp', 'profile_digest', 'handoff_root',
+    'profile_schema_version', 'commitment_digest',
+    'lifecycle_state'), helper.LAUNCH_RECORD_SCHEMA
+assert len(helper.LAUNCH_RECORD_SCHEMA) == 7
+assert 'oci_image_id' not in SOURCE, 'the helper still names an image identity'
 try:
     helper.check_launch_authorisation(record(extra='x'), 'CINV-000042')
 except helper.TransitionRefused:
@@ -427,17 +495,24 @@ print('OK')
 
 run_case "record identity and digest fields are grammar-checked" "${PRELUDE}
 for field, value in (('cimp', 'CIMP-00001'), ('cimp', 'cimp-000001'),
-                     ('oci_image_id', 'g' * 64),
-                     ('oci_image_id', 'sha256:' + 'a' * 64),
-                     ('oci_image_id', 'A' * 64),
-                     ('oci_image_id', 'a' * 63),
-                     ('oci_image_id', 'a' * 65),
-                     ('oci_image_id', 'alpine:latest'),
-                     ('oci_image_id', 'docker.io/library/alpine'),
+                     ('cimp', 'CIMP-00000a'), ('cimp', 'CINV-000001'),
+                     # Grammatical and meaningless: the unallocated CIMP names
+                     # no implementation and is refused by name.
+                     ('cimp', 'CIMP-000000'),
+                     ('profile_digest', 'g' * 64),
+                     ('profile_digest', 'sha256:' + 'a' * 64),
+                     ('profile_digest', 'A' * 64),
+                     ('profile_digest', 'a' * 63),
+                     ('profile_digest', 'a' * 65),
+                     ('profile_digest', ''),
+                     ('profile_digest', 1),
+                     ('profile_digest', None),
                      ('commitment_digest', 'z' * 64),
                      ('commitment_digest', 'b' * 63),
+                     ('commitment_digest', 'B' * 64),
                      ('profile_schema_version', '1'),
                      ('profile_schema_version', 2),
+                     ('profile_schema_version', True),
                      ('handoff_root', '/tmp/elsewhere'),
                      ('handoff_root', '../handoff')):
     try:
@@ -446,6 +521,56 @@ for field, value in (('cimp', 'CIMP-00001'), ('cimp', 'cimp-000001'),
         continue
     raise AssertionError(f'accepted {field}={value!r}')
 print('OK')
+"
+
+run_case "the published profile is located and checked like every other object" "${PRELUDE}
+import stat as statmod
+assert helper.PROFILE_NAME == 'profile', helper.PROFILE_NAME
+assert helper.profile_path('CINV-000042') == \\
+    helper.HANDOFF_ROOT + '/CINV-000042/profile', helper.profile_path('CINV-000042')
+for value in ('../../etc', 'CINV-000042/../..', '/etc/passwd', ''):
+    try:
+        helper.profile_path(value)
+    except helper.TransitionRefused:
+        continue
+    raise AssertionError(f'built a profile path from {value!r}')
+path = os.path.join(WORK, 'published-profile')
+with open(path, 'wb') as handle:
+    handle.write(b'{}')
+os.chmod(path, 0o444)
+info = os.lstat(path)
+assert helper.check_profile_object(info, expected_uid=info.st_uid) is None
+for mode in (0o644, 0o664, 0o666, 0o755, 0o400):
+    os.chmod(path, mode)
+    try:
+        helper.check_profile_object(os.lstat(path), expected_uid=info.st_uid)
+    except helper.TransitionRefused:
+        continue
+    raise AssertionError(f'accepted profile mode {oct(mode)}')
+os.chmod(path, 0o444)
+try:
+    helper.check_profile_object(os.lstat(path), expected_uid=info.st_uid + 1)
+except helper.TransitionRefused:
+    pass
+else:
+    raise AssertionError('accepted a profile owned by the wrong identity')
+directory = os.path.join(WORK, 'profile-directory')
+os.mkdir(directory, 0o555)
+try:
+    helper.check_profile_object(os.lstat(directory), expected_uid=info.st_uid)
+except helper.TransitionRefused:
+    pass
+else:
+    raise AssertionError('accepted a directory as the published profile')
+empty = os.path.join(WORK, 'empty-profile')
+open(empty, 'wb').close()
+os.chmod(empty, 0o444)
+try:
+    helper.check_profile_object(os.lstat(empty), expected_uid=info.st_uid)
+except helper.TransitionRefused:
+    print('OK')
+else:
+    raise AssertionError('accepted an empty published profile')
 "
 
 # --- ownership and mode expectations ------------------------------------------------
@@ -528,13 +653,26 @@ run_case "the worker executable is fixed, absolute, and never searched for" "${P
 policy = helper.policy_for(['prog', 'CINV-000042'])
 assert policy.worker_interpreter == '/usr/bin/python3', policy.worker_interpreter
 assert policy.worker_script == '/usr/libexec/kyri-exec-worker.py', policy.worker_script
-assert policy.worker_argv == ('/usr/bin/python3',
-                              '/usr/libexec/kyri-exec-worker.py',
-                              'CINV-000042'), policy.worker_argv
+# vNext: argv is five elements and is built from the AUTHENTICATED record, not
+# from the command line -- the CIMP and the profile digest cannot be known
+# before the record is read, and must never come from a caller.
+authenticated = helper.check_launch_authorisation(record(), 'CINV-000042')
+argv = helper.worker_argv(authenticated)
+assert argv == ('/usr/bin/python3', '/usr/libexec/kyri-exec-worker.py',
+                'CINV-000042', 'CIMP-000001', 'a' * 64), argv
+assert len(argv) == 5, argv
+for stand_in in (None, 'CINV-000042', dict(record()), 42, ('CINV-000042',)):
+    try:
+        helper.worker_argv(stand_in)
+    except helper.TransitionRefused:
+        continue
+    raise AssertionError('argv was built from an unauthenticated value')
+assert not any(f.name == 'worker_argv' for f in dataclasses.fields(policy)), \\
+    'the policy result still carries a caller-reachable argv'
 assert helper.WORKER_INTERPRETER.startswith('/')
 assert helper.WORKER_SCRIPT.startswith('/')
 # The script is an argument, never the executable: no -m, no shebang reliance.
-assert '-m' not in policy.worker_argv
+assert '-m' not in argv
 code = code_only()
 # No lookup of any kind: no PATH read, no search helper, no normalisation that
 # could turn a relative name into a resolved one.
@@ -571,10 +709,21 @@ assert 'getcwd' not in source and 'chdir' not in source
 print('OK')
 "
 
-run_case "descriptor policy names only the protocol descriptors" "${PRELUDE}
+run_case "descriptor policy names the protocol descriptors and the sealed profile" "${PRELUDE}
 policy = helper.policy_for(['prog', 'CINV-000042'])
-assert policy.inherited_descriptors == (0, 1, 2), policy.inherited_descriptors
+# vNext: one governed exception to stdio-only inheritance, and it is an
+# exception rather than a return to ambient inheritance -- the number is
+# compiled in, root opens the object itself, and no caller may name a
+# descriptor.
+assert helper.PROFILE_FD == 3, helper.PROFILE_FD
+assert policy.inherited_descriptors == (0, 1, 2, 3), policy.inherited_descriptors
+assert policy.profile_fd == helper.PROFILE_FD, policy.profile_fd
 assert isinstance(policy.inherited_descriptors, tuple)
+# The seal set is a decision, so it is stated here rather than wherever the
+# syscall happens to be made.
+assert helper.REQUIRED_SEALS == 0xF, hex(helper.REQUIRED_SEALS)
+assert (helper.F_SEAL_SEAL, helper.F_SEAL_SHRINK, helper.F_SEAL_GROW,
+        helper.F_SEAL_WRITE) == (0x1, 0x2, 0x4, 0x8)
 print('OK')
 "
 
@@ -593,9 +742,10 @@ for banned in ('command', 'argv_extra', 'shell', 'env', 'cwd', 'image',
                'mounts', 'uid_arg', 'user_arg', 'config_path', 'extra'):
     assert banned not in names, banned
 assert names == {'cinv', 'worker_user', 'worker_uid', 'worker_gid',
-                 'worker_interpreter', 'worker_script', 'worker_argv',
-                 'evidence_path', 'handoff_path', 'environment',
-                 'working_directory', 'inherited_descriptors'}, names
+                 'worker_interpreter', 'worker_script',
+                 'evidence_path', 'handoff_path', 'profile_path',
+                 'environment', 'working_directory',
+                 'inherited_descriptors', 'profile_fd'}, names
 print('OK')
 "
 
@@ -648,8 +798,18 @@ import types as pytypes
 functions = sorted(n for n, v in vars(helper).items()
                    if isinstance(v, pytypes.FunctionType) and not n.startswith('_'))
 assert functions == ['check_evidence_object', 'check_handoff_object',
-                     'check_launch_authorisation', 'evidence_path',
-                     'handoff_path', 'policy_for', 'validate_cinv'], functions
+                     'check_launch_authorisation', 'check_profile_object',
+                     'evidence_path', 'handoff_path', 'parse_launch_record',
+                     'policy_for', 'profile_path', 'require_authenticated',
+                     'validate_cinv', 'worker_argv'], functions
+# Every addition is a decision, not an action: locating the profile, checking
+# its object properties, parsing one bounded record, closing that record into a
+# type, rebinding it, and stating the command line. None of them open, copy,
+# seal, or place anything -- T11 still owns every syscall.
+source = SOURCE
+for banned in ('memfd', 'F_ADD_SEALS', 'F_GET_SEALS', 'dup2', 'F_SETFD',
+               'os.write', 'os.read', 'os.open'):
+    assert banned not in source, banned
 print('OK')
 "
 

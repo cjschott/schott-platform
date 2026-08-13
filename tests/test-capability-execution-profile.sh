@@ -512,8 +512,49 @@ import types as pytypes
 import tools.capability.execution.profile as module
 functions = [n for n, v in vars(module).items()
              if isinstance(v, pytypes.FunctionType) and not n.startswith('_')]
+# parse_canonical_profile joined this set with Pass 3B-ii: the decoder belongs
+# beside the encoder, because two modules answering \"what are these bytes\" is
+# one more than can be kept in agreement. It is pure like the rest -- bytes in,
+# a profile or a refusal out, and no descriptor, path, or process anywhere.
 assert sorted(functions) == ['build_profile', 'canonical_profile',
-                             'fingerprint', 'verify_observed'], functions
+                             'fingerprint', 'parse_canonical_profile',
+                             'verify_observed'], functions
+print('OK')
+"
+
+run_case "the canonical decoder is exact, total, and reads nothing" "${PRELUDE}
+from tools.capability.execution.profile import (
+    parse_canonical_profile, ProfileNotCanonical, MAXIMUM_PROFILE_BYTES)
+built = build_profile(binding())
+body = canonical_profile(built)
+decoded = parse_canonical_profile(body)
+assert canonical_profile(decoded) == body
+assert fingerprint(decoded) == fingerprint(built)
+# Non-canonical spellings of the same values are refused rather than accepted
+# and re-normalised: the digest is taken over bytes, so two spellings would be
+# two commitments to one profile.
+for mangled in (b' ' + body, body + b' ', body.replace(b'{', b'{ ', 1),
+                body.replace(b',', b', ', 1)):
+    try:
+        parse_canonical_profile(mangled)
+    except ProfileError:
+        continue
+    raise AssertionError('accepted a non-canonical spelling')
+# A document that is not a governed profile at all is a refusal, in this
+# module's own vocabulary rather than the encoder's.
+for rubbish in (b'{}', b'not json', b'[]', b'{\"cinv\":\"CINV-000042\"}',
+                b'{\"a\":' + b'0' * 70000 + b'}'):
+    try:
+        parse_canonical_profile(rubbish)
+    except ProfileError:
+        continue
+    raise AssertionError('accepted ' + repr(rubbish[:24]))
+import inspect
+source = inspect.getsource(parse_canonical_profile)
+# Bytes in, a profile or a refusal out. Obtaining the bytes is somebody else's
+# authority, and this module must not acquire it by growing a reader.
+for banned in ('open(', 'os.', 'descriptor', 'fcntl'):
+    assert banned not in source, banned
 print('OK')
 "
 

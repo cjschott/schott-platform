@@ -451,29 +451,51 @@ assert sha(read(os.path.join(base, PAYLOAD_NAME))) == published.payload_digest
 print('OK')
 "
 
-run_case "the privilege boundary is untouched by this pass" "${PRELUDE}
+run_case "publication stays coordinator-side of the privilege boundary" "${PRELUDE}
 from pathlib import Path
+# Pass 3B-ii moved the boundary; this asserts publication did not move with it.
+# The launch record is the vNext seven fields, the profile digest replaced the
+# image identity, and the sealed transport lives in the privileged helper --
+# none of which this module may know about.
 helper = Path('provisioning/execution/kyri-exec-transition.py').read_text(encoding='utf-8')
-# The launch record is still the pre-vNext seven fields, including
-# oci_image_id: replacing it is Pass 3B-ii, not this pass.
 schema = helper.split('LAUNCH_RECORD_SCHEMA = (')[1].split(')')[0]
-assert chr(34) + 'oci_image_id' + chr(34) in schema, schema
+assert chr(34) + 'profile_digest' + chr(34) in schema, schema
+assert chr(34) + 'oci_image_id' + chr(34) not in schema, schema
 assert schema.count(chr(34)) == 14, schema
-assert 'INHERITED_DESCRIPTORS = (0, 1, 2)' in helper
-assert 'PROFILE_FD' not in helper and 'memfd' not in helper
-assert '(WORKER_INTERPRETER, WORKER_SCRIPT, cinv)' in helper
-# The worker entrypoint and library are untouched.
-entry = Path('provisioning/execution/kyri-exec-worker.py').read_text(encoding='utf-8')
-assert 'no governed runtime backend is bound' in entry
-assert 'memfd' not in entry and 'F_GET_SEALS' not in entry
+assert 'INHERITED_DESCRIPTORS = (0, 1, 2, 3)' in helper
+assert 'PROFILE_FD = 3' in helper
+# The transport belongs to the action layer; the policy layer decides and the
+# worker consumes. Publication does none of the three.
+action = Path('provisioning/execution/kyri-exec-transition-action.py').read_text(encoding='utf-8')
+assert 'memfd_create' in action and 'F_ADD_SEALS' in action
+assert 'memfd' not in helper, 'the policy layer performs the copy'
 worker = Path('tools/capability/execution/worker.py').read_text(encoding='utf-8')
-assert 'memfd' not in worker and 'F_GET_SEALS' not in worker
-assert 'PROFILE_FD' not in worker
-# Handoff publication reaches no runtime, container, or privileged surface.
+assert 'F_GET_SEALS' in worker and 'PROFILE_FD = 3' in worker
+assert 'memfd_create' not in worker, 'the worker creates the object it consumes'
+# Handoff publication reaches no runtime, container, or privileged surface, and
+# knows nothing about how its bytes later cross the boundary.
 source = Path('tools/capability/execution/handoff.py').read_text(encoding='utf-8')
 for token in ('podman', 'Podman', 'subprocess', 'execve', 'setuid', 'memfd',
-              'sudo', 'no_new_privs'):
+              'sudo', 'no_new_privs', 'F_ADD_SEALS', 'F_GET_SEALS',
+              'PROFILE_FD', 'launch-authorisation'):
     assert token not in source, token
+print('OK')
+"
+
+run_case "the published profile is exactly what the transition will authenticate" "${PRELUDE}
+import hashlib
+base, root, published, binding = publish('boundary-bytes')
+body = read(os.path.join(base, 'root', 'CINV-000042', PROFILE_NAME))
+# The whole transport rests on this equality: the transition hashes these bytes
+# and refuses unless they match the digest the launch record committed to.
+assert body == canonical_profile(governed_profile()), 'publication is not canonical'
+assert hashlib.sha256(body).hexdigest() == published.profile_digest
+assert published.profile_digest == fingerprint(governed_profile()).profile_digest
+# And it stays coordinator-owned and coordinator-replaceable, which is exactly
+# why the sealed copy exists rather than a freeze on this file.
+info = os.lstat(os.path.join(base, 'root', 'CINV-000042', PROFILE_NAME))
+assert stat.S_IMODE(info.st_mode) == HANDOFF_MODES['profile'] == 0o444
+assert info.st_uid == os.getuid()
 print('OK')
 "
 

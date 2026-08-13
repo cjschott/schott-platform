@@ -103,14 +103,22 @@ def main(argv: list[str]) -> int:
     action = _installed(ACTION_MODULE)
     quota = _installed(QUOTA_MODULE)
 
+    backend = action.SystemBackend()
+
     try:
         policy = policy_module.policy_for(argv)
+        # Authorisation is read and checked before the transition is asked to
+        # do anything, and what comes back is a closed type only the policy
+        # layer can build. The `CIMP` and profile digest the worker is told to
+        # trust come from here and from nowhere a caller can reach.
+        launch = action.authenticate_launch(policy, backend=backend)
     except policy_module.TransitionRefused as error:
         raise SystemExit(f"refused: {error}") from None
 
     action.perform_transition(
         policy,
-        backend=action.SystemBackend(),
+        launch_authorisation=launch,
+        backend=backend,
         quota=quota,
         # Observed, not asserted. A caller saying it holds root is not
         # evidence, and the action refuses without it.
