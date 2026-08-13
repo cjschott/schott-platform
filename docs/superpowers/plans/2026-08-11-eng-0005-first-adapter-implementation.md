@@ -1086,7 +1086,7 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | normal allocation begins at `CIMP-000001` / `CGEN-000000000001` | **IMPLEMENTED** (Pass 2B) |
 | permanent identifier gaps | **IMPLEMENTED** (Pass 2B) |
 | `implementation-lifecycle` mutation lock | **IMPLEMENTED** (Pass 2B) |
-| COMPLETE and RETIRE disposition ceremonies | REQUIRED, NOT YET IMPLEMENTED |
+| COMPLETE and RETIRE disposition ceremonies | **IMPLEMENTED** (Pass 2D) |
 | ordinary admission transaction | **IMPLEMENTED** (Pass 2C) |
 | orphan-generation reconciliation | REQUIRED, NOT YET IMPLEMENTED |
 | authority and control namespaces on disk | REQUIRED, NOT YET IMPLEMENTED |
@@ -1095,6 +1095,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | **IMPLEMENTED** (Pass 2C) |
 | exported payload schema-version constant | **IMPLEMENTED** (Pass 2C) |
 | coordinator resolves authority; root and worker do not | REQUIRED, NOT YET IMPLEMENTED |
+| launch-record `ExecutionProfile` transport | REQUIRED, NOT YET IMPLEMENTED |
+| production G5 image build and CIMP admission | NOT STARTED |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
 ### Pass 2B — offline bootstrap primitives, implemented
@@ -1188,6 +1190,48 @@ reader names no container runtime. The constant moved to its only consumer
 rather than the guard being weakened — the reader deliberately does not enforce
 contract identities anyway, because a retired CIMP admitted under an older
 contract must stay readable.
+
+### Pass 2D — pending-disposition ceremonies, implemented
+
+`tools/provisioning/authority_disposition.py` settles pending CIMPs. Exactly
+two answers exist — `COMPLETE` and `RETIRE` — as a governed enum; a suite check
+scans for `DELETE`, `IGNORE`, `REPAIR`, `REUSE`, `FORCE`, and `AUTO` and fails
+if any appears, because each would be a way for the system to decide on the
+operator's behalf what a half-finished decision meant.
+
+**One generation for the whole pending set.** A request that omits a pending
+CIMP, names one that is not pending, or decides one twice is refused before
+anything is touched. Sequential disposition would raise the high-water mark
+past a still-pending lower ordinal — the reader's corruption condition — so the
+namespace would transit global freeze on its way to a valid state.
+
+**Everything that can fail runs before anything is written.** Classification,
+the decision set, every COMPLETE prerequisite, and every existing retirement
+are checked first; only then is a retirement published or a `CGEN` burned. A
+malformed request therefore costs nothing and leaves nothing behind, and a
+mixed request containing one unlawful decision is refused whole rather than
+partially applied.
+
+COMPLETE re-performs the full Pass 2C prerequisite set against the **immutable
+published admission** — a valid record proves a record was written, never that
+the image still exists or that the evidence was for it. The admitted identity
+comes from the admission; the evidence and the observed ID must agree with it,
+not merely with each other. RETIRE needs no image evidence at all, and takes
+none, because it grants no authority.
+
+**Retirement is one-way and never rewritten.** For a CIMP already carrying one,
+the existing record is validated and its digest reused; `COMPLETE` is refused
+outright. A ceremony interrupted after publishing some retirements leaves the
+reader reporting accurate mixed subtypes, and a resumed request must respect
+the decisions already published.
+
+Disposition allocates exactly one `CGEN` for the whole set and **no `CIMP` at
+all**, both proven by counter bytes. `publish_successor` and `advance_pointer`
+were factored out of Pass 2C rather than reimplemented, so both ceremonies
+share one set of durability decisions; Pass 2C's suite is unchanged and green.
+
+**No runtime-installed file changed in this pass** — the generation-4 delta is
+still the two files from Passes 2A and 2C.
 
 ## 6. Sequencing rules
 

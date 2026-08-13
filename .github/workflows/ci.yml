@@ -298,6 +298,10 @@ jobs:
       - name: Capability implementation admission tests
         run: bash tests/test-capability-authority-admission.sh
 
+      # G5 pending-disposition ceremonies. Hermetic; no production path.
+      - name: Capability pending disposition tests
+        run: bash tests/test-capability-authority-disposition.sh
+
       # G4 provisioning artifacts. Installs nothing and mounts nothing.
       - name: Capability execution provisioning artifact tests
         run: bash tests/test-capability-execution-provisioning.sh

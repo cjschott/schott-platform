@@ -688,7 +688,7 @@ and it did not affect the installation or its verification. Run that probe from
 a directory the execution identity can traverse, such as `/tmp`.
 
 **Generation 4 — pending, from Passes 2A and 2C (2026-08-13).** Exactly **two**
-installed objects differ from source:
+installed objects differ from source; Passes 2B and 2D added no runtime file:
 
 | Repository source | Installed path | SHA-256 |
 |---|---|---|
@@ -698,8 +698,9 @@ installed objects differ from source:
 Both `root:root 0444`. The other 43 matrix artefacts are byte-identical and the
 three `/usr/libexec` entrypoints are unchanged.
 
-**Nothing from Passes 2B or 2C is installed, and none of it may be.** The whole
-`tools/provisioning/` package — bootstrap, evidence, and admission — is offline
+**Nothing from Passes 2B, 2C, or 2D is installed, and none of it may be.** The
+whole `tools/provisioning/` package — bootstrap, evidence, admission, and
+disposition — is offline
 operator tooling and sits outside the matrix by design. Installing it would put
 identifier allocation and authority publication inside the runtime library the
 coordinator imports from.

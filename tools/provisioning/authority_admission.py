@@ -205,6 +205,55 @@ def _publish(staging_fd: int, name: str, destination_fd: int) -> None:
     os.fsync(destination_fd)
 
 
+def publish_successor(authority_fd: int, staging_fd: int, *, generation: Any,
+                      authority_set: bytes, cgen: str) -> tuple[bytes, str]:
+    """Stage, verify, and publish one successor generation, non-current.
+
+    Factored so admission and disposition share one publication path. A second
+    implementation of this would be a second set of durability decisions, and
+    the two would drift in exactly the places that matter least often and cost
+    most when they do.
+
+    The generation is immutable the moment it lands and grants nothing: only
+    the pointer decides what is authoritative.
+    """
+    record = canonical_json.serialise({
+        "cgen": cgen,
+        "predecessor_cgen": generation.cgen,
+        "predecessor_generation_digest": generation.generation_digest,
+        "authority_set_digest": hashlib.sha256(authority_set).hexdigest(),
+    })
+    _stage(staging_fd, cgen, {
+        bootstrap.AUTHORITY_SET: authority_set,
+        bootstrap.GENERATION: record,
+    })
+    generations_fd = os.open(
+        bootstrap.GENERATIONS, bootstrap._DIR_FLAGS, dir_fd=authority_fd)
+    try:
+        _publish(staging_fd, cgen, generations_fd)
+    finally:
+        os.close(generations_fd)
+    return record, hashlib.sha256(record).hexdigest()
+
+
+def advance_pointer(authority_fd: int, *, cgen: str, generation_digest: str) -> None:
+    """Move `current-generation`, the one step that grants anything.
+
+    A regular canonical-JSON file replaced by durable atomic rename. It is the
+    only object in the namespace legitimately replaced rather than created
+    once, because it is a pointer and not a record.
+    """
+    pointer = canonical_json.serialise({
+        "cgen": cgen, "generation_digest": generation_digest})
+    temporary = f".{bootstrap.CURRENT_GENERATION}.{cgen}"
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(temporary, dir_fd=authority_fd)
+    bootstrap._write_durable(temporary, pointer, authority_fd, 0o440)
+    os.rename(temporary, bootstrap.CURRENT_GENERATION,
+              src_dir_fd=authority_fd, dst_dir_fd=authority_fd)
+    os.fsync(authority_fd)
+
+
 def admit_implementation(authority_fd: int, control_fd: int, *,
                          request: AdmissionRequest) -> AdmissionResult:
     """Admit one implementation, or refuse without granting authority.
@@ -267,37 +316,14 @@ def admit_implementation(authority_fd: int, control_fd: int, *,
             cgen = bootstrap.allocate_cgen(control_fd)
             authority_set = _successor_authority_set(
                 generation, cimp, admission_digest)
-            record = canonical_json.serialise({
-                "cgen": cgen,
-                "predecessor_cgen": generation.cgen,
-                "predecessor_generation_digest": generation.generation_digest,
-                "authority_set_digest": hashlib.sha256(authority_set).hexdigest(),
-            })
-
-            _stage(staging_fd, cgen, {
-                bootstrap.AUTHORITY_SET: authority_set,
-                bootstrap.GENERATION: record,
-            })
-            generations_fd = os.open(
-                bootstrap.GENERATIONS, bootstrap._DIR_FLAGS, dir_fd=authority_fd)
-            try:
-                _publish(staging_fd, cgen, generations_fd)
-            finally:
-                os.close(generations_fd)
+            record, generation_digest = publish_successor(
+                authority_fd, staging_fd, generation=generation,
+                authority_set=authority_set, cgen=cgen)
         finally:
             os.close(staging_fd)
 
-        pointer = canonical_json.serialise({
-            "cgen": cgen,
-            "generation_digest": hashlib.sha256(record).hexdigest(),
-        })
-        temporary = f".{bootstrap.CURRENT_GENERATION}.{cgen}"
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=authority_fd)
-        bootstrap._write_durable(temporary, pointer, authority_fd, 0o440)
-        os.rename(temporary, bootstrap.CURRENT_GENERATION,
-                  src_dir_fd=authority_fd, dst_dir_fd=authority_fd)
-        os.fsync(authority_fd)
+        advance_pointer(authority_fd, cgen=cgen,
+                        generation_digest=generation_digest)
 
         # Success is what the reader says, not what this function believes.
         final = current_generation(authority_fd)
@@ -317,6 +343,6 @@ def admit_implementation(authority_fd: int, control_fd: int, *,
             oci_image_id=image_id,
             admission_digest=admission_digest,
             authority_set_digest=hashlib.sha256(authority_set).hexdigest(),
-            generation_digest=hashlib.sha256(record).hexdigest(),
+            generation_digest=generation_digest,
             provisioning_evidence_digest=provisioning_digest,
         )
