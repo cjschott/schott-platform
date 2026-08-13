@@ -207,7 +207,11 @@ assert_backstop_coverage() {
                  "package_contract.py" "handoff.py" "profile.py"
                  "protocol.py" "worker.py" "lifecycle.py" "collector.py"
                  "quarantine.py" "cleanup.py" "admin.py"
-                 "adapter.py" "quota.py")
+                 "adapter.py" "quota.py"
+                 # Backstopped by tests/test-capability-authority-resolution.sh,
+                 # which proves it is read-only, reaches no offline writer, and
+                 # names no production path.
+                 "authorisation.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

@@ -1094,8 +1094,10 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | `provisioning_evidence_digest` = SHA-256 of canonical bytes | **IMPLEMENTED** (Pass 2C) |
 | `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | **IMPLEMENTED** (Pass 2C) |
 | exported payload schema-version constant | **IMPLEMENTED** (Pass 2C) |
-| coordinator resolves authority; root and worker do not | REQUIRED, NOT YET IMPLEMENTED |
+| coordinator resolves authority; root and worker do not | **IMPLEMENTED** (Pass 3A) |
 | launch-record `ExecutionProfile` transport | REQUIRED, NOT YET IMPLEMENTED |
+| root helper launch-record schema extension | REQUIRED, NOT YET IMPLEMENTED |
+| worker governed-profile consumption | REQUIRED, NOT YET IMPLEMENTED |
 | production G5 image build and CIMP admission | NOT STARTED |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
@@ -1232,6 +1234,48 @@ share one set of durability decisions; Pass 2C's suite is unchanged and green.
 
 **No runtime-installed file changed in this pass** — the generation-4 delta is
 still the two files from Passes 2A and 2C.
+
+### Pass 3A — coordinator authority resolution, implemented
+
+`tools/capability/execution/authorisation.py` turns a requested `CIMP` into a
+governed `ExecutionProfile`: `current_generation` → `resolve_implementation` →
+runtime compatibility → `build_profile` → `AuthorisedImplementation`. It is the
+first **runtime-installed** module of the G5 work; everything under
+`tools/provisioning/` stays operator-only.
+
+The image identity comes from the resolved admission and nowhere else. The
+authority root arrives as an already-open descriptor supplied by service
+startup, never as a caller-chosen path — the one input that must not be caller
+controlled.
+
+**Record integrity and runtime compatibility are separated, deliberately.** The
+reader keeps historical and retired records readable, because refusing them
+would let one old entry poison the namespace; whether a contract is one *this
+build* can honour is judged here instead, after resolution and before a profile
+exists. A structurally perfect admission for another adapter, argv contract, or
+schema version raises `IncompatibleImplementation` — distinct from unknown and
+from retired, because the record is sound and the decision to admit it stands.
+
+Error mapping preserves every distinction the reader already draws: unknown and
+reserved raise `UnknownImplementation`, retired raises `RetiredImplementation`,
+pending raises `UnknownImplementation` naming the outstanding disposition, a
+malformed identifier raises `ImplementationAuthorityError`, and corruption
+propagates `IntegrityFailure` **undowngraded** — collapsing a global freeze into
+"unknown" would hide it behind what looks like a typo.
+
+`AuthorisedImplementation` carries values only — no descriptor, no path, no
+mutable metadata — and reuses the existing `fingerprint()` rather than inventing
+a second profile digest. The adapter's own `ExecutionBinding` is left alone: it
+is the downstream object that also needs argv and environment, and conflating
+the two would put a second author on it.
+
+Resolution mutates nothing, proven by byte-identical authority and control
+trees, unchanged counters and pointer, and no staging. An AST backstop proves no
+runtime module imports `tools.provisioning`, and the new module is registered in
+the execution suite's purity-backstop coverage list rather than exempted from it.
+
+`LAUNCH_RECORD_SCHEMA` is untouched and still exactly seven fields — asserted by
+this pass's own suite, since extending it is Pass 3B's privilege-boundary work.
 
 ## 6. Sequencing rules
 

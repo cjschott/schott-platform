@@ -108,7 +108,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=46
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=60
+  TOTAL_STEPS=61
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -302,6 +302,11 @@ run "Capability implementation admission" \
 # settled in one successor generation. Hermetic against temporary roots.
 run "Capability pending disposition" \
   bash tests/test-capability-authority-disposition.sh
+
+# ENG-0005 G5 increment. Coordinator authority resolution: a requested CIMP
+# becomes a governed ExecutionProfile. Read-only and hermetic.
+run "Capability authority resolution" \
+  bash tests/test-capability-authority-resolution.sh
 
 # ENG-0005 G4 artifacts. Static validation of the installed worker entrypoint,
 # the backing-store and sudoers examples, and the provisioning runbook.

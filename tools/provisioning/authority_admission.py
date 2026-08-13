@@ -32,9 +32,11 @@ import os
 from typing import Any
 
 from tools.capability.execution import canonical_json
+from tools.capability.execution.authorisation import (
+    ADAPTER_IDENTITY, ARGV_CONTRACT_IDENTITY)
 from tools.capability.execution.implementation_authority import (
-    NamespaceState,
-    PendingDisposition, current_generation, resolve_implementation)
+    NamespaceState, PendingDisposition, current_generation,
+    resolve_implementation)
 from tools.capability.execution.payload import PAYLOAD_SCHEMA_VERSION
 from tools.capability.execution.profile import PROFILE_SCHEMA_VERSION
 from tools.provisioning import authority_bootstrap as bootstrap
@@ -44,18 +46,15 @@ from tools.provisioning.provisioning_evidence import (
 _ADMISSION = "admission"
 _HEX = frozenset("0123456789abcdef")
 
-# The governed contract identities an admission commits.
+# The governed contract identities an admission commits, re-exported from the
+# runtime module that defines what this build implements.
 #
-# Defined here rather than beside the admission schema for two reasons. The
-# reader deliberately does not enforce them -- a retired CIMP admitted under an
-# older contract must stay readable, and rejecting it would let history poison
-# the whole namespace -- so the reader has no use for them. And the reader
-# carries a backstop proving it names no container runtime at all; a governed
-# identity that happens to contain "podman" would erode a real property for the
-# sake of where a constant sits. Enforcement belongs where a contract is
-# chosen, which is here.
-ADAPTER_IDENTITY = "python-podman-v1"
-ARGV_CONTRACT_IDENTITY = "fixed-python-entrypoint-v1"
+# One definition, and it lives on the runtime side: the writer must admit only
+# what the runtime can honour, so the runtime is the thing that gets to say
+# what that is. Offline tooling may depend on runtime; runtime never depends on
+# offline tooling. They are deliberately not in the reader, which stays free of
+# any container-runtime name and deliberately does not enforce contracts at
+# all -- a retired CIMP admitted under an older contract must stay readable.
 
 
 class AdmissionRefused(ValueError):

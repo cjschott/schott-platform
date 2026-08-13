@@ -687,19 +687,22 @@ cannot traverse the coordinator's tree, which is the authority split working —
 and it did not affect the installation or its verification. Run that probe from
 a directory the execution identity can traverse, such as `/tmp`.
 
-**Generation 4 — pending, from Passes 2A and 2C (2026-08-13).** Exactly **two**
-installed objects differ from source; Passes 2B and 2D added no runtime file:
+**Generation 4 — pending, from Passes 2A, 2C, and 3A (2026-08-13).** **Three**
+installed objects differ from source — two changed and one new; Passes 2B and
+2D added no runtime file:
 
 | Repository source | Installed path | SHA-256 |
 |---|---|---|
 | `tools/capability/execution/implementation_authority.py` | `…/tools/capability/execution/implementation_authority.py` | `ddd5b9134d5f4e0906ebfdb4cabd61a7d63639fd8c55a20523e872055c6234e4` |
 | `tools/capability/execution/payload.py` | `…/tools/capability/execution/payload.py` | `cde8f95b307d4f45bf0e79efca54cf3fa2ec0f6d043282f2ebe4310e6b67d4bb` |
+| `tools/capability/execution/authorisation.py` **(new)** | `…/tools/capability/execution/authorisation.py` | `191bb7b8e1553e96c27d8a29cedd5be1d30d2fdb55777fa53cf50581d58f799c` |
 
-Both `root:root 0444`. The other 43 matrix artefacts are byte-identical and the
+All `root:root 0444`. The other 43 matrix artefacts are byte-identical and the
 three `/usr/libexec` entrypoints are unchanged.
 
-**Nothing from Passes 2B, 2C, or 2D is installed, and none of it may be.** The
-whole `tools/provisioning/` package — bootstrap, evidence, admission, and
+**Nothing from Passes 2B, 2C, or 2D is installed, and none of it may be.** Pass
+3A's `authorisation.py` is runtime and *is* installed; the whole
+`tools/provisioning/` package — bootstrap, evidence, admission, and
 disposition — is offline
 operator tooling and sits outside the matrix by design. Installing it would put
 identifier allocation and authority publication inside the runtime library the

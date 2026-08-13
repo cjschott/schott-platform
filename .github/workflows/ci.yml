@@ -302,6 +302,10 @@ jobs:
       - name: Capability pending disposition tests
         run: bash tests/test-capability-authority-disposition.sh
 
+      # G5 coordinator authority resolution. Read-only and hermetic.
+      - name: Capability authority resolution tests
+        run: bash tests/test-capability-authority-resolution.sh
+
       # G4 provisioning artifacts. Installs nothing and mounts nothing.
       - name: Capability execution provisioning artifact tests
         run: bash tests/test-capability-execution-provisioning.sh
