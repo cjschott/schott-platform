@@ -35,13 +35,16 @@ from .implementation_authority import (
     UnknownImplementation, current_generation, resolve_implementation)
 from .payload import PAYLOAD_SCHEMA_VERSION
 from .profile import (
-    PROFILE_SCHEMA_VERSION, ExecutionFingerprint, ExecutionProfile,
-    ProfileBinding, build_profile, fingerprint)
+    ADAPTER_IDENTITY, ARGV_CONTRACT_IDENTITY, PROFILE_SCHEMA_VERSION,
+    ExecutionFingerprint, ExecutionProfile, ProfileBinding, build_profile,
+    fingerprint)
 
-# The governed contract identities this build implements. An admission naming
-# anything else is readable history, not something the current runtime may bind.
-ADAPTER_IDENTITY = "python-podman-v1"
-ARGV_CONTRACT_IDENTITY = "fixed-python-entrypoint-v1"
+# The governed contract identities this build implements are re-exported from
+# `profile`, which is where the policy they belong to lives. The worker checks
+# the same names against the same constants; two copies would be two answers.
+__all__ = ["ADAPTER_IDENTITY", "ARGV_CONTRACT_IDENTITY",
+           "AuthorisedImplementation", "IncompatibleImplementation",
+           "authorise_implementation"]
 
 
 class IncompatibleImplementation(ImplementationAuthorityError):
@@ -102,6 +105,8 @@ def _require_compatible(admission: Admission) -> None:
 
 
 def authorise_implementation(authority_fd: int, *, cinv: str, cimp: str,
+                             payload_digest: str, package_digest: str,
+                             package_entrypoint: str,
                              metadata: Mapping[str, Any] | None = None
                              ) -> AuthorisedImplementation:
     """Turn a requested `CIMP` into a governed profile, or refuse.
@@ -111,6 +116,13 @@ def authorise_implementation(authority_fd: int, *, cinv: str, cimp: str,
     execution. Taking a path here would make the authority namespace something
     a caller could choose, which is the one input that must never be caller
     controlled.
+
+    The three commitments are *invocation* authority, not implementation
+    authority: they describe the material this invocation published, and they
+    are required rather than optional because a profile without them cannot be
+    verified by the worker at all. They influence no security control — a
+    different payload produces a different commitment, never a differently
+    configured sandbox.
 
     ``metadata`` exists so that an attempt to influence the profile is an
     error rather than something quietly dropped; it is passed straight to
@@ -133,7 +145,10 @@ def authorise_implementation(authority_fd: int, *, cinv: str, cimp: str,
     _require_compatible(admission)
 
     profile = build_profile(
-        ProfileBinding(cinv=cinv, admission=admission), metadata)
+        ProfileBinding(cinv=cinv, admission=admission,
+                       payload_digest=payload_digest,
+                       package_digest=package_digest,
+                       package_entrypoint=package_entrypoint), metadata)
 
     # The agreements the design requires, asserted rather than assumed. Each
     # would be a silent substitution if it ever failed.

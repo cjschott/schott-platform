@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=48
+  TOTAL_STEPS=49
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=63
+  TOTAL_STEPS=64
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -242,6 +242,12 @@ run "Capability execution transition action" \
 # child -- but no privilege: credentials and the worker exec are injected.
 run "Capability execution profile transport" \
   bash tests/test-capability-execution-profile-transport.sh
+
+# ENG-0005 Pass 4A. The create_argv authority gate: policy re-derivation,
+# runtime contracts, image presence through an injected seam, and the payload
+# and package commitments. Builds an argv tuple and executes nothing.
+run "Capability execution authority gate" \
+  bash tests/test-capability-execution-authority-gate.sh
 
 # ENG-0005 generation-5 installer. Drives the operator installer against
 # throwaway fixture trees only: failure is injected at every commit position

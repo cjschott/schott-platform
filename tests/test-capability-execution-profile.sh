@@ -61,6 +61,11 @@ FORBIDDEN_CALLS = {
     "monotonic", "uuid1", "uuid4", "normalize", "scandir", "stat",
 }
 FORBIDDEN_TEXT = ("podman", "docker", "sudo", "runuser", "systemd", "/proc/")
+# The governed adapter contract identity is a *name*, and it lives here because
+# the worker checks it against the same constant. Naming the contract is not
+# reaching a runtime, so the literal is removed before the token scan rather
+# than the scan being weakened: every other occurrence still fails.
+CONTRACT_IDENTITY = "python-podman-v1"
 
 if not target.is_file():
     print("module-absent")
@@ -84,7 +89,7 @@ for node in ast.walk(tree):
             body.append(ast.Pass())
 ast.fix_missing_locations(tree)
 
-stripped = ast.unparse(tree).lower()
+stripped = ast.unparse(tree).lower().replace(CONTRACT_IDENTITY, "")
 for token in FORBIDDEN_TEXT:
     if token in stripped:
         findings.append(f"{rel}: forbidden token in code: {token}")
@@ -157,8 +162,20 @@ def admission(cimp='CIMP-000001', image=IMAGE):
                      argv_contract_identity='fixed-python-entrypoint-v1',
                      provisioning_evidence_digest='b' * 64)
 
-def binding(cinv='CINV-000042', **kw):
-    return ProfileBinding(cinv=cinv, admission=admission(**kw))
+# Schema 2 carries the invocation commitments. They are identity, not policy:
+# a different payload produces a different commitment, never a differently
+# configured sandbox, which is what these fixtures keep asserting.
+PAYLOAD_DIGEST = 'c' * 64
+PACKAGE_DIGEST = 'd' * 64
+PACKAGE_ENTRYPOINT = 'main.py'
+
+def binding(cinv='CINV-000042', payload_digest=PAYLOAD_DIGEST,
+            package_digest=PACKAGE_DIGEST,
+            package_entrypoint=PACKAGE_ENTRYPOINT, **kw):
+    return ProfileBinding(cinv=cinv, admission=admission(**kw),
+                          payload_digest=payload_digest,
+                          package_digest=package_digest,
+                          package_entrypoint=package_entrypoint)
 
 def profile(**kw):
     return build_profile(binding(**kw))
@@ -185,7 +202,9 @@ def observed_from(p, **overrides):
 # --- fixed constants ---------------------------------------------------------
 
 run_case "the accepted v1 constants are exactly the specification's" "${PRELUDE}
-assert PROFILE_SCHEMA_VERSION == 1
+# Schema 2 added the three invocation commitments. The security constants
+# below are unchanged by that: the schema bump carries commitments, not policy.
+assert PROFILE_SCHEMA_VERSION == 2
 assert MEMORY_BYTES == 256 * 1024 * 1024, MEMORY_BYTES
 assert MEMORY_SWAP_BYTES == 256 * 1024 * 1024
 assert CPUS == '0.5', CPUS
@@ -303,7 +322,7 @@ changes = {
     'grace_seconds': 5, 'execution_uid': 0, 'execution_gid': 0,
     'hostname': 'other', 'tmpfs_bytes': 32 * 1024 * 1024,
     'tmpfs_mode': 0o777, 'tmpfs_options': ('noexec',),
-    'profile_schema_version': 2, 'oci_image_id': 'b' * 64,
+    'profile_schema_version': 3, 'oci_image_id': 'b' * 64,
     'cimp': 'CIMP-000002', 'adapter_identity': 'other-v2',
     'payload_schema_version': 9, 'privileged': True, 'host_network': True,
     'host_pid': True, 'gpu': True, 'devices': ('/dev/nvidia0',),
@@ -400,7 +419,7 @@ mismatches = {
     'cpu_quota_us': 100000, 'cpu_period_us': 1000, 'pids_limit': 4096,
     'execution_uid': 0, 'execution_gid': 0, 'hostname': 'other',
     'tmpfs_bytes': 1, 'tmpfs_mode': 0o777, 'tmpfs_options': ('noexec',),
-    'profile_schema_version': 2, 'devices': ('/dev/nvidia0',),
+    'profile_schema_version': 3, 'devices': ('/dev/nvidia0',),
     'sockets': ('/run/podman/podman.sock',),
     'effective_capabilities': ('CAP_SYS_ADMIN',),
     'dropped_capabilities': (),
@@ -481,22 +500,28 @@ else:
 
 run_case "an unsupported profile schema version is refused" "${PRELUDE}
 p = profile()
-for version in (0, 2, 99, -1):
+# 1 is here deliberately: schema 1 remains a readable historical shape and is
+# not a version this build verifies. Historical readability is not execution.
+for version in (0, 1, 3, 99, -1):
     altered = dataclasses.replace(p, profile_schema_version=version)
     try:
         verify_observed(altered, observed_from(altered))
     except UnsupportedProfileSchema as error:
         assert error.classification is Classification.EXECUTION_PROFILE_VERSION_UNSUPPORTED
         continue
-    raise AssertionError(f'schema version {version} was verified with v1 semantics')
+    raise AssertionError(f'schema version {version} was verified with v2 semantics')
 print('OK')
 "
 
 run_case "an admission declaring a different profile schema refuses at build" "${PRELUDE}
 from tools.capability.execution.implementation_authority import Admission
-bad = ProfileBinding(cinv='CINV-000042', admission=Admission(
+bad = ProfileBinding(cinv='CINV-000042',
+                     payload_digest=PAYLOAD_DIGEST,
+                     package_digest=PACKAGE_DIGEST,
+                     package_entrypoint=PACKAGE_ENTRYPOINT,
+                     admission=Admission(
     cimp='CIMP-000001', oci_image_id=IMAGE, adapter_identity='python-podman-v1',
-    payload_schema_version=1, execution_profile_schema_version=2,
+    payload_schema_version=1, execution_profile_schema_version=3,
     argv_contract_identity='fixed-python-entrypoint-v1',
     provisioning_evidence_digest='b' * 64))
 try:
@@ -504,7 +529,7 @@ try:
 except UnsupportedProfileSchema:
     print('OK')
 else:
-    raise AssertionError('an admission naming schema 2 built a v1 profile')
+    raise AssertionError('an admission naming schema 3 built a v2 profile')
 "
 
 run_case "T8 exposes no execution or I/O authority" "${PRELUDE}
@@ -516,8 +541,12 @@ functions = [n for n, v in vars(module).items()
 # beside the encoder, because two modules answering \"what are these bytes\" is
 # one more than can be kept in agreement. It is pure like the rest -- bytes in,
 # a profile or a refusal out, and no descriptor, path, or process anywhere.
+# governed_policy and verify_governed_policy joined with Pass 4A: the module
+# that owns the compiled-in policy is also the one that answers whether a
+# profile carries it. Both are pure -- values in, a refusal or nothing out.
 assert sorted(functions) == ['build_profile', 'canonical_profile',
-                             'fingerprint', 'parse_canonical_profile',
+                             'fingerprint', 'governed_policy',
+                             'parse_canonical_profile', 'verify_governed_policy',
                              'verify_observed'], functions
 print('OK')
 "

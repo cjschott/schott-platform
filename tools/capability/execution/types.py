@@ -159,6 +159,14 @@ class ExecutionProfile:
     No field carries a default. A security control that could be omitted at
     construction is one that can be forgotten, and a forgotten control looks
     exactly like a control nobody needed.
+
+    Three fields carry *invocation* commitments rather than policy:
+    ``payload_digest``, ``package_digest`` and ``package_entrypoint``. They are
+    here because the worker cannot otherwise learn what the coordinator
+    published — the material itself lives in a directory the coordinator owns,
+    and a commitment that travelled beside it would be no commitment at all.
+    Carried in the profile, they cross under the sealed transport that already
+    protects everything else here.
     """
 
     cinv: str
@@ -193,6 +201,9 @@ class ExecutionProfile:
     host_network: bool
     host_pid: bool
     gpu: bool
+    payload_digest: str
+    package_digest: str
+    package_entrypoint: str
 
 
 @dataclasses.dataclass(frozen=True)

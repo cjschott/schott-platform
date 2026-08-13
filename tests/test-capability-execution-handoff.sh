@@ -206,7 +206,7 @@ from tools.capability.execution.handoff import (
     HandoffIdentityMismatch, HANDOFF_MODES, PACKAGE_DIRECTORY,
     PAYLOAD_NAME, OUTPUT_DIRECTORY, PROFILE_NAME)
 from tools.capability.execution.profile import (
-    ProfileBinding, build_profile, canonical_profile, fingerprint)
+    PROFILE_SCHEMA_VERSION, ProfileBinding, build_profile, canonical_profile, fingerprint)
 from tools.capability.execution.implementation_authority import Admission
 WORK = os.environ['WORKDIR']
 UUID = '12774bf1-cf2a-4c8c-ba19-42fd9a8a0a96'
@@ -283,23 +283,54 @@ def admission(cimp='CIMP-000001', image=None):
     return Admission(
         cimp=cimp, oci_image_id=image if image else 'a' * 64,
         adapter_identity='python-podman-v1', payload_schema_version=1,
-        execution_profile_schema_version=1,
+        execution_profile_schema_version=PROFILE_SCHEMA_VERSION,
         argv_contract_identity='fixed-python-entrypoint-v1',
         provisioning_evidence_digest='b' * 64)
 
-def governed_profile(cinv='CINV-000042', cimp='CIMP-000001', image=None):
-    return build_profile(ProfileBinding(cinv=cinv, admission=admission(cimp, image)))
+# The default fixture package, committed once. Its digest depends only on the
+# member paths and bytes, so it is the same tree every publication builds, and
+# using it as the default keeps governed_profile coherent with what publish
+# actually stages -- which is now a publication requirement, not a convenience.
+_DEFAULT_BASE, _DEFAULT_ENTRY = make_package('default-commitment-pkg')
+_DEFAULT_FD, DEFAULT_PACKAGE = package_of(_DEFAULT_BASE, _DEFAULT_ENTRY)
+os.close(_DEFAULT_FD)
+# The payload commitment is over the CANONICAL bytes, which is what gets
+# published -- not over the JSON spelling the fixture happens to write. The two
+# differ here precisely because canonicalisation sorts keys, and using the raw
+# spelling would have committed to bytes nobody publishes.
+DEFAULT_PAYLOAD = payload_binding('default-commitment')
+
+def governed_profile(cinv='CINV-000042', cimp='CIMP-000001', image=None,
+                     payload_digest=None, package_digest=None,
+                     package_entrypoint=None):
+    '''Schema 2: the profile commits to the material published beside it.'''
+    return build_profile(ProfileBinding(
+        cinv=cinv, admission=admission(cimp, image),
+        payload_digest=payload_digest or DEFAULT_PAYLOAD.digest,
+        package_digest=package_digest or DEFAULT_PACKAGE.digest,
+        package_entrypoint=package_entrypoint or DEFAULT_PACKAGE.entrypoint))
 
 def publish(name='p', cinv='CINV-000042', files=None, entrypoint='main.py',
             profile=None):
+    '''Publish one coherent staged snapshot.
+
+    Schema 2: the profile commits to the payload and package being published,
+    so the fixture must derive it from those bindings rather than from
+    placeholders. A profile committing to other material is a refusal now, and
+    that refusal has its own case below.
+    '''
     pkg_base, ep = make_package(name + '-pkg', files=files, entrypoint=entrypoint)
     hb = make_handoff_root(name + '-hand')
     root = anchor(hb)
     fd, binding = package_of(pkg_base, ep)
+    payload = payload_binding(name)
     try:
         published = publish_handoff(
-            root, cinv, fd, payload_binding(name), binding,
-            profile=governed_profile(cinv) if profile is None else profile)
+            root, cinv, fd, payload, binding,
+            profile=(governed_profile(cinv, payload_digest=payload.digest,
+                                      package_digest=binding.digest,
+                                      package_entrypoint=binding.entrypoint)
+                     if profile is None else profile))
     finally:
         os.close(fd)
     return hb, root, published, binding

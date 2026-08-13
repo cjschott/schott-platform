@@ -203,6 +203,11 @@ def publish_pending(authority, cimp, image=IMAGE, retire=False, **override):
 def resolve(authority, cimp, cinv=CINV, **kwargs):
     handle = fd(authority)
     try:
+        # Schema 2: the invocation commitments are required, because a
+        # profile without them cannot be verified by the worker at all.
+        kwargs.setdefault('payload_digest', 'c' * 64)
+        kwargs.setdefault('package_digest', 'd' * 64)
+        kwargs.setdefault('package_entrypoint', 'main.py')
         return authorise_implementation(handle, cinv=cinv, cimp=cimp, **kwargs)
     finally:
         os.close(handle)

@@ -41,13 +41,16 @@ from __future__ import annotations
 
 import dataclasses
 import fcntl
+import hashlib
 import os
 import stat as stat_module
 from typing import Any, Protocol, Sequence
 
-from .package_contract import PackageBinding
-from .profile import (MAXIMUM_PROFILE_BYTES, ProfileError, fingerprint,
-                      parse_canonical_profile)
+from .package_contract import PackageBinding, PackageError, validate_package
+from .payload import PAYLOAD_MAXIMUM_BYTES, PAYLOAD_SCHEMA_VERSION
+from .profile import (ADAPTER_IDENTITY, MAXIMUM_PROFILE_BYTES,
+                      PROFILE_SCHEMA_VERSION, ProfileError, fingerprint,
+                      parse_canonical_profile, verify_governed_policy)
 from .types import ExecutionProfile
 
 PODMAN = "/usr/bin/podman"
@@ -129,7 +132,12 @@ EXPECTED_MODES = {
 _DIGITS = frozenset("0123456789")
 _HEX = frozenset("0123456789abcdef")
 UNALLOCATED_CIMP = "CIMP-000000"
-_READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+# O_NONBLOCK is the generation-5 FIFO lesson applied on this side of the
+# boundary. Opening a FIFO for reading blocks until a writer arrives, so a
+# coordinator that replaced the payload with a named pipe would hang the worker
+# before it reached the check that refuses it. Inert on the regular file this
+# is supposed to be.
+_READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 
 
@@ -344,19 +352,209 @@ def verify_handoff(cinv: str, *, root_fd: int) -> HandoffSources:
     )
 
 
-def _container_script(package: PackageBinding) -> str:
+class ImageStore(Protocol):
+    """The one question the worker may ask about images.
+
+    Deliberately not a listing, a resolver, or a client. Presence is not
+    authority: the image identity was already decided by `CIMP` resolution
+    against a namespace the coordinator cannot write, and this seam only
+    reports whether that exact already-authorised identity exists locally.
+    Anything wider -- a tag lookup, "latest", a repository name, a pull --
+    would let the store choose what runs.
+    """
+
+    def present(self, oci_image_id: str) -> bool: ...
+
+
+_VERIFIED = object()
+
+
+class VerifiedExecution:
+    """Proof that every gate condition held, and the only input create_argv takes.
+
+    Not a plain dataclass, for the same reason `AuthenticatedLaunch` is not: a
+    value that means "all seven conditions passed" must not be constructible by
+    anything that did not run them.
+    """
+
+    __slots__ = ("profile", "sources", "entrypoint")
+
+    def __init__(self, token: Any, *, profile: ExecutionProfile,
+                 sources: "HandoffSources", entrypoint: str) -> None:
+        if token is not _VERIFIED:
+            raise WorkerRefused(
+                "a verified execution is produced by verify_execution and "
+                "cannot be constructed")
+        object.__setattr__(self, "profile", profile)
+        object.__setattr__(self, "sources", sources)
+        object.__setattr__(self, "entrypoint", entrypoint)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise WorkerRefused("the verified execution is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise WorkerRefused("the verified execution is immutable")
+
+
+def require_runtime_contract(profile: ExecutionProfile) -> None:
+    """Confirm the profile names contracts this build implements, or refuse.
+
+    Record integrity and runtime compatibility are different questions. A
+    historical admission may be perfectly readable and still name an adapter or
+    a schema this build does not implement; that is a refusal to execute, not a
+    claim the record is corrupt. Refusing here is what stops readable history
+    becoming an execution bypass.
+    """
+    if profile.adapter_identity != ADAPTER_IDENTITY:
+        raise WorkerRefused(
+            f"the profile names adapter {profile.adapter_identity!r}, and this "
+            f"build implements {ADAPTER_IDENTITY!r}")
+    if profile.payload_schema_version != PAYLOAD_SCHEMA_VERSION:
+        raise WorkerRefused(
+            f"the profile names payload schema {profile.payload_schema_version}, "
+            f"and this build implements {PAYLOAD_SCHEMA_VERSION}")
+    if profile.profile_schema_version != PROFILE_SCHEMA_VERSION:
+        raise WorkerRefused(
+            f"the profile names schema {profile.profile_schema_version}, and "
+            f"this build executes only schema {PROFILE_SCHEMA_VERSION}")
+
+
+def require_image_present(profile: ExecutionProfile, images: Any) -> None:
+    """Confirm the authorised image exists locally, or refuse.
+
+    The identity is not chosen here and cannot be: it arrives already bound by
+    `CIMP` resolution, is required to be a bare 64-character lowercase hex
+    local image ID, and is passed to the store unchanged. A store that raises,
+    or that answers with anything other than a boolean, is refused rather than
+    interpreted -- an unreadable store is not a present image.
+    """
+    identity = profile.oci_image_id
+    if not isinstance(identity, str) or len(identity) != 64 \
+            or set(identity) - _HEX:
+        raise WorkerRefused("the profile carries a malformed image ID")
+    try:
+        answer = images.present(identity)
+    except Exception as error:  # noqa: BLE001 -- any failure is a refusal
+        raise WorkerRefused(
+            f"the image store could not be consulted: {error}") from None
+    if answer is not True and answer is not False:
+        raise WorkerRefused("the image store gave no usable answer")
+    if not answer:
+        raise WorkerRefused(
+            "the authorised image is not present in the execution identity's store")
+
+
+def _verify_payload(profile: ExecutionProfile, invocation_fd: int) -> None:
+    """Confirm the published payload is the committed bytes, or refuse."""
+    try:
+        handle = os.open(PAYLOAD_NAME, _READ_FLAGS, dir_fd=invocation_fd)
+    except OSError as error:
+        raise WorkerRefused(f"the payload is unusable: {error}") from None
+    try:
+        info = os.fstat(handle)
+        if not stat_module.S_ISREG(info.st_mode):
+            raise WorkerRefused("the payload is not a regular file")
+        if info.st_size > PAYLOAD_MAXIMUM_BYTES:
+            raise WorkerRefused("the payload exceeds the governed bound")
+        body = os.read(handle, PAYLOAD_MAXIMUM_BYTES + 1)
+    except OSError as error:
+        raise WorkerRefused(f"the payload could not be read: {error}") from None
+    finally:
+        os.close(handle)
+    if len(body) > PAYLOAD_MAXIMUM_BYTES:
+        raise WorkerRefused("the payload exceeds the governed bound")
+    if hashlib.sha256(body).hexdigest() != profile.payload_digest:
+        raise WorkerRefused("the published payload is not the committed payload")
+
+
+def _verify_package(profile: ExecutionProfile, invocation_fd: int) -> str:
+    """Confirm the published package is the committed tree, or refuse.
+
+    Re-validated with the same contract that produced the commitment, so the
+    publisher and the verifier cannot disagree about what the digest covers.
+    That walk is descriptor-relative and refuses symlinks, hard links, special
+    files, executables, and anything over the governed bounds, so this check
+    also re-establishes the tree's shape rather than trusting the earlier one.
+    """
+    try:
+        handle = os.open(PACKAGE_NAME, _DIR_FLAGS, dir_fd=invocation_fd)
+    except OSError as error:
+        raise WorkerRefused(f"the package is unusable: {error}") from None
+    try:
+        binding = validate_package(handle,
+                                   entrypoint=profile.package_entrypoint)
+    except PackageError as error:
+        raise WorkerRefused(f"the published package is not governed: {error}") from None
+    except OSError as error:
+        raise WorkerRefused(f"the package could not be read: {error}") from None
+    finally:
+        os.close(handle)
+    if binding.digest != profile.package_digest:
+        raise WorkerRefused("the published package is not the committed package")
+    return binding.entrypoint
+
+
+def verify_execution(context: LaunchContext, profile: ExecutionProfile, *,
+                     root_fd: int, images: Any) -> VerifiedExecution:
+    """Run every gate condition, or refuse. The only route to ``create_argv``.
+
+    One path, in one order, with no optional step and no way around it:
+    identity binding, then governed policy, then runtime contracts, then image
+    presence, then the payload and package commitments. Each is a refusal, and
+    a refusal here means nothing was created.
+    """
+    if not isinstance(context, LaunchContext):
+        raise WorkerRefused("a validated LaunchContext is required")
+    if not isinstance(profile, ExecutionProfile):
+        raise WorkerRefused("a built ExecutionProfile is required")
+
+    # 1-2. Identity: the profile is the one the transition authenticated.
+    if fingerprint(profile).profile_digest != context.profile_digest:
+        raise WorkerRefused("the profile does not match the authorised digest")
+    if profile.cinv != context.cinv:
+        raise WorkerRefused("the profile names a different invocation")
+    if profile.cimp != context.cimp:
+        raise WorkerRefused("the profile names a different implementation")
+
+    # 3. Policy: authenticated is not authorised.
+    try:
+        verify_governed_policy(profile)
+    except ProfileError as error:
+        raise WorkerRefused(f"the profile is not governed policy: {error}") from None
+
+    # 5. Contracts this build implements.
+    require_runtime_contract(profile)
+
+    # 4. The authorised image, present locally.
+    require_image_present(profile, images)
+
+    # 6-7. The published material, against commitments that crossed sealed.
+    sources = verify_handoff(profile.cinv, root_fd=root_fd)
+    try:
+        invocation = os.open(profile.cinv, _DIR_FLAGS, dir_fd=root_fd)
+    except OSError as error:
+        raise WorkerRefused(f"the handoff is unusable: {error}") from None
+    try:
+        _verify_payload(profile, invocation)
+        entrypoint = _verify_package(profile, invocation)
+    finally:
+        os.close(invocation)
+
+    return VerifiedExecution(_VERIFIED, profile=profile, sources=sources,
+                             entrypoint=entrypoint)
+
+
+def _container_entrypoint(entrypoint: str) -> str:
     """The container-side path of the governed entrypoint.
 
-    The package contract already proved the entrypoint is relative, `.py`,
-    traversal-free, and present in the validated tree, so this does not
-    re-validate it with a second, weaker scheme. The assertions below are
-    defensive only: they restate the invariant at the boundary where a
-    violation would become an argument, and would catch a `PackageBinding`
-    that reached here without passing through that contract.
+    The gate already proved this entrypoint is the committed one and that it
+    names a validated member of the verified tree, so this does not re-validate
+    it with a second, weaker scheme. The assertions below are defensive only:
+    they restate the invariant at the boundary where a violation would become
+    an argument.
     """
-    entrypoint = package.entrypoint
     if not isinstance(entrypoint, str) or not entrypoint:
-        raise WorkerRefused("the package binding carries no entrypoint")
+        raise WorkerRefused("the verified execution carries no entrypoint")
     if entrypoint.startswith("/") or not entrypoint.endswith(".py"):
         raise WorkerRefused("the bound entrypoint is not a relative .py path")
     if any(part in ("", ".", "..") for part in entrypoint.split("/")):
@@ -364,29 +562,26 @@ def _container_script(package: PackageBinding) -> str:
     return f"{PACKAGE_DESTINATION}/{entrypoint}"
 
 
-def create_argv(profile: ExecutionProfile, sources: HandoffSources,
-                package: PackageBinding) -> tuple[str, ...]:
+def create_argv(verified: VerifiedExecution) -> tuple[str, ...]:
     """The complete creation arguments, closed against everything else.
 
     Every security-critical control is stated explicitly even where Podman's
     default happens to match. A default is a decision somebody else can change;
     a flag is one this adapter owns.
 
-    The three inputs stay separate because they are three different things:
-    the profile is the sandbox, the sources are the verified bind mounts, and
-    the package is the governed capability identity. Only the last carries an
-    entrypoint, and it arrives already validated.
+    **One input, and it is a proof.** The profile, the bind sources, and the
+    entrypoint no longer arrive separately, because a caller able to supply
+    them separately is a caller able to supply an unverified one. The gate
+    produces this value or nothing does.
     """
-    if not isinstance(profile, ExecutionProfile):
-        raise WorkerRefused("a built ExecutionProfile is required")
-    if not isinstance(sources, HandoffSources):
-        raise WorkerRefused("verified HandoffSources are required")
-    if not isinstance(package, PackageBinding):
-        raise WorkerRefused("a validated PackageBinding is required")
+    if not isinstance(verified, VerifiedExecution):
+        raise WorkerRefused("a verified execution is required")
+    profile = verified.profile
+    sources = verified.sources
     if profile.cinv != sources.cinv:
         raise WorkerRefused("the profile and handoff name different invocations")
 
-    entrypoint = _container_script(package)
+    entrypoint = _container_entrypoint(verified.entrypoint)
     environment: tuple[str, ...] = tuple(
         argument
         for name, value in CONTAINER_ENVIRONMENT

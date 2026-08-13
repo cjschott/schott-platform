@@ -146,6 +146,25 @@ bind_target() {
 }
 digest_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
+# The generation-5 commit the installer pins, read from the installer itself so
+# the two can never disagree. Fixture material comes from that commit for the
+# same reason the baseline comes from history: the working tree moves on, and a
+# fixture built from it would stop being generation 5 the moment it did.
+GEN5_COMMIT="$(sed -n 's/^COMMIT="\(.*\)"$/\1/p' "${INSTALLER}" | head -1)"
+[[ "${GEN5_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'the installer pins no full generation-5 commit\n' >&2; exit 1; }
+
+materialise_gen5() {
+  local source="$1" destination="$2" expected="$3" observed
+  rm -f "${destination}"
+  git -C "${REPOSITORY}" cat-file blob "${GEN5_COMMIT}:${source}" > "${destination}"
+  observed="$(digest_of "${destination}")"
+  [[ "${observed}" == "${expected}" ]] || {
+    printf 'generation-5 blob for %s is %s, expected %s\n' \
+      "${source}" "${observed}" "${expected}" >&2
+    exit 1; }
+}
+
 # Every pinned object must be reachable before a single case runs. A shallow
 # clone would otherwise turn a missing blob into a confusing mid-suite failure,
 # so it is refused here with the reason and the remedy.
@@ -353,7 +372,8 @@ for done_count in 1 2 3 4 5 6; do
     source="$(field "${row}" 0)"; mode="$(field "${row}" 2)"
     target="$(bind_target "${root}" "$(field "${row}" 1)")"
     cp -p "${target}" "${target}.kyri-gen4.old"
-    install -m "${mode}" "${REPOSITORY}/${source}" "${target}.kyri-gen5.new"
+    materialise_gen5 "${source}" "${target}.kyri-gen5.new" "$(field "${row}" 4)"
+    chmod "${mode}" "${target}.kyri-gen5.new"
     if (( index <= done_count )); then
       mv -f "${target}.kyri-gen5.new" "${target}"
       printf 'progress:%d=GEN5\n' "${index}" >> "${root}/root/kyri-gen5-transaction/journal"
@@ -388,7 +408,8 @@ for done_count in 1 3 6; do
     target="$(bind_target "${root}" "$(field "${row}" 1)")"
     cp -p "${target}" "${target}.kyri-gen4.old"
     if (( index <= done_count )); then
-      install -m "${mode}" "${REPOSITORY}/${source}" "${target}"
+      materialise_gen5 "${source}" "${target}" "$(field "${row}" 4)"
+      chmod "${mode}" "${target}"
     fi
     # No .kyri-gen5.new anywhere: the prepared material is gone.
   done

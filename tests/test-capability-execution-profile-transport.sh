@@ -109,7 +109,7 @@ action = load('kyri_exec_transition_action',
 from tools.capability.execution.canonical_json import serialise
 from tools.capability.execution.implementation_authority import Admission
 from tools.capability.execution.profile import (
-    ProfileBinding, build_profile, canonical_profile, fingerprint)
+    PROFILE_SCHEMA_VERSION, ProfileBinding, build_profile, canonical_profile, fingerprint)
 
 WORK = os.environ['WORKDIR']
 DROP = object()
@@ -118,13 +118,16 @@ def admission(cimp='CIMP-000001', image=None):
     return Admission(
         cimp=cimp, oci_image_id=image if image else 'a' * 64,
         adapter_identity='python-podman-v1', payload_schema_version=1,
-        execution_profile_schema_version=1,
+        execution_profile_schema_version=PROFILE_SCHEMA_VERSION,
         argv_contract_identity='fixed-python-entrypoint-v1',
         provisioning_evidence_digest='b' * 64)
 
 def governed_profile(cinv='CINV-000042', cimp='CIMP-000001', image=None):
     return build_profile(ProfileBinding(cinv=cinv,
-                                        admission=admission(cimp, image)))
+                                        admission=admission(cimp, image),
+                                        payload_digest='c' * 64,
+                                        package_digest='d' * 64,
+                                        package_entrypoint='main.py'))
 
 class Backend:
     '''Records the privileged steps and performs none of them.
@@ -1130,20 +1133,23 @@ entry = load('kyri_exec_worker', 'provisioning/execution/kyri-exec-worker.py')
 from tools.capability.execution import worker as W
 from tools.capability.execution.implementation_authority import Admission
 from tools.capability.execution.profile import (
-    ProfileBinding, build_profile, canonical_profile, fingerprint,
-    parse_canonical_profile, ProfileError)
+    PROFILE_SCHEMA_VERSION, ProfileBinding, build_profile, canonical_profile,
+    fingerprint, parse_canonical_profile, ProfileError)
 
 def admission(cimp='CIMP-000001', image=None):
     return Admission(
         cimp=cimp, oci_image_id=image if image else 'a' * 64,
         adapter_identity='python-podman-v1', payload_schema_version=1,
-        execution_profile_schema_version=1,
+        execution_profile_schema_version=PROFILE_SCHEMA_VERSION,
         argv_contract_identity='fixed-python-entrypoint-v1',
         provisioning_evidence_digest='b' * 64)
 
 def governed_profile(cinv='CINV-000042', cimp='CIMP-000001', image=None):
     return build_profile(ProfileBinding(cinv=cinv,
-                                        admission=admission(cimp, image)))
+                                        admission=admission(cimp, image),
+                                        payload_digest='c' * 64,
+                                        package_digest='d' * 64,
+                                        package_entrypoint='main.py'))
 
 def sealed(body, seals=None):
     '''A sealed anonymous object holding exactly body, as root would hand it.'''

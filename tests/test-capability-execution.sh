@@ -245,7 +245,7 @@ PROFILE_FIELDS = dict(
     memory_bytes=268435456, memory_swap_bytes=268435456, cpus='0.5',
     pids_limit=64, timeout_seconds=30, grace_seconds=2,
     read_only_rootfs=True, no_new_privileges=True, cap_drop_all=True,
-    tmpfs_bytes=16777216, profile_schema_version=1, cimp='CIMP-000001',
+    tmpfs_bytes=16777216, profile_schema_version=2, cimp='CIMP-000001',
     adapter_identity='python-podman-v1', payload_schema_version=1,
     execution_uid=1000, execution_gid=1000, hostname='trackb',
     cpu_quota_us=50000, cpu_period_us=100000, tmpfs_mode=0o1777,
@@ -253,7 +253,12 @@ PROFILE_FIELDS = dict(
     dropped_capabilities=('ALL',),
     mounts=(Mount(destination='/kyri/package', read_only=True, source_kind='bind'),),
     devices=(), sockets=(), privileged=False, host_network=False,
-    host_pid=False, gpu=False)
+    host_pid=False, gpu=False,
+    # Schema 2: invocation commitments, not policy. They are here because the
+    # type carries them, and a type test that omitted them would stop noticing
+    # if they were dropped.
+    payload_digest='c' * 64, package_digest='d' * 64,
+    package_entrypoint='main.py')
 FINGERPRINT_FIELDS = dict(
     cinv='CINV-000042', profile_digest='b' * 64,
     oci_image_id='a' * 64, cimp='CIMP-000001',

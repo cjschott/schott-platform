@@ -256,18 +256,37 @@ require_repository() {
   ok "repository on ${BRANCH} at ${head_now} (contains ${COMMIT}), tree checked (as ${owner})"
 }
 
+# One generation-5 object, taken from the commit that defines it.
+#
+# Read from the pinned commit rather than the working tree, because they are
+# not the same thing once development continues: a later pass may legitimately
+# move `profile.py` or `worker.py` on to the next generation, and installing
+# whatever the checkout happens to hold would put unreviewed bytes on the host
+# under a generation-5 label. The digest check below then verifies what was
+# actually extracted, so a rewritten history cannot substitute either.
+materialise_gen5() {
+  local source="$1" destination="$2" expected="$3" observed
+  git -C "${REPOSITORY}" cat-file blob "${COMMIT}:${source}" > "${destination}" \
+    || halt "${source} is not readable at ${COMMIT}"
+  observed="$(digest_of "${destination}")"
+  [[ "${observed}" == "${expected}" ]] \
+    || halt "${source} at ${COMMIT} is ${observed}, expected ${expected}"
+}
+
 require_source_digests() {
-  local row source gen5 observed mode
+  local row source gen5 observed scratch
+  scratch="$(mktemp)"
   for row in "${MATRIX[@]}"; do
     source="$(field "${row}" 0)"; gen5="$(field "${row}" 4)"
-    [[ -f "${source}" ]] || halt "source ${source} is missing"
-    observed="$(digest_of "${source}")"
-    [[ "${observed}" == "${gen5}" ]] \
-      || halt "${source} is ${observed}, expected ${gen5}"
-    mode="$(stat -c '%a' "${source}")"
-    [[ "${mode}" == "644" || "${mode}" == "664" ]] \
-      || note "source ${source} has mode ${mode}; installed mode is set explicitly"
+    git -C "${REPOSITORY}" cat-file -e "${COMMIT}:${source}" 2>/dev/null \
+      || { rm -f "${scratch}"; halt "${source} does not exist at ${COMMIT}"; }
+    materialise_gen5 "${source}" "${scratch}" "${gen5}"
+    observed="$(digest_of "${REPOSITORY}/${source}")"
+    if [[ "${observed}" != "${gen5}" ]]; then
+      note "the working tree has moved past Generation 5 at ${source}; installing the ${COMMIT} bytes"
+    fi
   done
+  rm -f "${scratch}"
   ok "all seven Generation-5 source digests match ${COMMIT}"
 }
 
@@ -380,10 +399,10 @@ prepare() {
     sync_path "${backup}"
 
     rm -f "${prepared}"
-    if [[ -n "${FIXTURE}" ]]; then
-      install -m "${mode}" "${REPOSITORY}/${source}" "${prepared}"
-    else
-      install -o root -g root -m "${mode}" "${REPOSITORY}/${source}" "${prepared}"
+    materialise_gen5 "${source}" "${prepared}" "${gen5}"
+    chmod "${mode}" "${prepared}"
+    if [[ -z "${FIXTURE}" ]]; then
+      chown root:root "${prepared}"
     fi
     observed="$(digest_of "${prepared}")"
     [[ "${observed}" == "${gen5}" ]] \

@@ -266,7 +266,10 @@ def tree_digest(root):
 run_case "governed identities and schema versions are constants, not operator input" "${PRELUDE}
 assert ADAPTER_IDENTITY == 'python-podman-v1', ADAPTER_IDENTITY
 assert ARGV_CONTRACT_IDENTITY == 'fixed-python-entrypoint-v1', ARGV_CONTRACT_IDENTITY
-assert PROFILE_SCHEMA_VERSION == 1, PROFILE_SCHEMA_VERSION
+# Profile schema 2 carries the invocation commitments Pass 4A added. The
+# payload schema is deliberately unchanged: nothing about the payload document
+# moved, only the commitment to its bytes, which lives in the profile.
+assert PROFILE_SCHEMA_VERSION == 2, PROFILE_SCHEMA_VERSION
 assert PAYLOAD_SCHEMA_VERSION == 1, PAYLOAD_SCHEMA_VERSION
 # The request carries external evidence only; every governed value is derived.
 import dataclasses

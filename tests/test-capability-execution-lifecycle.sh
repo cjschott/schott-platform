@@ -132,7 +132,11 @@ for target in targets:
     permitted_os = {"open", "read", "pread", "close", "fstat", "stat",
                     "scandir", "getuid", "geteuid", "getgid", "getegid",
                     "O_RDONLY", "O_NOFOLLOW", "O_CLOEXEC", "O_DIRECTORY",
-                    "error"}
+                    # O_NONBLOCK joined with Pass 4A: the worker now opens
+                    # coordinator-owned payload and package objects, and a FIFO
+                    # left in place of one would block the open before the type
+                    # check could refuse it.
+                    "O_NONBLOCK", "error"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
                 and node.value.id == "os" and node.attr not in permitted_os:
@@ -208,6 +212,7 @@ from tools.capability.execution import worker as W
 from tools.capability.execution import lifecycle as L
 from tools.capability.execution.implementation_authority import Admission
 from tools.capability.execution.profile import (
+    PROFILE_SCHEMA_VERSION,
     build_profile, ProfileBinding, ObservedProfile)
 from tools.capability.execution.protocol import (
     Message, MessageKind, Session, encode, ProtocolViolation)
@@ -236,24 +241,80 @@ def package(entrypoint='main.py', extra=()):
     finally:
         os.close(fd)
 
-def profile(cinv=CINV):
-    return build_profile(ProfileBinding(cinv=cinv, admission=Admission(
+def profile(cinv=CINV, payload_digest='c' * 64, package_digest='d' * 64,
+            package_entrypoint='main.py'):
+    return build_profile(ProfileBinding(
+        cinv=cinv,
+        payload_digest=payload_digest, package_digest=package_digest,
+        package_entrypoint=package_entrypoint,
+        admission=Admission(
         cimp='CIMP-000001', oci_image_id=IMAGE,
         adapter_identity='python-podman-v1', payload_schema_version=1,
-        execution_profile_schema_version=1,
+        execution_profile_schema_version=PROFILE_SCHEMA_VERSION,
         argv_contract_identity='fixed-python-entrypoint-v1',
         provisioning_evidence_digest='b' * 64)))
 
+class Images:
+    '''The injected image-presence seam: no Podman, no listing, no authority.'''
+
+    def __init__(self, present=None):
+        self._present = present
+
+    def present(self, oci_image_id):
+        return True if self._present is None else oci_image_id in self._present
+
+def verified(name='v', cinv=CINV, entrypoint='main.py', extra=()):
+    '''A gate-verified execution built from a real published tree.
+
+    create_argv takes only the gate result, so these cases produce one the way
+    production does. The commitments are derived from the tree that was
+    actually written, which is the property the gate exists to check.
+    '''
+    import hashlib
+    from tools.capability.execution.package_contract import validate_package
+    base = make_handoff(name, cinv, entrypoint=entrypoint, extra=extra)
+    inv = os.path.join(base, cinv)
+    pkg_fd = os.open(os.path.join(inv, 'package'), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        binding = validate_package(pkg_fd, entrypoint=entrypoint)
+    finally:
+        os.close(pkg_fd)
+    with open(os.path.join(inv, 'payload'), 'rb') as handle:
+        payload_bytes = handle.read()
+    built = profile(cinv=cinv,
+                    payload_digest=hashlib.sha256(payload_bytes).hexdigest(),
+                    package_digest=binding.digest,
+                    package_entrypoint=binding.entrypoint)
+    root_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        from tools.capability.execution.profile import fingerprint
+        return W.verify_execution(
+            W.require_launch_context(
+                cinv=cinv, cimp=built.cimp,
+                profile_digest=fingerprint(built).profile_digest),
+            built, root_fd=root_fd, images=Images())
+    finally:
+        os.close(root_fd)
+
 def make_handoff(name='h', cinv=CINV, mode_pkg=0o555, mode_payload=0o444,
-                 mode_out=0o700, mode_inv=0o555):
+                 mode_out=0o700, mode_inv=0o555, entrypoint='main.py',
+                 extra=()):
     base = os.path.join(WORK, name)
     if os.path.isdir(base):
         chmod_tree(base); shutil.rmtree(base)
     inv = os.path.join(base, cinv)
     os.makedirs(os.path.join(inv, 'package'))
     os.makedirs(os.path.join(inv, 'out'))
-    with open(os.path.join(inv, 'package', 'main.py'), 'wb') as h:
+    target = os.path.join(inv, 'package', entrypoint)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, 'wb') as h:
         h.write(b'def run():\n    return {}\n')
+    for member in extra:
+        spare = os.path.join(inv, 'package', member)
+        os.makedirs(os.path.dirname(spare) or os.path.join(inv, 'package'),
+                    exist_ok=True)
+        with open(spare, 'wb') as h:
+            h.write(b'X = 1\n')
     with open(os.path.join(inv, 'payload'), 'wb') as h:
         h.write(b'{\"operation\":\"sum\"}')
     os.chmod(os.path.join(inv, 'payload'), mode_payload)
@@ -365,7 +426,7 @@ print('OK')
 
 run_case "the Podman executable is a fixed absolute constant" "${PRELUDE}
 assert W.PODMAN == '/usr/bin/podman', W.PODMAN
-argv = W.create_argv(profile(), sources('exe'), package())
+argv = W.create_argv(verified('exe'))
 assert argv[0] == '/usr/bin/podman', argv[0]
 code = code_of(W)
 for banned in ('which', 'os.pathsep', 'expanduser', 'realpath', 'os.environ'):
@@ -467,7 +528,7 @@ finally:
 # --- create argv ------------------------------------------------------------------
 
 run_case "create and start are separate, and podman run appears nowhere" "${PRELUDE}
-argv = W.create_argv(profile(), sources('sep'), package())
+argv = W.create_argv(verified('sep'))
 assert argv[1] == 'create', argv[1]
 assert 'run' not in argv, argv
 for module in (W, L):
@@ -477,7 +538,7 @@ print('OK')
 "
 
 run_case "the container name is derived solely from the CINV" "${PRELUDE}
-argv = W.create_argv(profile(), sources('name'), package())
+argv = W.create_argv(verified('name'))
 assert W.container_name(CINV) == 'kyri-CINV-000042'
 index = argv.index('--name')
 assert argv[index + 1] == 'kyri-CINV-000042', argv[index + 1]
@@ -489,7 +550,7 @@ print('OK')
 "
 
 run_case "the image is the exact bound digest, never a tag" "${PRELUDE}
-argv = W.create_argv(profile(), sources('img'), package())
+argv = W.create_argv(verified('img'))
 assert IMAGE in argv, argv
 assert not any(a.endswith(':latest') for a in argv), argv
 assert not any(a == 'latest' for a in argv)
@@ -500,7 +561,7 @@ print('OK')
 "
 
 run_case "every accepted security flag is explicit in the argv" "${PRELUDE}
-argv = W.create_argv(profile(), sources('flags'), package())
+argv = W.create_argv(verified('flags'))
 text = ' '.join(argv)
 required = [
     '--network none', '--read-only', '--cap-drop ALL',
@@ -515,7 +576,7 @@ print('OK')
 
 run_case "the fixed Python environment is passed as adapter-owned --env" "${PRELUDE}
 import os
-argv = W.create_argv(profile(), sources('env'), package())
+argv = W.create_argv(verified('env'))
 pairs = [argv[index + 1] for index, value in enumerate(argv) if value == '--env']
 assert pairs == ['LC_ALL=C.UTF-8', 'PYTHONDONTWRITEBYTECODE=1',
                  'PYTHONHASHSEED=0', 'PYTHONUTF8=1'], pairs
@@ -532,7 +593,7 @@ import os
 os.environ['PYTHONHASHSEED'] = '99'
 os.environ['LC_ALL'] = 'en_US.UTF-8'
 os.environ['PYTHONUTF8'] = '0'
-argv = W.create_argv(profile(), sources('noinherit'), package())
+argv = W.create_argv(verified('noinherit'))
 pairs = [argv[index + 1] for index, value in enumerate(argv) if value == '--env']
 assert 'PYTHONHASHSEED=0' in pairs, pairs
 assert 'LC_ALL=C.UTF-8' in pairs, pairs
@@ -545,7 +606,7 @@ print('OK')
 "
 
 run_case "the tmpfs carries its exact accepted options" "${PRELUDE}
-argv = W.create_argv(profile(), sources('tmpfs'), package())
+argv = W.create_argv(verified('tmpfs'))
 index = argv.index('--tmpfs')
 spec = argv[index + 1]
 assert spec.startswith('/tmp:'), spec
@@ -556,7 +617,7 @@ print('OK')
 
 run_case "the three mounts carry the exact sources, destinations and access" "${PRELUDE}
 found = sources('mounts')
-argv = W.create_argv(profile(), found, package())
+argv = W.create_argv(verified('found'))
 mounts = [argv[i + 1] for i, a in enumerate(argv) if a == '--mount']
 assert len(mounts) == 3, mounts
 joined = ' '.join(mounts)
@@ -572,7 +633,7 @@ print('OK')
 "
 
 run_case "no device, privileged, host-network or socket flag appears" "${PRELUDE}
-argv = W.create_argv(profile(), sources('none'), package())
+argv = W.create_argv(verified('none'))
 text = ' '.join(argv)
 for banned in ('--device', '--privileged', '--network host', '--pid host',
                '--cap-add', '--gpus', '--security-opt seccomp=unconfined',
@@ -582,7 +643,7 @@ print('OK')
 "
 
 run_case "the container command is adapter-owned with no caller argv" "${PRELUDE}
-argv = W.create_argv(profile(), sources('cmd'), package())
+argv = W.create_argv(verified('cmd'))
 tail = list(argv[argv.index(IMAGE) + 1:])
 assert tail == ['/usr/bin/python', '/kyri/package/main.py'], tail
 for banned in ('sh', '-c', 'bash', '--', '/usr/bin/python3'):
@@ -594,17 +655,14 @@ print('OK')
 # The entrypoint is the governed one the package contract validated, not a
 # constant. A nested entrypoint must survive intact into the container path.
 run_case "the script argument comes from the bound package entrypoint" "${PRELUDE}
-nested = package('pkg/main.py')
-argv = W.create_argv(profile(), sources('nested'), nested)
+argv = W.create_argv(verified('nested', entrypoint='pkg/main.py'))
 tail = list(argv[argv.index(IMAGE) + 1:])
 assert tail == ['/usr/bin/python', '/kyri/package/pkg/main.py'], tail
-flat = package('main.py')
-argv = W.create_argv(profile(), sources('flat'), flat)
+argv = W.create_argv(verified('flat', entrypoint='main.py'))
 assert list(argv[argv.index(IMAGE) + 1:]) == [
     '/usr/bin/python', '/kyri/package/main.py']
 # Two different bindings produce their own script argument.
-deep = package('a/b/entry.py')
-argv = W.create_argv(profile(), sources('deep'), deep)
+argv = W.create_argv(verified('deep', entrypoint='a/b/entry.py'))
 assert list(argv[argv.index(IMAGE) + 1:])[1] == '/kyri/package/a/b/entry.py'
 print('OK')
 "
@@ -615,22 +673,24 @@ code = code_of(W)
 assert '/kyri/package/main.py' not in code, 'a hard-coded entrypoint remains'
 assert 'main.py' not in code, 'the worker names a specific script'
 params = list(inspect.signature(W.create_argv).parameters)
-assert params == ['profile', 'sources', 'package'], params
+# Pass 4A: one input, and it is a proof. Separate profile/sources/package
+# arguments were a caller's opportunity to supply an unverified one.
+assert params == ['verified'], params
 assert 'entrypoint' not in params, params
 # The entrypoint cannot arrive as a raw string.
 from tools.capability.execution.worker import WorkerRefused
 for bad in ('main.py', None, 42, {'entrypoint': 'main.py'}):
     try:
-        W.create_argv(profile(), sources('raw'), bad)
+        W.create_argv(bad)
     except WorkerRefused:
         continue
-    raise AssertionError(f'accepted {bad!r} as a package binding')
+    raise AssertionError(f'accepted {bad!r} in place of a verified execution')
 print('OK')
 "
 
 run_case "no pull, and the argv is closed against extra flags" "${PRELUDE}
 assert 'pull' not in code_of(W).lower(), 'the worker can pull'
-argv = W.create_argv(profile(), sources('closed'), package())
+argv = W.create_argv(verified('closed'))
 # Every element is a constant, a governed identity, or a derived source.
 assert isinstance(argv, tuple), type(argv)
 try:
@@ -645,7 +705,7 @@ else:
 
 run_case "create returns the full 64-hex container ID" "${PRELUDE}
 backend = FakeBackend()
-container_id = L.create(backend, W.create_argv(profile(), sources('create'), package()),
+container_id = L.create(backend, W.create_argv(verified('create')),
                         W.ENVIRONMENT)
 assert container_id == CID
 assert names(backend) == ['create']
@@ -656,7 +716,7 @@ run_case "a short or malformed container ID is refused as authority" "${PRELUDE}
 for bad in ('c' * 12, 'c' * 63, 'c' * 65, 'C' * 64, '', 'deadbeef', None, 42):
     backend = FakeBackend(container_id=bad)
     try:
-        L.create(backend, W.create_argv(profile(), sources('short'), package()), W.ENVIRONMENT)
+        L.create(backend, W.create_argv(verified('short')), W.ENVIRONMENT)
     except L.LifecycleRefused:
         continue
     raise AssertionError(f'accepted container id {bad!r}')
@@ -666,7 +726,7 @@ print('OK')
 run_case "create failure never retries, recreates, or falls back" "${PRELUDE}
 backend = FakeBackend(create_error=OSError('create refused'))
 try:
-    L.create(backend, W.create_argv(profile(), sources('fail'), package()), W.ENVIRONMENT)
+    L.create(backend, W.create_argv(verified('fail')), W.ENVIRONMENT)
 except L.LifecycleRefused:
     pass
 else:
@@ -696,7 +756,7 @@ inspect_data = {
     'PidsLimit': 64, 'User': '1000:1000', 'Hostname': 'trackb',
     'Devices': [], 'Sockets': [], 'TmpfsSize': 16777216,
     'TmpfsMode': 1023, 'TmpfsOptions': ['noexec', 'nosuid', 'nodev'],
-    'ProfileSchemaVersion': 1,
+    'ProfileSchemaVersion': 2,
     'Mounts': [
         {'Destination': '/kyri/package', 'RW': False, 'Type': 'bind'},
         {'Destination': '/run/kyri/input/payload', 'RW': False, 'Type': 'bind'},
@@ -733,7 +793,7 @@ base = {
     'User': '1000:1000', 'Hostname': 'trackb', 'Devices': [], 'Sockets': [],
     'TmpfsSize': 16777216, 'TmpfsMode': 1023,
     'TmpfsOptions': ['noexec', 'nosuid', 'nodev'],
-    'ProfileSchemaVersion': 1,
+    'ProfileSchemaVersion': 2,
     'Mounts': [
         {'Destination': '/kyri/package', 'RW': False, 'Type': 'bind'},
         {'Destination': '/run/kyri/input/payload', 'RW': False, 'Type': 'bind'},

@@ -1098,8 +1098,10 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | coordinator profile publication | **IMPLEMENTED** (Pass 3B-i) |
 | sealed privilege-boundary profile transport | **IMPLEMENTED** (Pass 3B-ii) |
 | generation-5 installation | **INSTALLED / ACTIVE / ACCEPTED** |
-| profile policy re-derivation at the worker | **RULED** (Pass 3C), required before G6 |
-| payload/package digest commitment and entrypoint transport | **RULED** (Pass 3C), required before G6 |
+| profile policy re-derivation at the worker | **IMPLEMENTED** (Pass 4A) |
+| payload/package digest commitment and entrypoint transport | **IMPLEMENTED** (Pass 4A) |
+| generation 6 | **SOURCE COMPLETE / NOT INSTALLED** |
+| collection-time payload/package re-verification | **REQUIRED** (Pass 4B), not implemented |
 | root helper launch-record schema vNext | **IMPLEMENTED** (Pass 3B-ii) |
 | worker governed-profile consumption | **IMPLEMENTED** (Pass 3B-ii) |
 | production G5 image build and CIMP admission | NOT STARTED |
@@ -1482,6 +1484,64 @@ Consequences when implemented: `ExecutionProfile` gains three fields -> profile
 schema version 2 -> **generation 6**. The launch record, the transition, root's
 opacity, the descriptor contract, the worker exec tuple, the payload schema and
 the protocol are all unchanged.
+
+### Pass 4A — pre-G6 execution authority, implemented
+
+Conditions 3–7 of the design §14.2.5 gate are implemented. Conditions 1–2 were
+already held by generation 5. `create_argv` is still unreachable in production,
+because nothing calls the gate outside tests and the worker entrypoint still
+refuses at G6.
+
+**One policy source.** `governed_policy()` in `profile.py` is the single table
+of compiled-in controls: `build_profile` produces those values and
+`verify_governed_policy` checks them, so there is no second copy to drift. The
+runtime contract identities moved there too, and `authorisation.py` re-exports
+them. Root imports none of it.
+
+**26 governed fields, re-derived.** Every compiled-in control is compared to
+this build's constant, with the five order-free collections compared as sets
+because the canonical form sorts them. Nothing is repaired and nothing is
+normalised: a profile carrying `network: "host"` is refused, never corrected
+and run. A coverage assertion in the gate suite requires every `ExecutionProfile`
+field to be either governed or explicitly exempt, so a field added later cannot
+escape verification by being forgotten.
+
+**Image presence is not image authority.** The worker asks one question through
+an injected seam — is this exact bare 64-hex already-authorised local ID
+present — and refuses a store that raises or answers with anything but a
+boolean. No tag, no manifest digest, no listing, no pull, no resolution.
+
+**Schema 2.** `ExecutionProfile` gains `payload_digest`, `package_digest`, and
+`package_entrypoint`; `PROFILE_SCHEMA_VERSION` becomes 2. The payload schema,
+the protocol, the launch record, and the `CIMP`/`CGEN` schemas are unchanged.
+The payload commitment is over the **canonical** payload bytes — the ones
+actually published — and the package commitment is the existing
+`package_contract` manifest, reused rather than reinvented so publisher and
+verifier cannot disagree about what it covers.
+
+**Publication is coherent or it fails.** `publish_handoff` refuses a profile
+that commits to material other than what is being staged, so "profile commits
+A, payload publishes B" is not a reachable state.
+
+**The worker verifies before argv.** Payload: no-follow, non-blocking, `fstat`,
+regular file only, bounded read, digest compared. Package: re-validated with
+the same contract that produced the commitment, which independently refuses
+symlinks, hard links, special files, executables, and traversal, then the
+manifest digest is compared and the committed entrypoint resolved against the
+verified tree. `create_argv` now takes one input — the gate's `VerifiedExecution`,
+which cannot be constructed by hand — so there is no route around it.
+
+**One deliberate clarification.** Choosing *which* validated member of its own
+package runs is the coordinator's invocation authority, not an attack; what is
+refused is an entrypoint that is not a validated member of the committed tree.
+
+**Residual, unchanged and still open.** Verification happens before `create`;
+a coordinator that mutates payload or package afterwards is not prevented, only
+detectable. Pass 4B closes that by re-verifying at collection. **REQUIRED BUT
+NOT YET IMPLEMENTED.**
+
+**Generation 5's privilege boundary is byte-identical.** Root still parses no
+profile, and none of the four privileged files changed.
 
 ## 6. Sequencing rules
 

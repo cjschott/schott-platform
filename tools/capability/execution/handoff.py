@@ -279,6 +279,22 @@ def publish_handoff(root: RootDescriptor, cinv: str, artefact_fd: int,
         raise HandoffIdentityMismatch(
             f"the profile names {profile.cinv} and the handoff is for {cinv}")
 
+    # The commitments must name exactly the material in this staged snapshot.
+    # A profile committing to A while B is published would be a handoff that
+    # reports success and hands the worker something it must then refuse --
+    # and the whole point of carrying the commitments in the profile is that
+    # they are derived here, from what is actually being written, rather than
+    # accepted from a caller.
+    if profile.payload_digest != payload.digest:
+        raise HandoffIdentityMismatch(
+            "the profile commits to a different payload than the one published")
+    if profile.package_digest != package.digest:
+        raise HandoffIdentityMismatch(
+            "the profile commits to a different package than the one published")
+    if profile.package_entrypoint != package.entrypoint:
+        raise HandoffIdentityMismatch(
+            "the profile commits to a different entrypoint than the package binds")
+
     profile_bytes = canonical_profile(profile)
     profile_digest = hashlib.sha256(profile_bytes).hexdigest()
     # Derived here, never accepted from a caller, and checked against the

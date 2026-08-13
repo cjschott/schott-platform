@@ -34,7 +34,14 @@ from . import canonical_json
 from .implementation_authority import Admission
 from .types import Classification, ExecutionFingerprint, ExecutionProfile, Mount
 
-PROFILE_SCHEMA_VERSION = 1
+PROFILE_SCHEMA_VERSION = 2
+
+# The runtime contracts this build implements. They live beside the policy they
+# belong to rather than in the resolution layer, because the worker must check
+# them too and a second copy is a second answer. `authorisation` re-exports
+# these names so its callers are unaffected.
+ADAPTER_IDENTITY = "python-podman-v1"
+ARGV_CONTRACT_IDENTITY = "fixed-python-entrypoint-v1"
 
 # The bound applied to canonical profile bytes before they are parsed. The
 # governed profile is a fixed shape of a few hundred bytes; anything near this
@@ -98,6 +105,18 @@ class UnsupportedProfileSchema(ProfileError):
     classification = Classification.EXECUTION_PROFILE_VERSION_UNSUPPORTED
 
 
+class ProfilePolicyViolation(ProfileError):
+    """A profile field does not equal this build's governed value.
+
+    Distinct from ``ProfileMismatch``, which is about a *container* disagreeing
+    with a profile. This is about the profile itself carrying a value nobody
+    was authorised to choose — authenticated bytes saying something the policy
+    never said.
+    """
+
+    classification = Classification.EXECUTION_IDENTITY_MISMATCH
+
+
 class ProfileNotCanonical(ProfileError):
     """Bytes that are not the exact canonical form of the profile they decode to.
 
@@ -131,6 +150,9 @@ class ProfileBinding:
 
     cinv: str
     admission: Admission
+    payload_digest: str
+    package_digest: str
+    package_entrypoint: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -165,6 +187,38 @@ class ObservedProfile:
     profile_schema_version: Any
 
 
+_HEX = frozenset("0123456789abcdef")
+
+
+def _require_digest(value: Any, what: str) -> None:
+    """Exactly 64 lowercase hexadecimal characters, or refuse.
+
+    Lowercase is required rather than folded, for the same reason the launch
+    record requires it: two spellings of one digest are two commitments.
+    """
+    if not isinstance(value, str) or len(value) != 64 or set(value) - _HEX:
+        raise ProfileError(f"the {what} is not 64 lowercase hex characters")
+
+
+def _require_entrypoint(value: Any) -> None:
+    """One relative, traversal-free ``.py`` path, or refuse.
+
+    The package contract already proved this against the tree it validated.
+    Re-checking the *shape* here is not a second opinion about membership: it
+    is the guarantee that whatever reaches the profile cannot be absolute, walk
+    upward, or name something that is not Python source, whichever caller
+    supplied it.
+    """
+    if not isinstance(value, str) or not value:
+        raise ProfileError("the package entrypoint must be a relative path")
+    if value.startswith("/"):
+        raise ProfileError("the package entrypoint must not be absolute")
+    if not value.endswith(".py"):
+        raise ProfileError("the package entrypoint must be a .py file")
+    if any(part in ("", ".", "..") for part in value.split("/")):
+        raise ProfileError("the package entrypoint must be traversal-free")
+
+
 def build_profile(binding: ProfileBinding,
                   metadata: Mapping[str, Any] | None = None) -> ExecutionProfile:
     """The governed profile for ``binding``, or refuse.
@@ -181,6 +235,10 @@ def build_profile(binding: ProfileBinding,
         raise MetadataOverrideRefused(
             f"capability metadata may not influence the execution profile "
             f"(refused at {named!r})")
+
+    _require_digest(binding.payload_digest, "payload digest")
+    _require_digest(binding.package_digest, "package digest")
+    _require_entrypoint(binding.package_entrypoint)
 
     admission = binding.admission
     if admission.execution_profile_schema_version != PROFILE_SCHEMA_VERSION:
@@ -226,6 +284,9 @@ def build_profile(binding: ProfileBinding,
         host_network=False,
         host_pid=False,
         gpu=False,
+        payload_digest=binding.payload_digest,
+        package_digest=binding.package_digest,
+        package_entrypoint=binding.package_entrypoint,
     )
 
 
@@ -278,6 +339,9 @@ def canonical_profile(profile: ExecutionProfile) -> bytes:
         "mounts": _mount_form(profile.mounts),
         "devices": sorted(profile.devices),
         "sockets": sorted(profile.sockets),
+        "payload_digest": profile.payload_digest,
+        "package_digest": profile.package_digest,
+        "package_entrypoint": profile.package_entrypoint,
     })
 
 
@@ -360,6 +424,7 @@ def parse_canonical_profile(data: bytes) -> ExecutionProfile:
         "pids_limit", "timeout_seconds", "grace_seconds", "execution_uid",
         "execution_gid", "hostname", "tmpfs_bytes", "tmpfs_mode",
         "tmpfs_options", "mounts", "devices", "sockets",
+        "payload_digest", "package_digest", "package_entrypoint",
     }
     if set(document) != expected:
         missing = sorted(expected - set(document))
@@ -407,12 +472,101 @@ def parse_canonical_profile(data: bytes) -> ExecutionProfile:
         host_network=_flag(document, "host_network"),
         host_pid=_flag(document, "host_pid"),
         gpu=_flag(document, "gpu"),
+        payload_digest=_text(document, "payload_digest"),
+        package_digest=_text(document, "package_digest"),
+        package_entrypoint=_text(document, "package_entrypoint"),
     )
 
     if canonical_profile(profile) != bytes(data):
         raise ProfileNotCanonical(
             "the profile document is not the canonical form of what it decodes to")
     return profile
+
+
+# Collections whose order carries no meaning. The canonical form sorts them,
+# so a profile decoded from canonical bytes arrives in sorted order while the
+# constant above is written in the order a human reads it. Comparing them as
+# sequences would fail for a perfectly governed profile.
+_UNORDERED = frozenset({"tmpfs_options", "dropped_capabilities", "devices",
+                        "sockets", "mounts"})
+
+
+def governed_policy() -> dict[str, Any]:
+    """Every compiled-in control this build governs, by profile field name.
+
+    **One source.** ``build_profile`` produces these values and the worker
+    checks against these values; there is no second table anywhere. A field
+    added to ``ExecutionProfile`` that belongs to policy and is not added here
+    is caught by the coverage assertion in the gate suite rather than silently
+    escaping verification.
+
+    Identity and invocation commitments are deliberately absent: `CINV`,
+    `CIMP`, the image, the contract identities, the schema version, and the
+    payload/package commitments are not compiled-in policy and are verified by
+    the checks that own them.
+    """
+    return {
+        "network": NETWORK,
+        "hostname": HOSTNAME,
+        "execution_uid": EXECUTION_UID,
+        "execution_gid": EXECUTION_GID,
+        "memory_bytes": MEMORY_BYTES,
+        "memory_swap_bytes": MEMORY_SWAP_BYTES,
+        "cpus": CPUS,
+        "cpu_quota_us": CPU_QUOTA_US,
+        "cpu_period_us": CPU_PERIOD_US,
+        "pids_limit": PIDS_LIMIT,
+        "timeout_seconds": TIMEOUT_SECONDS,
+        "grace_seconds": GRACE_SECONDS,
+        "read_only_rootfs": True,
+        "no_new_privileges": True,
+        "cap_drop_all": True,
+        "dropped_capabilities": DROPPED_CAPABILITIES,
+        "tmpfs_bytes": TMPFS_BYTES,
+        "tmpfs_mode": TMPFS_MODE,
+        "tmpfs_options": TMPFS_OPTIONS,
+        "mounts": (
+            Mount(destination=PACKAGE_MOUNT, read_only=True, source_kind="bind"),
+            Mount(destination=PAYLOAD_MOUNT, read_only=True, source_kind="bind"),
+            Mount(destination=OUTPUT_MOUNT, read_only=False, source_kind="bind"),
+        ),
+        "devices": (),
+        "sockets": (),
+        "privileged": False,
+        "host_network": False,
+        "host_pid": False,
+        "gpu": False,
+    }
+
+
+def verify_governed_policy(profile: ExecutionProfile) -> None:
+    """Confirm every governed control is this build's value, or refuse.
+
+    **This is the check the sealed transport cannot make.** Generation 5 proves
+    the profile is exactly the bytes the coordinator committed to; it cannot
+    prove those values were ever allowed, because the same party authored the
+    digest. Here the values are re-derived from the constants this build
+    compiled in and compared.
+
+    **Nothing is repaired and nothing is normalised.** A profile carrying
+    ``network: "host"`` is refused, not corrected to ``"none"`` and run —
+    correcting it would execute something nobody authorised while reporting
+    success, which is worse than either refusing or failing loudly.
+    """
+    if not isinstance(profile, ExecutionProfile):
+        raise ProfileError("a built ExecutionProfile is required")
+    differing: list[str] = []
+    for field, expected in governed_policy().items():
+        actual = getattr(profile, field)
+        if field in _UNORDERED:
+            if sorted(actual, key=repr) != sorted(expected, key=repr):
+                differing.append(field)
+        elif type(actual) is not type(expected) or actual != expected:
+            differing.append(field)
+    if differing:
+        raise ProfilePolicyViolation(
+            "the profile is not this build's governed policy at: "
+            + ", ".join(sorted(differing)))
 
 
 def fingerprint(profile: ExecutionProfile) -> ExecutionFingerprint:

@@ -866,9 +866,23 @@ below describes a control that exists on this host today.**
   after the worker verifies — is declared, and mitigated by re-verification at
   collection.
 
-Implementing either changes `ExecutionProfile`, so both land together as
-**profile schema 2 / generation 6**. Until then `create_argv` has no caller and
-G6 stays closed.
+**Both are now implemented in source (Pass 4A) and are not installed.** The
+profile carries `payload_digest`, `package_digest` and `package_entrypoint`,
+`PROFILE_SCHEMA_VERSION` is 2, and the worker re-derives all 26 compiled-in
+controls, checks the runtime contracts, asks an injected seam whether the exact
+authorised image is present, and verifies the published payload and package
+against the commitments before `create_argv` — which now takes only a gate
+result that cannot be constructed by hand.
+
+**Generation 6 is SOURCE COMPLETE and NOT INSTALLED.** Generation 5 remains
+active and accepted on this host. `create_argv` still has no caller, the worker
+entrypoint still refuses at G6, and **G6 stays closed**.
+
+One residual is deliberately still open: verification happens before `create`,
+so a coordinator that mutates payload or package afterwards is detectable but
+not prevented. Closing that by re-verifying at collection is **Pass 4B,
+REQUIRED BUT NOT YET IMPLEMENTED** — and it will touch the same runtime
+objects, which is why generation 6 should be installed once, after it.
 
 Two earlier handoff models were accepted and then disproved empirically — a
 root-owned path freeze and descriptor anchoring to the coordinator's inode.

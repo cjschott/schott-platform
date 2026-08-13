@@ -259,6 +259,12 @@ jobs:
       - name: Capability execution profile transport tests
         run: bash tests/test-capability-execution-profile-transport.sh
 
+      # The create_argv authority gate: profile policy re-derivation, runtime
+      # contracts, image presence through an injected seam, and the payload
+      # and package commitments. Builds argv and executes nothing.
+      - name: Capability execution authority gate tests
+        run: bash tests/test-capability-execution-authority-gate.sh
+
       # Generation-5 installer, driven against throwaway fixture trees only:
       # failure injected at every commit position, every interrupted
       # transaction replayed. Installs nothing and needs no privilege.
