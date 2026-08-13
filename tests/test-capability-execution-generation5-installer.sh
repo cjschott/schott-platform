@@ -102,6 +102,40 @@ for raw in "${RAW_ROWS[@]}"; do
   ROWS+=("${raw}")
 done
 
+# ===========================================================================
+# Generation-4 fixture baseline — pinned immutable history
+# ===========================================================================
+# The baseline MUST NOT come from the installed tree. It did once, and that
+# made the suite pass only while the host still ran generation 4: the moment
+# generation 5 was installed every fixture began at GEN5=7 and each
+# transactional case short-circuited with "already installed; nothing to do".
+# A test whose meaning depends on which generation the host happens to run is
+# not a test of the installer.
+#
+# These are the commits whose blob at that path reproduces the exact
+# generation-4 digest the installer pins. They are constants: no caller, no
+# environment variable, and no test input selects a revision or a path, and no
+# revision syntax is accepted from anywhere.
+gen4_commit_for() {
+  case "$1" in
+    tools/capability/execution/handoff.py)
+      printf '%s' "1f7969ab463eef720e57c88989286711b1bf06bf" ;;
+    tools/capability/execution/profile.py)
+      printf '%s' "affbc86bfa212ff118afae01e086a02f8f8c5a77" ;;
+    tools/capability/execution/worker.py)
+      printf '%s' "affbc86bfa212ff118afae01e086a02f8f8c5a77" ;;
+    provisioning/execution/kyri-exec-transition.py)
+      printf '%s' "affbc86bfa212ff118afae01e086a02f8f8c5a77" ;;
+    provisioning/execution/kyri-exec-transition-action.py)
+      printf '%s' "2e3bede624f22d1d246cb5beacece971521c34eb" ;;
+    provisioning/execution/kyri-exec-transition-entrypoint.py)
+      printf '%s' "34c18a771fd9abc39bab4357999fc9ce1ba726c1" ;;
+    provisioning/execution/kyri-exec-worker.py)
+      printf '%s' "34c18a771fd9abc39bab4357999fc9ce1ba726c1" ;;
+    *) return 1 ;;
+  esac
+}
+
 field() { IFS='|' read -r -a f <<<"$1"; printf '%s' "${f[$2]}"; }
 # The absolute target path inside a fixture root.
 bind_target() {
@@ -112,37 +146,107 @@ bind_target() {
 }
 digest_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
+# Every pinned object must be reachable before a single case runs. A shallow
+# clone would otherwise turn a missing blob into a confusing mid-suite failure,
+# so it is refused here with the reason and the remedy.
+require_history() {
+  local shallow row source commit missing=0
+  shallow="$(git -C "${REPOSITORY}" rev-parse --is-shallow-repository)"
+  if [[ "${shallow}" == "true" ]]; then
+    printf 'FAIL: this is a shallow clone; the generation-4 fixture baseline lives in history.\n' >&2
+    printf '      CI checks out with fetch-depth: 0 for exactly this reason.\n' >&2
+    exit 1
+  fi
+  for row in "${ROWS[@]}"; do
+    source="$(field "${row}" 0)"
+    if ! commit="$(gen4_commit_for "${source}")"; then
+      printf 'FAIL: no pinned generation-4 commit for %s\n' "${source}" >&2
+      missing=$((missing + 1)); continue
+    fi
+    git -C "${REPOSITORY}" cat-file -e "${commit}^{commit}" 2>/dev/null || {
+      printf 'FAIL: pinned commit %s is absent\n' "${commit}" >&2
+      missing=$((missing + 1)); continue
+    }
+    git -C "${REPOSITORY}" cat-file -e "${commit}:${source}" 2>/dev/null || {
+      printf 'FAIL: %s does not exist at %s\n' "${source}" "${commit}" >&2
+      missing=$((missing + 1)); }
+  done
+  (( missing == 0 )) || exit 1
+  pass "every pinned generation-4 object is present in history"
+}
+require_history
+
+# One generation-4 object, extracted from immutable history and proved.
+materialise_gen4() {
+  local source="$1" destination="$2" expected="$3" commit observed
+  commit="$(gen4_commit_for "${source}")" || {
+    printf 'no pinned generation-4 commit for %s\n' "${source}" >&2; exit 1; }
+  git -C "${REPOSITORY}" cat-file blob "${commit}:${source}" > "${destination}"
+  observed="$(digest_of "${destination}")"
+  # Fail closed rather than inventing fixture bytes: if history no longer
+  # reproduces the accepted digest, the pin is wrong and the suite is
+  # meaningless, not merely inconvenient.
+  [[ "${observed}" == "${expected}" ]] || {
+    printf 'generation-4 blob for %s is %s, expected %s\n' \
+      "${source}" "${observed}" "${expected}" >&2
+    exit 1; }
+}
+
 # A fixture holding the exact Generation-4 bytes at every target, plus the
 # Generation-4 evidence the installer verifies the unchanged surface against.
+#
+# Nothing below reads /usr/lib/kyri/python or /usr/libexec. The seven targets
+# come from pinned history; the rest of the library tree comes from this
+# checkout, where those files are byte-identical across generations 4 and 5
+# because no pass changed them. The evidence file is then generated from the
+# fixture itself, so the baseline is self-consistent by construction.
 build_fixture() {
-  local root="$1" row target mode live
+  local root="$1" row source target mode gen4 file relative
   [[ -d "${root}" ]] && chmod -R u+w "${root}" >/dev/null 2>&1
   mkdir -p "${root}/usr/lib/kyri/python/tools/capability/execution" \
            "${root}/usr/lib/kyri/python/tools/common" \
            "${root}/usr/libexec" "${root}/root"
-  # Generation-4 bytes come from the live installed tree, read-only.
+
+  # The rest of the library tree, from this checkout.
+  while IFS= read -r file; do
+    relative="${file}"
+    mkdir -p "${root}/usr/lib/kyri/python/$(dirname "${relative}")"
+    rm -f "${root}/usr/lib/kyri/python/${relative}"
+    cp "${REPOSITORY}/${file}" "${root}/usr/lib/kyri/python/${relative}"
+    chmod 0444 "${root}/usr/lib/kyri/python/${relative}"
+  done < <(cd "${REPOSITORY}" && { printf 'tools/__init__.py\n'
+             find tools/capability tools/common -type f -name '*.py' \
+               -not -path '*__pycache__*' | sort; })
+  cp "${REPOSITORY}/provisioning/execution/kyri-exec-quota.py" \
+     "${root}/usr/lib/kyri/python/kyri_exec_quota.py"
+  chmod 0444 "${root}/usr/lib/kyri/python/kyri_exec_quota.py"
+  cp "${REPOSITORY}/provisioning/execution/kyri-exec-quota.py" \
+     "${root}/usr/libexec/kyri-exec-quota"
+  chmod 0555 "${root}/usr/libexec/kyri-exec-quota"
+
+  # The seven, from pinned history, each proved against the installer's own
+  # generation-4 digest before it is used.
   for row in "${ROWS[@]}"; do
+    source="$(field "${row}" 0)"
     target="$(bind_target "${root}" "$(field "${row}" 1)")"
     mode="$(field "${row}" 2)"
-    live="${target#"${root}"}"
+    gen4="$(field "${row}" 3)"
     mkdir -p "$(dirname "${target}")"
     rm -f "${target}"
-    cp "${live}" "${target}"
+    materialise_gen4 "${source}" "${target}" "${gen4}"
     chmod "${mode}" "${target}"
   done
-  # The unchanged-surface evidence: every installed .py digest, recorded with
-  # host paths exactly as the real evidence file does.
-  find /usr/lib/kyri/python -type f -name '*.py' -print0 \
-    | sort -z | xargs -0 sha256sum > "${root}/root/kyri-gen4-library-digests.txt"
-  sha256sum /usr/libexec/kyri-exec-transition /usr/libexec/kyri-exec-worker.py \
-            /usr/libexec/kyri-exec-quota > "${root}/root/kyri-gen4-helper-digests.txt"
-  # Mirror the other 36 unchanged library files so the surface check can pass.
-  local file
-  while IFS= read -r file; do
-    mkdir -p "${root}$(dirname "${file}")"
-    [[ -f "${root}${file}" ]] || cp "${file}" "${root}${file}"
-  done < <(find /usr/lib/kyri/python -type f -name '*.py')
-  cp /usr/libexec/kyri-exec-quota "${root}/usr/libexec/kyri-exec-quota"
+
+  # Evidence generated from the fixture, with host-style pathnames, in the
+  # exact `sha256sum` layout the installer parses.
+  ( cd "${root}/usr/lib/kyri/python" \
+    && find . -type f -name '*.py' -print0 | sort -z | xargs -0 sha256sum ) \
+    | sed 's#  \./#  /usr/lib/kyri/python/#' \
+    > "${root}/root/kyri-gen4-library-digests.txt"
+  ( cd "${root}" && sha256sum usr/libexec/kyri-exec-transition \
+      usr/libexec/kyri-exec-worker.py usr/libexec/kyri-exec-quota ) \
+    | sed 's#  usr/libexec/#  /usr/libexec/#' \
+    > "${root}/root/kyri-gen4-helper-digests.txt"
 }
 
 # What generation is each target, decided from bytes alone?
@@ -440,6 +544,69 @@ if grep -q 'NOT an atomic seven-object installation' "${INSTALLER}" \
   pass "the installer claims transactional crash-recoverable installation, not atomicity"
 else
   fail "the installer's stated guarantee changed"
+fi
+
+# --- 15. the generation-4 baseline is hermetic ----------------------------
+# The regression this suite exists to prevent: the baseline once came from the
+# installed tree, so the whole suite silently stopped testing anything the day
+# generation 5 was installed. Proven two ways -- what the fixture contains, and
+# where the code is allowed to read from.
+hermetic="${WORK}/hermetic"; build_fixture "${hermetic}"
+baseline_wrong=0
+for row in "${ROWS[@]}"; do
+  target="$(bind_target "${hermetic}" "$(field "${row}" 1)")"
+  gen4="$(field "${row}" 3)"; gen5="$(field "${row}" 4)"
+  observed="$(digest_of "${target}")"
+  if [[ "${observed}" != "${gen4}" ]]; then
+    fail "fixture target is ${observed:0:12}, expected generation-4 ${gen4:0:12}"
+    baseline_wrong=$((baseline_wrong + 1))
+  elif [[ "${observed}" == "${gen5}" ]]; then
+    fail "generation-4 and generation-5 digests collide for $(field "${row}" 0)"
+    baseline_wrong=$((baseline_wrong + 1))
+  fi
+done
+if (( baseline_wrong == 0 )); then
+  pass "every fixture target holds the installer-pinned generation-4 bytes"
+fi
+
+# Whatever the host currently runs, the fixture is generation 4. Reported, not
+# asserted: the suite must not care which generation is installed.
+live_state="unreadable"
+if [[ -r /usr/lib/kyri/python/tools/capability/execution/worker.py ]]; then
+  live_digest="$(digest_of /usr/lib/kyri/python/tools/capability/execution/worker.py)"
+  for row in "${ROWS[@]}"; do
+    [[ "$(field "${row}" 0)" == "tools/capability/execution/worker.py" ]] || continue
+    if [[ "${live_digest}" == "$(field "${row}" 4)" ]]; then live_state="generation 5"
+    elif [[ "${live_digest}" == "$(field "${row}" 3)" ]]; then live_state="generation 4"
+    else live_state="an unrecognised generation"; fi
+  done
+fi
+printf 'note: the installed tree is %s; the fixture is generation 4 regardless\n' "${live_state}"
+
+# --- 16. fixture construction never reads the installed tree --------------
+builder="$(sed -n '/^build_fixture()/,/^}/p;/^materialise_gen4()/,/^}/p' "$0")"
+if printf '%s' "${builder}" | grep -qE '(cp|cat|sha256sum|find|install)[[:space:]]+/usr/'; then
+  fail "fixture construction reads an absolute /usr path"
+else
+  pass "fixture construction reads no /usr path: not the installed tree"
+fi
+if printf '%s' "${builder}" | grep -q 'cat-file blob'; then
+  pass "fixture generation-4 bytes come from pinned git objects"
+else
+  fail "fixture generation-4 bytes do not come from git objects"
+fi
+# Every pinned revision is a full 40-character object id and a constant: no
+# caller, environment, or test input selects a revision or a path.
+pins="$(sed -n '/^gen4_commit_for()/,/^}/p' "$0" | grep -oE "[0-9a-f]{40}" | sort -u)"
+if [[ "$(printf '%s\n' "${pins}" | grep -c .)" -ge 4 ]]; then
+  pass "generation-4 sources are pinned as full object ids"
+else
+  fail "generation-4 sources are not pinned as full object ids"
+fi
+if sed -n '/^gen4_commit_for()/,/^}/p' "$0" | grep -qE '\$[{(]|KYRI_|GEN4_COMMIT='; then
+  fail "a pinned generation-4 source is caller- or environment-selectable"
+else
+  pass "no pinned generation-4 source is caller- or environment-selectable"
 fi
 
 printf '\n'

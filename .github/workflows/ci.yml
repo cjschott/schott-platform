@@ -24,6 +24,13 @@ jobs:
       - name: Check out repository
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # Full history, because the generation-5 installer suite builds its
+          # generation-4 fixture baseline from pinned historical blobs rather
+          # than from whatever generation the machine happens to have installed.
+          # The default depth-1 checkout would leave those objects absent and
+          # the suite would fail closed on every run.
+          fetch-depth: 0
 
       - name: Shell syntax check (scripts, tests, operator tooling)
         run: |
