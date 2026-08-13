@@ -687,9 +687,9 @@ cannot traverse the coordinator's tree, which is the authority split working —
 and it did not affect the installation or its verification. Run that probe from
 a directory the execution identity can traverse, such as `/tmp`.
 
-**Generation 4 — pending, from Passes 2A, 2C, and 3A (2026-08-13).** **Three**
-installed objects differ from source — two changed and one new; Passes 2B and
-2D added no runtime file:
+**Generation 4 — installed and accepted 2026-08-13**, from Passes 2A, 2C, and
+3A. **Three** installed objects differed from source — two changed and one new;
+Passes 2B and 2D added no runtime file:
 
 | Repository source | Installed path | SHA-256 |
 |---|---|---|
@@ -708,10 +708,17 @@ operator tooling and sits outside the matrix by design. Installing it would put
 identifier allocation and authority publication inside the runtime library the
 coordinator imports from.
 
-Generation 4 is not urgent. The reader classification and the payload constant
-are both inert until an authority namespace exists on the host, so this can be
-one reviewed re-provisioning after the disposition ceremonies land rather than
-several.
+Accepted evidence: 43 installed runtime library files, manifest digest
+`179449810b1da3ac7bf55107c1723f5030ca29958ea8b94b04b7c40ec1b29c4c`, recorded at
+`/root/kyri-gen4-library-digests.txt` and `/root/kyri-gen4-helper-digests.txt`
+with all prior G4, G4c, and generation-3 evidence intact. The import boundary,
+the reader's three states, the two pending subtypes, the authorisation seam, and
+the bare-hex `oci_image_id` contract were each verified in the installed tree;
+`tools/provisioning` is absent from it, as it must remain.
+
+**Generation 5 will be required** by the Pass 3B profile handoff, which changes
+the launch-record schema and the root helper. It is ruled in design §14.1 and
+not yet implemented.
 
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its

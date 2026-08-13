@@ -1095,7 +1095,7 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | **IMPLEMENTED** (Pass 2C) |
 | exported payload schema-version constant | **IMPLEMENTED** (Pass 2C) |
 | coordinator resolves authority; root and worker do not | **IMPLEMENTED** (Pass 3A) |
-| launch-record `ExecutionProfile` transport | REQUIRED, NOT YET IMPLEMENTED |
+| launch-record `ExecutionProfile` transport | **RULED** (Pass 3B), not yet implemented |
 | root helper launch-record schema extension | REQUIRED, NOT YET IMPLEMENTED |
 | worker governed-profile consumption | REQUIRED, NOT YET IMPLEMENTED |
 | production G5 image build and CIMP admission | NOT STARTED |
@@ -1276,6 +1276,38 @@ the execution suite's purity-backstop coverage list rather than exempted from it
 
 `LAUNCH_RECORD_SCHEMA` is untouched and still exactly seven fields — asserted by
 this pass's own suite, since extending it is Pass 3B's privilege-boundary work.
+
+### Pass 3B ruling — governed profile handoff, 2026-08-13
+
+Ruled and recorded in design §14.1; **nothing implemented**. The profile
+crosses as one immutable `…/capability-handoff/<CINV>/profile` holding exactly
+`canonical_profile(profile)`, committed by a `profile_digest` that **replaces**
+`oci_image_id` in the launch record — so the record stays seven fields and root
+still understands one document and nothing else.
+
+Flattening was rejected because it would make the privileged parser the place
+execution policy is validated. The protocol was rejected because the worker
+needs the profile before its first message and the only coordinator→worker verbs
+are `START_NOW` and `ABORT`. A passed descriptor was rejected because
+`INHERITED_DESCRIPTORS` is `(0, 1, 2)` and reopening inheritance to carry policy
+restores the surface that rule removes.
+
+Root verifies the digest and then **freezes** the profile to `root:root 0444`
+while still privileged; that, not re-reading, is what closes TOCTOU — the
+coordinator owns the handoff directory and could otherwise `chmod` it back. Root
+parses the profile at no point. The worker reconstructs it from canonical bytes,
+requires an exact round-trip, and requires `profile.cinv` to match its argv.
+
+Two things were surfaced rather than absorbed. Keeping both `oci_image_id` and
+`profile_digest` is a live alternative — it costs a second privileged parse for
+a check the worker already performs — and is recorded in §14.1 for the reviewer
+to prefer if they disagree. And `payload`/`package/` carry the same swap
+exposure the profile freeze closes; extending the freeze to them is a follow-up,
+deliberately outside Pass 3B.
+
+Consequences: launch-record schema and root helper change → **generation 5**.
+Payload schema, profile schema version, protocol, and `ExecutionProfile` fields
+are unchanged.
 
 ## 6. Sequencing rules
 
