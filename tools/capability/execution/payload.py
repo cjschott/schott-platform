@@ -76,6 +76,12 @@ class _Schema:
 # The governed schema registry. Versions are selected by capability authority
 # through the call, never by the payload, so this maps an integer the caller
 # already had the right to choose.
+# The governed payload schema this build implements. Exported so admission
+# commits a constant rather than an operator's integer: a payload schema is a
+# contract between the coordinator and the capability, and an admission that
+# named a version nobody implements would be admitted and then unusable.
+PAYLOAD_SCHEMA_VERSION = 1
+
 _SCHEMAS: dict[int, _Schema] = {
     1: _Schema(fields={
         "operation": _Field(kind=str, required=True),

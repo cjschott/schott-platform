@@ -293,6 +293,11 @@ jobs:
       - name: Capability implementation-authority bootstrap tests
         run: bash tests/test-capability-authority-bootstrap.sh
 
+      # G5 ordinary admission transaction and provisioning evidence.
+      # Hermetic; builds no image and creates no production authority path.
+      - name: Capability implementation admission tests
+        run: bash tests/test-capability-authority-admission.sh
+
       # G4 provisioning artifacts. Installs nothing and mounts nothing.
       - name: Capability execution provisioning artifact tests
         run: bash tests/test-capability-execution-provisioning.sh

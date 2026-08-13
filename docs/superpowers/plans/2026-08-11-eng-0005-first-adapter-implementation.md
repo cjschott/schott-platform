@@ -1086,14 +1086,14 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | normal allocation begins at `CIMP-000001` / `CGEN-000000000001` | **IMPLEMENTED** (Pass 2B) |
 | permanent identifier gaps | **IMPLEMENTED** (Pass 2B) |
 | `implementation-lifecycle` mutation lock | **IMPLEMENTED** (Pass 2B) |
-| offline writer, COMPLETE and RETIRE ceremonies | REQUIRED, NOT YET IMPLEMENTED |
-| ordinary admission transaction | REQUIRED, NOT YET IMPLEMENTED |
+| COMPLETE and RETIRE disposition ceremonies | REQUIRED, NOT YET IMPLEMENTED |
+| ordinary admission transaction | **IMPLEMENTED** (Pass 2C) |
 | orphan-generation reconciliation | REQUIRED, NOT YET IMPLEMENTED |
 | authority and control namespaces on disk | REQUIRED, NOT YET IMPLEMENTED |
-| canonical provisioning-evidence manifest, 15 fields | REQUIRED, NOT YET IMPLEMENTED |
-| `provisioning_evidence_digest` = SHA-256 of canonical bytes | REQUIRED, NOT YET IMPLEMENTED |
-| `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | REQUIRED, NOT YET IMPLEMENTED |
-| exported payload schema-version constant | REQUIRED, NOT YET IMPLEMENTED |
+| canonical provisioning-evidence manifest, 15 fields | **IMPLEMENTED** (Pass 2C) |
+| `provisioning_evidence_digest` = SHA-256 of canonical bytes | **IMPLEMENTED** (Pass 2C) |
+| `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | **IMPLEMENTED** (Pass 2C) |
+| exported payload schema-version constant | **IMPLEMENTED** (Pass 2C) |
 | coordinator resolves authority; root and worker do not | REQUIRED, NOT YET IMPLEMENTED |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
@@ -1140,6 +1140,54 @@ number comes next" — so the check is now scoped to the allocation path. And th
 header tripped the production-path backstop by putting the word "touches" next
 to `/var/lib/kyri`; it carries the repository's `prod-path-reference` marker
 now, which is the sanctioned greppable exception.
+
+### Pass 2C — ordinary admission transaction, implemented
+
+`tools/provisioning/authority_admission.py` composes the Pass 2A reader and the
+Pass 2B primitives into the normal admission path, and
+`provisioning_evidence.py` implements the fifteen-field canonical evidence
+manifest whose exact bytes `provisioning_evidence_digest` commits. Both stay
+outside the install matrix with the rest of the offline tooling.
+
+The request carries three fields — the image identity, the evidence bytes, and
+the identity the operator observed independently. Everything else is derived:
+`CIMP`, `CGEN`, both contract identities, both schema versions, every digest,
+and every published byte. An API that accepted a contract identity would let an
+operator admit an implementation this build cannot honour.
+
+**Prerequisites are verified before an identifier is burned.** That is a
+deliberate departure from a literal reading of the pass instructions, which
+expected a malformed request to reach publication and leave pending state: a
+refused request must not consume an identity or publish a record, so bad input
+now costs nothing. The consequence is that the intermediate pending state is
+reachable **only by interruption**, which is what it always described. The
+writer asserts it internally between the two publications, and the suite proves
+it by constructing the state exactly as a crash leaves it.
+
+For the same reason `provisioning_evidence_digest` cannot mismatch its
+manifest: it is computed from the supplied bytes rather than accepted, so a
+disagreeing digest is unrepresentable. What is reachable — and tested — is
+evidence that fails its own schema, names a different image, or is not the
+canonical encoding of what it parses to.
+
+Three sources of image identity must agree exactly: requested, observed, and
+recorded. None may be anything but the bare local image ID, so agreement is
+between three readings of one immutable identity rather than between a name and
+whatever it currently points at. §27's separate three-way *version* proof —
+digest-pinned base, SBOM, and the interpreter's own reported version — is
+enforced inside the evidence schema.
+
+The successor authority set is built from the validated current set plus one
+new entry, never by scanning `implementations/`: the set records what was
+decided, and a directory listing is only what is on disk, so scanning would let
+an interrupted transaction promote itself.
+
+One boundary correction. `ADAPTER_IDENTITY` was first placed beside the
+admission schema in the reader, where it tripped the T4 backstop proving the
+reader names no container runtime. The constant moved to its only consumer
+rather than the guard being weakened — the reader deliberately does not enforce
+contract identities anyway, because a retired CIMP admitted under an older
+contract must stay readable.
 
 ## 6. Sequencing rules
 

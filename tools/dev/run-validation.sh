@@ -108,7 +108,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=46
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=58
+  TOTAL_STEPS=59
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -291,6 +291,12 @@ run "Capability execution output quota" \
 # admits no implementation, and opens no gate.
 run "Capability implementation-authority bootstrap" \
   bash tests/test-capability-authority-bootstrap.sh
+
+# ENG-0005 G5 increment. Ordinary implementation-admission transaction and the
+# canonical provisioning-evidence manifest. Hermetic against temporary roots --
+# builds no image, runs no Podman, and creates no production authority path.
+run "Capability implementation admission" \
+  bash tests/test-capability-authority-admission.sh
 
 # ENG-0005 G4 artifacts. Static validation of the installed worker entrypoint,
 # the backing-store and sudoers examples, and the provisioning runbook.

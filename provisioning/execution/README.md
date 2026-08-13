@@ -687,20 +687,27 @@ cannot traverse the coordinator's tree, which is the authority split working —
 and it did not affect the installation or its verification. Run that probe from
 a directory the execution identity can traverse, such as `/tmp`.
 
-**Generation 4 — pending, from the Pass 2A reader change (2026-08-13).** The
-reader gained the three-state classification, so exactly **one** installed
-object differs from source:
+**Generation 4 — pending, from Passes 2A and 2C (2026-08-13).** Exactly **two**
+installed objects differ from source:
 
 | Repository source | Installed path | SHA-256 |
 |---|---|---|
-| `tools/capability/execution/implementation_authority.py` | `/usr/lib/kyri/python/tools/capability/execution/implementation_authority.py` | `ddd5b9134d5f4e0906ebfdb4cabd61a7d63639fd8c55a20523e872055c6234e4` |
+| `tools/capability/execution/implementation_authority.py` | `…/tools/capability/execution/implementation_authority.py` | `ddd5b9134d5f4e0906ebfdb4cabd61a7d63639fd8c55a20523e872055c6234e4` |
+| `tools/capability/execution/payload.py` | `…/tools/capability/execution/payload.py` | `cde8f95b307d4f45bf0e79efca54cf3fa2ec0f6d043282f2ebe4310e6b67d4bb` |
 
-`root:root 0444`. The other 44 matrix artefacts are byte-identical, the three
-`/usr/libexec` entrypoints are unchanged, and **nothing from Pass 2B is
-installed** — the bootstrap package is outside the matrix by design. Generation
-4 is not urgent: the classifier is inert until an authority namespace and a
-writer exist, so it can be folded into one reviewed re-provisioning after the
-admission transaction lands rather than done twice.
+Both `root:root 0444`. The other 43 matrix artefacts are byte-identical and the
+three `/usr/libexec` entrypoints are unchanged.
+
+**Nothing from Passes 2B or 2C is installed, and none of it may be.** The whole
+`tools/provisioning/` package — bootstrap, evidence, and admission — is offline
+operator tooling and sits outside the matrix by design. Installing it would put
+identifier allocation and authority publication inside the runtime library the
+coordinator imports from.
+
+Generation 4 is not urgent. The reader classification and the payload constant
+are both inert until an authority namespace exists on the host, so this can be
+one reviewed re-provisioning after the disposition ceremonies land rather than
+several.
 
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its
