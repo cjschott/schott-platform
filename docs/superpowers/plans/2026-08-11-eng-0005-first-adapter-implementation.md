@@ -1034,14 +1034,35 @@ matrices. Three refinements were derived while validating it:
   authorised* from *later withdrawn*, and immutable history is better evidence
   than a field that would have to be trusted.
 
-**Test boundary.** `tests/test-capability-execution-implementation-authority.sh`
-case *"an on-disk CIMP absent from the manifest fails closed"* asserts today's
-behaviour: it publishes `CIMP-000002` beside a listed `CIMP-000001` and
-requires a refusal. Under this ruling that exact fixture becomes
-VALID_WITH_PENDING_DISPOSITION. The test is **correct for the current
-implementation and was deliberately left unchanged** — it changes in the
-implementation pass that introduces the tolerance, not in the pass that
-documents it.
+**Test boundary — closed by Pass 2A.** The case *"an on-disk CIMP absent from
+the manifest fails closed"* asserted the pre-ruling behaviour and was replaced
+by the pending-disposition section when the tolerance was implemented, not when
+it was documented.
+
+### Pass 2A — reader classification, implemented
+
+`current_generation()` still raises on INVALID and still returns a `Generation`
+for both valid states, so no caller changed. The snapshot now carries `state`
+and an ordered `pending` tuple of frozen `PendingImplementation` records, each
+naming its `PendingDisposition`. Putting them on the snapshot rather than
+behind a second query is deliberate: obtaining authority and learning about
+unfinished transactions cannot come apart, so the writer cannot read one
+without the other.
+
+Tolerance covers the *omission* only. A future ordinal buys no leniency about
+canonical bytes, schema, identity, unexpected objects, or symlinks; all of
+those remain global findings, as does an unlisted ordinal at or below the
+high-water mark, and `CIMP-000000` in either the namespace or an authority set.
+`resolve_implementation` refuses a pending CIMP as `UnknownImplementation` and
+says which disposition is outstanding, so an operator reads *awaiting
+disposition* rather than *never existed*.
+
+Two fixture defects surfaced while proving it. `build()` never created
+`implementations/` for an empty genesis namespace, which a real provisioned
+namespace always carries. And an unlisted CIMP whose ordinal *equals* the
+high-water mark is unreachable by construction — the ordinal is the directory
+name, so it cannot be both listed and unlisted; only *strictly below* can
+occur, and the test now asserts that with a retired entry holding the ordinal.
 
 #### G5 ruling status
 
@@ -1056,9 +1077,10 @@ documents it.
 | worker chooses no image; no runtime pull or fetch | **IMPLEMENTED** |
 | corruption remains globally fail-closed | **IMPLEMENTED** |
 | `PROFILE_SCHEMA_VERSION = 1` | **IMPLEMENTED** |
-| three-state reader model and pending disposition | REQUIRED, NOT YET IMPLEMENTED |
-| `CIMP-000000` reserved; semantic rejection | REQUIRED, NOT YET IMPLEMENTED |
-| high-water rule, empty genesis set = 0 | REQUIRED, NOT YET IMPLEMENTED |
+| three-state reader model and pending disposition | **IMPLEMENTED** (Pass 2A) |
+| `PENDING_ADMISSION` / `PENDING_RETIREMENT` subtypes | **IMPLEMENTED** (Pass 2A) |
+| `CIMP-000000` reserved; semantic rejection | **IMPLEMENTED** (Pass 2A) |
+| high-water rule, empty genesis set = 0 | **IMPLEMENTED** (Pass 2A) |
 | independent persistent CIMP and CGEN counters | REQUIRED, NOT YET IMPLEMENTED |
 | `CGEN-000000000000` genesis with empty authority set | REQUIRED, NOT YET IMPLEMENTED |
 | normal allocation begins at `CIMP-000001` / `CGEN-000000000001` | REQUIRED, NOT YET IMPLEMENTED |

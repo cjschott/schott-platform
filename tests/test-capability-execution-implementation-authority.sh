@@ -186,7 +186,8 @@ from tools.capability.execution.implementation_authority import (
     current_generation, resolve_implementation,
     ImplementationAuthorityError, IntegrityFailure, ScanLimitExceeded,
     FindingsTruncated, RetiredImplementation, UnknownImplementation,
-    Generation, Admission, MAXIMUM_SCAN_ENTRIES, MAXIMUM_SUMMARY_BYTES)
+    Generation, Admission, MAXIMUM_SCAN_ENTRIES, MAXIMUM_SUMMARY_BYTES,
+    NamespaceState, PendingDisposition, PendingImplementation, RESERVED_CIMP)
 from tools.capability.execution.types import Classification
 WORK = os.environ['WORKDIR']
 GENESIS = 'CGEN-000000000000'
@@ -215,6 +216,9 @@ def build(name, cimps=('CIMP-000001',), retired=(), cgen=GENESIS,
     root = os.path.join(WORK, name)
     if os.path.isdir(root):
         shutil.rmtree(root)
+    # A provisioned namespace always carries the implementations directory,
+    # including at genesis with nothing admitted yet.
+    os.makedirs(os.path.join(root, 'implementations'), exist_ok=True)
     entries = []
     for cimp in cimps:
         adm = serialise(admission_body(cimp))
@@ -241,6 +245,35 @@ def build(name, cimps=('CIMP-000001',), retired=(), cgen=GENESIS,
     write(os.path.join(root, 'current-generation'),
           serialise({'cgen': cgen, 'generation_digest': sha(gen)}))
     return root
+
+def publish_unlisted(root, cimp, retire=False, admission=None, retirement=None):
+    '''Publish a CIMP that no current authority set accounts for.
+
+    This is exactly what an interrupted admission leaves behind: the record is
+    immutable and on disk, and the generation that would have listed it was
+    never made current.
+    '''
+    body = serialise(admission_body(cimp)) if admission is None else admission
+    write(os.path.join(root, 'implementations', cimp, 'admission'), body)
+    if retire or retirement is not None:
+        ret = serialise({'cimp': cimp}) if retirement is None else retirement
+        write(os.path.join(root, 'implementations', cimp, 'retirement'), ret)
+    return root
+
+def tree_digest(root):
+    '''One digest over every path, mode, and byte beneath root.'''
+    items = []
+    for base, dirs, files in os.walk(root):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(base, name)
+            with open(path, 'rb') as handle:
+                items.append((os.path.relpath(path, root),
+                              os.lstat(path).st_mode, handle.read()))
+        for name in dirs:
+            path = os.path.join(base, name)
+            items.append((os.path.relpath(path, root), os.lstat(path).st_mode, b''))
+    return sha(repr(sorted(items)).encode('utf-8'))
 
 def open_root(root):
     return os.open(root, os.O_RDONLY | os.O_DIRECTORY)
@@ -468,11 +501,291 @@ assert refuses(root)
 print('OK')
 "
 
-run_case "an on-disk CIMP absent from the manifest fails closed" "${PRELUDE}
-root = build('extra')
-write(os.path.join(root, 'implementations', 'CIMP-000002', 'admission'),
-      serialise(admission_body('CIMP-000002')))
+# --- interrupted transactions: pending disposition -------------------------
+#
+# Admission publishes a CIMP record and then advances current-generation. A
+# crash between those two atomic steps is reachable by ordinary power loss, so
+# the resulting namespace must stay readable: authority already granted is not
+# revoked, and the interrupted record grants nothing until an operator
+# disposes of it.
+
+run_case "a steady-state namespace is VALID with no pending disposition" "${PRELUDE}
+generation = load(build('steady'))
+assert generation.state is NamespaceState.VALID, generation.state
+assert generation.pending == (), generation.pending
+print('OK')
+"
+
+run_case "an interrupted admission is pending, not corruption" "${PRELUDE}
+root = publish_unlisted(build('pendadm'), 'CIMP-000002')
+generation = load(root)
+assert generation.state is NamespaceState.VALID_WITH_PENDING_DISPOSITION, generation.state
+assert len(generation.pending) == 1, generation.pending
+entry = generation.pending[0]
+assert entry.cimp == 'CIMP-000002', entry
+assert entry.disposition is PendingDisposition.PENDING_ADMISSION, entry
+# The already-current implementation keeps working. A crash must not revoke
+# authority that was correctly granted before it.
+assert generation.eligible_cimps == ('CIMP-000001',), generation.eligible_cimps
+fd = open_root(root)
+try:
+    assert resolve_implementation(fd, 'CIMP-000001', generation=generation).cimp == 'CIMP-000001'
+    # The pending one is not authority and must not resolve.
+    try:
+        resolve_implementation(fd, 'CIMP-000002', generation=generation)
+    except UnknownImplementation:
+        pass
+    else:
+        raise AssertionError('a pending CIMP resolved as execution authority')
+finally:
+    os.close(fd)
+print('OK')
+"
+
+run_case "an interrupted RETIRE disposition is pending retirement" "${PRELUDE}
+# The RETIRE ceremony publishes the retirement record and then publishes a
+# successor generation. A crash between them must not be corruption either.
+root = publish_unlisted(build('pendret'), 'CIMP-000002', retire=True)
+generation = load(root)
+assert generation.state is NamespaceState.VALID_WITH_PENDING_DISPOSITION, generation.state
+assert len(generation.pending) == 1, generation.pending
+entry = generation.pending[0]
+assert entry.cimp == 'CIMP-000002', entry
+assert entry.disposition is PendingDisposition.PENDING_RETIREMENT, entry
+assert generation.eligible_cimps == ('CIMP-000001',), generation.eligible_cimps
+fd = open_root(root)
+try:
+    try:
+        resolve_implementation(fd, 'CIMP-000002', generation=generation)
+    except UnknownImplementation:
+        pass
+    else:
+        raise AssertionError('a retirement-bearing pending CIMP resolved')
+finally:
+    os.close(fd)
+print('OK')
+"
+
+run_case "a retirement-bearing pending CIMP is never reported as eligible" "${PRELUDE}
+for retire in (False, True):
+    root = publish_unlisted(build('elig' + str(retire)), 'CIMP-000002', retire=retire)
+    generation = load(root)
+    assert 'CIMP-000002' not in generation.eligible_cimps, generation.eligible_cimps
+    assert all(e.cimp != 'CIMP-000002' for e in generation.entries), generation.entries
+print('OK')
+"
+
+run_case "multiple pending CIMPs are all reported in numeric order" "${PRELUDE}
+root = build('multi')
+# Deliberately published out of order, and of mixed subtype.
+publish_unlisted(root, 'CIMP-000004', retire=True)
+publish_unlisted(root, 'CIMP-000002')
+publish_unlisted(root, 'CIMP-000003', retire=True)
+generation = load(root)
+assert generation.state is NamespaceState.VALID_WITH_PENDING_DISPOSITION
+assert [e.cimp for e in generation.pending] == \\
+    ['CIMP-000002', 'CIMP-000003', 'CIMP-000004'], generation.pending
+assert [e.disposition for e in generation.pending] == [
+    PendingDisposition.PENDING_ADMISSION,
+    PendingDisposition.PENDING_RETIREMENT,
+    PendingDisposition.PENDING_RETIREMENT], generation.pending
+assert generation.eligible_cimps == ('CIMP-000001',)
+fd = open_root(root)
+try:
+    for cimp in ('CIMP-000002', 'CIMP-000003', 'CIMP-000004'):
+        try:
+            resolve_implementation(fd, cimp, generation=generation)
+        except UnknownImplementation:
+            continue
+        raise AssertionError('pending ' + cimp + ' resolved')
+finally:
+    os.close(fd)
+print('OK')
+"
+
+run_case "a retired listed CIMP still raises the high-water mark" "${PRELUDE}
+# Retirement removes eligibility, not accounting. An ordinal at or below the
+# high-water mark is a gap in history, never an interrupted transaction.
+root = build('hwretired', cimps=('CIMP-000001', 'CIMP-000002'),
+             retired=('CIMP-000002',))
+generation = load(root)
+assert generation.eligible_cimps == ('CIMP-000001',), generation.eligible_cimps
+assert generation.state is NamespaceState.VALID
+# CIMP-000002 is retired and listed, so an unlisted CIMP-000002 ordinal is
+# already spoken for; a new unlisted CIMP-000003 is legitimately pending.
+publish_unlisted(root, 'CIMP-000003')
+generation = load(root)
+assert [e.cimp for e in generation.pending] == ['CIMP-000003'], generation.pending
+print('OK')
+"
+
+run_case "the empty genesis authority set has a high-water mark of zero" "${PRELUDE}
+root = build('emptygen', cimps=())
+generation = load(root)
+assert generation.state is NamespaceState.VALID, generation.state
+assert generation.entries == () and generation.eligible_cimps == ()
+# The first legitimately published CIMP is therefore pending, not a finding.
+publish_unlisted(root, 'CIMP-000001')
+generation = load(root)
+assert generation.state is NamespaceState.VALID_WITH_PENDING_DISPOSITION
+assert [e.cimp for e in generation.pending] == ['CIMP-000001'], generation.pending
+print('OK')
+"
+
+run_case "an unlisted CIMP at or below the high-water mark fails closed" "${PRELUDE}
+# This is the case tolerance must never cover: an ordinal the current
+# authority set has already passed is a removal or a substitution, not an
+# interrupted transaction.
+root = build('below', cimps=('CIMP-000001', 'CIMP-000003'))
+publish_unlisted(root, 'CIMP-000002')
 assert refuses(root)
+# Equality is unreachable by construction and is asserted as such: an unlisted
+# CIMP cannot share an ordinal with a listed one, because the ordinal is the
+# directory name. Only 'strictly below' can actually occur.
+root = build('belowret', cimps=('CIMP-000001', 'CIMP-000004'),
+             retired=('CIMP-000004',))
+publish_unlisted(root, 'CIMP-000003')
+assert refuses(root), 'a retired entry must still hold its ordinal'
+print('OK')
+"
+
+run_case "CIMP-000000 is reserved and is always an integrity finding" "${PRELUDE}
+assert RESERVED_CIMP == 'CIMP-000000', RESERVED_CIMP
+# Physically present and unlisted: reserved beats every pending condition,
+# including an ordinal above an empty genesis high-water mark.
+root = build('res0', cimps=())
+publish_unlisted(root, 'CIMP-000000')
+assert refuses(root)
+# Named by an authority set: a reserved identifier is not a real one.
+root = build('res0listed', cimps=('CIMP-000000',))
+assert refuses(root)
+print('OK')
+"
+
+run_case "a structurally broken pending CIMP fails closed, never pending" "${PRELUDE}
+# Future ordinal does not buy leniency: every structural rule still applies.
+root = build('badpend1')
+publish_unlisted(root, 'CIMP-000002', admission=b'{not canonical')
+assert refuses(root)
+
+root = build('badpend2')
+publish_unlisted(root, 'CIMP-000002',
+                 admission=serialise(admission_body('CIMP-000009')))
+assert refuses(root)
+
+root = build('badpend3')
+body = admission_body('CIMP-000002'); body['extra'] = 'x'
+publish_unlisted(root, 'CIMP-000002', admission=serialise(body))
+assert refuses(root)
+
+root = build('badpend4')
+body = admission_body('CIMP-000002'); body['oci_image_id'] = 'sha256:' + 'a' * 64
+publish_unlisted(root, 'CIMP-000002', admission=serialise(body))
+assert refuses(root)
+
+root = build('badpend5')
+publish_unlisted(root, 'CIMP-000002')
+write(os.path.join(root, 'implementations', 'CIMP-000002', 'notes'), b'x')
+assert refuses(root)
+
+root = build('badpend6')
+os.makedirs(os.path.join(root, 'implementations'), exist_ok=True)
+os.symlink(os.path.join(root, 'implementations', 'CIMP-000001'),
+           os.path.join(root, 'implementations', 'CIMP-000002'))
+assert refuses(root)
+
+root = build('badpend7')
+publish_unlisted(root, 'CIMP-000002')
+target = os.path.join(root, 'implementations', 'CIMP-000001', 'admission')
+path = os.path.join(root, 'implementations', 'CIMP-000003', 'admission')
+os.makedirs(os.path.dirname(path), exist_ok=True)
+os.symlink(target, path)
+assert refuses(root)
+print('OK')
+"
+
+run_case "a broken retirement on a pending CIMP fails closed, never pending" "${PRELUDE}
+root = build('badret1')
+publish_unlisted(root, 'CIMP-000002', retirement=b'{not canonical')
+assert refuses(root)
+
+root = build('badret2')
+publish_unlisted(root, 'CIMP-000002',
+                 retirement=serialise({'cimp': 'CIMP-000009'}))
+assert refuses(root)
+
+root = build('badret3')
+publish_unlisted(root, 'CIMP-000002',
+                 retirement=serialise({'cimp': 'CIMP-000002', 'why': 'x'}))
+assert refuses(root)
+
+# A retirement with no admission beside it is not a disposition in progress.
+root = build('badret4')
+write(os.path.join(root, 'implementations', 'CIMP-000002', 'retirement'),
+      serialise({'cimp': 'CIMP-000002'}))
+assert refuses(root)
+print('OK')
+"
+
+run_case "classification and ordering are identical across repeated reads" "${PRELUDE}
+root = build('repeat')
+publish_unlisted(root, 'CIMP-000003', retire=True)
+publish_unlisted(root, 'CIMP-000002')
+first = load(root)
+for _ in range(4):
+    again = load(root)
+    assert again.state is first.state
+    assert again.pending == first.pending, (again.pending, first.pending)
+    assert again.cgen == first.cgen
+    assert again.generation_digest == first.generation_digest
+    assert again.eligible_cimps == first.eligible_cimps
+print('OK')
+"
+
+run_case "pending disposition does not alter the current-generation digest" "${PRELUDE}
+root = build('nodigest')
+before = load(root)
+publish_unlisted(root, 'CIMP-000002')
+after = load(root)
+assert after.generation_digest == before.generation_digest
+assert after.cgen == before.cgen
+assert after.authority_set_digest == before.authority_set_digest
+assert after.entries == before.entries
+print('OK')
+"
+
+run_case "reading a pending namespace writes nothing at all" "${PRELUDE}
+root = build('noside')
+publish_unlisted(root, 'CIMP-000002')
+publish_unlisted(root, 'CIMP-000003', retire=True)
+before = tree_digest(root)
+for _ in range(3):
+    generation = load(root)
+    fd = open_root(root)
+    try:
+        resolve_implementation(fd, 'CIMP-000001', generation=generation)
+        for cimp in ('CIMP-000002', 'CIMP-000003'):
+            try:
+                resolve_implementation(fd, cimp, generation=generation)
+            except UnknownImplementation:
+                pass
+    finally:
+        os.close(fd)
+assert tree_digest(root) == before, 'the reader mutated the namespace'
+print('OK')
+"
+
+run_case "the pending record is immutable and carries its own subtype" "${PRELUDE}
+root = publish_unlisted(build('frozen'), 'CIMP-000002')
+entry = load(root).pending[0]
+assert isinstance(entry, PendingImplementation)
+for field, value in (('cimp', 'CIMP-000009'),
+                     ('disposition', PendingDisposition.PENDING_RETIREMENT)):
+    try:
+        setattr(entry, field, value)
+    except Exception:
+        continue
+    raise AssertionError('pending record is mutable: ' + field)
 print('OK')
 "
 

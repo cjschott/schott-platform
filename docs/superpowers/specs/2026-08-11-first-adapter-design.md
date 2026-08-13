@@ -230,6 +230,42 @@ Pending CIMPs are **interrupted transactions awaiting disposition** — not
 eligible, not authorised, not retired by implication, never automatically
 included in a later authority set, never automatically deleted, never
 automatically repaired. They must never resolve as execution authority.
+
+**Two pending subtypes, ruled 2026-08-12.** A pending CIMP carries which
+disposition it is waiting for, because the two permit different completions and
+re-deriving the difference from raw namespace bytes would be a second
+interpretation of the same evidence.
+
+- **`PENDING_ADMISSION`** — a published admission with no retirement record.
+  The interrupted admission has received no final decision, so the operator may
+  still choose **COMPLETE** or **RETIRE**. Neither happens automatically.
+- **`PENDING_RETIREMENT`** — a published admission *and* a valid published
+  retirement for the same CIMP. The RETIRE decision is already immutable, and
+  the only lawful completion is publishing a successor generation that accounts
+  for the CIMP as retired. **COMPLETE is forbidden**: an immutable retirement is
+  not reversible, and no later operator may make such a CIMP eligible.
+
+A published retirement does **not** by itself make a CIMP accounted for. Only a
+current authority set listing it with the correct admission and retirement
+commitments completes the disposition.
+
+**The RETIRE ceremony has its own crash window**, and it is tolerated for the
+same reason the admission window is. The ceremony publishes the retirement
+record and then publishes the successor generation; a crash between them leaves
+a valid admission and a valid retirement with no generation accounting for
+either. Treating that as corruption would recreate the ordinary-power-loss
+global freeze this model exists to prevent. So: the namespace stays
+VALID_WITH_PENDING_DISPOSITION, the subtype becomes `PENDING_RETIREMENT`,
+already-current implementations remain usable, the pending CIMP stays
+ineligible, ordinary writer mutation stays blocked, and disposition resumes by
+publishing a fresh successor `CGEN` accounting for it as retired. No deletion,
+no automatic repair, no identifier reuse, and no reversal to COMPLETE.
+
+**A malformed retirement is not pending.** A retirement without a valid
+admission beside it, one naming a different CIMP, one that is not canonical or
+fails the closed schema, an unexpected extra object, or a symlinked record are
+all INVALID and freeze globally. A future ordinal buys no leniency about
+structure — tolerance is only ever about the *omission* from the authority set.
 Runtime resolution continues against the already-current authority set, so
 valid pending state does **not** disable implementations that are already
 authoritative. That is the point of the classification: a crash must not
@@ -274,6 +310,10 @@ so a sequential ceremony would transit through global freeze. One ceremony, one
 successor generation, every pending CIMP explicitly COMPLETE or RETIRE.
 
 ### 5.2 Disposition ceremonies
+
+**COMPLETE** is permitted only for `PENDING_ADMISSION`. If a valid retirement
+record exists for the CIMP the ceremony must refuse, and the reader's subtype is
+what makes that enforceable without a second reading of raw namespace state.
 
 **COMPLETE** resumes an interrupted admission. A valid admission record proves
 only that the record was written, never that the later authority-publication

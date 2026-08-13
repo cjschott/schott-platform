@@ -27,6 +27,7 @@ Governed by ``docs/superpowers/specs/2026-08-11-first-adapter-design.md`` §5.
 from __future__ import annotations
 
 import dataclasses
+import enum
 import hashlib
 import os
 from typing import Any
@@ -40,6 +41,14 @@ MAXIMUM_RECORD_BYTES = 2 * 1024 * 1024
 MAXIMUM_AUTHORITY_SET_ENTRIES = 10_000
 
 GENESIS_CGEN = "CGEN-000000000000"
+
+# Reserved forever, and never allocated. Normal allocation begins at
+# CIMP-000001, which is what lets the empty genesis authority set carry a
+# high-water mark of 0 rather than -1: an ordinal-0 directory can then never
+# satisfy "strictly greater than the high-water mark" and slip through as an
+# interrupted transaction. Semantic rejection lives here rather than in
+# ``_is_cimp`` because that parser is still wanted as syntax-only elsewhere.
+RESERVED_CIMP = "CIMP-000000"
 
 _IMPLEMENTATIONS = "implementations"
 _GENERATIONS = "generations"
@@ -104,6 +113,46 @@ class UnknownImplementation(ImplementationAuthorityError):
     """No such CIMP in the validated authority set."""
 
 
+class NamespaceState(enum.Enum):
+    """How completely the current generation accounts for what is published.
+
+    ``INVALID`` is deliberately not a value any successful read returns: an
+    unsound namespace raises, so a caller cannot obtain authority and then
+    forget to inspect a status field. It is named because the writer's contract
+    is stated in these three terms.
+    """
+
+    VALID = "valid"
+    VALID_WITH_PENDING_DISPOSITION = "valid_with_pending_disposition"
+    INVALID = "invalid"
+
+
+class PendingDisposition(enum.Enum):
+    """Which disposition an interrupted transaction is still waiting for.
+
+    The distinction is carried rather than left to be rediscovered, because the
+    two states permit different completions and re-deriving that from raw
+    namespace bytes is a second interpretation of the same evidence.
+    """
+
+    # Published admission, no retirement. The operator may still choose either
+    # COMPLETE or RETIRE; neither happens on its own.
+    PENDING_ADMISSION = "pending_admission"
+    # Published admission *and* published retirement. The RETIRE decision is
+    # already immutable, so the only lawful completion is publishing a
+    # generation that accounts for it as retired. COMPLETE is no longer
+    # available: an immutable retirement is not reversible by a later operator.
+    PENDING_RETIREMENT = "pending_retirement"
+
+
+@dataclasses.dataclass(frozen=True)
+class PendingImplementation:
+    """One published CIMP the current generation does not account for."""
+
+    cimp: str
+    disposition: PendingDisposition
+
+
 @dataclasses.dataclass(frozen=True)
 class Admission:
     """One immutable implementation contract, as admitted."""
@@ -150,6 +199,14 @@ class Generation:
     predecessor_generation_digest: str | None
     entries: tuple[AuthoritySetEntry, ...]
     eligible_cimps: tuple[str, ...]
+    # How completely this generation accounts for the implementations
+    # namespace, and what is outstanding. Carried on the snapshot rather than
+    # offered as a separate query so that obtaining authority and learning
+    # about unfinished transactions cannot come apart: the writer refuses
+    # ordinary mutation on anything but VALID, and it cannot read the one
+    # without the other. Pending entries are ordered by numeric CIMP.
+    state: NamespaceState = NamespaceState.VALID
+    pending: tuple[PendingImplementation, ...] = ()
 
 
 class _Scan:
@@ -372,6 +429,9 @@ def _authority_set(body: bytes) -> tuple[AuthoritySetEntry, ...]:
         cimp = row["cimp"]
         if not _is_cimp(cimp):
             raise IntegrityFailure(f"authority-set names {cimp!r}")
+        if cimp == RESERVED_CIMP:
+            raise IntegrityFailure(
+                f"authority-set names the reserved {RESERVED_CIMP}")
         ordinal = int(cimp[5:])
         if ordinal <= previous:
             raise IntegrityFailure(
@@ -386,6 +446,78 @@ def _authority_set(body: bytes) -> tuple[AuthoritySetEntry, ...]:
             cimp=cimp, admission_digest=row["admission"],
             retirement_digest=retirement))
     return tuple(entries)
+
+
+def _ordinal(cimp: str) -> int:
+    return int(cimp[5:])
+
+
+def _pending(found: dict[str, dict[str, bytes]],
+             entries: tuple[AuthoritySetEntry, ...],
+             listed: set[str], scan: _Scan) -> tuple[PendingImplementation, ...]:
+    """Classify every published CIMP the current authority set omits.
+
+    Admission publishes a CIMP record and then advances ``current-generation``.
+    Those are two atomic steps, so an interruption between them is reachable by
+    ordinary power loss — and treating that as corruption would freeze all
+    implementation authority for a crash, which is the outcome the classified
+    states exist to avoid. An omitted CIMP is therefore an *interrupted
+    transaction* when it is structurally beyond reproach and its ordinal is
+    ahead of everything the current authority set knows about, and a finding
+    otherwise.
+
+    **Tolerance is only ever about the omission.** Every structural rule still
+    applies: a future ordinal buys no leniency about canonical bytes, schema,
+    identity, unexpected objects, or symlinks. Anything that fails one of those
+    is a finding, exactly as it would be if the CIMP were listed.
+    """
+    # Retired entries count. Retirement removes eligibility, not accounting, so
+    # an ordinal it occupies has been spoken for and can never be reintroduced
+    # as though it were in flight. Empty genesis is 0, not -1, so the reserved
+    # CIMP-000000 cannot qualify as pending on a fresh namespace.
+    high_water = max((_ordinal(entry.cimp) for entry in entries), default=0)
+
+    pending: list[PendingImplementation] = []
+    for name in sorted(set(found) - listed, key=_ordinal):
+        if name == RESERVED_CIMP:
+            scan.find(f"{name} is reserved and must never be published")
+            continue
+        if _ordinal(name) <= high_water:
+            # At or below the high-water mark this is a removal or a
+            # substitution — the current authority set has already passed this
+            # ordinal — and never an interrupted transaction.
+            scan.find(
+                f"{name} exists on disk but is absent from the authority-set")
+            continue
+
+        records = found[name]
+        admission_body = records.get(_ADMISSION)
+        if admission_body is None:
+            # _scan_one already recorded the missing admission.
+            continue
+        try:
+            _admission(admission_body, name)
+        except ImplementationAuthorityError as error:
+            scan.find(f"pending {name}: {error}")
+            continue
+
+        retirement_body = records.get(_RETIREMENT)
+        if retirement_body is None:
+            pending.append(PendingImplementation(
+                cimp=name, disposition=PendingDisposition.PENDING_ADMISSION))
+            continue
+        # A published retirement means the RETIRE decision is already
+        # immutable; the ceremony was interrupted before the generation that
+        # accounts for it. That is still an interrupted transaction, not
+        # corruption, for exactly the reason above.
+        try:
+            _retirement(retirement_body, name)
+        except ImplementationAuthorityError as error:
+            scan.find(f"pending {name}: {error}")
+            continue
+        pending.append(PendingImplementation(
+            cimp=name, disposition=PendingDisposition.PENDING_RETIREMENT))
+    return tuple(pending)
 
 
 def current_generation(root_fd: int) -> Generation:
@@ -457,8 +589,7 @@ def current_generation(root_fd: int) -> Generation:
     found = _scan_implementations(root_fd, scan)
 
     listed = {entry.cimp for entry in entries}
-    for name in sorted(set(found) - listed):
-        scan.find(f"{name} exists on disk but is absent from the authority-set")
+    pending = _pending(found, entries, listed, scan)
 
     eligible: list[str] = []
     for entry in entries:
@@ -498,6 +629,9 @@ def current_generation(root_fd: int) -> Generation:
         predecessor_generation_digest=predecessor_digest,
         entries=entries,
         eligible_cimps=tuple(eligible),
+        state=(NamespaceState.VALID_WITH_PENDING_DISPOSITION if pending
+               else NamespaceState.VALID),
+        pending=pending,
     )
 
 
@@ -514,6 +648,17 @@ def resolve_implementation(root_fd: int, cimp: str, *,
 
     entry = next((e for e in generation.entries if e.cimp == cimp), None)
     if entry is None:
+        # A pending CIMP is genuinely not in the authority set, so this is the
+        # right refusal; it is named explicitly only so an operator reads
+        # "awaiting disposition" rather than "never existed". Publication is
+        # not authority, and nothing here can promote it.
+        outstanding = next(
+            (p for p in generation.pending if p.cimp == cimp), None)
+        if outstanding is not None:
+            raise UnknownImplementation(
+                f"{cimp} is published but not accounted for by the current "
+                f"generation ({outstanding.disposition.value}); it is not "
+                "execution authority until an operator disposes of it")
         raise UnknownImplementation(f"{cimp} is not in the authority-set")
     if entry.retirement_digest is not None:
         raise RetiredImplementation(f"{cimp} is retired and cannot be bound")
