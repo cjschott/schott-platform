@@ -192,7 +192,7 @@ run_case() {
 }
 
 PRELUDE="
-import hashlib, os, shutil
+import hashlib, os, shutil, stat
 from tools.capability.execution.canonical_json import serialise
 from tools.capability.execution.backing_store import (
     verify_backing_store, ObservedFilesystem)
@@ -204,12 +204,19 @@ from tools.capability.execution.package_contract import (
 from tools.capability.execution.handoff import (
     publish_handoff, HandoffBinding, HandoffError, HandoffTargetExists,
     HandoffIdentityMismatch, HANDOFF_MODES, PACKAGE_DIRECTORY,
-    PAYLOAD_NAME, OUTPUT_DIRECTORY)
+    PAYLOAD_NAME, OUTPUT_DIRECTORY, PROFILE_NAME)
+from tools.capability.execution.profile import (
+    ProfileBinding, build_profile, canonical_profile, fingerprint)
+from tools.capability.execution.implementation_authority import Admission
 WORK = os.environ['WORKDIR']
 UUID = '12774bf1-cf2a-4c8c-ba19-42fd9a8a0a96'
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+def read(path):
+    with open(path, 'rb') as handle:
+        return handle.read()
 
 def write(path, data, mode=0o644):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -272,16 +279,202 @@ def package_of(base, entrypoint='main.py'):
         os.close(fd)
         raise
 
-def publish(name='p', cinv='CINV-000042', files=None, entrypoint='main.py'):
+def admission(cimp='CIMP-000001', image=None):
+    return Admission(
+        cimp=cimp, oci_image_id=image if image else 'a' * 64,
+        adapter_identity='python-podman-v1', payload_schema_version=1,
+        execution_profile_schema_version=1,
+        argv_contract_identity='fixed-python-entrypoint-v1',
+        provisioning_evidence_digest='b' * 64)
+
+def governed_profile(cinv='CINV-000042', cimp='CIMP-000001', image=None):
+    return build_profile(ProfileBinding(cinv=cinv, admission=admission(cimp, image)))
+
+def publish(name='p', cinv='CINV-000042', files=None, entrypoint='main.py',
+            profile=None):
     pkg_base, ep = make_package(name + '-pkg', files=files, entrypoint=entrypoint)
     hb = make_handoff_root(name + '-hand')
     root = anchor(hb)
     fd, binding = package_of(pkg_base, ep)
     try:
-        published = publish_handoff(root, cinv, fd, payload_binding(name), binding)
+        published = publish_handoff(
+            root, cinv, fd, payload_binding(name), binding,
+            profile=governed_profile(cinv) if profile is None else profile)
     finally:
         os.close(fd)
     return hb, root, published, binding
+"
+
+# --- the governed profile object --------------------------------------------
+#
+# PUBLICATION MATERIAL ONLY. These bytes are what the privileged transition
+# will later authenticate and copy into a sealed root-authored object; the file
+# published here is coordinator-owned and stays that way. It is NOT execution
+# authority by itself, nothing consumes it yet, and the worker must never read
+# it directly. That transport is Pass 3B-ii and does not exist.
+
+run_case "the profile is published as exactly the canonical profile bytes" "${PRELUDE}
+profile = governed_profile()
+hb, root, published, binding = publish('prof', profile=profile)
+body = read(os.path.join(hb, 'root', 'CINV-000042', PROFILE_NAME))
+assert body == canonical_profile(profile), 'the published bytes are not canonical'
+# One serialiser: the bytes are the same object the fingerprint digests.
+assert sha(body) == fingerprint(profile).profile_digest
+assert published.profile_digest == fingerprint(profile).profile_digest
+print('OK')
+"
+
+run_case "the published profile carries the accepted ownership and mode" "${PRELUDE}
+hb, root, published, binding = publish('profmode')
+path = os.path.join(hb, 'root', 'CINV-000042', PROFILE_NAME)
+status = os.lstat(path)
+assert stat.S_ISREG(status.st_mode), oct(status.st_mode)
+assert stat.S_IMODE(status.st_mode) == HANDOFF_MODES['profile'] == 0o444, \
+    oct(stat.S_IMODE(status.st_mode))
+# Coordinator-owned, exactly as the payload is. It is NOT re-owned to root:
+# the sealed copy in Pass 3B-ii is what protects these bytes, not this mode.
+assert status.st_uid == os.getuid(), status.st_uid
+assert not os.path.islink(path)
+print('OK')
+"
+
+run_case "the profile must name the invocation it is published for" "${PRELUDE}
+hb = make_handoff_root('cinvbind')
+root = anchor(hb)
+pkg_base, ep = make_package('cinvbind-pkg')
+fd, binding = package_of(pkg_base, ep)
+try:
+    # A profile built for another CINV is refused rather than published.
+    publish_handoff(root, 'CINV-000042', fd, payload_binding('cinvbind'),
+                    binding, profile=governed_profile(cinv='CINV-000099'))
+except HandoffIdentityMismatch:
+    pass
+else:
+    raise AssertionError('a profile for another invocation was published')
+finally:
+    os.close(fd)
+assert not os.path.exists(os.path.join(hb, 'root', 'CINV-000042')), 'partial handoff'
+print('OK')
+"
+
+run_case "a malformed profile is refused and publishes nothing" "${PRELUDE}
+for bad in (None, 'profile', 42, object()):
+    hb = make_handoff_root('badprof' + str(abs(hash(repr(bad))) % 99999))
+    root = anchor(hb)
+    pkg_base, ep = make_package('badprof-pkg')
+    fd, binding = package_of(pkg_base, ep)
+    try:
+        publish_handoff(root, 'CINV-000042', fd, payload_binding('bad'),
+                        binding, profile=bad)
+    except HandoffError:
+        pass
+    else:
+        raise AssertionError('accepted ' + repr(bad))
+    finally:
+        os.close(fd)
+    assert not os.path.exists(os.path.join(hb, 'root', 'CINV-000042'))
+    assert os.listdir(os.path.join(hb, 'root')) == [], 'staging residue'
+print('OK')
+"
+
+run_case "profile publication is create-once and a collision changes nothing" "${PRELUDE}
+hb, root, published, binding = publish('collide')
+path = os.path.join(hb, 'root', 'CINV-000042', PROFILE_NAME)
+before = read(path)
+pkg_base, ep = make_package('collide-again')
+fd, second = package_of(pkg_base, ep)
+try:
+    publish_handoff(root, 'CINV-000042', fd, payload_binding('collide'),
+                    second, profile=governed_profile(image='9' * 64))
+except HandoffTargetExists:
+    pass
+else:
+    raise AssertionError('a second handoff overwrote the first')
+finally:
+    os.close(fd)
+assert read(path) == before, 'the published profile was replaced'
+print('OK')
+"
+
+run_case "the profile cannot be aimed anywhere but its governed name" "${PRELUDE}
+import inspect
+# There is no path, name, or destination parameter to aim: the filename is a
+# module constant and the directory is derived from the validated CINV.
+assert PROFILE_NAME == 'profile', PROFILE_NAME
+source = inspect.getsource(publish_handoff)
+assert '..' not in source
+for token in ('profile_path', 'profile_name=', 'destination'):
+    assert token not in source, token
+# And a traversal-shaped CINV never reaches publication at all.
+hb = make_handoff_root('escape')
+root = anchor(hb)
+pkg_base, ep = make_package('escape-pkg')
+fd, binding = package_of(pkg_base, ep)
+try:
+    for cinv in ('../CINV-000042', 'CINV-000042/../..', 'CINV-000042/profile'):
+        try:
+            publish_handoff(root, cinv, fd, payload_binding('escape'), binding,
+                            profile=governed_profile())
+        except HandoffError:
+            continue
+        raise AssertionError('accepted ' + repr(cinv))
+finally:
+    os.close(fd)
+print('OK')
+"
+
+run_case "serialisation is deterministic across repeated publication" "${PRELUDE}
+first = publish('det1')[2].profile_digest
+second = publish('det2')[2].profile_digest
+assert first == second, (first, second)
+profile = governed_profile()
+assert canonical_profile(profile) == canonical_profile(profile)
+print('OK')
+"
+
+run_case "publishing the profile changes nothing else in the handoff" "${PRELUDE}
+hb, root, published, binding = publish('unchanged')
+base = os.path.join(hb, 'root', 'CINV-000042')
+# Exactly the accepted members, plus the profile, and nothing more.
+assert sorted(os.listdir(base)) == sorted(
+    [PACKAGE_DIRECTORY, PAYLOAD_NAME, OUTPUT_DIRECTORY, PROFILE_NAME]), \
+    sorted(os.listdir(base))
+# Payload and package keep their own modes and bytes untouched.
+assert stat.S_IMODE(os.lstat(os.path.join(base, PAYLOAD_NAME)).st_mode) == \
+    HANDOFF_MODES['payload']
+assert stat.S_IMODE(os.lstat(os.path.join(base, PACKAGE_DIRECTORY)).st_mode) == \
+    HANDOFF_MODES['package']
+assert stat.S_IMODE(os.lstat(os.path.join(base, OUTPUT_DIRECTORY)).st_mode) == \
+    HANDOFF_MODES['output']
+assert stat.S_IMODE(os.lstat(base).st_mode) == HANDOFF_MODES['invocation']
+assert sha(read(os.path.join(base, PAYLOAD_NAME))) == published.payload_digest
+print('OK')
+"
+
+run_case "the privilege boundary is untouched by this pass" "${PRELUDE}
+from pathlib import Path
+helper = Path('provisioning/execution/kyri-exec-transition.py').read_text(encoding='utf-8')
+# The launch record is still the pre-vNext seven fields, including
+# oci_image_id: replacing it is Pass 3B-ii, not this pass.
+schema = helper.split('LAUNCH_RECORD_SCHEMA = (')[1].split(')')[0]
+assert chr(34) + 'oci_image_id' + chr(34) in schema, schema
+assert schema.count(chr(34)) == 14, schema
+assert 'INHERITED_DESCRIPTORS = (0, 1, 2)' in helper
+assert 'PROFILE_FD' not in helper and 'memfd' not in helper
+assert '(WORKER_INTERPRETER, WORKER_SCRIPT, cinv)' in helper
+# The worker entrypoint and library are untouched.
+entry = Path('provisioning/execution/kyri-exec-worker.py').read_text(encoding='utf-8')
+assert 'no governed runtime backend is bound' in entry
+assert 'memfd' not in entry and 'F_GET_SEALS' not in entry
+worker = Path('tools/capability/execution/worker.py').read_text(encoding='utf-8')
+assert 'memfd' not in worker and 'F_GET_SEALS' not in worker
+assert 'PROFILE_FD' not in worker
+# Handoff publication reaches no runtime, container, or privileged surface.
+source = Path('tools/capability/execution/handoff.py').read_text(encoding='utf-8')
+for token in ('podman', 'Podman', 'subprocess', 'execve', 'setuid', 'memfd',
+              'sudo', 'no_new_privs'):
+    assert token not in source, token
+print('OK')
 "
 
 # --- interface shape --------------------------------------------------------
@@ -289,7 +482,8 @@ def publish(name='p', cinv='CINV-000042', files=None, entrypoint='main.py'):
 run_case "publication requires a RootDescriptor and takes no destination path" "${PRELUDE}
 import inspect
 params = list(inspect.signature(publish_handoff).parameters)
-assert params == ['root', 'cinv', 'artefact_fd', 'payload', 'package'], params
+assert params == ['root', 'cinv', 'artefact_fd', 'payload', 'package',
+                  'profile'], params
 for name, p in inspect.signature(publish_handoff).parameters.items():
     assert 'path' not in name.lower(), name
     assert str(p.annotation) != 'Path', name
@@ -303,7 +497,8 @@ pkg_base, ep = make_package('rawdest-pkg')
 fd, binding = package_of(pkg_base, ep)
 try:
     publish_handoff(os.path.join(hb, 'root'), 'CINV-000042', fd,
-                    payload_binding('rawdest'), binding)
+                    payload_binding('rawdest'), binding,
+                    profile=governed_profile())
 except (HandoffError, AttributeError, TypeError):
     print('OK')
 else:
@@ -321,7 +516,8 @@ try:
     for bad in ('CINV-00004', '../../etc', '/etc/passwd', 'CINV-000042/x',
                 'cinv-000042', '', 'opaque-invocation-id'):
         try:
-            publish_handoff(root, bad, fd, payload_binding('cg'), binding)
+            publish_handoff(root, bad, fd, payload_binding('cg'), binding,
+                            profile=governed_profile())
         except HandoffError:
             continue
         raise AssertionError(f'accepted CINV {bad!r}')
@@ -565,7 +761,8 @@ finally:
 pkg_base, ep = make_package('spelling-pkg')
 pfd, binding = package_of(pkg_base, ep)
 try:
-    published = publish_handoff(root, 'CINV-000042', pfd, other, binding)
+    published = publish_handoff(root, 'CINV-000042', pfd, other, binding,
+                                profile=governed_profile())
 finally:
     os.close(pfd)
 with open(os.path.join(hb, 'root', 'CINV-000042', PAYLOAD_NAME), 'rb') as handle:
@@ -605,7 +802,8 @@ evil, _ = make_package('srcrace', files={
     'main.py': b'ATTACKER = True\n', 'helper.py': b'X = 9\n',
     'data/table.json': b'{\"a\":99}'})
 try:
-    published = publish_handoff(root, 'CINV-000042', fd, payload_binding('sr'), binding)
+    published = publish_handoff(root, 'CINV-000042', fd, payload_binding('sr'),
+                                binding, profile=governed_profile())
 finally:
     os.close(fd)
 with open(os.path.join(hb, 'root', 'CINV-000042', PACKAGE_DIRECTORY, 'main.py'), 'rb') as handle:
@@ -626,7 +824,8 @@ os.rename(os.path.join(evil, 'root'), good)
 pkg_base, ep = make_package('dstrace-pkg')
 fd, binding = package_of(pkg_base, ep)
 try:
-    publish_handoff(root, 'CINV-000042', fd, payload_binding('dr'), binding)
+    publish_handoff(root, 'CINV-000042', fd, payload_binding('dr'), binding,
+                    profile=governed_profile())
 finally:
     os.close(fd)
 assert os.path.isdir(os.path.join(hb, 'root-moved', 'CINV-000042'))
@@ -645,7 +844,8 @@ try:
     pkg_base, ep = make_package('exists-again')
     fd, second = package_of(pkg_base, ep)
     try:
-        publish_handoff(root, 'CINV-000042', fd, payload_binding('ex2'), second)
+        publish_handoff(root, 'CINV-000042', fd, payload_binding('ex2'), second,
+                        profile=governed_profile())
     except HandoffTargetExists:
         pass
     else:
@@ -664,7 +864,8 @@ try:
     names = os.listdir(os.path.join(hb, 'root'))
     assert names == ['CINV-000042'], names
     inner = sorted(os.listdir(os.path.join(hb, 'root', 'CINV-000042')))
-    assert inner == sorted([PACKAGE_DIRECTORY, PAYLOAD_NAME, OUTPUT_DIRECTORY]), inner
+    assert inner == sorted([PACKAGE_DIRECTORY, PAYLOAD_NAME, OUTPUT_DIRECTORY,
+                            PROFILE_NAME]), inner
 finally:
     root.close()
 print('OK')
@@ -682,7 +883,8 @@ tampered = binding.__class__(
     aggregate_bytes=binding.aggregate_bytes, entrypoint=binding.entrypoint,
     digest='f' * 64)
 try:
-    publish_handoff(root, 'CINV-000042', fd, payload_binding('fp'), tampered)
+    publish_handoff(root, 'CINV-000042', fd, payload_binding('fp'), tampered,
+                    profile=governed_profile())
 except HandoffIdentityMismatch:
     pass
 else:

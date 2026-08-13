@@ -39,10 +39,21 @@ from typing import Any
 from .backing_store import RootDescriptor
 from .package_contract import PackageBinding
 from .payload import PayloadBinding
+from .profile import ExecutionProfile, canonical_profile, fingerprint
 
 PACKAGE_DIRECTORY = "package"
 PAYLOAD_NAME = "payload"
 OUTPUT_DIRECTORY = "out"
+
+# The governed execution profile, published with the rest of the handoff.
+#
+# **Publication material, not authority.** These are the canonical bytes the
+# privileged transition will later authenticate and copy into a sealed
+# root-authored object; this file stays coordinator-owned and coordinator-
+# replaceable, and nothing consumes it yet. It must never be read directly as
+# execution authority -- that transport is a separate increment. The name is a
+# constant precisely so no caller can aim publication anywhere else.
+PROFILE_NAME = "profile"
 
 # The accepted §13 matrix. The invocation subtree and its package are readable
 # and traversable but not writable; the payload is read-only; the output leaf is
@@ -53,6 +64,7 @@ HANDOFF_MODES = {
     "package": 0o555,
     "package_file": 0o444,
     "payload": 0o444,
+    "profile": 0o444,
     "output": 0o700,
     "staging": 0o700,
 }
@@ -83,6 +95,7 @@ class HandoffBinding:
     cinv: str
     package_digest: str
     payload_digest: str
+    profile_digest: str
     entrypoint: str
     entry_count: int
 
@@ -234,13 +247,18 @@ def _empty(dir_fd: int) -> None:
 
 
 def publish_handoff(root: RootDescriptor, cinv: str, artefact_fd: int,
-                    payload: PayloadBinding,
-                    package: PackageBinding) -> HandoffBinding:
+                    payload: PayloadBinding, package: PackageBinding,
+                    *, profile: ExecutionProfile) -> HandoffBinding:
     """Publish the immutable handoff for ``cinv``, or refuse.
 
     Everything is built under an internally derived staging name and installed
     with one rename, so a partially written tree can never be mistaken for a
     handoff. Nothing existing is replaced.
+
+    ``profile`` is the governed profile the accepted authority-resolution path
+    produced. It is serialised here through the one canonical encoder and
+    nothing about execution policy is reconstructed or reinterpreted: this
+    module publishes bytes somebody else authored.
     """
     _require_root(root)
     _validate_cinv(cinv)
@@ -248,9 +266,27 @@ def publish_handoff(root: RootDescriptor, cinv: str, artefact_fd: int,
         raise HandoffError("payload must be a PayloadBinding")
     if not isinstance(package, PackageBinding):
         raise HandoffError("package must be a PackageBinding")
+    if not isinstance(profile, ExecutionProfile):
+        raise HandoffError("profile must be an ExecutionProfile")
     if _manifest_digest(package) != package.digest:
         raise HandoffIdentityMismatch(
             "the package binding does not match its own manifest")
+
+    # The profile must name the invocation it is being published for.
+    # Publishing one invocation's policy under another's name would make the
+    # handoff say something its author never decided.
+    if profile.cinv != cinv:
+        raise HandoffIdentityMismatch(
+            f"the profile names {profile.cinv} and the handoff is for {cinv}")
+
+    profile_bytes = canonical_profile(profile)
+    profile_digest = hashlib.sha256(profile_bytes).hexdigest()
+    # Derived here, never accepted from a caller, and checked against the
+    # commitment the rest of the runtime already uses. A second digest over
+    # the same profile would be a second answer to one question.
+    if profile_digest != fingerprint(profile).profile_digest:
+        raise HandoffIdentityMismatch(
+            "the canonical profile does not hash to its own fingerprint")
 
     root.reverify()
 
@@ -278,6 +314,8 @@ def publish_handoff(root: RootDescriptor, cinv: str, artefact_fd: int,
             _publish_package(staging_fd, artefact_fd, package)
             _write_member(PAYLOAD_NAME, payload.canonical_bytes, staging_fd,
                           HANDOFF_MODES["payload"], payload.digest)
+            _write_member(PROFILE_NAME, profile_bytes, staging_fd,
+                          HANDOFF_MODES["profile"], profile_digest)
             os.chmod(PACKAGE_DIRECTORY, HANDOFF_MODES["package"],
                      dir_fd=staging_fd, follow_symlinks=False)
             os.fsync(staging_fd)
@@ -297,6 +335,7 @@ def publish_handoff(root: RootDescriptor, cinv: str, artefact_fd: int,
         cinv=cinv,
         package_digest=package.digest,
         payload_digest=payload.digest,
+        profile_digest=profile_digest,
         entrypoint=package.entrypoint,
         entry_count=package.entry_count,
     )

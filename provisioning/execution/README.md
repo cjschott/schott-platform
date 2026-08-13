@@ -716,7 +716,11 @@ the reader's three states, the two pending subtypes, the authorisation seam, and
 the bare-hex `oci_image_id` contract were each verified in the installed tree;
 `tools/provisioning` is absent from it, as it must remain.
 
-**Generation 5 will be required** by the Pass 3B profile handoff. It changes the
+**Generation 5 will be required** by the Pass 3B profile handoff, and it
+installs **Pass 3B-i and 3B-ii together as one generation** — the coordinator
+publisher and the privilege-boundary change must agree about what authorises
+execution. Pass 3B-i is implemented (`handoff.py` publishes the canonical
+profile); Pass 3B-ii is not. It changes the
 launch-record schema, the root helper, the inherited-descriptor set
 (`0,1,2,3`), and the worker exec tuple (five elements). Ruled in design §14.1
 and not yet implemented.

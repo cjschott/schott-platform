@@ -1095,7 +1095,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | **IMPLEMENTED** (Pass 2C) |
 | exported payload schema-version constant | **IMPLEMENTED** (Pass 2C) |
 | coordinator resolves authority; root and worker do not | **IMPLEMENTED** (Pass 3A) |
-| launch-record `ExecutionProfile` transport | **RULED** (Pass 3B), not yet implemented |
+| coordinator profile publication | **IMPLEMENTED** (Pass 3B-i) |
+| sealed privilege-boundary profile transport | **RULED** (Pass 3B-ii), not yet implemented |
 | root helper launch-record schema extension | REQUIRED, NOT YET IMPLEMENTED |
 | worker governed-profile consumption | REQUIRED, NOT YET IMPLEMENTED |
 | production G5 image build and CIMP admission | NOT STARTED |
@@ -1321,6 +1322,42 @@ protocol, and `CIMP`/`CGEN` schemas are unchanged, and §13 needs no new row.
 authority TOCTOU only. `payload` and `package/` remain replaceable through the
 same directory-ownership route; whether that matters before G6 is a separate
 hardening question this ruling does not answer.
+
+### Pass 3B-i — coordinator profile publication, implemented
+
+`publish_handoff` now publishes `…/<CINV>/profile` holding exactly
+`canonical_profile(profile)`, alongside the payload and package, inside the
+same staged tree installed by one rename. It reuses `_write_member`, so the
+bytes are created once with `O_EXCL`, written bounded, fsynced, read back, and
+verified against their digest — no weaker publication semantics were invented
+for the profile.
+
+The digest is **derived, never accepted**: `publish_handoff` computes
+`sha256(canonical_profile(profile))` and refuses unless it equals
+`fingerprint(profile).profile_digest`, so there is one answer to what these
+bytes commit to. It also requires `profile.cinv` to equal the handoff `CINV`,
+because publishing one invocation's policy under another's name would make the
+handoff say something its author never decided. The filename is a module
+constant and the directory derives from the validated `CINV`, so there is no
+path, name, or destination a caller could aim.
+
+**This file is publication material, not authority.** It stays coordinator-
+owned at `cschott:cschott 0444` — exactly like the payload — and is *not*
+re-owned to root, because the earlier freeze model was disproved. Nothing
+consumes it, and the worker must never read it directly. Pass 3B-ii
+authenticates these bytes and copies them into a sealed root-authored object;
+that sealed copy, not this file, becomes execution authority. The module
+comments say so, so a later reader cannot mistake publication for protection.
+
+Nothing in the privilege boundary moved. A suite case asserts it directly: the
+launch record still carries `oci_image_id` at seven fields,
+`INHERITED_DESCRIPTORS` is still `(0, 1, 2)`, the worker exec tuple is still
+three elements, neither worker layer mentions `memfd` or `F_GET_SEALS`, and
+`handoff.py` names no Podman, subprocess, `execve`, `setuid`, or `no_new_privs`
+surface.
+
+Payload and package publication, ownership, modes, and lifetime are unchanged,
+and their replacement exposure remains the open hardening follow-up.
 
 ## 6. Sequencing rules
 
