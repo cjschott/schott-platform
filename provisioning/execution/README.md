@@ -631,6 +631,21 @@ Records are create-once and immutable. `current-generation` is the single
 exception and is **not** an immutable record: it is a regular canonical-JSON
 file, never a symlink, replaced only by durable atomic rename.
 
+**Publication renames staged material into the published namespace**, so the
+control root and the authority root must sit on **one filesystem** — which they
+do beneath `/var/lib/kyri`. This is the same assumption the per-invocation
+handoff makes beneath `/data`.
+
+**The bootstrap primitives are operator tooling and are not installed.**
+`tools/provisioning/authority_bootstrap.py` implements the counters, the
+`implementation-lifecycle` lock, and the genesis ceremony, and it is
+deliberately outside the §8.2 install matrix — which covers `tools/__init__.py`,
+`tools/capability/**`, and `tools/common/*` only. It must never be added: the
+coordinator reads published authority and never writes it, and keeping the
+writer out of `/usr/lib/kyri/python` makes that a property of the host rather
+than a rule. It carries no absolute path, so the operator supplies both roots
+as open descriptors when the eventual provisioning ceremony runs.
+
 **Generation 3 — installed and accepted 2026-08-12**, from the `oci_image_id`
 correction. The execution-authority field was renamed from `oci_digest` and its
 syntax corrected to bare `^[0-9a-f]{64}$`, and the observation path was moved
@@ -671,6 +686,21 @@ working directory. That is informational — `kyri-capability` legitimately
 cannot traverse the coordinator's tree, which is the authority split working —
 and it did not affect the installation or its verification. Run that probe from
 a directory the execution identity can traverse, such as `/tmp`.
+
+**Generation 4 — pending, from the Pass 2A reader change (2026-08-13).** The
+reader gained the three-state classification, so exactly **one** installed
+object differs from source:
+
+| Repository source | Installed path | SHA-256 |
+|---|---|---|
+| `tools/capability/execution/implementation_authority.py` | `/usr/lib/kyri/python/tools/capability/execution/implementation_authority.py` | `ddd5b9134d5f4e0906ebfdb4cabd61a7d63639fd8c55a20523e872055c6234e4` |
+
+`root:root 0444`. The other 44 matrix artefacts are byte-identical, the three
+`/usr/libexec` entrypoints are unchanged, and **nothing from Pass 2B is
+installed** — the bootstrap package is outside the matrix by design. Generation
+4 is not urgent: the classifier is inert until an authority namespace and a
+writer exist, so it can be folded into one reviewed re-provisioning after the
+admission transaction lands rather than done twice.
 
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its

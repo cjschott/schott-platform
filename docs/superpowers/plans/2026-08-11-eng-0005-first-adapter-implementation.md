@@ -1081,11 +1081,13 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | `PENDING_ADMISSION` / `PENDING_RETIREMENT` subtypes | **IMPLEMENTED** (Pass 2A) |
 | `CIMP-000000` reserved; semantic rejection | **IMPLEMENTED** (Pass 2A) |
 | high-water rule, empty genesis set = 0 | **IMPLEMENTED** (Pass 2A) |
-| independent persistent CIMP and CGEN counters | REQUIRED, NOT YET IMPLEMENTED |
-| `CGEN-000000000000` genesis with empty authority set | REQUIRED, NOT YET IMPLEMENTED |
-| normal allocation begins at `CIMP-000001` / `CGEN-000000000001` | REQUIRED, NOT YET IMPLEMENTED |
-| permanent identifier gaps | REQUIRED, NOT YET IMPLEMENTED |
+| independent persistent CIMP and CGEN counters | **IMPLEMENTED** (Pass 2B) |
+| `CGEN-000000000000` genesis with empty authority set | **IMPLEMENTED** (Pass 2B) |
+| normal allocation begins at `CIMP-000001` / `CGEN-000000000001` | **IMPLEMENTED** (Pass 2B) |
+| permanent identifier gaps | **IMPLEMENTED** (Pass 2B) |
+| `implementation-lifecycle` mutation lock | **IMPLEMENTED** (Pass 2B) |
 | offline writer, COMPLETE and RETIRE ceremonies | REQUIRED, NOT YET IMPLEMENTED |
+| ordinary admission transaction | REQUIRED, NOT YET IMPLEMENTED |
 | orphan-generation reconciliation | REQUIRED, NOT YET IMPLEMENTED |
 | authority and control namespaces on disk | REQUIRED, NOT YET IMPLEMENTED |
 | canonical provisioning-evidence manifest, 15 fields | REQUIRED, NOT YET IMPLEMENTED |
@@ -1094,6 +1096,50 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | exported payload schema-version constant | REQUIRED, NOT YET IMPLEMENTED |
 | coordinator resolves authority; root and worker do not | REQUIRED, NOT YET IMPLEMENTED |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
+
+### Pass 2B — offline bootstrap primitives, implemented
+
+`tools/provisioning/authority_bootstrap.py` provides the CIMP and CGEN
+counters, the `implementation-lifecycle` lock, and the genesis ceremony. It
+lives **outside** the install matrix deliberately: the matrix covers
+`tools/capability` and `tools/common`, so the writer never reaches the
+root-owned runtime library, and the boundary is a property of what exists on
+the host rather than a rule to remember. A suite check scans the worker,
+lifecycle, adapter, reader, coordinator, and all four transition sources to
+prove none of them imports it, and rejects absolute path literals in the module
+so the production mapping stays with operator integration.
+
+Counters follow the existing CADM precedent exactly — zero-padded ASCII digits
+and a newline, incremented durably *before* the caller sees the value. That
+ordering is what burns an identifier: a caller that dies holding one leaves a
+permanent gap rather than a number that gets handed out twice. Both are
+provisioned at zero, which is also what makes `CIMP-000000` and
+`CGEN-000000000000` unreachable from the allocators — never emitted, not
+emitted and then filtered. Genesis consumes neither, proven directly.
+
+The lock is non-blocking. A ceremony that quietly waited on another would look
+like a slow command and finish in an order nobody chose, so contention refuses
+and says which mutation already holds it. Runtime readers take no lock, so
+there is no ordering to establish against the coordinator's `capacity` and
+`quarantine-capacity` locks.
+
+Genesis stages, fsyncs, verifies the staged bytes by reading them back,
+publishes by rename, installs the pointer by rename, and then asks the **Pass
+2A reader** whether the result is valid — it does not re-implement authority
+interpretation, so a genesis the runtime would reject cannot be reported as
+successful. It refuses a second run, any pre-existing authority material, a
+symlinked or wrong-typed object, missing or malformed control state, and
+staging residue, which it never removes: discarding somebody else's unfinished
+work is an explicit recovery action, not something a routine primitive does on
+the way past.
+
+Two boundary corrections came out of writing it. The suite's own scanner
+initially banned `scandir` module-wide, which is wrong — genesis legitimately
+enumerates to prove a directory is empty, a different question from "what
+number comes next" — so the check is now scoped to the allocation path. And the
+header tripped the production-path backstop by putting the word "touches" next
+to `/var/lib/kyri`; it carries the repository's `prod-path-reference` marker
+now, which is the sanctioned greppable exception.
 
 ## 6. Sequencing rules
 

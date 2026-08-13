@@ -108,7 +108,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=46
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=57
+  TOTAL_STEPS=58
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -284,6 +284,13 @@ run "Capability execution image definition" \
 # installs nothing: the privileged operation is source only behind G2/G3.
 run "Capability execution output quota" \
   bash tests/test-capability-execution-quota.sh
+
+# ENG-0005 G5 increment. Offline implementation-authority bootstrap: the CIMP
+# and CGEN counters, the lifecycle mutation lock, and the genesis ceremony.
+# Hermetic against temporary roots -- creates no production authority path,
+# admits no implementation, and opens no gate.
+run "Capability implementation-authority bootstrap" \
+  bash tests/test-capability-authority-bootstrap.sh
 
 # ENG-0005 G4 artifacts. Static validation of the installed worker entrypoint,
 # the backing-store and sudoers examples, and the provisioning runbook.

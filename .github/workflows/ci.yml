@@ -288,6 +288,11 @@ jobs:
       - name: Capability execution output quota tests
         run: bash tests/test-capability-execution-quota.sh
 
+      # G5 offline authority bootstrap: counters, lifecycle lock, genesis.
+      # Hermetic against temporary roots; creates no production authority path.
+      - name: Capability implementation-authority bootstrap tests
+        run: bash tests/test-capability-authority-bootstrap.sh
+
       # G4 provisioning artifacts. Installs nothing and mounts nothing.
       - name: Capability execution provisioning artifact tests
         run: bash tests/test-capability-execution-provisioning.sh
