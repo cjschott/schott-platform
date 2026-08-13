@@ -1349,12 +1349,15 @@ authenticates these bytes and copies them into a sealed root-authored object;
 that sealed copy, not this file, becomes execution authority. The module
 comments say so, so a later reader cannot mistake publication for protection.
 
-Nothing in the privilege boundary moved. A suite case asserts it directly: the
-launch record still carries `oci_image_id` at seven fields,
-`INHERITED_DESCRIPTORS` is still `(0, 1, 2)`, the worker exec tuple is still
-three elements, neither worker layer mentions `memfd` or `F_GET_SEALS`, and
-`handoff.py` names no Podman, subprocess, `execve`, `setuid`, or `no_new_privs`
-surface.
+Nothing in the privilege boundary moved **in that pass**. A suite case asserted
+it directly at the time: the launch record still carried `oci_image_id` at
+seven fields, `INHERITED_DESCRIPTORS` was still `(0, 1, 2)`, the worker exec
+tuple was still three elements, neither worker layer mentioned `memfd` or
+`F_GET_SEALS`, and `handoff.py` named no Podman, subprocess, `execve`,
+`setuid`, or `no_new_privs` surface. Pass 3B-ii then changed the first four of
+those deliberately and migrated that suite case; the sentence is kept in the
+past tense as the record of what 3B-i did *not* do, not as a claim about the
+current boundary. `handoff.py` still names none of those surfaces.
 
 Payload and package publication, ownership, modes, and lifetime are unchanged,
 and their replacement exposure remains the open hardening follow-up.

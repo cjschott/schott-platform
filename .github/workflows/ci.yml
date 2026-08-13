@@ -25,10 +25,11 @@ jobs:
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Shell syntax check (scripts and tests)
+      - name: Shell syntax check (scripts, tests, operator tooling)
         run: |
           bash -n scripts/*.sh
           bash -n tests/*.sh
+          bash -n provisioning/execution/*.sh
 
       - name: Static repository assertions
         run: bash tests/test-static.sh
@@ -250,6 +251,12 @@ jobs:
       # into a controlled child. No credential change and no privilege.
       - name: Capability execution profile transport tests
         run: bash tests/test-capability-execution-profile-transport.sh
+
+      # Generation-5 installer, driven against throwaway fixture trees only:
+      # failure injected at every commit position, every interrupted
+      # transaction replayed. Installs nothing and needs no privilege.
+      - name: Capability execution generation-5 installer tests
+        run: bash tests/test-capability-execution-generation5-installer.sh
 
       # Worker driven through a fake backend: no Podman, no subprocess, no
       # container. Real execution is gate G6.

@@ -801,6 +801,45 @@ timer, or cron entry references any `kyri-exec` path. That makes sequential
 pathname visibility acceptable *here* — it does not make it atomic, and it
 stops being an argument the moment G3 opens.
 
+#### The installer, and the ceremony for using it
+
+The transactional installer is `provisioning/execution/install-generation-5.sh`
+in this repository. It is **operator tooling, not runtime authority**: it is
+mode `0644`, is never executed directly, installs neither itself nor its test
+suite, and appears nowhere in the install matrix above. Nothing under
+`/usr/lib/kyri/python` or `/usr/libexec` is or becomes a copy of it — a host
+that carried the installer inside the runtime library would have put the thing
+that replaces the privilege boundary inside the privilege boundary.
+
+Its failure-injection suite is `tests/test-capability-execution-generation5-installer.sh`,
+which runs in local validation and CI against throwaway fixture trees only.
+
+The ceremony is seven steps, and steps 3 and 5 are where an operator decides
+rather than a script:
+
+```
+1.  read the script                sed -n '1,60p' provisioning/execution/install-generation-5.sh
+2.  read-only preflight            sudo bash provisioning/execution/install-generation-5.sh --verify
+3.  INSPECT THE OUTPUT             confirm: generation-4 baseline verified, seven
+                                   source digests match, no transaction in progress,
+                                   gates closed. Stop here if anything reads wrong.
+4.  install                        sudo bash provisioning/execution/install-generation-5.sh --install
+5.  INSPECT THE RESULT             confirm COMMIT completed, or that a rollback
+                                   restored a complete generation 4. A rollback is a
+                                   correct outcome, not a partial state to repair by hand.
+6.  read-only confirmation         sudo bash provisioning/execution/install-generation-5.sh --verify-installed
+7.  capture evidence               record /root/kyri-gen5-library-digests.txt and
+                                   /root/kyri-gen5-helper-digests.txt with the prior
+                                   G4/G4c evidence, which stays untouched
+```
+
+**Do not chain step 4 to step 2.** `--verify` succeeding means the host is a
+valid generation-4 baseline and the transaction is ready; it does not mean the
+change has been reviewed. If a run is interrupted, rerun `--install` (or
+`--recover`): it will inspect actual bytes, never start a fresh transaction over
+unknown state, and drive the host to one complete generation or stop for
+disposition.
+
 #### Carried forward to G6, unresolved
 
 Two questions the sealed-transport ruling deliberately does not answer, both

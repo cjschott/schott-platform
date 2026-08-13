@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=47
+  TOTAL_STEPS=48
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=62
+  TOTAL_STEPS=63
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -125,6 +125,9 @@ syntax_check() {
   bash -n scripts/*.sh
   bash -n tests/*.sh
   bash -n tools/dev/*.sh
+  # Operator tooling ships beside the runbook it belongs to, so it is syntax
+  # checked here rather than being the one shell script nothing reads.
+  bash -n provisioning/execution/*.sh
 }
 run "Shell syntax (bash -n)" syntax_check
 
@@ -239,6 +242,13 @@ run "Capability execution transition action" \
 # child -- but no privilege: credentials and the worker exec are injected.
 run "Capability execution profile transport" \
   bash tests/test-capability-execution-profile-transport.sh
+
+# ENG-0005 generation-5 installer. Drives the operator installer against
+# throwaway fixture trees only: failure is injected at every commit position
+# and every interrupted transaction is replayed. Installs nothing, needs no
+# privilege, and snapshots the production paths to prove it touched none.
+run "Capability execution generation-5 installer" \
+  bash tests/test-capability-execution-generation5-installer.sh
 
 # ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
 # no subprocess, no container, no Podman. Real execution is gate G6.
