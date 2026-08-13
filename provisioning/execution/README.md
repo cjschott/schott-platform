@@ -722,8 +722,10 @@ the reader's three states, the two pending subtypes, the authorisation seam, and
 the bare-hex `oci_image_id` contract were each verified in the installed tree;
 `tools/provisioning` is absent from it, as it must remain.
 
-**Generation 5 is required and is not installed.** Both passes are now
-implemented in source, and they install **together as one generation** — the
+**Generation 5 is installed, active and accepted** (verified by
+`--verify-installed`: complete set, installed contract, import boundary, no
+eighth object, gates unchanged). Both passes installed **together as one
+generation** — the
 coordinator publisher and the privilege-boundary change must agree about what
 authorises execution, and a host carrying one without the other has a
 coordinator publishing bytes nothing authenticates, or a helper authenticating
@@ -840,19 +842,33 @@ change has been reviewed. If a run is interrupted, rerun `--install` (or
 unknown state, and drive the host to one complete generation or stop for
 disposition.
 
-#### Carried forward to G6, unresolved
+#### Carried forward to G6 — now ruled, not yet implemented
 
-Two questions the sealed-transport ruling deliberately does not answer, both
-recorded so they are not lost:
+Both questions the sealed-transport ruling deliberately did not answer have
+been ruled in design §14.2–§14.4. **Neither ruling is implemented, and nothing
+below describes a control that exists on this host today.**
 
-- **Governed profile and security controls.** The worker verifies the profile's
-  *identity* — digest, `CINV`, `CIMP` — but not that its *values* are the
-  governed ones. `create_argv` will consume `network`, `pids_limit`, `cpus`,
-  `hostname`, `tmpfs_options`, and `oci_image_id` from coordinator-authored
-  bytes. Nothing consumes them today, because `create_argv` has no caller.
-  **Requires a ruling before G6.**
-- **Payload and package replacement exposure.** Unchanged by this pass and
-  still replaceable through the same directory-ownership route.
+- **Profile identity is not profile policy authority.** Generation 5 proves the
+  worker parses the bytes the coordinator committed to; it cannot prove those
+  values were the governed ones, because the same party authored the digest.
+  Only seven profile fields reach Podman argv — `cinv`, `network`,
+  `pids_limit`, `cpus`, `hostname`, `tmpfs_options`, `oci_image_id` — and for
+  exactly those the profile is both the instruction and the expectation, so
+  `verify_observed` cannot detect a substitution. The remedy is a worker-side
+  equality check against the constants it already installs in `profile.py`: no
+  authority access, no descriptor, no schema change, no privileged operation.
+- **Payload and `package/` are not execution authority.** Neither is read by
+  root or by the worker; both are consumed inside the sandbox, and substitution
+  corrupts the evidence chain rather than containment. They gain digest
+  commitments carried in the governed profile, which also supplies the
+  entrypoint contract `create_argv` needs and does not currently have. A root
+  freeze and a root-owned copy were both rejected. The residual — substitution
+  after the worker verifies — is declared, and mitigated by re-verification at
+  collection.
+
+Implementing either changes `ExecutionProfile`, so both land together as
+**profile schema 2 / generation 6**. Until then `create_argv` has no caller and
+G6 stays closed.
 
 Two earlier handoff models were accepted and then disproved empirically — a
 root-owned path freeze and descriptor anchoring to the coordinator's inode.

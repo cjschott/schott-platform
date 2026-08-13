@@ -1031,6 +1031,358 @@ never re-owned — the sealed copy, not the file's ownership, is what protects i
 > and whether that matters before G6 is a separate hardening question this
 > ruling deliberately does not answer.
 
+### 14.2 Profile identity is not profile policy authority — ruling 2026-08-13
+
+**REQUIRED BUT NOT YET IMPLEMENTED.** Generation 5 is installed, active and
+accepted. Everything below is a ruling about what must be true before
+`create_argv` becomes reachable; none of it is live, and nothing in this
+section describes a control that exists today.
+
+#### 14.2.1 What §14.1 proved, and what it did not
+
+The sealed transport proves **profile identity**: the bytes the worker parses
+are exactly the bytes the coordinator committed to, and no party — including a
+coordinator holding a writable descriptor from before publication — can change
+them afterwards. That property is real and is empirically tested.
+
+It proves nothing whatever about **profile policy authority**: whether the
+values inside those bytes were the governed ones. A profile is authenticated
+against a digest the coordinator also authored, in a launch record the
+coordinator also wrote. Authentication is a statement about *provenance and
+integrity*, never about *content legitimacy*.
+
+> **The rule.** Identity answers "are these the bytes that were committed?"
+> Policy authority answers "was this value allowed to be what it is?" The
+> sealed memfd answers the first. Only re-derivation from an independent
+> governing source answers the second, and the two must never be argued for
+> each other.
+
+#### 14.2.2 Where the profile's values actually come from
+
+`build_profile` accepts exactly one input — `ProfileBinding(cinv, admission)` —
+and refuses any metadata. Within governed code the coordinator therefore
+*cannot* vary a single security control: every one is a module constant in
+`profile.py`. Five fields are not constants:
+
+| Field | Source | Domain |
+|---|---|---|
+| `cinv` | the invocation being executed | invocation identity |
+| `cimp` | `admission.cimp` | implementation authority |
+| `oci_image_id` | `admission.oci_image_id` | implementation authority |
+| `adapter_identity` | `admission.adapter_identity` | implementation authority |
+| `payload_schema_version` | `admission.payload_schema_version` | implementation authority |
+
+The authority root those come from is `root:cschott 0750` with `0440` records,
+written only by offline operator tooling. **The coordinator reads it and cannot
+write it**, which is what makes it an independent governing source.
+
+The exposure is therefore precisely this: a **compromised** coordinator does not
+have to call `build_profile` at all. It can write arbitrary canonical bytes to
+`…/<CINV>/profile` and the matching digest into the launch record, and the
+whole authenticated chain will faithfully deliver them.
+
+#### 14.2.3 The dangerous set is exactly the argv-reaching fields
+
+Of 32 profile fields, only **seven** reach `podman create` argv:
+`cinv` (via the container name), `network`, `pids_limit`, `cpus`, `hostname`,
+`tmpfs_options`, and `oci_image_id`. Memory, CPU quota/period, tmpfs size and
+mode, execution UID and GID, mount topology and the capability set are
+**compiled-in literals in `create_argv`** and are read from the profile only by
+`verify_observed`.
+
+That asymmetry decides the severity of every field:
+
+- For a field that is a literal in argv and compared from the profile, a
+  substituted value **cannot weaken the container**; it can only make the
+  observed container disagree with the claimed profile, which fails closed as
+  `execution_identity_mismatch`.
+- For a field that reaches argv, the profile is simultaneously the *instruction*
+  and the *expectation*. `verify_observed` compares the container against the
+  same substituted profile and agrees. **There is no detection.** A profile
+  carrying `network: "host"` produces a host-networked container that verifies
+  as correct.
+
+`cap_drop_all`, `privileged`, `host_network`, `host_pid`, `gpu`,
+`timeout_seconds` and `grace_seconds` are today *inert*: they enter the digest
+and are neither emitted into argv nor compared. They are declarations, not
+controls — and the moment anything begins consuming them they inherit the
+severity of the group above.
+
+#### 14.2.4 Field authority matrix
+
+`P` = producer, `G` = required governing authority, `V` = required verification
+before `create_argv`. "Const" means the compiled-in value in `profile.py`.
+
+| Field | P | Reaches argv | Required G | Required V | Implemented |
+|---|---|---|---|---|---|
+| `cinv` | invocation | yes (name) | invocation identity | equals argv `CINV` | **yes** |
+| `cimp` | admission | no | implementation authority | equals argv `CIMP` | **yes** |
+| `oci_image_id` | admission | **yes** | implementation authority | grammar + store presence (§27) | partial |
+| `adapter_identity` | admission | no | implementation authority | equals `ADAPTER_IDENTITY` | no |
+| `payload_schema_version` | admission | no | implementation authority | equals build constant | no |
+| `profile_schema_version` | Const | no | compiled-in | equals `PROFILE_SCHEMA_VERSION` | partial |
+| `network` | Const | **yes** | compiled-in | equals `NETWORK` (`"none"`) | **no** |
+| `pids_limit` | Const | **yes** | compiled-in | equals `PIDS_LIMIT` | **no** |
+| `cpus` | Const | **yes** | compiled-in | equals `CPUS` | **no** |
+| `hostname` | Const | **yes** | compiled-in | equals `HOSTNAME` | **no** |
+| `tmpfs_options` | Const | **yes** | compiled-in | equals `TMPFS_OPTIONS` as a set | **no** |
+| `memory_bytes` | Const | no | compiled-in | equals constant | no |
+| `memory_swap_bytes` | Const | no | compiled-in | equals constant | no |
+| `cpu_quota_us` | Const | no | compiled-in | equals constant | no |
+| `cpu_period_us` | Const | no | compiled-in | equals constant | no |
+| `timeout_seconds` | Const | no | compiled-in | equals constant | no |
+| `grace_seconds` | Const | no | compiled-in | equals constant | no |
+| `read_only_rootfs` | Const | no (literal `--read-only`) | compiled-in | is `True` | no |
+| `no_new_privileges` | Const | no (literal flag) | compiled-in | is `True` | no |
+| `cap_drop_all` | Const | no (literal `ALL`) | compiled-in | is `True` | no |
+| `dropped_capabilities` | Const | no | compiled-in | equals `("ALL",)` | no |
+| `execution_uid` | Const | no (literal 1000) | compiled-in | equals `EXECUTION_UID` | no |
+| `execution_gid` | Const | no (literal 1000) | compiled-in | equals `EXECUTION_GID` | no |
+| `tmpfs_bytes` | Const | no (literal 16m) | compiled-in | equals constant | no |
+| `tmpfs_mode` | Const | no (literal 1777) | compiled-in | equals constant | no |
+| `mounts` | Const | no (built from sources) | compiled-in | equals the three governed destinations | no |
+| `devices` | Const | no | compiled-in | is empty | no |
+| `sockets` | Const | no | compiled-in | is empty | no |
+| `privileged` | Const | no (inert) | compiled-in | is `False` | no |
+| `host_network` | Const | no (inert) | compiled-in | is `False` | no |
+| `host_pid` | Const | no (inert) | compiled-in | is `False` | no |
+| `gpu` | Const | no (inert) | compiled-in | is `False` | no |
+
+**Every "Const" row has the same remedy and it is cheap.** The worker already
+installs `profile.py`; re-deriving those values needs no authority access, no
+new descriptor, no schema change, and no privileged operation — it is an
+equality check against constants the worker already holds. This is the required
+amendment to §14.1.6: the worker's closed check list gains *policy
+re-derivation* after identity binding and before `create_argv`.
+
+`oci_image_id` needs **no** duplicate worker-side authority. The chain
+`CIMP → admission → AuthorisedImplementation → profile` already derives it from
+a root-owned namespace the coordinator cannot write, and the worker has neither
+access to that namespace nor permission to read it (§7). Its residual is bounded
+by something better: an image identity that was never loaded into the execution
+identity's rootless store cannot run, and the store is not coordinator-writable.
+A compromised coordinator can select any *admitted, present* implementation —
+which is the coordinator's legitimate authority — and cannot conjure an image.
+Adding a second image authority to the worker would be symmetry, not security.
+
+#### 14.2.5 The `create_argv` gate invariant
+
+```
+create_argv MUST NOT be reachable unless, for the profile parsed from sealed
+FD 3:
+
+  1. fingerprint(profile).profile_digest == the argv profile digest, and
+  2. profile.cinv == the argv CINV, and profile.cimp == the argv CIMP, and
+  3. every compiled-in field equals this build's constant in profile.py, and
+  4. oci_image_id is 64 lowercase hex and is present in the execution
+     identity's rootless store, and
+  5. adapter_identity and payload_schema_version equal this build's contract
+     identities, and
+  6. the published package tree and payload verify against commitments that
+     crossed the privilege boundary under §14.1 protection, and
+  7. the governed entrypoint likewise crossed under that protection.
+
+Conditions 1-2 hold today. Conditions 3-7 do not.
+```
+
+Conditions 3 and 5 are a pure comparison. Condition 4 exists in §27 and must be
+wired. Conditions 6 and 7 are the payload/package ruling below and are the only
+ones that change a schema.
+
+### 14.3 Payload and package — classification and ruling 2026-08-13
+
+**REQUIRED BUT NOT YET IMPLEMENTED.**
+
+#### 14.3.1 What they are, from the code
+
+Neither is read by root, and neither is read by the worker. `validate_payload`
+and `validate_package` run **coordinator-side before publication**; after that
+the worker checks only type and mode in `verify_handoff` and derives three
+pathname strings. The bytes are consumed by the **container**, at
+`/kyri/package` and `/run/kyri/input/payload`, both `ro=true`.
+
+Payload can never become argv or environment (§9, §10). Package content cannot
+either — but the package **entrypoint string** becomes the final argv element
+through `_container_script`, and that is the one part of either object with
+argv reach.
+
+#### 14.3.2 Classification
+
+- **`payload` — authenticated invocation input, consumed only inside the
+  sandbox.** Not execution authority. Substitution changes what the capability
+  computed on; it cannot change the sandbox, the image, the identity, or any
+  host access. The damage is to the *evidence chain* — Kyri would record that
+  invocation X processed payload P when it processed P′ — not to containment.
+- **`package/` — authenticated invocation input whose *entrypoint* is
+  execution-adjacent.** Content substitution changes which code runs inside an
+  unchanged sandbox: again an evidence-integrity failure, not an escape. The
+  entrypoint string is different in kind, because it lands in argv.
+- **Neither is execution authority.** Containment comes from the profile, which
+  §14.1 protects; identity comes from `CIMP`/`CINV`, which the launch record and
+  sealed profile bind.
+
+#### 14.3.3 There is a gap here that is not about hardening at all
+
+`create_argv` requires a `PackageBinding`, and **no code path gives the worker
+one.** `validate_package` is coordinator-side and its result does not cross the
+boundary. Before G6 the governed entrypoint and the package manifest digest must
+reach the worker somehow — this is a missing contract, not merely a weak one,
+and it is the reason condition 7 exists above.
+
+#### 14.3.4 Alternatives considered
+
+| Option | Prevents | Leaves | Cost |
+|---|---|---|---|
+| A. leave mutable, document containment | nothing | all substitution | none; but leaves the evidence chain unproven |
+| B. root freezes the tree (`chown -R`) | replacement | nothing, *if it worked* | **rejected**: recursive privileged walk over a coordinator-supplied tree of up to 1,024 entries, with symlink and hardlink hazards, and it inherits §14.1.1's disproof — the coordinator owns the per-`CINV` directory and can `chmod` it back |
+| C. descriptor anchoring | nothing | everything | **rejected**: §14.1.1 disproved it; a descriptor pins an inode, not its contents. Podman also needs a pathname for a bind source (§6) |
+| D. copy into root-owned immutable storage | replacement | — | recursive privileged copy of ≤64 MiB per invocation, a new root-owned tree, and cleanup authority transferred to root. Disproportionate for non-authority data |
+| E. sealed anonymous transport | replacement | — | **not applicable**: a bind-mount source must be a pathname; `/proc/self/fd/N` is rejected by §6 |
+| F. digest commitment carried under §14.1 protection, verified by the worker | undetected substitution up to verification | substitution *after* verification | one profile schema field group and one worker-side verification pass; no privileged operation, no new descriptor, no cleanup authority |
+
+#### 14.3.5 Ruling
+
+**Option F, with a declared residual.** The governed profile gains
+`payload_digest`, `package_digest`, and `package_entrypoint`. They then cross
+the boundary under exactly the protection §14.1 already provides — sealed,
+root-authored, digest-committed — and the worker verifies the published payload
+and package tree against them, descriptor-safely and no-follow, immediately
+before `create_argv`. This also supplies the missing entrypoint contract of
+§14.3.3, so one change closes both.
+
+**Declared residual, stated rather than engineered around:** a compromised
+coordinator may still replace payload or package bytes *after* the worker
+verifies them and before or while the container reads them. This is not closed,
+because closing it costs a recursive privileged operation over caller-supplied
+trees, and what it buys is protection of an evidence chain rather than of
+containment. Mitigation is detection, not prevention: the same digests are
+re-verified at collection, so a substitution becomes a classified integrity
+failure rather than a silent one.
+
+**Not chosen because it resembles the profile solution.** The profile needed
+sealing because it *is* containment authority. Payload and package are not.
+
+#### 14.3.6 Cross-`CINV` substitution
+
+Material from `CINV-A` placed under `CINV-B` is today undetectable: the worker
+checks type and mode only, and the paths are derived from the validated `CINV`,
+so the wrong bytes at the right path are accepted. Under §14.3.5 it becomes
+detectable, because the digests that must match arrive inside a profile whose
+`cinv` is bound to the argv `CINV` and to the launch record. **The binding is
+therefore digest-in-profile, not path-derivation.**
+
+#### 14.3.7 Special files and the FIFO lesson
+
+Every future verification read of payload or package members is performed by the
+**unprivileged worker**, never by root — so the §14.1 FIFO defect cannot recur
+at the privilege boundary. It can still hang the worker, so the same discipline
+applies: `O_NOFOLLOW | O_NONBLOCK`, `fstat` before read, `S_ISREG` required,
+bounded reads, `O_DIRECTORY` on every intermediate component, and refusal of
+symlink, FIFO, socket, device node, directory substitution, and oversized
+members. Hardlinks inside `package/` are harmless — the manifest digest covers
+content, not link count.
+
+#### 14.3.8 Cleanup and lifetime
+
+Unchanged, deliberately. The coordinator continues to own publication and
+cleanup of the per-`CINV` handoff; **no cleanup authority moves to root**, no
+new privileged operation appears, and crash residue remains what §14 already
+says it is: reported, never silently removed. Because no root-owned copy is
+created, there is nothing new that a cleanup could delete and nothing new to
+reconcile.
+
+#### 14.3.9 Consequences
+
+Changed: `ExecutionProfile` gains three fields → **profile schema version 2** →
+new canonical bytes → new digests → **installed generation 6**. Unchanged: the
+launch-record schema, the transition, root's opacity, `INHERITED_DESCRIPTORS`,
+the worker exec tuple, the payload schema, the coordinator↔worker protocol, and
+the `CIMP`/`CGEN` schemas. §13 needs no new row.
+
+### 14.4 Pre-G6 attack matrix and trust flow
+
+Status column: **held** = enforced today; **gap** = ruled above, not implemented;
+**inert** = reachable only if a future change starts consuming the field.
+
+| Attack | Authoritative source | Detecting component | Mechanism | Fails at | Status | Required work |
+|---|---|---|---|---|---|---|
+| Coordinator names an unadmitted image | implementation authority | coordinator | `authorise_implementation` derives from admission | before handoff | held | — |
+| Compromised coordinator writes an arbitrary image ID into profile bytes | rootless store contents | worker | image presence (§27); store is not coordinator-writable | before `create` | gap | wire §27 check |
+| Compromised coordinator sets `network: "host"` | `profile.NETWORK` | worker | re-derive against compiled-in constant | before `create_argv` | **gap** | §14.2.5 cond. 3 |
+| Compromised coordinator raises `pids_limit` / `cpus` | `profile` constants | worker | same | before `create_argv` | **gap** | §14.2.5 cond. 3 |
+| Compromised coordinator alters `tmpfs_options` (drops `noexec`) | `profile.TMPFS_OPTIONS` | worker | same | before `create_argv` | **gap** | §14.2.5 cond. 3 |
+| Compromised coordinator alters `hostname` | `profile.HOSTNAME` | worker | same | before `create_argv` | gap | §14.2.5 cond. 3 |
+| Compromised coordinator raises memory / changes UID / adds mounts or devices | `create_argv` literals | worker | value never reaches argv; `verify_observed` then disagrees | at verification | held | — |
+| Compromised coordinator sets `privileged`/`host_pid`/`gpu` | — | — | field is inert: never emitted, never compared | nowhere | inert | keep inert or govern before use |
+| Profile bytes substituted after publication | sealed memfd | root, then worker | §14.1 seal + digest | before exec, then before parse | held | — |
+| Retained writable descriptor on the profile | sealed memfd | kernel | `F_SEAL_WRITE` per inode | at `write` | held | — |
+| Cross-`CIMP` substitution | launch record + profile | worker | `profile.cimp` vs argv `CIMP` | before argv | held | — |
+| Cross-`CINV` substitution of the profile | launch record + profile | root, then worker | record binds `CINV`; `profile.cinv` vs argv | before exec | held | — |
+| Cross-`CINV` substitution of payload/package | profile digests | worker | digests carried in the profile | before `create_argv` | **gap** | §14.3.5 |
+| Payload replaced after publication | profile `payload_digest` | worker | digest verification | before `create_argv` | **gap** | §14.3.5 |
+| Payload replaced after worker verification | — | collector | re-verification at collection | at classification | **gap (residual)** | detection only, declared |
+| Package member replaced after publication | profile `package_digest` | worker | manifest digest verification | before `create_argv` | **gap** | §14.3.5 |
+| Package entrypoint substituted | profile `package_entrypoint` | worker | entrypoint crosses under §14.1 protection | before argv | **gap** | §14.3.3 |
+| Parent-directory `chmod` + rename over payload/package | — | worker | digest at verification; residual after | before `create_argv` | **gap (residual)** | §14.3.5 |
+| Symlink / FIFO / socket / device substitution in the handoff | worker read discipline | worker | `O_NOFOLLOW\|O_NONBLOCK`, `fstat`, `S_ISREG` | before read | partial | §14.3.7 |
+| Package traversal escape | package contract | coordinator, then worker | validated at publication; re-checked at verification | before argv | partial | §14.3.7 |
+| Stale handoff residue adopted as authority | handoff create-once | coordinator | existing `CINV` is a refusal | at publication | held | — |
+| Unknown/unexpected profile control value | canonical round-trip | worker | exact field set + canonical re-serialisation | at parse | held | — |
+
+**Trust flow, with the authority domains marked.**
+
+```
+  capability request                                   [invocation data]
+        |
+        v
+  implementation authority  /var/lib/kyri/…            <== IDENTITY AUTHORITY
+  root:cschott 0750, records 0440                          (coordinator reads,
+  written only by offline operator tooling                   cannot write)
+        |
+        v
+  resolve_implementation -> Admission
+        |
+        v
+  authorise_implementation                             <== POLICY AUTHORITY
+    build_profile(binding, metadata=None)                  enters here, and
+    every control is a profile.py constant                 ONLY here today
+        |
+        v
+  AuthorisedImplementation -> ExecutionProfile
+        |
+        v
+  publish_handoff  ->  …/<CINV>/{profile,payload,package/,out/}
+        |                                   ^
+        |                                   |
+        |                        [untrusted application data]
+        |                        payload and package content
+        v
+  launch authorisation record (coordinator-written, create-once)
+        |
+        v
+  root: authenticate record -> AuthenticatedLaunch     <== INTEGRITY ONLY
+        authenticate profile bytes vs digest               root is opaque;
+        copy into sealed memfd, place on FD 3               it proves identity,
+        drop credentials, no_new_privs, execve              never policy
+        |
+        v
+  worker: seals -> canonical parse -> round-trip
+          fingerprint == argv digest
+          profile.cinv/cimp == argv
+          --------------------------------------------- <== POLICY AUTHORITY
+          re-derive every constant field                     MUST re-enter here
+          verify image presence                              (§14.2.5, NOT
+          verify payload/package/entrypoint digests           IMPLEMENTED)
+        |
+        v
+  create_argv  ->  podman create  ->  podman start
+```
+
+The diagram's point is the asymmetry: policy authority enters once, on the
+coordinator side, and is currently never re-established after crossing a
+boundary that explicitly does not carry it. §14.2.5 is the requirement that it
+must be.
+
 ## 15. Quarantine model
 
 Failed or untrusted output may be copied **only** as quarantined forensic

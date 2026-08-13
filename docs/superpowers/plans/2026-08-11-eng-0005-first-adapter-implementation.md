@@ -1097,6 +1097,9 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | coordinator resolves authority; root and worker do not | **IMPLEMENTED** (Pass 3A) |
 | coordinator profile publication | **IMPLEMENTED** (Pass 3B-i) |
 | sealed privilege-boundary profile transport | **IMPLEMENTED** (Pass 3B-ii) |
+| generation-5 installation | **INSTALLED / ACTIVE / ACCEPTED** |
+| profile policy re-derivation at the worker | **RULED** (Pass 3C), required before G6 |
+| payload/package digest commitment and entrypoint transport | **RULED** (Pass 3C), required before G6 |
 | root helper launch-record schema vNext | **IMPLEMENTED** (Pass 3B-ii) |
 | worker governed-profile consumption | **IMPLEMENTED** (Pass 3B-ii) |
 | production G5 image build and CIMP admission | NOT STARTED |
@@ -1429,6 +1432,56 @@ them, and re-raises encoder errors in the profile vocabulary.
 coordinator↔worker protocol, and the `CIMP`/`CGEN` schemas are unchanged.
 `payload` and `package/` are untouched and their replacement exposure remains
 the open hardening follow-up.
+
+### Pass 3C ruling — pre-G6 execution authority, 2026-08-13
+
+Ruled in design §14.2-§14.4. **Nothing implemented.** Generation 5 is installed,
+active and accepted; this is the ruling that must be implemented before
+`create_argv` may become reachable.
+
+**Identity is not policy.** The sealed transport proves the worker parses the
+bytes the coordinator committed to. It cannot prove those values were the
+governed ones, because the digest that authenticates them was authored by the
+same party. A compromised coordinator need not call `build_profile` at all --
+it can write canonical bytes and a matching digest directly.
+
+**The dangerous set is small and exactly identified.** Only seven profile
+fields reach `podman create` argv: `cinv`, `network`, `pids_limit`, `cpus`,
+`hostname`, `tmpfs_options`, `oci_image_id`. Memory, CPU quota, tmpfs size and
+mode, UID/GID, mounts and capabilities are compiled-in literals in
+`create_argv` and are read from the profile only by `verify_observed` -- so
+substituting them causes a mismatch failure rather than a weakened container.
+For the seven, the profile is both instruction and expectation, and
+`verify_observed` compares the container against the same substituted profile
+and agrees. That is the whole exposure.
+
+**The remedy is cheap and unprivileged.** The worker already installs
+`profile.py`. Re-deriving every compiled-in field is an equality check against
+constants it holds, needing no authority access, no descriptor, no schema
+change and no privileged operation. `oci_image_id` needs no second authority:
+the `CIMP` chain derives it from a root-owned namespace the coordinator cannot
+write, and an image absent from the execution identity's rootless store cannot
+run.
+
+**Payload and package are not execution authority.** Neither is read by root or
+by the worker; both are consumed inside the sandbox. Substitution corrupts the
+evidence chain, not containment. But `create_argv` requires a `PackageBinding`
+that **no code path currently gives the worker**, and the entrypoint it carries
+lands in argv -- a missing contract rather than a weak one.
+
+The ruling carries `payload_digest`, `package_digest` and `package_entrypoint`
+in the governed profile, so they cross under the protection §14.1 already
+provides and the worker verifies the published tree against them before
+`create_argv`. A root freeze and a root-owned copy were both rejected: the
+first inherits §14.1.1's disproof, and both buy protection of an evidence chain
+with a recursive privileged operation over caller-supplied trees. The residual
+-- substitution after the worker verifies -- is declared and mitigated by
+re-verification at collection rather than engineered around.
+
+Consequences when implemented: `ExecutionProfile` gains three fields -> profile
+schema version 2 -> **generation 6**. The launch record, the transition, root's
+opacity, the descriptor contract, the worker exec tuple, the payload schema and
+the protocol are all unchanged.
 
 ## 6. Sequencing rules
 
