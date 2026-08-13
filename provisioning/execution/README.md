@@ -716,9 +716,18 @@ the reader's three states, the two pending subtypes, the authorisation seam, and
 the bare-hex `oci_image_id` contract were each verified in the installed tree;
 `tools/provisioning` is absent from it, as it must remain.
 
-**Generation 5 will be required** by the Pass 3B profile handoff, which changes
-the launch-record schema and the root helper. It is ruled in design §14.1 and
-not yet implemented.
+**Generation 5 will be required** by the Pass 3B profile handoff. It changes the
+launch-record schema, the root helper, the inherited-descriptor set
+(`0,1,2,3`), and the worker exec tuple (five elements). Ruled in design §14.1
+and not yet implemented.
+
+Two earlier handoff models were accepted and then disproved empirically — a
+root-owned path freeze and descriptor anchoring to the coordinator's inode.
+Both are recorded in §14.1 with their disproofs. The accepted model has root
+authenticate the coordinator's bytes and copy them into a sealed `memfd`, so
+the published profile file stops being authority the moment the copy verifies.
+`payload` and `package/` are unaffected and their mutation exposure remains an
+open hardening follow-up.
 
 **4. Repository source and installed runtime may legitimately drift.** The
 installed tree is the authority for the active deployment generation, and its

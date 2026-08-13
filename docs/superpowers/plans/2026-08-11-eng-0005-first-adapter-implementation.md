@@ -1277,37 +1277,50 @@ the execution suite's purity-backstop coverage list rather than exempted from it
 `LAUNCH_RECORD_SCHEMA` is untouched and still exactly seven fields — asserted by
 this pass's own suite, since extending it is Pass 3B's privilege-boundary work.
 
-### Pass 3B ruling — governed profile handoff, 2026-08-13
+### Pass 3B ruling — governed profile handoff, final 2026-08-13
 
-Ruled and recorded in design §14.1; **nothing implemented**. The profile
-crosses as one immutable `…/capability-handoff/<CINV>/profile` holding exactly
-`canonical_profile(profile)`, committed by a `profile_digest` that **replaces**
-`oci_image_id` in the launch record — so the record stays seven fields and root
-still understands one document and nothing else.
+Ruled and recorded in design §14.1; **nothing implemented**. Two models were
+accepted and then falsified empirically before this one, and both are recorded
+there with their disproofs rather than quietly dropped.
 
-Flattening was rejected because it would make the privileged parser the place
-execution policy is validated. The protocol was rejected because the worker
-needs the profile before its first message and the only coordinator→worker verbs
-are `START_NOW` and `ABORT`. A passed descriptor was rejected because
-`INHERITED_DESCRIPTORS` is `(0, 1, 2)` and reopening inheritance to carry policy
-restores the surface that rule removes.
+**Rejected — root-owned path freeze.** `unlink`/`rename` are authorised by the
+containing directory, not the target's owner or mode, and the coordinator owns
+`…/<CINV>/`, so it can always `chmod` back and replace a root-owned file.
 
-Root verifies the digest and then **freezes** the profile to `root:root 0444`
-while still privileged; that, not re-reading, is what closes TOCTOU — the
-coordinator owns the handoff directory and could otherwise `chmod` it back. Root
-parses the profile at no point. The worker reconstructs it from canonical bytes,
-requires an exact round-trip, and requires `profile.cinv` to match its argv.
+**Rejected — descriptor anchoring to the source inode.** A descriptor pins an
+inode, never its contents. A coordinator retaining an `O_RDWR` handle from
+before publication writes through it afterwards, and root's own authenticated
+descriptor then reads substituted bytes. The property required is *worker bytes
+== bytes root authenticated*, which is strictly stronger than *same inode*.
 
-Two things were surfaced rather than absorbed. Keeping both `oci_image_id` and
-`profile_digest` is a live alternative — it costs a second privileged parse for
-a check the worker already performs — and is recorded in §14.1 for the reviewer
-to prefer if they disagree. And `payload`/`package/` carry the same swap
-exposure the profile freeze closes; extending the freeze to them is a follow-up,
-deliberately outside Pass 3B.
+**Accepted — sealed root-authored object.** Root authenticates the
+coordinator's bytes and copies them into a `memfd` sealed with
+`F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`, passed as FD 3.
+Verified on this host: every mutation is refused, including through a
+`/proc/self/fd` reopen, because the seal is enforced per inode rather than per
+descriptor. The object has no pathname and no second handle, so every attack on
+the source file becomes irrelevant. No fallback to a temporary file exists — a
+fallback would silently reinstate a rejected model.
 
-Consequences: launch-record schema and root helper change → **generation 5**.
-Payload schema, profile schema version, protocol, and `ExecutionProfile` fields
-are unchanged.
+`INHERITED_DESCRIPTORS` becomes `(0, 1, 2, 3)`. One measured trap is recorded:
+if the memfd is itself allocated as FD 3, `dup2(3, 3)` is a POSIX no-op that
+leaves `FD_CLOEXEC` set, so the descriptor would close at `execve` and the
+worker would receive nothing. The transition must clear the flag explicitly.
+
+The worker exec tuple grows to five elements — `CINV`, `CIMP`, and the
+`profile_digest`, all taken by root from the record it already authenticated —
+because verifying `profile.cimp` or the digest against the profile itself is
+circular, and the worker neither can nor should read the coordinator-owned
+launch record.
+
+Consequences: launch-record schema, root helper, descriptor set, and worker
+exec tuple change → **generation 5**. `ExecutionProfile`, payload schema,
+protocol, and `CIMP`/`CGEN` schemas are unchanged, and §13 needs no new row.
+
+**Carried forward, untouched:** sealed transport closes the execution-profile
+authority TOCTOU only. `payload` and `package/` remain replaceable through the
+same directory-ownership route; whether that matters before G6 is a separate
+hardening question this ruling does not answer.
 
 ## 6. Sequencing rules
 

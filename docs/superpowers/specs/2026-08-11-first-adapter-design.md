@@ -828,130 +828,193 @@ Same-filesystem assumption: handoff and canonical staging are both under
 per `CINV`. Residue is reported, never silently removed. Reboot clears
 `runroot` on tmpfs; handoff on `/data` survives and is reported.
 
-### 14.1 Governed profile handoff — ruled 2026-08-13
+### 14.1 Governed profile handoff — final ruling, amended 2026-08-13
 
 **REQUIRED BUT NOT YET IMPLEMENTED.** Pass 3A resolves a `CIMP` into a governed
-`ExecutionProfile` coordinator-side. This section rules how that profile
-reaches the worker without letting root or the worker author, reinterpret, or
-select any part of it. Nothing below is built yet.
+`ExecutionProfile` coordinator-side. This section rules how those bytes reach
+the worker unaltered. Nothing below is built yet.
 
-**The object that crosses is one immutable file.** Per invocation the
-coordinator writes `…/capability-handoff/<CINV>/profile`, containing exactly
-`canonical_profile(profile)` — the same bytes `fingerprint()` already digests.
-It is created once, never rewritten, and published by the same
-copy-then-`rename` discipline §14 uses for the payload.
+#### 14.1.1 Two withdrawn models, and what disproved them
 
-Three alternatives were considered and rejected:
+Both were accepted in turn and then falsified empirically. They are recorded
+because the reasons are the design.
 
-- **Flattening the profile into the launch record.** The record's whole purpose
-  (§6's schema stop condition) is that root understands *one bounded record and
-  nothing else*. Adding roughly twenty-five profile fields would make the
-  privileged parser the place execution policy is validated, which is precisely
-  what "root MUST NOT construct container argv from caller input" forbids.
-- **Carrying it over the coordinator↔worker protocol.** The worker needs the
-  profile *before* its first message, and the only coordinator→worker verbs are
-  `START_NOW` and `ABORT`. Adding a profile message would put policy on a live
-  channel instead of an immutable digest-committed artefact.
-- **Passing an open descriptor through the transition.** `INHERITED_DESCRIPTORS`
-  is `(0, 1, 2)` and everything above is closed before the credential drop.
-  Reopening descriptor inheritance to carry policy would restore exactly the
-  surface that rule exists to remove.
+**REJECTED — root-owned path freeze.** Root was to verify the coordinator's
+`…/<CINV>/profile` and `chown` it to `root:root 0444` before dropping
+privilege. Disproved: `unlink(2)` and `rename(2)` are authorised by write and
+execute on the *containing directory*, not by the target's owner or mode, and
+the target's ownership matters only under a sticky bit that `0555` does not
+set. The coordinator **owns** `…/<CINV>/`, and `chmod(2)` requires ownership
+rather than write permission — so it may always restore write access and
+replace a root-owned file it cannot itself write.
 
-**One policy author, and it is the coordinator.**
+**REJECTED — descriptor anchoring to the source inode.** Root was to open the
+coordinator's profile, authenticate it, and pass that descriptor as FD 3.
+Disproved: a descriptor pins an *inode*, never its *contents*. A coordinator
+that retains an `O_RDWR` descriptor from before publication may write through
+it afterwards; file mode is evaluated at `open(2)` only, so `0444` does not
+revoke it, and a read-only open confers no exclusion on Linux. Reading through
+root's own authenticated descriptor then returns substituted bytes.
 
-| Value | Authored by | Root | Worker |
+The property required is **worker bytes == the exact bytes root authenticated**,
+which is strictly stronger than *same inode*.
+
+#### 14.1.2 Accepted — sealed, root-authored profile object
+
+Root authenticates the coordinator's bytes and then **copies them into an
+object only root has ever written, and which nobody can subsequently mutate**.
+
+```
+memfd_create("kyri-exec-profile", MFD_CLOEXEC | MFD_ALLOW_SEALING)
+F_ADD_SEALS: F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL
+```
+
+Verified on this host (Linux 6.8, Python 3.12): after sealing, `write`,
+`ftruncate` in both directions, adding a seal, and removing one are all
+refused. A reopen through `/proc/self/fd/N` with `O_RDWR` **succeeds**, and is
+harmless — the write and truncate through it are refused, because `F_SEAL_WRITE`
+is enforced at the inode rather than per descriptor. `F_SEAL_SEAL` makes the
+seal set itself final. The object has **no pathname**, so replacement is
+meaningless; **no other handle exists**, so retained-writable-descriptor
+mutation is impossible; and it is reclaimed with the process tree, so it has no
+lifetime or cleanup question.
+
+If a host cannot provide this exact contract, the transition **refuses**. There
+is no fallback to a temporary file: a fallback would silently reinstate a model
+this section rejects.
+
+**The source profile stops being authority the moment the sealed copy passes
+verification.** After that, path replacement, `chmod`, truncation, rewriting
+through a retained descriptor, unlinking, and replacing the whole `<CINV>`
+directory are all irrelevant. The handoff path remains only publication state
+and cleanup evidence.
+
+#### 14.1.3 Root stays policy-opaque
+
+Root may read the raw bytes, hash them, compare the digest, copy them, and seal
+them. Root **must not** parse `ExecutionProfile` or interpret `oci_image_id`,
+mounts, resource policy, argv, or environment. To root the profile is an
+authenticated opaque blob, which is what keeps §6's schema stop condition true:
+the privileged parser understands one bounded record and nothing else.
+
+#### 14.1.4 FD 3 lifecycle, and one trap
+
+`PROFILE_FD = 3`, compiled in. `INHERITED_DESCRIPTORS = (0, 1, 2, 3)`.
+
+This is an exception to stdio-only inheritance, not a return to ambient
+inheritance: root opens the object itself, from a governed path, authenticates
+it before it is inheritable, fixes the number, and passes it read-only. No
+caller may name a descriptor number, and no caller descriptor survives because
+it happened to occupy a governed one.
+
+Two placement cases, both measured:
+
+- **A caller pre-opens FD 3.** `dup2(sealed, 3)` replaces it atomically and
+  clears `FD_CLOEXEC` on the new descriptor. The caller's object is closed by
+  the same call. Verified.
+- **The memfd is itself allocated as FD 3.** `dup2(3, 3)` is a POSIX no-op that
+  returns success and **does not clear `FD_CLOEXEC`** — so the descriptor would
+  be closed at `execve` and the worker would receive nothing. The transition
+  must therefore clear the flag explicitly with `fcntl(3, F_SETFD, 0)` rather
+  than relying on `dup2`, in both cases. Verified.
+
+Order: create with `MFD_CLOEXEC`; copy; verify; seal; verify seals; place on
+FD 3; clear `FD_CLOEXEC` explicitly; close every other non-stdio descriptor;
+re-verify FD 3 is still the sealed object before dropping privilege.
+
+#### 14.1.5 Authenticated worker context — five-element argv
+
+The worker cannot verify `profile.cimp` or the digest against values taken from
+the profile itself; that is circular. It cannot read the launch record either,
+and must not — `…/execution/` is `cschott 0700` and coordinator-writable.
+
+```
+execve("/usr/bin/python3",
+       ("/usr/bin/python3", "/usr/libexec/kyri-exec-worker.py",
+        "CINV-nnnnnn", "CIMP-nnnnnn", "<64 lowercase hex profile_digest>"),
+       CLOSED_ENVIRONMENT)
+```
+
+Root takes both added values from the launch record it has already
+authenticated and builds the argv itself, so the caller supplies neither. They
+are short fixed-grammar tokens, visible in the exec tuple, needing no
+environment variable and no second descriptor. The environment stays closed and
+carries no `CIMP`, digest, path, descriptor number, or image identity.
+
+#### 14.1.6 Worker validation
+
+Exactly five argv elements — no optional three-element form. `CINV` and `CIMP`
+by the existing grammars, `CIMP-000000` semantically refused, digest exactly 64
+lowercase hex. Then, from **FD 3 only**: confirm the required seals via
+`F_GET_SEALS`, bounded read, canonical parse, exact canonical round-trip,
+construct the `ExecutionProfile`, recompute `fingerprint(profile).profile_digest`
+and require equality with the argv digest, require `profile.cinv` and
+`profile.cimp` to equal the argv values, and validate `oci_image_id` through the
+existing governed contract. Only then may Podman argv be constructed.
+
+The seal check is the strongest identity proof Linux actually offers here.
+`fstat` on a memfd shows an anonymous inode on `tmpfs`, which distinguishes it
+from a regular file but is not an unforgeable identity, and `/proc/self/fd`
+naming is not a stable authority. **The cryptographic authority is the digest
+comparison**, not the descriptor's provenance, and the ruling claims no more
+than that.
+
+#### 14.1.7 Ordering
+
+Verified launch record → quota establish and read back → open the coordinator
+profile `O_NOFOLLOW` → validate type, size, ancestry → hash the exact bytes read
+from that descriptor → require the digest matches → create the memfd → copy →
+rewind and verify the copy → apply the seals → read the seals back → place on
+FD 3 → clear `FD_CLOEXEC` → reset the offset → close every descriptor outside
+`(0, 1, 2, 3)` → re-verify FD 3 is sealed and readable → `setgroups` →
+`setgid` → `setuid` → verify the drop is permanent → `no_new_privs` →
+`execve` with the five-element argv. Root never reopens the profile path after
+sealing, and nothing reaches Podman before the worker's checks complete.
+
+#### 14.1.8 Threat matrix
+
+| Attack | Prevented or detected by | Mechanism | Fails at |
 |---|---|---|---|
-| `CINV`, `CIMP` | coordinator | validates syntax | revalidates syntax |
-| `oci_image_id` | admission, via Pass 3A | — (see below) | reads from the profile |
-| every profile field | coordinator, from `build_profile` | never parses | reconstructs, never alters |
-| `profile_digest` | coordinator, `= sha256(canonical_profile)` | verifies against the file | recomputes by round-trip |
-| argv and environment | worker, from the profile only | never constructs | constructs from adapter-owned values |
-| quota policy | compiled-in | applies it | never applies it |
-| handoff paths | derived from `CINV` and a compiled-in root | derives its own | derives its own |
+| Path replaced after verification | sealed copy | no pathname is consulted after sealing | irrelevant |
+| Retained writable source descriptor | sealed copy | bytes copied into a root-only object | irrelevant |
+| Source truncated, rewritten, unlinked | sealed copy | source stops being authority | irrelevant |
+| `<CINV>` directory `chmod`ed or replaced | sealed copy | same | irrelevant |
+| Caller pre-opens FD 3 | transition | `dup2` replaces it atomically | before credential drop |
+| Ambient descriptor leakage | transition | all but `(0,1,2,3)` closed | before credential drop |
+| Sealed object mutated | kernel | `F_SEAL_WRITE`, enforced per inode | at `write`/`ftruncate` |
+| Seals removed or weakened | kernel | `F_SEAL_SEAL` | at `F_ADD_SEALS` |
+| Unsealed or wrong-type object on FD 3 | worker | `F_GET_SEALS` required set | before parse |
+| `CIMP` substituted | worker | `profile.cimp` vs argv `CIMP` | before argv |
+| `CINV` substituted | worker | `profile.cinv` vs argv `CINV` | before argv |
+| Digest substituted | root, then worker | record digest vs source bytes; argv digest vs recomputed | before exec, then before argv |
+| Image or any profile field substituted | root, then worker | digest covers all canonical bytes | before exec, then before argv |
+| Non-canonical or malformed profile | worker | canonical round-trip | before argv |
+| Wrong argv count | worker | exact five | before anything |
 
-Neither root nor the worker may derive a policy value the coordinator already
-decided, and neither may accept one from argv, environment, or the protocol.
+#### 14.1.9 Consequences
 
-**`profile_digest` is `sha256(canonical_profile(profile))`** — the existing
-`ExecutionFingerprint.profile_digest`, not a second digest. The complete
-canonical bytes cross precisely so both sides can recompute rather than trust.
-
-**Launch record vNext — seven fields still.** `oci_image_id` is *replaced* by
-`profile_digest`:
+Launch record vNext stays **seven fields** — `oci_image_id` replaced by
+`profile_digest`, and not reintroduced:
 
 ```
 cinv · cimp · profile_digest · handoff_root · profile_schema_version
      · commitment_digest · lifecycle_state
 ```
 
-This is an amendment to §6, which names `oci_image_id` in the record. Removing
-it keeps "one record and nothing else" literally true: with the image identity
-inside the digest-committed profile, root would otherwise have to parse a
-*second* document to check the two agree, and a privileged parser that reads
-execution policy is the thing §6 exists to prevent. Root's syntactic image
-check is not lost — the worker performs it on the profile before argv, and the
-bytes it checks are the bytes root committed by digest. **The alternative —
-keeping both fields and having root extract one field from the profile — is
-recorded here deliberately; it costs a second privileged parse and buys a check
-that already happens downstream.** No production launch record has ever been
-written, so no migration is owed.
+Changed: the launch-record schema, the root helper, `INHERITED_DESCRIPTORS`,
+and the worker exec tuple — therefore **installed generation 5**. Unchanged:
+`ExecutionProfile` fields and schema version, payload schema version, the
+coordinator↔worker protocol, and the `CIMP`/`CGEN` schemas.
 
-**Root validates, and interprets nothing.** It verifies: the launch record is
-canonical and closed to the seven fields; `CINV` and `CIMP` grammar; the record
-names the `CINV` it was invoked for; `lifecycle_state` is `launch_authorized`;
-the commitment digest is well-formed; the handoff exists beneath the compiled-in
-root with the expected ownership and modes; and `sha256(<CINV>/profile)` equals
-`profile_digest`. It then **freezes the profile** — `chown root:root`, mode
-`0444` — before dropping privilege. Root **must not** parse the profile, read a
-quota value, a UID, a GID, a mount, or an image out of it, or let any of them
-influence the transition: its own credential targets are compiled-in constants.
+§13 needs **no new row**: the profile is published at
+`…/<CINV>/profile` as `cschott:cschott 0444`, exactly like `payload`, and is
+never re-owned — the sealed copy, not the file's ownership, is what protects it.
 
-**The worker verifies by reconstruction.** It derives `<CINV>/profile` from the
-compiled-in handoff root and the revalidated `CINV`, opens it `O_NOFOLLOW`,
-parses the canonical bytes into an `ExecutionProfile`, and requires that
-re-serialising that profile reproduces the bytes exactly. A non-canonical
-encoding, an unknown field, or any tampering fails that round-trip. It then
-requires `profile.cinv` to equal its argv `CINV`, which is what makes a profile
-from another invocation unusable. Only then does it construct argv.
-
-**TOCTOU is closed by ownership, not by re-reading.** The window between root's
-verification and the worker's read is the reason root re-owns the profile to
-`root:root 0444` while still privileged: after that point the coordinator — who
-owns the handoff directory and could otherwise `chmod` it back — can no longer
-replace the object the worker will open. The worker inherits no descriptor for
-it, so the descriptor-inheritance surface stays closed; what it opens is an
-object nobody unprivileged can still swap.
-
-> **Observation, not introduced here.** `payload` and `package/` carry the same
-> exposure today: §13 makes `…/<CINV>/` `cschott:cschott 0555`, and an owner may
-> always `chmod` its own directory. Freezing the profile closes it for the one
-> object this ruling adds; extending the same freeze to `payload` and `package/`
-> is a worthwhile follow-up and is **not** part of Pass 3B.
-
-**Ordering is unchanged.** Establish the output quota → verify and freeze the
-profile → `setgroups` → `setgid` → `setuid` → `no_new_privs` → `execve`. The
-`execve` tuple, the closed environment, and `INHERITED_DESCRIPTORS = (0, 1, 2)`
-are all untouched.
-
-**Failure is closed at every boundary.** A missing, non-canonical, oversized, or
-digest-mismatched profile; a `CINV` disagreement; a failed round-trip; an
-unexpected owner or mode; a symlink anywhere — each refuses **before** any
-credential change and therefore before Podman can be reached. Root refusing
-after the quota is established is still a refusal: nothing has executed.
-
-**Lifetime and cleanup.** The profile shares the per-`CINV` handoff lifetime
-exactly: created once before the transition, immutable for the life of the
-invocation, and removed only by the existing handoff cleanup authority.
-Collision on an existing `<CINV>` handoff remains a refusal, and residue is
-reported rather than silently removed.
-
-**§13 amendment.** The per-invocation table gains one row:
-
-| `…/<CINV>/profile` | `cschott:cschott` `0444`, re-owned to `root:root` `0444` by the transition | read |
-
-**Consequences.** The launch-record schema and the root helper change, so this
-requires **installed generation 5**. The payload schema, the profile schema
-version, the protocol, and the `ExecutionProfile` fields are all unchanged.
+> **Follow-up, unchanged and untouched.** Sealed transport closes the
+> *execution-profile* authority TOCTOU only. `payload` and `package/` remain
+> replaceable by the coordinator through the same directory-ownership route,
+> and whether that matters before G6 is a separate hardening question this
+> ruling deliberately does not answer.
 
 ## 15. Quarantine model
 
