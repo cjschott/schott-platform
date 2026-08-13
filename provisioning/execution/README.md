@@ -760,6 +760,61 @@ nowhere**: the test suites, `tools/dev/run-validation.sh`, the CI workflow, the
 design and plan documents, and this runbook. `tools/provisioning/` remains
 outside the matrix, as it must.
 
+#### Deployment semantics — transactional, crash-recoverable, not atomic
+
+**The seven objects do not become visible together, and no installer should
+claim they do.** Linux provides atomic replacement of *one* pathname —
+`rename(2)` within a filesystem — and no primitive that publishes seven
+independent pathnames as a unit. During the replacement window some targets are
+generation 5 while others are still generation 4. True all-or-nothing
+visibility would need a different runtime layout: a versioned generation
+directory plus a single atomic pointer swap, with both entrypoints resolving
+through the pointer. That is a change to a privilege boundary rather than to an
+installer, and it is not authorised here.
+
+What is achievable on this layout, and what the generation-5 installer must
+therefore implement, is **transactional crash-recoverable installation**:
+
+| Phase | Guarantee |
+|---|---|
+| PREPARE | each new object is staged beside its target on the target's own filesystem with final bytes and mode, fsynced; the current generation-4 object is retained the same way, so rollback has material rather than intentions |
+| JOURNAL | a durable root-only record of intent, both pinned digests per target, and per-target progress, fsynced before every irreversible step |
+| COMMIT | one `rename(2)` per target — atomic *per pathname* — each followed by a directory fsync and an immediate bytes/owner/mode verification |
+| ROLLBACK | any commit-phase failure restores every already-replaced target from its retained copy and re-verifies the complete generation-4 set |
+| RECOVER | a rerun inspects **actual bytes**, classifies each target `GEN4`/`GEN5`/`UNKNOWN`, and drives the host to one complete generation; `UNKNOWN` fails closed for operator disposition |
+
+Recovery completes **forward** to generation 5 when every remaining target's
+prepared object verifies against its pinned digest, and rolls **back** to
+generation 4 otherwise. It never guesses, and a rollback is reported as a
+rollback — a complete, verified generation 4 — rather than as a failed
+generation 5.
+
+**No mixed set is ever accepted as a generation.** Evidence is written only
+after all seven installed objects verify by digest, owner, and mode, the
+unchanged runtime surface still matches the generation-4 evidence, no eighth
+delta exists, the import boundary holds, and the gates are unchanged.
+
+**Why the commit window is operationally safe at this gate:** there is no live
+caller able to enter the privilege boundary. `/etc/sudoers.d/kyri-exec` does not
+exist, so the coordinator cannot invoke the helper at all; no systemd unit,
+timer, or cron entry references any `kyri-exec` path. That makes sequential
+pathname visibility acceptable *here* — it does not make it atomic, and it
+stops being an argument the moment G3 opens.
+
+#### Carried forward to G6, unresolved
+
+Two questions the sealed-transport ruling deliberately does not answer, both
+recorded so they are not lost:
+
+- **Governed profile and security controls.** The worker verifies the profile's
+  *identity* — digest, `CINV`, `CIMP` — but not that its *values* are the
+  governed ones. `create_argv` will consume `network`, `pids_limit`, `cpus`,
+  `hostname`, `tmpfs_options`, and `oci_image_id` from coordinator-authored
+  bytes. Nothing consumes them today, because `create_argv` has no caller.
+  **Requires a ruling before G6.**
+- **Payload and package replacement exposure.** Unchanged by this pass and
+  still replaceable through the same directory-ownership route.
+
 Two earlier handoff models were accepted and then disproved empirically — a
 root-owned path freeze and descriptor anchoring to the coordinator's inode.
 Both are recorded in §14.1 with their disproofs. The accepted model has root
