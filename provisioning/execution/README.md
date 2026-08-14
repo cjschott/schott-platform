@@ -878,11 +878,41 @@ result that cannot be constructed by hand.
 active and accepted on this host. `create_argv` still has no caller, the worker
 entrypoint still refuses at G6, and **G6 stays closed**.
 
-One residual is deliberately still open: verification happens before `create`,
-so a coordinator that mutates payload or package afterwards is detectable but
-not prevented. Closing that by re-verifying at collection is **Pass 4B,
-REQUIRED BUT NOT YET IMPLEMENTED** — and it will touch the same runtime
-objects, which is why generation 6 should be installed once, after it.
+One residual is still open, and it is now ruled rather than merely recorded.
+Verification happens before `create`, and re-verifying later would not fix it:
+Podman resolves a **pathname** in a coordinator-owned directory, and a bind
+mount shares that tree for the container's whole lifetime. Reproduced
+empirically — gate satisfied, payload and entrypoint replaced afterwards, bind
+sources still resolving to the mutated bytes.
+
+**Pass 4B is ruled (design §14.5, Option A) and NOT IMPLEMENTED.** The worker
+will copy verified material into a snapshot it owns, recompute both commitments
+over the snapshot, and Podman will bind only that. It brings one **new
+generation-6 host prerequisite**, applied with the generation-6 installation and
+not before:
+
+| Object | Owner | Mode | Created by |
+|---|---|---|---|
+| `/run/kyri/` | `root:root` | `0755` | `systemd-tmpfiles` at boot |
+| `/run/kyri/execution-material/` | `root:kyri-capability` | `0770` | `systemd-tmpfiles` at boot |
+
+`0770` and not `0775`: `cschott` and `kyri-capability` share no group, so this
+admits the worker and gives the coordinator no write, no read, and no traverse.
+Root creates the empty root and nothing else — it never enters a per-`CINV`
+directory, reads no payload or package, and gains no recursive walker or cleanup
+command. The worker owns its snapshots and removes them with the existing
+per-`CINV` cleanup, after output collection.
+
+`/run` is tmpfs, so snapshots are lost on reboot. That is correct: they are
+ephemeral execution material, durable evidence lives elsewhere, and losing them
+revokes no implementation authority. Capacity is bounded by contract — ≤66 MiB
+per invocation × 2 execution slots = ≤132 MiB live, against 5.9 GiB — and the
+**XFS project quota on `/data` does not protect `/run`**, which is why the bound
+is stated here rather than assumed. Accumulated stale snapshots are the residual
+to watch.
+
+`…/<CINV>/out/` does **not** move: it is already worker-owned, and the §34
+project quota on `/data` is what bounds it.
 
 Two earlier handoff models were accepted and then disproved empirically — a
 root-owned path freeze and descriptor anchoring to the coordinator's inode.

@@ -1383,6 +1383,245 @@ coordinator side, and is currently never re-established after crossing a
 boundary that explicitly does not carry it. §14.2.5 is the requirement that it
 must be.
 
+### 14.5 Worker-owned execution snapshot — ruling 2026-08-14
+
+**REQUIRED BUT NOT YET IMPLEMENTED.** Pass 4A is source-complete; nothing below
+exists. Generation 5 is installed and active and is unaffected by this section.
+
+#### 14.5.1 What Pass 4A left open, measured rather than argued
+
+Pass 4A verifies the payload and package commitments before `create_argv`. That
+verification was then shown to close nothing, empirically: the gate was
+satisfied, the coordinator restored write access to material it owns, replaced
+the payload and the entrypoint, and the bind sources `create_argv` emits still
+resolved to the mutated bytes.
+
+```
+bind: type=bind,src=/data/kyri/capability-handoff/CINV-000042/package,…
+bind: type=bind,src=/data/kyri/capability-handoff/CINV-000042/payload,…
+committed payload digest : 7dfecf7cff0e7f42
+mounted  payload digest  : db9bf426931ed052
+entrypoint Podman would run: import os / os.system("id")
+```
+
+Two independent reasons a second verification cannot fix this. Podman resolves
+a **pathname** after any check the worker can make — §6 rejects
+`/proc/self/fd/N` as a bind source, so there is no descriptor-anchored
+alternative. And a bind mount is not a copy: the container shares the source
+tree for its whole lifetime, so the window is not "verify → open" but
+"verify → end of execution".
+
+#### 14.5.2 Ruling: Option A, and why not the others
+
+**Selected: the worker copies verified material into a snapshot it owns, under
+ancestry the coordinator cannot mutate, and Podman binds only the snapshot.**
+
+*Option C — accept the residual and detect only — is rejected.* Containment was
+never the whole requirement. Kyri must be able to say that the material
+presented to the container was the material the profile authenticated, and a
+detection-only model can only say that it was, at one earlier instant.
+
+*Option B — root-owned handoff ancestry — remains rejected.* It moves
+publication and cleanup toward root and contradicts §14, where the coordinator
+publishes and owns the handoff.
+
+#### 14.5.3 Measured ancestry, and why a dedicated root is preferred
+
+| Path | Owner | Mode | Usable |
+|---|---|---|---|
+| `/data`, `/data/kyri` | `cschott` | 0755 | no — coordinator renames any child |
+| `…/capability-handoff/<CINV>/` | `cschott` | 0555 | no — the problem itself |
+| `/data/kyri/capability` (worker `HOME`) | `kyri-capability` | 0750 | no — worker-owned, but its parent is coordinator-owned |
+| `/data/kyri/capability-runtime/` | `cschott` | 0700 | no — worker has no access |
+| `/run/user/999` | `kyri-capability` | 0700 | possible, rejected below |
+| `/run` | `root:root` | 0755 | **yes — the only root-owned ancestry** |
+
+**`/run/user/999` is assessed and not selected.** It measures better than the
+earlier analysis assumed: it exists, is a 5.9 GiB tmpfs, is `uid=999 gid=987
+mode=700`, and the user is **lingering** (`Linger=yes`), so it survives logout
+and is recreated at boot by `systemd-logind`. It is rejected anyway, because it
+is **rootless Podman's own runtime directory**: its lifecycle belongs to
+`logind` rather than to Kyri provisioning, `podman` writes its own state there,
+and a stale Kyri snapshot and a Podman runtime object would share a capacity
+budget and a cleanup story that neither component owns. Coupling execution
+material to another component's directory is how a lifetime question becomes
+nobody's.
+
+**Selected root: `/run/kyri/execution-material/`.**
+
+| Object | Owner | Mode | Rationale |
+|---|---|---|---|
+| `/run` | `root:root` | 0755 | existing, tmpfs, `noexec` |
+| `/run/kyri/` | `root:root` | 0755 | root-created, coordinator cannot write |
+| `/run/kyri/execution-material/` | `root:kyri-capability` | 0770 | worker creates children; coordinator has no write, no read, and **no traverse** |
+| `…/<CINV>/` | `kyri-capability:kyri-capability` | 0500 after materialisation | create-once, worker-owned |
+| `…/<CINV>/payload` | `kyri-capability` | 0444 | worker-authored |
+| `…/<CINV>/package/` | `kyri-capability` | 0500 | worker-authored |
+
+`cschott` is in `cschott, adm, cdrom, dip, plugdev, lxd, sudo, docker`;
+`kyri-capability` is in `kyri-capability` only, and group 987 has no
+supplementary members. **The two share no group**, so `0770 root:kyri-capability`
+admits the worker and excludes the coordinator. Mode `0770` rather than `0775`
+is deliberate: the coordinator must not be able to traverse or enumerate.
+
+`/run` is mounted `noexec`. That is harmless and mildly helpful: the container
+runs `/usr/bin/python /kyri/package/<entrypoint>`, so package members are
+**read** by the interpreter and never `execve`d.
+
+#### 14.5.4 Authority split
+
+- **Root/provisioning** creates `/run/kyri/` and `/run/kyri/execution-material/`
+  and nothing else. It never enters a per-`CINV` directory, never reads payload
+  or package, and gains no recursive parser or cleanup command.
+- **The worker** creates its per-`CINV` snapshot after the credential drop,
+  copies verified material into it, and owns its removal.
+- **The coordinator** has no write, read, or traverse authority anywhere below
+  the snapshot root.
+
+#### 14.5.5 The snapshot algorithm
+
+1. sealed profile verified (§14.1), governed policy re-derived, runtime
+   contracts checked, image presence confirmed — all as Pass 4A already does;
+2. the coordinator handoff payload and package verified against the profile
+   commitments — Pass 4A, unchanged, and now an **ingestion** check;
+3. `mkdir` the per-`CINV` snapshot **create-once** (`O_EXCL` semantics); an
+   existing directory is a refusal, never a reuse or a silent delete;
+4. write the payload into the snapshot **from the bytes already read and
+   verified in step 2** — the source is never reopened;
+5. copy the package tree descriptor-relatively, each member opened
+   `O_NOFOLLOW | O_NONBLOCK` from the already-open source directory descriptor,
+   type-checked, and written into a worker-created child;
+6. **recompute both commitments over the snapshot** and require equality with
+   the profile;
+7. resolve `package_entrypoint` inside the snapshot and require an allowed
+   regular member;
+8. tighten the snapshot modes;
+9. only then does collection succeed, and `create_argv` derives its bind
+   sources from the snapshot root plus the validated `CINV`.
+
+Step 6 is what makes step 5 safe: a package tree mutated *during* the copy
+produces a snapshot whose commitment does not match, and the invocation is
+refused. **No retry-until-stable loop.** One coherent attempt or a refusal —
+a retry loop against an adversary that can always mutate again is a loop with
+no defined end.
+
+Files added, removed, or modified during the copy, a replaced directory, a
+rename race, a symlink, a hard link, a FIFO, a socket, a device node, or an
+unexpected directory all fail: the copy refuses the object types outright and
+the recomputed commitment refuses everything else.
+
+#### 14.5.6 What Podman binds
+
+```
+COORDINATOR HANDOFF        (cschott-owned, mutable, ingestion source only)
+        |  verify commitments, then copy
+        v
+WORKER SNAPSHOT            /run/kyri/execution-material/<CINV>/
+        |  recompute and require equality
+        v
+PODMAN BIND SOURCE         package/ and payload, worker-owned, coordinator
+                           has no write, no traverse, no rename
+```
+
+`out/` is unchanged and stays in the handoff at `…/<CINV>/out/`: it is
+worker-owned already, it is the one writable leaf, and the §34 XFS project
+quota on `/data` is what bounds it. Moving it would move the quota story.
+
+#### 14.5.7 Lifetime, cleanup, and residue
+
+Created after the credential drop and before `podman create`; it must live
+until the container is gone, because a bind mount keeps referencing it — so it
+is **not** removed after `create`, and not after `start`. Removal happens with
+the existing per-`CINV` cleanup, after output collection.
+
+The worker removes its own snapshot. **No new root command, and the coordinator
+never cleans this root.** A stale snapshot grants nothing: it is not execution
+authority by existing, cannot be adopted for another `CINV`, cannot bypass a
+commitment, and a create-once collision is a refusal rather than a delete. On
+reboot `/run` is empty, which is correct — the snapshot is ephemeral execution
+material. Durable evidence lives elsewhere; losing snapshots revokes no
+implementation authority.
+
+#### 14.5.8 Capacity
+
+Bounded by contract, not by hope: package ≤ 64 MiB (1,024 entries), payload
+≤ 2 MiB, so ≤ 66 MiB per invocation, and §23 caps live executions at **2
+slots** — **≤ 132 MiB** of live snapshot at any time, against a 5.9 GiB
+`/run`.
+
+**The §34 XFS project quota does not protect `/run`.** It governs `/data` and
+nothing else, and claiming otherwise would be a quota nobody enforces. The
+governing bound here is the package/payload contract multiplied by the capacity
+bound, plus create-once and worker cleanup. `/run` is shared with the rest of
+the host, so **accumulated stale snapshots are the residual to watch**; if that
+ever needs a hard limit, the mechanism is a dedicated `tmpfs` mount with a
+`size=` option, ruled then rather than assumed now.
+
+#### 14.5.9 Boot and provisioning classification
+
+Created by **`systemd-tmpfiles`** (`/etc/tmpfiles.d/kyri-execution-material.conf`),
+which needs no service, runs before anything Kyri does, and re-establishes the
+root on every boot with the ruled owner and mode. systemd 255 is present and
+`/etc/tmpfiles.d/` is in use.
+
+This is a **generation-6 host prerequisite**, not a G4 amendment: G4 is closed
+and accepted, nothing about it becomes untrue, and the new root is required
+only by the runtime this generation installs. It is an operator step in the
+runbook, applied with the generation-6 installation and not before.
+
+#### 14.5.10 Invariance
+
+No change to `/usr/libexec/kyri-exec-transition`, `/usr/libexec/kyri-exec-worker.py`,
+`kyri_exec_transition.py`, `kyri_exec_transition_action.py`, `PROFILE_FD`, the
+seal contract, the five-element argv, root's opacity, or the quota/drop/
+`no_new_privs` ordering. The snapshot is worker-side, after the credential
+drop. No new `ExecutionProfile` field, no launch-record change, no payload
+schema change, no protocol change: the Pass 4A commitments are exactly what the
+snapshot is verified against.
+
+#### 14.5.11 Attack matrix
+
+| Attack | Source | Prevented/detected by | Mechanism | Fails at | Residual |
+|---|---|---|---|---|---|
+| Retained writable payload descriptor | coordinator | snapshot | snapshot bytes are worker-authored; no coordinator handle ever existed | irrelevant | none |
+| Retained writable package member descriptor | coordinator | snapshot | same | irrelevant | none |
+| `chmod` the handoff directory | coordinator | snapshot | handoff is ingestion only after copy | irrelevant | none |
+| Payload rename/replace after verification | coordinator | snapshot | Podman binds the snapshot | irrelevant | none |
+| Package directory replaced after verification | coordinator | snapshot | same | irrelevant | none |
+| Mutation **during** the copy | coordinator | worker | commitment recomputed over the snapshot | before `create_argv` | invocation refused, no retry |
+| Mutation **after** the copy | coordinator | snapshot | coordinator cannot reach the snapshot | irrelevant | none |
+| Mutation during container execution | coordinator | snapshot | bind source is worker-owned | irrelevant | none |
+| Cross-`CINV` substitution | coordinator | worker | commitments come from a profile bound to the argv `CINV` | before `create_argv` | none |
+| Snapshot collision | crash residue | worker | create-once refusal, never adoption or delete | before copy | operator disposition |
+| Stale snapshot reuse | crash residue | worker | existence is not authority; commitments still required | before `create_argv` | none |
+| Symlink or special file introduced during copy | coordinator | worker | type check per member, `O_NOFOLLOW`, `O_NONBLOCK` | during copy | none |
+| Coordinator traverses the snapshot | coordinator | kernel | `0770 root:kyri-capability`, no shared group | at `open` | none |
+| Coordinator `chmod`/renames the snapshot parent | coordinator | kernel | parent is `root:root`; ownership is required to `chmod` | at `chmod` | none |
+| `/run` exhaustion | coordinator or accumulation | capacity + contract | ≤66 MiB × 2 slots, plus cleanup | at allocation | **stale accumulation** |
+| Interactive `cschott` with `sudo`/`docker` | operator | — | out of scope | — | **operator is trusted; see below** |
+
+**One scope statement, stated rather than implied.** `cschott` is in `sudo` and
+`docker`, so the *interactive operator identity* is root-equivalent and no
+filesystem ownership defends against it. That has always been true and is not
+what this boundary is for: the threat model is the **coordinator process**,
+which holds one `NOPASSWD` grant over one command with one argument and cannot
+`chmod`, `chown`, or write outside its own trees. Option A closes the race
+against that actor completely.
+
+#### 14.5.12 The Pass 4B guarantee, exactly
+
+> The bytes and tree Podman mounts are a **worker-owned snapshot**, created from
+> invocation material whose commitments match the authenticated
+> `ExecutionProfile`, under ancestry the coordinator can neither write,
+> traverse, rename, nor `chmod`.
+
+And the distinction that must survive into the implementation:
+
+- **the source handoff may remain mutable** — it is coordinator-owned
+  publication material and stays that way; and
+- **the container-consumed snapshot is not coordinator-mutable** — which is the
+  property Pass 4A could not provide and this ruling exists to add.
+
 ## 15. Quarantine model
 
 Failed or untrusted output may be copied **only** as quarantined forensic

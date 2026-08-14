@@ -1101,7 +1101,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | profile policy re-derivation at the worker | **IMPLEMENTED** (Pass 4A) |
 | payload/package digest commitment and entrypoint transport | **IMPLEMENTED** (Pass 4A) |
 | generation 6 | **SOURCE COMPLETE / NOT INSTALLED** |
-| collection-time payload/package re-verification | **REQUIRED** (Pass 4B), not implemented |
+| worker-owned execution snapshot | **RULED** (Pass 4B, Option A), not implemented |
+| generation-6 host prerequisite: /run/kyri/execution-material | **RULED**, not provisioned |
 | root helper launch-record schema vNext | **IMPLEMENTED** (Pass 3B-ii) |
 | worker governed-profile consumption | **IMPLEMENTED** (Pass 3B-ii) |
 | production G5 image build and CIMP admission | NOT STARTED |
@@ -1542,6 +1543,52 @@ NOT YET IMPLEMENTED.**
 
 **Generation 5's privilege boundary is byte-identical.** Root still parses no
 profile, and none of the four privileged files changed.
+
+### Pass 4B ruling — worker-owned execution snapshot, 2026-08-14
+
+Ruled in design §14.5. **Nothing implemented.** Pass 4B was correctly stopped
+before mutation once the residual race was reproduced empirically rather than
+argued: with the Pass 4A gate satisfied, the coordinator restored write access
+to material it owns, replaced the payload and the entrypoint, and the bind
+sources `create_argv` emits still resolved to the mutated bytes.
+
+Collection-time re-verification was evaluated and rejected as a *fix*. Podman
+resolves a pathname after any check the worker can make — §6 rejects
+`/proc/self/fd/N` as a bind source — and a bind mount shares the source tree for
+the container's whole lifetime, so the window is not "verify → open" but
+"verify → end of execution".
+
+**Option A selected by operator direction.** The worker copies verified material
+into a snapshot it owns under root-owned ancestry, recomputes both commitments
+over the snapshot, and Podman binds only that. Option C (detect only) was
+rejected because Kyri must preserve provenance between authenticated invocation
+material and the material actually presented to the container; containment
+remaining intact is not sufficient. Option B (root-owned handoff) stays rejected
+because it moves publication and cleanup toward root.
+
+**Measured, not assumed.** `/run` is the only root-owned ancestry
+(`root:root 0755`, tmpfs, 5.9 GiB, `noexec`). `/run/user/999` measured better
+than expected — lingering, worker-owned, persists across logout — and was still
+rejected: it is rootless Podman's own runtime directory, and coupling execution
+material to another component's lifecycle is how a cleanup question becomes
+nobody's. `cschott` and `kyri-capability` share **no group**, so
+`root:kyri-capability 0770` on `/run/kyri/execution-material/` admits the worker
+and excludes the coordinator entirely — no write, no read, no traverse.
+
+**Bounds.** Package ≤64 MiB, payload ≤2 MiB, §23 caps live executions at two
+slots: ≤132 MiB live against 5.9 GiB. The §34 XFS project quota governs `/data`
+and does **not** protect `/run`; the bound here is the contract times the
+capacity model, plus create-once and worker cleanup. Accumulated stale snapshots
+are the named residual.
+
+**Boundaries held.** No privileged change: the snapshot is worker-side, after
+the credential drop, and root creates only an empty directory through
+`systemd-tmpfiles`. No schema change: Pass 4A's commitments are exactly what the
+snapshot is verified against. `out/` stays in the handoff, because it is already
+worker-owned and the XFS quota is what bounds it.
+
+**Status: REQUIRED BUT NOT YET IMPLEMENTED.** Generation 5 remains active,
+generation 6 remains source-only, and G6 stays closed.
 
 ## 6. Sequencing rules
 
