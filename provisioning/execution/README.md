@@ -863,28 +863,62 @@ Confirmed against two independent Chainguard provenance pages (`python` and
 attestation`** — downloading performs no signature checking at all, and the
 tooling does not offer it as an alternative.
 
-#### Index or child manifest
+#### Index or child manifest — corrected 2026-08-14 after a live failure
 
-Cosign is invoked against the **digest-pinned multi-arch index** with
-`--platform linux/amd64`, because that is the reference whose platform
-selection cosign implements. The child is then bound by requiring the signed
-statement's `subject` digest to equal the platform manifest. Passing the child
-digest directly would make `--platform` meaningless and drop the binding.
+**The child.** An earlier revision of this runbook said to verify the
+multi-arch **index** with `--platform linux/amd64`. That was wrong and it cost
+an operator a live ceremony:
 
-The discovered candidate under review — a candidate, approved by nobody:
+```
+Error: unknown flag: --platform
+```
+
+`cosign verify-attestation` **has no `--platform` flag.** `cosign verify` does,
+and Chainguard documents a cosign version floor for "platform attestation
+selection", and from those two true things a false one was inferred. The
+mistake was asserting a CLI contract from prose instead of from the tool.
+
+The corrected model is also the stronger one. Chainguard publishes an SBOM for
+the index **and** a standalone single-architecture SBOM for each variant, each
+attached to that variant's own digest. Naming the child therefore retrieves the
+`linux/amd64` SPDX document directly, and **the signed statement's subject is
+the child manifest digest** — so the platform binding is the signature itself,
+not an inference from an index descriptor. Nothing is weakened by dropping the
+flag; a chain of reasoning is replaced by a signature.
 
 ```
 discovery   cgr.dev/chainguard/python:latest        <- discovery only, never authority
-index       sha256:fe9ad068be9f8b9417ffebc049c852c43c03897c364146b9823944cdd7e70b94
+index       sha256:fe9ad068…                        <- context; NOT what is verified
 platform    linux/amd64
-child       sha256:84e1f28d16a545d7fdeb0a292005e1d6147059deee4aac8611526888d353f5ca
-config      sha256:a33976e6c3275bab76c89686561e5b8cacf6c6f40b70ec67a3d01c8cf8c2bdd6
+child       sha256:84e1f28d…                        <- verified, and the build's BASE_IMAGE
+config      sha256:a33976e6…
 ```
 
-A note on discovery: the OCI `/referrers` endpoint returning **count 0** for the
-child manifest does **not** indicate the absence of an attestation. Cosign
-discovers attestations through its tag scheme (`sha256-<digest>.att`), not
-through the referrers API, so referrers is silent about them either way.
+The approval now requires `base_image_reference` to be **exactly the verified
+child manifest** — `manifest_digest` and the digest in `base_image_reference`
+must agree. Approving the index while attesting the child would hand the
+builder a choice of platform the signature never covered.
+
+**If verification against the child reports "no matching attestations"**: stop
+and report it. That would contradict the publication model above, and the
+remedy is a re-ruling — an explicit verified chain from the signed index
+subject through the index bytes to exactly one `linux/amd64` descriptor. Do
+**not** substitute the index reference and carry on: the index statement's
+subject is the index, and accepting it silently drops the platform binding.
+
+#### The flag contract, so this cannot recur
+
+Two checks, both regression-tested:
+
+| Mode | Checks against | Needs cosign |
+|---|---|---|
+| `--verify-flag-contract` | the pinned v2.6.0 option set, embedded from that release's own reference | no — runs in CI |
+| `--verify-cosign-contract` | the **installed binary's own `--help`** | yes |
+
+The suite reintroduces `--platform` into the printed procedure and requires the
+contract check to catch it, so the guard is proven against the actual defect
+rather than only against correct input. It also drives the binary check with a
+stub whose help omits a printed flag, and requires refusal.
 
 #### Deterministic selection, and what is refused
 

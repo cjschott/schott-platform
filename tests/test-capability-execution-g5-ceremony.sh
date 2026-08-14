@@ -42,7 +42,6 @@ PREDICATE_TYPE="$(supply_pin PREDICATE_TYPE)"
 COSIGN_VERSION="$(supply_pin COSIGN_VERSION)"
 COSIGN_BINARY_SHA256="$(supply_pin COSIGN_BINARY_SHA256)"
 CHAINGUARD_IDENTITY="$(supply_pin CHAINGUARD_IDENTITY)"
-INDEX_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_INDEX_DIGEST)"
 MANIFEST_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_MANIFEST_DIGEST)"
 CONFIG_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_CONFIG_DIGEST)"
 [[ "${MANIFEST_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || {
@@ -182,12 +181,38 @@ fi
 
 # A commit whose operator package is not the reviewed one must fail the digest
 # gate, even though it is a perfectly valid ancestor of HEAD.
-root="${WORK}/wrongcommit"; build_fixture "${root}"
-OLD_COMMIT="$(git -C "${REPOSITORY}" rev-parse 'HEAD~1')"
-if run_ceremony "${root}" --verify-source --commit "${OLD_COMMIT}"; then
-  fail "an unreviewed commit passed the manifest gate"
+#
+# The commit is SEARCHED FOR, not assumed to be HEAD~1. It was HEAD~1 once and
+# the case silently stopped testing anything the moment a commit landed that
+# touched only docs and tests: HEAD~1's manifest was then identical to the pin,
+# so the gate had nothing to refuse and passed for the wrong reason.
+manifest_at() {
+  local commit="$1" file
+  git -C "${REPOSITORY}" ls-tree -r --name-only "${commit}" \
+      -- tools/__init__.py tools/capability tools/common tools/provisioning \
+    | grep '\.py$' | grep -v '__pycache__' | LC_ALL=C sort \
+    | while IFS= read -r file; do
+        printf '%s  %s\n' \
+          "$(git -C "${REPOSITORY}" cat-file blob "${commit}:${file}" | sha256sum | cut -d' ' -f1)" \
+          "${file}"
+      done | sha256sum | cut -d' ' -f1
+}
+
+OLD_COMMIT=""
+while IFS= read -r candidate; do
+  [[ "${candidate}" != "${COMMIT}" ]] || continue
+  if [[ "$(manifest_at "${candidate}")" != "${MANIFEST_DIGEST}" ]]; then
+    OLD_COMMIT="${candidate}"; break
+  fi
+done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD)
+
+if [[ -z "${OLD_COMMIT}" ]]; then
+  fail "no ancestor within 40 commits carries a different operator package; the gate is untested"
 else
-  if grep -q "manifest at ${OLD_COMMIT} is" "${root}/last-run.log"; then
+  root="${WORK}/wrongcommit"; build_fixture "${root}"
+  if run_ceremony "${root}" --verify-source --commit "${OLD_COMMIT}"; then
+    fail "an unreviewed commit passed the manifest gate"
+  elif grep -q "manifest at ${OLD_COMMIT} is" "${root}/last-run.log"; then
     pass "a valid ancestor whose operator package differs fails the pinned manifest digest"
   else
     fail "wrong commit refused for the wrong reason: $(tail -4 "${root}/last-run.log")"
@@ -362,7 +387,7 @@ else
 fi
 
 root="${WORK}/nosbom"; build_fixture "${root}"
-write_approval "${root}" "${BASE_REPOSITORY}@sha256:${INDEX_DIGEST_CANDIDATE}"
+write_approval "${root}" "${BASE_REPOSITORY}@sha256:${MANIFEST_DIGEST_CANDIDATE}"
 grep -v '^sbom_source=' "${root}/root/kyri-g5-approved-base.txt" > "${root}/tmp"
 mv "${root}/tmp" "${root}/root/kyri-g5-approved-base.txt"
 if run_ceremony "${root}" --verify-build-inputs; then
@@ -376,13 +401,24 @@ else
 fi
 
 root="${WORK}/goodbase"; build_fixture "${root}"
-write_approval "${root}" "${BASE_REPOSITORY}@sha256:${INDEX_DIGEST_CANDIDATE}"
+write_approval "${root}" "${BASE_REPOSITORY}@sha256:${MANIFEST_DIGEST_CANDIDATE}"
 if run_ceremony "${root}" --verify-build-inputs \
    && grep -q "the production base approval verifies" "${root}/last-run.log"; then
   pass "a complete approval verifies through the single supply-chain definition"
 else
   fail "a valid approval was rejected: $(tail -8 "${root}/last-run.log")"
 fi
+# The index must never be accepted as the build base: the attestation subject
+# is the child, and approving the index would hand the builder a platform the
+# signature never covered.
+root="${WORK}/indexbase"; build_fixture "${root}"
+write_approval "${root}" "${BASE_REPOSITORY}@sha256:$(supply_pin CANDIDATE_INDEX_DIGEST)"
+if run_ceremony "${root}" --verify-build-inputs; then
+  fail "the multi-arch index was accepted as the approved build base"
+else
+  pass "the index is refused as a build base: only the verified child manifest qualifies"
+fi
+
 # Delegation, not duplication: a second copy of the schema here would drift.
 if grep -q 'g5-supply-chain.sh' "${CEREMONY}" \
    && ! grep -q 'attestation_signer' "${CEREMONY}"; then

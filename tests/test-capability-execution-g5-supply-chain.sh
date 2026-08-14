@@ -241,7 +241,9 @@ else
 fi
 # The binary is referenced by absolute path only. A bare `cosign` anywhere would
 # mean PATH decides which cosign runs.
-if grep -nE '(^|[^-[:alnum:]_/])cosign +(verify|download|version)' "${SUPPLY}" \
+if sed -e '/^print_cosign_bootstrap()/,/^}/d' -e '/^print_attestation_procedure()/,/^}/d' \
+     "${SUPPLY}" \
+   | grep -nE '(^|[^-[:alnum:]_/])cosign +(verify|download|version)' \
    | grep -vE '\$\{COSIGN_PATH\}|^ *[0-9]+: *#' | grep -q .; then
   fail "the tooling invokes cosign through PATH"
 else
@@ -282,7 +284,7 @@ if run_supply --print-attestation-procedure > "${WORK}/proc.log" 2>&1; then
   missing=0
   for required in "verify-attestation" "--certificate-oidc-issuer=${CHAINGUARD_ISSUER}" \
                   "--certificate-identity=${CHAINGUARD_IDENTITY}" \
-                  "--type ${PREDICATE_TYPE}" "--platform linux/amd64"; do
+                  "--type ${PREDICATE_TYPE}"; do
     grep -qF -- "${required}" "${WORK}/proc.log" || {
       fail "the procedure omits ${required}"; missing=$((missing + 1)); }
   done
@@ -297,21 +299,134 @@ else
 fi
 
 # ===========================================================================
-# 7. index vs child manifest, and no tag in the authority path
+# 7. child-digest verification, and the flag contract that now guards it
 # ===========================================================================
-# The unexpanded literal IS the assertion: the reference must be built from the
-# pinned index constant, not from anything resolved at run time.
+# The defect this section exists for: a previous revision printed
+# `--platform linux/amd64` on verify-attestation. It reads plausibly -- `cosign
+# verify` does have that flag -- but verify-attestation does not, and the error
+# surfaced only when an operator ran the ceremony live.
+# Checked against the COMMAND lines, not the prose: the procedure explains at
+# length that this flag does not exist, and that explanation must not trip the
+# assertion that it is not emitted.
+if grep -qE '^[[:space:]]*--platform' "${WORK}/proc.log"; then
+  fail "the printed procedure still emits --platform on verify-attestation"
+else
+  pass "the printed procedure emits no --platform: verify-attestation has no such flag"
+fi
+if grep -q 'has no --platform flag' "${WORK}/proc.log"; then
+  pass "the procedure records why, so the assumption is not made a third time"
+else
+  fail "the procedure does not record that verify-attestation lacks --platform"
+fi
+
+# The procedure is verified against the CHILD manifest, whose attestation
+# subject is that manifest, so the platform binding is the signature itself.
+if grep -qF "${BASE_REPOSITORY}@sha256:${MANIFEST}" "${WORK}/proc.log"; then
+  pass "cosign is invoked against the digest-pinned linux/amd64 child manifest"
+else
+  fail "the verification reference is not the pinned child manifest"
+fi
+if grep -qF "sha256:${INDEX}" "${WORK}/proc.log" \
+   && grep -q "not what is verified" "${WORK}/proc.log"; then
+  pass "the index is recorded as context and explicitly not the verified reference"
+else
+  fail "the index/child distinction is not stated"
+fi
+if grep -q "no matching attestations" "${WORK}/proc.log"; then
+  pass "the contingency is stated: an index-only publication is a re-ruling, not a substitution"
+else
+  fail "the procedure does not say what to do if the child carries no attestation"
+fi
+
+# The flag contract, checked against the pinned option set. No binary needed.
+if run_supply --verify-flag-contract > "${WORK}/flags.log" 2>&1; then
+  pass "every flag in the printed procedure is in the pinned option set"
+else
+  fail "the printed procedure emits an unsupported flag: $(tail -4 "${WORK}/flags.log")"
+fi
+if grep -qE '^COSIGN_VERIFY_ATTESTATION_FLAGS=' "${SUPPLY}" \
+   && ! grep -E '^COSIGN_VERIFY_ATTESTATION_FLAGS=' -A 20 "${SUPPLY}" | grep -q -- '--platform'; then
+  pass "the pinned option set is recorded and does not contain --platform"
+else
+  fail "the pinned verify-attestation option set is missing or claims --platform"
+fi
+
+# THE REGRESSION ITSELF: reintroduce the exact defect and require the contract
+# check to catch it. An assertion that only passes on correct input proves
+# nothing about whether it would have caught the bug.
+regressed="${WORK}/regressed.sh"
+python3 - "${SUPPLY}" "${regressed}" <<'INJECT'
+import pathlib, sys
+# Line-based on purpose. The continuation marker is a backslash inside a shell
+# heredoc inside a test, and counting escapes through those layers is exactly
+# how an injection silently stops injecting and the regression stops regressing.
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines(keepends=True)
+for index, line in enumerate(lines):
+    if line.lstrip().startswith("--certificate-identity=${CHAINGUARD_IDENTITY}"):
+        indent = line[:len(line) - len(line.lstrip())]
+        body = line.rstrip("\n")
+        continuation = body[len(body.rstrip("\\")):]
+        lines.insert(index + 1,
+                     indent + "--platform ${CANDIDATE_PLATFORM} " + continuation + "\n")
+        break
+else:
+    raise SystemExit("the procedure shape changed; the injection point is gone")
+pathlib.Path(sys.argv[2]).write_text("".join(lines))
+INJECT
+
+# Asserted against the FILE, not against running it: if the injection ever stops
+# landing, that must fail loudly here rather than quietly turning the
+# regression into a test of nothing.
 # shellcheck disable=SC2016
-if grep -qF '${BASE_REPOSITORY}@sha256:${CANDIDATE_INDEX_DIGEST}' "${SUPPLY}"; then
-  pass "cosign is invoked against the digest-pinned multi-arch index"
+if ! grep -qF -- '--platform ${CANDIDATE_PLATFORM}' "${regressed}"; then
+  fail "the regression injection did not land in ${regressed}"
+elif bash "${regressed}" --verify-flag-contract > "${WORK}/regressed.log" 2>&1; then
+  fail "the flag contract accepted --platform: it would not have caught the live defect"
+elif ! grep -q "does not accept" "${WORK}/regressed.log"; then
+  fail "the injected defect was refused for the wrong reason: $(tail -3 "${WORK}/regressed.log")"
 else
-  fail "the attestation reference is not the pinned index digest"
+  pass "reintroducing --platform is caught by the flag contract, naming the flag"
 fi
-if grep -q 'the statement subject must be this' "${WORK}/proc.log"; then
-  pass "the child manifest is bound by requiring it as the statement subject"
+
+# And against a BINARY'S OWN HELP, which is the check that does not depend on a
+# document being right. Driven with a stub so it runs with no cosign installed.
+stub_root="${WORK}/stub"; mkdir -p "${stub_root}$(dirname "${COSIGN_PATH_ABS}")"
+cat > "${stub_root}${COSIGN_PATH_ABS}" <<'STUB'
+#!/usr/bin/env bash
+# A stand-in for the pinned binary, emitting a help text shaped like cosign
+# 2.6.0's: every flag the procedure uses, and deliberately no --platform.
+printf 'Options:
+'
+for flag in --type --certificate-oidc-issuer --certificate-identity --output             --check-claims --offline --rekor-url --key --help; do
+  printf '      %s string
+' "${flag}"
+done
+STUB
+chmod 0755 "${stub_root}${COSIGN_PATH_ABS}"
+if run_supply --fixture "${stub_root}" --verify-cosign-contract > "${WORK}/stub.log" 2>&1; then
+  grep -q "verify-attestation has no --platform flag" "${WORK}/stub.log" \
+    && pass "the binary contract check confirms against help that --platform is absent" \
+    || fail "the binary contract check did not report the --platform finding"
 else
-  fail "the index-to-child binding is not stated"
+  fail "the binary contract check failed against a conforming stub: $(tail -6 "${WORK}/stub.log")"
 fi
+
+# A binary that does NOT accept a flag the procedure prints must be refused.
+cat > "${stub_root}${COSIGN_PATH_ABS}" <<'STUB'
+#!/usr/bin/env bash
+printf 'Options:
+      --help
+'
+STUB
+chmod 0755 "${stub_root}${COSIGN_PATH_ABS}"
+if run_supply --fixture "${stub_root}" --verify-cosign-contract > "${WORK}/stub2.log" 2>&1; then
+  fail "a binary whose help lacks the printed flags was accepted"
+else
+  grep -q "does not list" "${WORK}/stub2.log" \
+    && pass "a binary that does not accept a printed flag is refused, naming the flag" \
+    || fail "the mismatched binary was refused for the wrong reason"
+fi
+
 # The discovery tag may be NAMED as discovery; it must never be the reference
 # cosign or the build is pointed at.
 if grep -nE '(verify-attestation|--build-arg BASE_IMAGE)' "${SUPPLY}" | grep -q ':latest'; then
@@ -389,7 +504,7 @@ fi
 appr="${WORK}/appr"; mkdir -p "${appr}/root"
 write_approval() {
   cat > "${appr}/root/kyri-g5-approved-base.txt" <<EOF
-base_image_reference=${1:-${BASE_REPOSITORY}@sha256:${INDEX}}
+base_image_reference=${1:-${BASE_REPOSITORY}@sha256:${MANIFEST}}
 platform=linux/amd64
 manifest_digest=sha256:${MANIFEST}
 config_digest=sha256:${CONFIG}
@@ -415,17 +530,17 @@ run_supply --fixture "${appr}" --verify-approval > "${appr}/tag.log" 2>&1 \
        && pass "a mutable tag can never be the authoritative base reference" \
        || fail "a tagged reference was refused for the wrong reason"; }
 
-write_approval "${BASE_REPOSITORY}@sha256:${INDEX}" "2.2.0"
+write_approval "${BASE_REPOSITORY}@sha256:${MANIFEST}" "2.2.0"
 run_supply --fixture "${appr}" --verify-approval >/dev/null 2>&1 \
   && fail "an approval naming an unpinned cosign version was accepted" \
   || pass "an approval whose cosign_version is not the pinned one is refused"
 
-write_approval "${BASE_REPOSITORY}@sha256:${INDEX}" "${COSIGN_VERSION}" "https://slsa.dev/provenance/v1"
+write_approval "${BASE_REPOSITORY}@sha256:${MANIFEST}" "${COSIGN_VERSION}" "https://slsa.dev/provenance/v1"
 run_supply --fixture "${appr}" --verify-approval >/dev/null 2>&1 \
   && fail "an approval naming the wrong predicate type was accepted" \
   || pass "an approval whose predicate type is not SPDX is refused"
 
-write_approval "${BASE_REPOSITORY}@sha256:${INDEX}" "${COSIGN_VERSION}" "${PREDICATE_TYPE}" "https://github.com/attacker/x@refs/heads/main"
+write_approval "${BASE_REPOSITORY}@sha256:${MANIFEST}" "${COSIGN_VERSION}" "${PREDICATE_TYPE}" "https://github.com/attacker/x@refs/heads/main"
 run_supply --fixture "${appr}" --verify-approval >/dev/null 2>&1 \
   && fail "an approval naming the wrong signer was accepted" \
   || pass "an approval whose attestation_signer is not Chainguard is refused"

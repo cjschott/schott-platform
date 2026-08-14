@@ -57,6 +57,10 @@ set -Eeuo pipefail
 #   --print-cosign-bootstrap        the operator's download/verify/install steps
 #   --verify-cosign                 the installed binary is the pinned one
 #   --print-attestation-procedure   retrieval, verification, byte extraction
+#   --verify-flag-contract          the printed flags are in the pinned option
+#                                   set (no binary needed; runs in CI)
+#   --verify-cosign-contract        the printed flags are accepted by the
+#                                   INSTALLED binary's own help
 #   --extract-sbom FILE             deterministic selection + committed digest
 #   --verify-candidate              the candidate evidence record
 #   --verify-approval               the production approval file
@@ -84,6 +88,31 @@ COSIGN_BINARY_SHA256="ea5c65f99425d6cfbb5c4b5de5dac035f14d09131c1a0ea7c7fc32eab3
 # The checksums file itself, so a swapped checksums file is caught before it is
 # ever used to bless a binary.
 COSIGN_CHECKSUMS_SHA256="423c15cb363bf4fd62bedc7a59d4130d84286e4532b99a0f95bfd4b0195b01c8"
+
+# The complete option set of `cosign verify-attestation` at the pinned version,
+# from that release's own reference documentation. It is here so the printed
+# procedure can be checked against it mechanically.
+#
+# WHY THIS EXISTS: a previous revision printed `--platform linux/amd64` on this
+# subcommand. It reads plausibly -- `cosign verify` does have --platform, and
+# Chainguard documents a cosign floor for "platform attestation selection" --
+# but verify-attestation does not, and the error surfaced only when an operator
+# ran it live. A CLI contract asserted from prose is not a verified contract.
+COSIGN_VERIFY_ATTESTATION_FLAGS="\
+--allow-http-registry --allow-insecure-registry --attachment-tag-prefix \
+--ca-intermediates --ca-roots --certificate --certificate-chain \
+--certificate-github-workflow-name --certificate-github-workflow-ref \
+--certificate-github-workflow-repository --certificate-github-workflow-sha \
+--certificate-github-workflow-trigger --certificate-identity \
+--certificate-identity-regexp --certificate-oidc-issuer \
+--certificate-oidc-issuer-regexp --check-claims --experimental-oci11 --help \
+--insecure-ignore-sct --insecure-ignore-tlog --k8s-keychain --key \
+--local-image --max-workers --new-bundle-format --offline --output --policy \
+--private-infrastructure --registry-cacert --registry-client-cert \
+--registry-client-key --registry-password --registry-server-name \
+--registry-token --registry-username --rekor-url --sct \
+--signature-digest-algorithm --sk --slot --timestamp-certificate-chain \
+--trusted-root --type --use-signed-timestamps"
 
 # Root-owned operator tooling. Never PATH: PATH is coordinator-influenced, and
 # "whatever cosign resolves to today" is not an identity.
@@ -122,7 +151,7 @@ PAYLOAD_OUT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --print-cosign-bootstrap|--verify-cosign|--print-attestation-procedure|\
---verify-candidate|--verify-approval)
+--verify-flag-contract|--verify-cosign-contract|--verify-candidate|--verify-approval)
       [[ -z "${MODE}" ]] || { printf 'ERROR one mode only\n' >&2; exit 2; }
       MODE="$1"; shift ;;
     --extract-sbom)
@@ -236,43 +265,63 @@ verify_cosign() {
 # --- attestation procedure --------------------------------------------------
 print_attestation_procedure() {
   cat <<PROC
-Retrieval and verification are two commands, and neither writes an approval.
+Retrieval and verification are one command, and it writes no approval.
 
-INDEX OR CHILD MANIFEST? Cosign is invoked against the multi-arch INDEX with
---platform, because that is the reference whose platform selection cosign
-implements. The child is then bound by requiring the signed statement's
-subject digest to equal the platform manifest below. Passing the child digest
-directly would make --platform meaningless and would drop the binding this
-ceremony actually wants.
+INDEX OR CHILD MANIFEST? **The child.** Two facts decide it, and the first was
+got wrong once already:
+
+  * \`cosign verify-attestation\` has no --platform flag. It exists on
+    \`cosign verify\`, not here. The pinned ${COSIGN_VERSION} option list is
+    embedded in this script and --verify-cosign-contract checks the printed
+    command against the binary's own help, so this cannot be assumed again.
+  * Chainguard publishes an SBOM for the index AND a standalone
+    single-architecture SBOM for each variant. The variant attestation is
+    attached to the variant's own digest, so naming the child retrieves the
+    linux/amd64 SBOM directly.
+
+Naming the child is therefore not a workaround for a missing flag; it is the
+stronger option. The signed statement's subject IS the child manifest digest,
+so the platform binding is the signature itself rather than a chain of
+inference from an index descriptor.
 
   DISCOVERY ${CANDIDATE_DISCOVERY_REFERENCE}   <- discovery only, never authority
-  INDEX     ${BASE_REPOSITORY}@sha256:${CANDIDATE_INDEX_DIGEST}
+  INDEX     sha256:${CANDIDATE_INDEX_DIGEST}   <- context; not what is verified
   PLATFORM  ${CANDIDATE_PLATFORM}
-  CHILD     sha256:${CANDIDATE_MANIFEST_DIGEST}   <- the statement subject must be this
+  CHILD     ${BASE_REPOSITORY}@sha256:${CANDIDATE_MANIFEST_DIGEST}   <- verified, and the build's BASE_IMAGE
   CONFIG    sha256:${CANDIDATE_CONFIG_DIGEST}
 
-  # 1. VERIFY the attestation cryptographically. This is the step that decides
-  #    whether the bytes are Chainguard's; downloading alone decides nothing.
+  # 1. VERIFY cryptographically. \`download attestation\` checks no signature
+  #    and is not an alternative to this.
   ${COSIGN_PATH} verify-attestation \\
       --type ${PREDICATE_TYPE} \\
       --certificate-oidc-issuer=${CHAINGUARD_ISSUER} \\
       --certificate-identity=${CHAINGUARD_IDENTITY} \\
-      --platform ${CANDIDATE_PLATFORM} \\
-      ${BASE_REPOSITORY}@sha256:${CANDIDATE_INDEX_DIGEST} \\
+      ${BASE_REPOSITORY}@sha256:${CANDIDATE_MANIFEST_DIGEST} \\
       > /root/kyri-g5-attestation-verified.jsonl
 
-  # 2. Extract the committed bytes and their digest, deterministically.
+  # 2. Extract the committed bytes and their digest, and require the signed
+  #    subject to be the child manifest. Step 1 proves who signed it; this
+  #    proves what it is about.
   sudo bash ${REPOSITORY}/provisioning/execution/g5-supply-chain.sh --extract-sbom \\
       /root/kyri-g5-attestation-verified.jsonl \\
       --manifest-digest ${CANDIDATE_MANIFEST_DIGEST}
 
   # 3. DETERMINISM, mandatory before approval. Repeat step 1 into a second
   #    file and require the committed digest to be identical.
-  ${COSIGN_PATH} verify-attestation ... > /root/kyri-g5-attestation-second.jsonl
+  ${COSIGN_PATH} verify-attestation ... \\
+      > /root/kyri-g5-attestation-second.jsonl
   sudo bash ${REPOSITORY}/provisioning/execution/g5-supply-chain.sh --extract-sbom \\
       /root/kyri-g5-attestation-second.jsonl \\
       --manifest-digest ${CANDIDATE_MANIFEST_DIGEST}
   # the two sbom_sha256 values must match, or the candidate is not approvable
+
+IF STEP 1 REPORTS "no matching attestations": stop and report it. That would
+mean this candidate publishes the SPDX only against the index, contradicting
+the model above, and the remedy is a re-ruling -- an explicit verified chain
+from the signed index subject through the index bytes to exactly one
+linux/amd64 descriptor. Do not substitute the index reference here and carry on:
+the index statement's subject is the index, and accepting it would silently
+drop the platform binding this ceremony exists to establish.
 
 A note on discovery: the OCI /referrers endpoint returning count 0 for the
 child manifest does NOT indicate the absence of an attestation. Cosign's
@@ -392,6 +441,57 @@ print("      sbom_sha256:          %s" % hashlib.sha256(payload).hexdigest())
   note "  'decoded DSSE payload, in-toto Statement v0.1, predicateType ${PREDICATE_TYPE}'"
 }
 
+# Every flag the printed procedure emits for verify-attestation. Extracted from
+# the procedure itself rather than restated, so the two cannot drift.
+procedure_flags() {
+  print_attestation_procedure \
+    | sed -n '/verify-attestation \\/,/^$/p' \
+    | grep -oE '(^|[[:space:]])--[a-z0-9-]+' \
+    | tr -d ' ' | LC_ALL=C sort -u
+}
+
+# Check the printed procedure against the PINNED option set. This runs
+# everywhere, including CI, and needs no binary.
+verify_flag_contract() {
+  local flag unsupported=0
+  while IFS= read -r flag; do
+    [[ -n "${flag}" ]] || continue
+    case " ${COSIGN_VERIFY_ATTESTATION_FLAGS} " in
+      *" ${flag} "*) ;;
+      *) bad "the printed procedure emits ${flag}, which cosign ${COSIGN_VERSION} verify-attestation does not accept"
+         unsupported=$((unsupported + 1)) ;;
+    esac
+  done < <(procedure_flags)
+  (( unsupported == 0 )) \
+    && ok "every flag in the printed procedure is in the pinned ${COSIGN_VERSION} option set"
+}
+
+# Check the printed procedure against the INSTALLED BINARY'S OWN HELP. This is
+# the check that would have caught --platform without an operator discovering it
+# during a live ceremony, and it consults the tool rather than a document.
+verify_cosign_contract() {
+  verify_flag_contract
+  [[ -x "${COSIGN_PATH}" ]] \
+    || halt "${COSIGN_PATH} is absent or not executable; run --print-cosign-bootstrap first"
+  local help flag missing=0
+  help="$("${COSIGN_PATH}" verify-attestation --help 2>&1)" \
+    || halt "${COSIGN_PATH} verify-attestation --help failed"
+  while IFS= read -r flag; do
+    [[ -n "${flag}" ]] || continue
+    grep -qE "(^|[[:space:]])${flag}([[:space:]]|=|,|$)" <<<"${help}" || {
+      bad "${COSIGN_PATH} verify-attestation --help does not list ${flag}"
+      missing=$((missing + 1)); }
+  done < <(procedure_flags)
+  # The specific false assumption, asserted directly so the regression has a name.
+  if grep -qE '(^|[[:space:]])--platform([[:space:]]|=|,|$)' <<<"${help}"; then
+    note "this binary's verify-attestation DOES list --platform; the pinned option set is stale"
+  else
+    ok "confirmed against the binary: verify-attestation has no --platform flag"
+  fi
+  (( missing == 0 )) \
+    && ok "every printed flag is accepted by ${COSIGN_PATH} verify-attestation"
+}
+
 # --- candidate evidence -----------------------------------------------------
 CANDIDATE_FIELDS=(
   discovery_reference index_digest platform manifest_digest config_digest
@@ -456,8 +556,16 @@ verify_approval() {
   [[ "${reference}" != *:latest* ]] || bad "base_image_reference names a tag"
   [[ "$(field_of platform "${BASE_APPROVAL}")" == "${CANDIDATE_PLATFORM}" ]] \
     || bad "platform is not ${CANDIDATE_PLATFORM}"
-  [[ "$(field_of manifest_digest "${BASE_APPROVAL}")" =~ ^sha256:[0-9a-f]{64}$ ]] \
+  local manifest
+  manifest="$(field_of manifest_digest "${BASE_APPROVAL}")"
+  [[ "${manifest}" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || bad "manifest_digest is not a sha256: digest"
+  # The build's base and the verified attestation subject must be the same
+  # object. Approving the index reference while attesting the child would give
+  # the builder a choice of platform that the signature never covered -- which
+  # is the hole the --platform defect would have left open had the flag existed.
+  [[ "${reference}" == "${BASE_REPOSITORY}@${manifest}" ]] \
+    || bad "base_image_reference ${reference} is not the verified platform manifest ${manifest}"
   [[ "$(field_of config_digest "${BASE_APPROVAL}")" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || bad "config_digest is not a sha256: digest"
   [[ "$(field_of sbom_sha256 "${BASE_APPROVAL}")" =~ ^[0-9a-f]{64}$ ]] \
@@ -485,6 +593,8 @@ case "${MODE}" in
 --print-cosign-bootstrap)      print_cosign_bootstrap ;;
 --verify-cosign)               verify_cosign ;;
 --print-attestation-procedure) print_attestation_procedure ;;
+--verify-flag-contract)        verify_flag_contract ;;
+--verify-cosign-contract)      verify_cosign_contract ;;
 --extract-sbom)                extract_sbom ;;
 --verify-candidate)            verify_candidate ;;
 --verify-approval)             verify_approval ;;
