@@ -1038,6 +1038,100 @@ there. The store is never required to be empty.
 the interpreter, then stop for review. Authority bootstrap, genesis, and
 admission are separate later phases and none runs from the build.
 
+#### The authority mutation gate — opened 2026-08-14, on evidence
+
+Live operator progression reached the intentionally disabled mutation gate
+**after** the production image was built and inspected:
+
+```
+MUTATION PHASE bootstrap-authority IS NOT ELIGIBLE.
+An approved base exists, but the mutation phases are not enabled in this
+build. They are prepared and reviewed; enabling them is a separate reviewed
+change once the production image has been built and inspected.
+```
+
+That refusal was correct and deliberate — it is recorded here as a designed
+stop, not an accident. It was also **not something an operator could satisfy by
+doing the work**: it was a build-time constant, so the prerequisite occurring
+changed nothing. It is replaced by eligibility **derived from the ceremony's own
+ruled evidence**.
+
+**There is no flag.** No `ENABLE_MUTATIONS`, no environment variable, no
+`--force`, no magic file, no boolean constant. `require_mutation_eligible`
+requires all of:
+
+1. an approved base at `/root/kyri-g5-approved-base.txt`;
+2. the ruled **provisioning-evidence manifest** at
+   `/root/kyri-g5-provisioning-evidence.json`, parsed through the ruled module
+   (design §27 / Pass 2C — fifteen closed fields, a missing one a refusal, an
+   unknown one a refusal), agreeing with the approval on `base_image_reference`
+   and `sbom_sha256`;
+3. the built image satisfying the ruled contract — `linux/amd64`, default user
+   `65532:65532`, **no** entrypoint, **no** command, working directory `/`;
+4. the execution identity's store resolving the reviewed tag to **the same
+   `.Id` the evidence names**.
+
+**No new evidence schema was invented.** The manifest schema is already ruled;
+only its storage contract (`root:root 0400`, outside anything the coordinator
+can reach) is specified here, matching the approval and candidate files. The
+image's default user, entrypoint, command, and working directory are
+deliberately **not** evidence fields — §27 rules the image's own user
+"metadata", because T12 launches with an explicit `--user` and the profile
+verification compares what Podman reported. They are checked as an image
+**contract**, never stored as authority.
+
+**The identity is Podman `.Id`, bare 64 lowercase hex.** The local RepoDigest
+(`sha256:500bbd7d…`) is *not* the implementation identity and is recorded as
+none: it is a registry-shaped digest over a manifest this host happened to
+write, and admitting it would bind authority to a name rather than an artefact.
+A `sha256:`-prefixed value, a tag, and an uppercase digest are each refused.
+
+**Eligibility grants no authority.** It means only that the next reviewed
+mutation phase may be run by an operator. The image is still admitted by
+nothing, no `CIMP` exists, and execution remains closed.
+
+#### The three phases, and what each may do
+
+| Phase | Creates | Must not |
+|---|---|---|
+| `--bootstrap-authority` | the two roots (`2750` / `0700`), `staging/` `2750`, both counters at zero `0600` | allocate a CIMP · publish an implementation · advance a generation · write sudoers · invoke transition or worker |
+| `--genesis` | `CGEN-000000000000` with an **empty** authority set | consume either counter · admit anything · grant authority |
+| `--admit` | one `CIMP`, its successor `CGEN`, the advanced pointer | run without three agreeing observations · create sudoers · enable execution |
+
+Each ends in an explicit **STOP** for operator review. Bootstrap does not run
+genesis; genesis does not run admission — asserted structurally.
+
+**Admission's three observations come from three places**: `--image-id`
+transcribed by the operator, the `oci_image_id` the evidence records, and what
+the store resolves the reviewed tag to. Copying one reading into three slots
+satisfies the comparison and proves nothing, which is the single way this check
+can be defeated.
+
+**An admitted implementation is authority to be *selected* by a future
+execution ceremony.** It is not permission for the coordinator to cross root:
+no sudoers exists, the transition is uncallable, and **G6 and G7 remain
+closed**.
+
+#### Re-bootstrap after every source correction
+
+`/root/kyri-g5-bootstrap/g5-ceremony.sh` is a copy and does **not** pick up
+source changes. After this commit it is stale. Re-bootstrap before the next
+phase:
+
+```bash
+# as the coordinator — from the reviewed git OBJECT, not the working tree
+git -C /opt/schott-platform cat-file blob \
+    <REVIEWED_COMMIT>:provisioning/execution/g5-ceremony.sh > /tmp/g5-ceremony.sh
+
+# as root — into 0700 root-owned space, then print the digest
+sudo install -d -m 0700 -o root -g root /root/kyri-g5-bootstrap
+sudo install -m 0500 -o root -g root /tmp/g5-ceremony.sh \
+    /root/kyri-g5-bootstrap/g5-ceremony.sh
+sudo sha256sum /root/kyri-g5-bootstrap/g5-ceremony.sh   # compare by eye, then run
+```
+
+Root never runs git inside the coordinator-owned checkout.
+
 #### Candidate evidence, and approval
 
 Two files, and the separation between them is the point.

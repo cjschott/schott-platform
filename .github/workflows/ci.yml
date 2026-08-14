@@ -303,6 +303,11 @@ jobs:
       - name: Capability execution G5 build context tests
         run: bash tests/test-capability-execution-g5-build-context.sh
 
+      # Mutation eligibility derived from ruled evidence, and the
+      # bootstrap/genesis/admission chain over fixture namespaces.
+      - name: Capability execution G5 authority tests
+        run: bash tests/test-capability-execution-g5-authority.sh
+
       # Worker driven through a fake backend: no Podman, no subprocess, no
       # container. Real execution is gate G6.
       - name: Capability execution lifecycle tests

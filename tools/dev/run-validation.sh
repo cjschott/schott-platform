@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=55
+  TOTAL_STEPS=56
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=70
+  TOTAL_STEPS=71
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -296,6 +296,13 @@ run "Capability execution G5 supply chain" \
 # built, no base pulled, and no container runtime invoked.
 run "Capability execution G5 build context" \
   bash tests/test-capability-execution-g5-build-context.sh
+
+# ENG-0005 G5 authority phases. Mutation eligibility derived from the ruled
+# provisioning evidence, and the bootstrap/genesis/admission chain driven
+# against fixture namespaces with an injected image observation. Touches no
+# production namespace, invokes no Podman, admits nothing real.
+run "Capability execution G5 authority" \
+  bash tests/test-capability-execution-g5-authority.sh
 
 # ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
 # no subprocess, no container, no Podman. Real execution is gate G6.

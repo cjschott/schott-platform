@@ -416,9 +416,18 @@ grep -q 'g5-build-context' "${REPOSITORY}/provisioning/execution/README.md" \
   && pass "the runbook documents the build context" \
   || fail "the runbook does not document the build context"
 
-[[ -e "${BUILD_CONTEXT_ABS}" ]] \
-  && fail "a production build context exists on this host: ${BUILD_CONTEXT_ABS}" \
-  || pass "no production build context exists on this host"
+# The operator has since materialised the production context, which is the
+# ceremony working. What this suite owes is that IT did not create one, and the
+# production-path snapshot below is what proves that. If a context exists it
+# must be the ruled shape -- readable by the execution group, writable by none.
+if [[ -e "${BUILD_CONTEXT_ABS}" ]]; then
+  observed="$(stat -c '%U:%G %a' "${BUILD_CONTEXT_ABS}")"
+  [[ "${observed}" == "root:${EXECUTION_GROUP} ${DIR_MODE}" ]] \
+    && pass "the production build context exists and is exactly root:${EXECUTION_GROUP} 0${DIR_MODE}" \
+    || fail "the production build context is ${observed}, expected root:${EXECUTION_GROUP} 0${DIR_MODE}"
+else
+  pass "no production build context exists on this host"
+fi
 for absent in /var/lib/kyri/implementation-authority /etc/sudoers.d/kyri-exec; do
   [[ -e "${absent}" ]] && fail "G5 state exists on this host: ${absent}"
 done

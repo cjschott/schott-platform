@@ -430,23 +430,25 @@ fi
 # ===========================================================================
 # 6. mutation phases refuse, and nothing chains
 # ===========================================================================
+# Eligibility is derived from ruled evidence, and the authority suite owns the
+# detail of that derivation. What this suite requires is the invariant: with no
+# evidence in the fixture, no mutation phase proceeds and none creates anything.
 for phase in bootstrap-authority genesis admit; do
   root="${WORK}/mut-${phase}"; build_fixture "${root}"
-  if run_ceremony "${root}" "--${phase}" --commit "${COMMIT}"; then
-    fail "--${phase} ran"
-  else
-    if grep -q "MUTATION PHASE .* IS NOT ELIGIBLE" "${root}/last-run.log" \
-       && grep -q "Nothing was created, built, allocated, or admitted" "${root}/last-run.log"; then
-      pass "--${phase} refuses and states that nothing was mutated"
-    else
-      fail "--${phase} refused for the wrong reason: $(tail -6 "${root}/last-run.log")"
-    fi
-  fi
+  run_ceremony "${root}" "--${phase}" --commit "${COMMIT}" \
+    && fail "--${phase} ran with no approval and no evidence"
   for created in var/lib/kyri/implementation-authority var/lib/kyri/implementation-authority-control; do
     [[ -e "${root}/${created}" ]] && fail "--${phase} created ${created}"
   done
 done
-pass "no mutation phase created an authority root"
+pass "no mutation phase proceeds or creates an authority root while ineligible"
+# The gate must be evidence-derived, never a build-time constant an operator
+# cannot satisfy by doing the work.
+if grep -q 'mutation phases are not enabled in this build' "${CEREMONY}"; then
+  fail "the mutation gate is a build-time refusal"
+else
+  pass "the mutation gate is not a build-time refusal"
+fi
 
 # A verification phase must never run a mutation phase.
 if grep -qE '^--verify[a-z-]*\).*(bootstrap_authority|run_genesis|run_admit)' "${CEREMONY}"; then

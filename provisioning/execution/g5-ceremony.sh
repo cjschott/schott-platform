@@ -127,6 +127,25 @@ SNAPSHOT_ROOT="/run/kyri/execution-material"
 BUILD_CONTEXT_DIR_MODE="550"
 BUILD_TAG="kyri-capability-execution:g5"
 
+# The ruled post-build record. The SCHEMA is design §27 / Pass 2C: fifteen
+# closed fields, a missing one a refusal and an unknown one a refusal, with its
+# SHA-256 becoming provisioning_evidence_digest in the admission record. Only
+# the STORAGE contract is specified here, matching the approval and candidate
+# files -- root-owned, read-only, outside anything the coordinator can reach.
+#
+# The schema is NOT extended. The image's default user, entrypoint, command and
+# working directory are deliberately not evidence fields: §27 rules the image's
+# own user "metadata", because T12 launches with an explicit --user and the
+# profile verification compares what Podman reported. They are checked below as
+# an image CONTRACT, never stored as authority.
+PRODUCTION_EVIDENCE="/root/kyri-g5-provisioning-evidence.json"
+
+# The built image's ruled shape. Constants, not evidence.
+IMAGE_EXPECT_OS="linux"
+IMAGE_EXPECT_ARCHITECTURE="amd64"
+IMAGE_EXPECT_USER="65532:65532"
+IMAGE_EXPECT_WORKINGDIR="/"
+
 # Every member of the context, and nothing else. Extra or missing refuses.
 #
 # ONE FILE, deliberately. The Containerfile carries no COPY and no ADD, so
@@ -147,18 +166,25 @@ CONTAINERFILE="provisioning/image/Containerfile"
 MODE=""
 FIXTURE=""
 COMMIT=""
+IMAGE_ID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bootstrap-instructions|--verify-host|--verify-source|--verify-build-inputs|\
 --verify-authority-prerequisites|--verify-materialisation|--print-plan|\
 --verify-build-context|--materialise-build-context|\
 --verify-materialised-build-context|--print-production-build|\
+--verify-production-image|--verify-production-evidence|\
 --bootstrap-authority|--genesis|--admit)
       [[ -z "${MODE}" ]] || { printf 'ERROR one mode only\n' >&2; exit 2; }
       MODE="$1"; shift ;;
     --fixture)
       FIXTURE="${2:-}"; shift 2
       [[ -n "${FIXTURE}" && "${FIXTURE}" != "/" ]] || { printf 'ERROR --fixture needs a directory\n' >&2; exit 2; }
+      ;;
+    --image-id)
+      IMAGE_ID="${2:-}"; shift 2
+      [[ "${IMAGE_ID}" =~ ^[0-9a-f]{64}$ ]] \
+        || { printf 'ERROR --image-id needs a bare 64-character lowercase hex image ID\n' >&2; exit 2; }
       ;;
     --commit)
       COMMIT="${2:-}"; shift 2
@@ -178,6 +204,7 @@ if [[ -n "${FIXTURE}" ]]; then
   SUDOERS="${FIXTURE}${SUDOERS}"
   CEREMONY_ROOT="${FIXTURE}${CEREMONY_ROOT}"
   BASE_APPROVAL="${FIXTURE}${BASE_APPROVAL}"
+  PRODUCTION_EVIDENCE="${FIXTURE}${PRODUCTION_EVIDENCE}"
   BUILD_CONTEXT="${FIXTURE}${BUILD_CONTEXT}"
   BUILD_CONTEXT_STAGING="${FIXTURE}${BUILD_CONTEXT_STAGING}"
   BUILD_CONTEXT_PARENT="${FIXTURE}${BUILD_CONTEXT_PARENT}"
@@ -185,6 +212,8 @@ if [[ -n "${FIXTURE}" ]]; then
 fi
 
 FAILURES=0
+OBSERVED_IMAGE_ID=""
+EVIDENCE_IMAGE_ID=""
 ok()    { printf 'ok       %s\n' "$1"; }
 note()  { printf 'note     %s\n' "$1"; }
 bad()   { printf 'FAIL     %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
@@ -580,12 +609,21 @@ BUILD
 
 # --- read-only phases ------------------------------------------------------
 verify_host() {
-  local installed
+  local expect_authority="${1:-absent}" installed
   installed="$(find "${LIBRARY_ROOT}" -type f -name '*.py' 2>/dev/null | wc -l)"
   [[ "${installed}" -eq 44 ]] || bad "the installed library holds ${installed} .py files, expected 44"
   [[ ! -e "${SUDOERS}" ]] || bad "${SUDOERS} exists: G3 is not closed and G5 must not depend on it"
-  [[ ! -e "${AUTHORITY_ROOT}" ]] || bad "${AUTHORITY_ROOT} already exists"
-  [[ ! -e "${CONTROL_ROOT}" ]] || bad "${CONTROL_ROOT} already exists"
+  # The authority namespace is absent at the STARTING position and present once
+  # bootstrap has run. Genesis and admission legitimately follow bootstrap, so
+  # which of the two is required is the caller's to say -- asserting "absent"
+  # unconditionally would make every phase after the first refuse itself.
+  if [[ "${expect_authority}" == "absent" ]]; then
+    [[ ! -e "${AUTHORITY_ROOT}" ]] || bad "${AUTHORITY_ROOT} already exists"
+    [[ ! -e "${CONTROL_ROOT}" ]] || bad "${CONTROL_ROOT} already exists"
+  else
+    [[ -d "${AUTHORITY_ROOT}" ]] || bad "${AUTHORITY_ROOT} does not exist; run --bootstrap-authority first"
+    [[ -d "${CONTROL_ROOT}" ]] || bad "${CONTROL_ROOT} does not exist; run --bootstrap-authority first"
+  fi
   if [[ -z "${FIXTURE}" ]]; then
     [[ "$(stat -c '%U:%G %a' "${KYRI_STATE}" 2>/dev/null)" == "root:root 711" ]] \
       || bad "${KYRI_STATE} is not root:root 0711"
@@ -593,7 +631,13 @@ verify_host() {
   local unit
   unit="$(grep -rl 'kyri-exec' /etc/systemd/system /lib/systemd/system /etc/cron.d /etc/crontab 2>/dev/null || true)"
   [[ -z "${unit}" || -n "${FIXTURE}" ]] || bad "a systemd or cron entry references kyri-exec"
-  (( FAILURES == 0 )) && ok "the host is at the ruled G5 starting position: generation 6, no authority state, gates closed"
+  if (( FAILURES == 0 )); then
+    if [[ "${expect_authority}" == "absent" ]]; then
+      ok "the host is at the ruled G5 starting position: generation 6, no authority state, gates closed"
+    else
+      ok "generation 6 exact, gates closed, and the authority namespace exists as bootstrap left it"
+    fi
+  fi
 }
 
 verify_source() {
@@ -838,6 +882,363 @@ runs.
 BOOT
 }
 
+# --- the built production image --------------------------------------------
+#
+# Read-only. Inspects what was built; stores nothing and admits nothing.
+#
+# The identity is Podman `.Id`, bare 64 lowercase hex. The local RepoDigest is
+# NOT the implementation identity and never becomes one: it is a registry-shaped
+# digest over a manifest this host happens to have written, and admitting it
+# would bind authority to a name rather than to the artefact.
+image_inspect_fields() {
+  # A fixture supplies observations because there is no Podman store under a
+  # fixture root. Production always asks the real store, as the execution
+  # identity, because that is whose store the image must be in.
+  if [[ -n "${FIXTURE}" ]]; then
+    [[ -f "${FIXTURE}/fixture/image-inspect" ]] || return 1
+    cat "${FIXTURE}/fixture/image-inspect"
+    return 0
+  fi
+  /usr/sbin/runuser -u "${EXECUTION_USER}" -- /usr/bin/env \
+      HOME="${EXECUTION_HOME}" XDG_RUNTIME_DIR="${EXECUTION_RUNTIME_DIR}" \
+      podman image inspect --format \
+'Id={{.Id}}
+Os={{.Os}}
+Architecture={{.Architecture}}
+User={{.Config.User}}
+Entrypoint={{.Config.Entrypoint}}
+Cmd={{.Config.Cmd}}
+WorkingDir={{.Config.WorkingDir}}' "${BUILD_TAG}" 2>/dev/null
+}
+
+inspect_field() { sed -n "s/^$1=//p" <<<"$2" | head -1; }
+
+# Podman renders an unset Entrypoint or Cmd as an empty Go slice or a nil.
+empty_config_list() {
+  case "$1" in ""|"[]"|"<nil>"|"null") return 0 ;; *) return 1 ;; esac
+}
+
+verify_production_image() {
+  local fields
+  if ! fields="$(image_inspect_fields)" || [[ -z "${fields}" ]]; then
+    bad "no image resolves as ${BUILD_TAG} in ${EXECUTION_USER}'s store"
+    return
+  fi
+  local id os architecture user entrypoint cmd workdir
+  id="$(inspect_field Id "${fields}")"
+  os="$(inspect_field Os "${fields}")"
+  architecture="$(inspect_field Architecture "${fields}")"
+  user="$(inspect_field User "${fields}")"
+  entrypoint="$(inspect_field Entrypoint "${fields}")"
+  cmd="$(inspect_field Cmd "${fields}")"
+  workdir="$(inspect_field WorkingDir "${fields}")"
+
+  # The identity, in the one governed form. A sha256: prefix is the shape every
+  # manifest digest arrives in, so it is refused rather than stripped.
+  [[ "${id}" =~ ^[0-9a-f]{64}$ ]] \
+    || bad "the image identity ${id:-absent} is not a bare 64-character lowercase hex .Id"
+  if [[ -n "${IMAGE_ID}" && "${id}" != "${IMAGE_ID}" ]]; then
+    bad "the store resolves ${BUILD_TAG} to ${id}, not the supplied ${IMAGE_ID}"
+  fi
+  [[ "${os}" == "${IMAGE_EXPECT_OS}" ]] \
+    || bad "the image is os ${os:-absent}, expected ${IMAGE_EXPECT_OS}"
+  [[ "${architecture}" == "${IMAGE_EXPECT_ARCHITECTURE}" ]] \
+    || bad "the image is architecture ${architecture:-absent}, expected ${IMAGE_EXPECT_ARCHITECTURE}"
+  [[ "${user}" == "${IMAGE_EXPECT_USER}" ]] \
+    || bad "the image default user is ${user:-absent}, expected ${IMAGE_EXPECT_USER}"
+  empty_config_list "${entrypoint}" \
+    || bad "the image carries an entrypoint (${entrypoint}); the governed command is passed at create"
+  empty_config_list "${cmd}" \
+    || bad "the image carries a command (${cmd}); the governed command is passed at create"
+  [[ "${workdir}" == "${IMAGE_EXPECT_WORKINGDIR}" ]] \
+    || bad "the image working directory is ${workdir:-absent}, expected ${IMAGE_EXPECT_WORKINGDIR}"
+  OBSERVED_IMAGE_ID="${id}"
+  if (( FAILURES == 0 )); then
+    ok "the built image is ${os}/${architecture}, user ${user}, no entrypoint, no command, workdir ${workdir}"
+    ok "implementation identity (Podman .Id): ${id}"
+    note "the local RepoDigest is not the implementation identity and is recorded as none"
+  fi
+}
+
+# --- the ruled provisioning evidence ---------------------------------------
+verify_production_evidence() {
+  [[ -f "${PRODUCTION_EVIDENCE}" ]] || {
+    bad "no provisioning evidence at ${PRODUCTION_EVIDENCE}"
+    return 1
+  }
+  if [[ -z "${FIXTURE}" ]]; then
+    [[ "$(stat -c '%U:%G %a' "${PRODUCTION_EVIDENCE}")" == "root:root 400" ]] \
+      || bad "${PRODUCTION_EVIDENCE} is not root:root 0400"
+  fi
+  local approved_base approved_sbom
+  approved_base="$(grep -E '^base_image_reference=' "${BASE_APPROVAL}" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  approved_sbom="$(grep -E '^sbom_sha256=' "${BASE_APPROVAL}" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+
+  materialise
+  # Parsed through the RULED module, in the isolated pinned-code environment. A
+  # second parser here would be a second opinion about what the schema is.
+  if ! run_materialised '
+import sys
+root, path, approved_base, approved_sbom = sys.argv[1:5]
+sys.path.insert(0, root)
+from tools.provisioning.provisioning_evidence import parse_evidence, evidence_digest
+body = open(path, "rb").read()
+document = parse_evidence(body)          # refuses missing, unknown, non-canonical
+if document["base_image_reference"] != approved_base:
+    raise SystemExit("evidence names base %s, the approval names %s"
+                     % (document["base_image_reference"], approved_base))
+if document["sbom_sha256"] != approved_sbom:
+    raise SystemExit("evidence commits SBOM %s, the approval commits %s"
+                     % (document["sbom_sha256"], approved_sbom))
+print("      oci_image_id:                 %s" % document["oci_image_id"])
+print("      os/architecture:              %s/%s" % (document["os"], document["architecture"]))
+print("      base_image_reference:         %s" % document["base_image_reference"])
+print("      sbom_sha256:                  %s" % document["sbom_sha256"])
+print("      provisioning_evidence_digest: %s" % evidence_digest(body))
+' "${PRODUCTION_EVIDENCE}" "${approved_base}" "${approved_sbom}"; then
+    bad "the provisioning evidence does not verify"
+    discard_materialised
+    return 1
+  fi
+  EVIDENCE_IMAGE_ID="$(run_materialised '
+import sys
+root, path = sys.argv[1:3]
+sys.path.insert(0, root)
+from tools.provisioning.provisioning_evidence import parse_evidence
+print(parse_evidence(open(path, "rb").read())["oci_image_id"])
+' "${PRODUCTION_EVIDENCE}")"
+  discard_materialised
+  ok "the provisioning evidence validates against the ruled fifteen-field schema and agrees with the approval"
+  return 0
+}
+
+# --- mutation eligibility, derived from evidence ---------------------------
+#
+# Not a flag, not an environment variable, not a magic file, not a boolean
+# constant. The mutation phases become eligible exactly when the ceremony's own
+# ruled evidence shows the prerequisite happened: a base was approved, an image
+# was built, that image is the one the evidence describes, and it is present in
+# the execution identity's store under the identity the evidence names.
+require_mutation_eligible() {
+  [[ -e "${BASE_APPROVAL}" ]] || refuse_mutation "${MODE#--}" \
+"No approved production base image is recorded at ${BASE_APPROVAL}.
+Candidate discovery and base approval have not happened, so there is no
+implementation to admit and no reason to create an authority namespace."
+
+  verify_production_evidence || refuse_mutation "${MODE#--}" \
+"The ruled provisioning evidence at ${PRODUCTION_EVIDENCE} is absent or does
+not verify. That record is what shows the production image was built and
+inspected, and it is the same document admission commits by digest. Produce it
+from the observed build facts, then rerun. Nothing here writes it: it is
+evidence, and evidence a script can manufacture proves nothing."
+
+  verify_production_image
+  (( FAILURES == 0 )) || refuse_mutation "${MODE#--}" \
+"The built image does not match the ruled contract, so the evidence describes
+something other than what is in the store."
+
+  [[ "${OBSERVED_IMAGE_ID}" == "${EVIDENCE_IMAGE_ID}" ]] || refuse_mutation "${MODE#--}" \
+"The store resolves ${BUILD_TAG} to ${OBSERVED_IMAGE_ID}, and the provisioning
+evidence describes ${EVIDENCE_IMAGE_ID}. Those must be the same artefact."
+
+  ok "mutation eligibility established from the approval, the evidence, and the store"
+  printf '\n'
+  printf 'ELIGIBLE. This grants no authority: the image is admitted by nothing,\n'
+  printf 'no CIMP exists, and execution remains closed. It means only that the\n'
+  printf 'next reviewed mutation phase may be run by an operator.\n\n'
+}
+
+# --- PHASE 6: authority bootstrap ------------------------------------------
+#
+# Creates the two namespace roots and the counters, and nothing else. It
+# allocates no CIMP, publishes no implementation, advances no CGEN, grants no
+# authority, writes no sudoers, and invokes neither the transition nor the
+# worker.
+#
+# The setgid bits are the architecture (§5.7 as amended): root creates every
+# published object, so without inheritance everything would come out root:root
+# and the coordinator could not read a namespace it is required to enumerate.
+# Both roots carry it -- implementations/ and generations/ are created under the
+# authority root, while <CIMP>/ and <CGEN>/ are created inside staging/ and
+# renamed in, and rename preserves the group they were created with. Nothing is
+# chowned after publication.
+bootstrap_authority() {
+  require_mutation_eligible
+  [[ ! -e "${AUTHORITY_ROOT}" ]] || halt "${AUTHORITY_ROOT} already exists"
+  [[ ! -e "${CONTROL_ROOT}" ]] || halt "${CONTROL_ROOT} already exists"
+  [[ -d "${KYRI_STATE}" ]] || halt "${KYRI_STATE} does not exist"
+
+  umask 022
+  mkdir -m 2750 "${AUTHORITY_ROOT}"
+  mkdir -m 0700 "${CONTROL_ROOT}"
+  mkdir -m 2750 "${CONTROL_ROOT}/staging"
+  if [[ -z "${FIXTURE}" ]]; then
+    chown "root:${COORDINATOR}" "${AUTHORITY_ROOT}" "${CONTROL_ROOT}/staging"
+    chown root:root "${CONTROL_ROOT}"
+  fi
+  # chmod again after chown: chown clears setgid, and a staging root without it
+  # publishes the wrong group -- the exact defect the ownership ruling closed.
+  chmod 2750 "${AUTHORITY_ROOT}" "${CONTROL_ROOT}/staging"
+  chmod 0700 "${CONTROL_ROOT}"
+
+  materialise
+  if ! run_materialised '
+import os, sys
+root, control = sys.argv[1:3]
+sys.path.insert(0, root)
+from tools.provisioning.authority_bootstrap import provision_control_state
+handle = os.open(control, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    provision_control_state(handle)
+finally:
+    os.close(handle)
+print("      counters provisioned at zero over the operator-provisioned staging root")
+' "${CONTROL_ROOT}"; then
+    discard_materialised
+    halt "control-state provisioning failed"
+  fi
+  discard_materialised
+
+  ok "namespace roots created: authority 2750, control 0700, staging 2750"
+  printf '\n'
+  printf 'STOP. Bootstrap allocated no CIMP, published no implementation, and\n'
+  printf 'advanced no generation. There is no authority here yet -- an\n'
+  printf 'uninitialised namespace is not an empty one. Review, then --genesis.\n'
+}
+
+# --- PHASE 7: genesis -------------------------------------------------------
+#
+# Publishes CGEN-000000000000 with an EMPTY authority set, and grants nothing.
+# Deliberately not combined with bootstrap, and deliberately not combined with
+# admission: each is an operator decision with a review between.
+run_genesis() {
+  require_mutation_eligible
+  [[ -d "${AUTHORITY_ROOT}" && -d "${CONTROL_ROOT}" ]] \
+    || halt "the namespace roots do not exist; run --bootstrap-authority first"
+
+  materialise
+  if ! run_materialised '
+import os, sys
+root, authority, control = sys.argv[1:4]
+sys.path.insert(0, root)
+from tools.provisioning.authority_bootstrap import initialise_genesis, GENESIS_CGEN
+from tools.capability.execution.implementation_authority import (
+    NamespaceState, current_generation)
+a = os.open(authority, os.O_RDONLY | os.O_DIRECTORY)
+c = os.open(control, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    published = initialise_genesis(a, c)
+finally:
+    os.close(a); os.close(c)
+if published != GENESIS_CGEN:
+    raise SystemExit("genesis published %s" % published)
+handle = os.open(authority, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    generation = current_generation(handle)
+finally:
+    os.close(handle)
+# Asked of the runtime reader, not of this ceremony. A genesis the runtime
+# would reject must never be reported as a success.
+if generation.state is not NamespaceState.VALID:
+    raise SystemExit("the namespace is %s" % generation.state)
+if generation.entries or generation.eligible_cimps or generation.pending:
+    raise SystemExit("genesis published a non-empty authority set")
+print("      current generation: %s" % generation.cgen)
+print("      namespace state:    %s" % generation.state.value)
+print("      authority set:      empty (%d entries)" % len(generation.entries))
+print("      pending:            %d" % len(generation.pending))
+' "${AUTHORITY_ROOT}" "${CONTROL_ROOT}"; then
+    discard_materialised
+    halt "genesis failed"
+  fi
+  discard_materialised
+
+  ok "genesis published CGEN-000000000000 with an empty authority set, verified through the runtime reader"
+  printf '\n'
+  printf 'STOP. Genesis granted nothing. The namespace is valid and admits\n'
+  printf 'nothing; no CIMP exists and no image is authorised. Review, then\n'
+  printf '%s\n' '--admit --image-id <the .Id you inspected>.'
+}
+
+# --- PHASE 8: admission -----------------------------------------------------
+#
+# Three INDEPENDENT observations of the image identity must agree:
+#
+#   requested  the operator supplies it with --image-id, transcribed from their
+#              own inspection
+#   recorded   the provisioning-evidence manifest says it
+#   observed   the execution identity's store resolves the reviewed tag to it
+#
+# They are collected from three places on purpose. Copying one reading into
+# three slots satisfies the comparison and proves nothing, which is the single
+# way this check can be defeated.
+run_admission() {
+  [[ -n "${IMAGE_ID}" ]] \
+    || halt "--admit requires --image-id <64-hex>: the requested identity is an operator observation, not something this script may supply"
+  require_mutation_eligible
+  [[ -d "${AUTHORITY_ROOT}" && -d "${CONTROL_ROOT}" ]] \
+    || halt "the namespace roots do not exist; run --bootstrap-authority and --genesis first"
+
+  # require_mutation_eligible already proved the store and the evidence agree;
+  # this adds the operator's own reading as the third.
+  [[ "${IMAGE_ID}" == "${OBSERVED_IMAGE_ID}" ]] \
+    || halt "the requested ${IMAGE_ID} is not what the store resolves (${OBSERVED_IMAGE_ID})"
+  [[ "${IMAGE_ID}" == "${EVIDENCE_IMAGE_ID}" ]] \
+    || halt "the requested ${IMAGE_ID} is not what the evidence records (${EVIDENCE_IMAGE_ID})"
+  ok "three independent observations agree on ${IMAGE_ID}"
+
+  materialise
+  if ! run_materialised '
+import os, sys
+root, authority, control, evidence_path, requested, observed = sys.argv[1:7]
+sys.path.insert(0, root)
+from tools.provisioning.authority_admission import (
+    AdmissionRequest, admit_implementation)
+from tools.capability.execution.implementation_authority import (
+    NamespaceState, current_generation, resolve_implementation)
+request = AdmissionRequest(
+    oci_image_id=requested,
+    evidence=open(evidence_path, "rb").read(),
+    observed_image_id=observed)
+a = os.open(authority, os.O_RDONLY | os.O_DIRECTORY)
+c = os.open(control, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    result = admit_implementation(a, c, request=request)
+finally:
+    os.close(a); os.close(c)
+handle = os.open(authority, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    final = current_generation(handle)
+    admitted = resolve_implementation(handle, result.cimp, generation=final)
+finally:
+    os.close(handle)
+if final.state is not NamespaceState.VALID or final.pending:
+    raise SystemExit("the admitted namespace is %s" % final.state)
+if admitted.oci_image_id != requested:
+    raise SystemExit("the admitted identity did not survive")
+print("      cimp:                         %s" % result.cimp)
+print("      cgen:                         %s" % result.cgen)
+print("      oci_image_id:                 %s" % result.oci_image_id)
+print("      admission_digest:             %s" % result.admission_digest)
+print("      authority_set_digest:         %s" % result.authority_set_digest)
+print("      generation_digest:            %s" % result.generation_digest)
+print("      provisioning_evidence_digest: %s" % result.provisioning_evidence_digest)
+print("      namespace:                    %s, pending %d" % (final.state.value, len(final.pending)))
+' "${AUTHORITY_ROOT}" "${CONTROL_ROOT}" "${PRODUCTION_EVIDENCE}" \
+  "${IMAGE_ID}" "${OBSERVED_IMAGE_ID}"; then
+    discard_materialised
+    halt "admission failed or was left pending; design §5.6 governs the outcome and the ruled COMPLETE or RETIRE ceremony disposes of it"
+  fi
+  discard_materialised
+
+  ok "one implementation admitted and re-read through the runtime reader"
+  printf '\n'
+  printf 'STOP. An admitted implementation is authority to be SELECTED by a\n'
+  printf 'future execution ceremony. It is not permission for the coordinator to\n'
+  printf 'cross root: no sudoers exists, the transition is uncallable, and G6 and\n'
+  printf 'G7 remain closed. Record the evidence above.\n'
+}
+
 refuse_mutation() {
   local phase="$1" reason="$2"
   printf '\n'
@@ -866,34 +1267,48 @@ case "${MODE}" in
 --print-production-build) print_production_build ;;
 --materialise-build-context) materialise_build_context ;;
 
+--verify-production-image) verify_production_image ;;
+--verify-production-evidence) verify_production_evidence || true ;;
+
 --bootstrap-authority|--genesis|--admit)
-  # Implemented as an explicit refusal, not as a stub that might one day run
-  # by accident. Each phase names what is missing; none of them is written to
-  # proceed while the base image is unapproved, because an authority namespace
-  # created before there is anything to admit is a namespace that exists for
-  # no reason and has to be disposed of rather than deleted.
+  # Eligibility is derived in require_mutation_eligible from the ceremony's own
+  # ruled evidence: an approved base, a validating provisioning-evidence
+  # manifest, and a store that resolves the reviewed tag to the identity that
+  # manifest names. There is no flag, no environment variable, no override.
   [[ "$(id -u)" -eq 0 || -n "${FIXTURE}" ]] || halt "mutation phases require root"
-  verify_host
-  (( FAILURES == 0 )) || halt "the host is not at the ruled starting position"
-  if [[ ! -e "${BASE_APPROVAL}" ]]; then
-    refuse_mutation "${MODE#--}" \
-"No approved production base image is recorded at ${BASE_APPROVAL}.
-Candidate discovery (phase 2) and base approval (phase 3) have not happened,
-so there is no implementation to admit and no reason to create an authority
-namespace yet. Run --print-plan."
-  fi
-  refuse_mutation "${MODE#--}" \
-"An approved base exists, but the mutation phases are not enabled in this
-build. They are prepared and reviewed; enabling them is a separate reviewed
-change once the production image has been built and inspected."
+  case "${MODE}" in
+    --bootstrap-authority) verify_host absent ;;
+    *)                     verify_host present ;;
+  esac
+  (( FAILURES == 0 )) || halt "the host is not in the state this phase requires"
+  case "${MODE}" in
+    --bootstrap-authority) bootstrap_authority ;;
+    --genesis)             run_genesis ;;
+    --admit)               run_admission ;;
+  esac
   ;;
 esac
 
 printf '\n'
 if (( FAILURES == 0 )); then
   printf 'G5 ceremony %s: all checks passed.\n' "${MODE#--}"
-  printf 'No image was built, no authority root created, no identifier allocated,\n'
-  printf 'nothing admitted, and neither the transition nor the worker was invoked.\n'
+  case "${MODE}" in
+    --bootstrap-authority)
+      printf 'The namespace roots exist. No image was built, no identifier was\n'
+      printf 'allocated, nothing was admitted, and neither the transition nor the\n'
+      printf 'worker was invoked.\n' ;;
+    --genesis)
+      printf 'The genesis generation exists and admits nothing. No identifier was\n'
+      printf 'allocated from either counter, no image was built, nothing was\n'
+      printf 'admitted, and neither the transition nor the worker was invoked.\n' ;;
+    --admit)
+      printf 'One implementation is admitted. No image was built, no sudoers policy\n'
+      printf 'exists, and neither the transition nor the worker was invoked --\n'
+      printf 'admission is authority to be selected later, not execution.\n' ;;
+    *)
+      printf 'No image was built, no authority root created, no identifier allocated,\n'
+      printf 'nothing admitted, and neither the transition nor the worker was invoked.\n' ;;
+  esac
 else
   printf 'G5 ceremony %s FAILED: %d\n' "${MODE#--}" "${FAILURES}" >&2
   exit 1
