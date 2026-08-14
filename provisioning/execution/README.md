@@ -935,6 +935,109 @@ transcribe.
 and require the committed bytes and digest to be identical. That is a live
 network step and has not been run.
 
+#### The production build context — corrected 2026-08-14 after a live failure
+
+The first production build named the checkout as both `--file` and context. It
+failed before Podman started:
+
+```
+cannot chdir to /opt/schott-platform: Permission denied
+```
+
+`/opt/schott-platform` is `cschott:cschott 0750`. `kyri-capability` is in
+neither the owner nor the group, so it has **no traverse bit** — which is the
+authority split working exactly as designed, not a misconfiguration. The
+original command was reviewed and is preserved in the history above as what was
+attempted; it is superseded, and the reasons it cannot be repaired in place
+matter: **none of** `chmod` on the checkout, an ACL, adding `kyri-capability` to
+the `cschott` group, a bind mount, building as `cschott` or root, or changing
+`HOME`/cwd alone is acceptable. Each of them buys a working build by dissolving
+the boundary the build exists to respect.
+
+**The correction: root gives the execution identity its own context.**
+
+```
+approved commit → git object → root materialisation → root-owned context
+               → readable by kyri-capability → podman build as kyri-capability
+```
+
+| Object | Owner | Mode |
+|---|---|---|
+| `/run/kyri` | `root:root` | `0755` (already ruled; unchanged) |
+| `/run/kyri/g5-build-context` | `root:kyri-capability` | `0550` |
+| `…/Containerfile` | `root:kyri-capability` | `0440` |
+
+`/run/kyri` is `root:root 0755`, so the coordinator **cannot create, rename, or
+unlink anything inside it** — the ancestry is the authority, not the modes on
+the leaf. That distinction is the lesson from the earlier handoff work, where
+modes were claimed to protect a coordinator-owned directory and did not. Inside
+the context, `0550`/`0440` gives `kyri-capability` read and traverse and
+**nobody** write, not even root without first restoring it; `other` gets
+nothing, so the coordinator cannot even read it.
+
+`/run` is tmpfs, so the context is ephemeral ceremony material and losing it on
+reboot costs nothing — re-materialise. It sits **beside** `execution-material`
+and never inside it.
+
+**One member, deliberately.** The Containerfile carries no `COPY` and no `ADD`,
+so nothing in the context can reach the built image; a README alongside it
+would be bytes to verify that cannot affect the result. If the definition ever
+gains a `COPY`, `--verify-build-context` **refuses** rather than quietly
+building from a context missing its inputs.
+
+| Relative path | Repository path | SHA-256 | Mode |
+|---|---|---|---|
+| `Containerfile` | `provisioning/image/Containerfile` | `f543c458…dcbb` | `0440` |
+
+**Materialisation reuses the established trust model**: bytes come from
+`git cat-file blob <PINNED>:<path>` read **as the repository owner**, never
+from a working-tree file and never with root running git inside a directory the
+coordinator controls. Staged in a `0700` sibling, digest-verified, given its
+final owner and mode **before** publication, then published by a single
+`rename` — so the visible name is never briefly wrong and nothing is chowned
+after it exists. Proven by attack: the suite clones the repository, poisons the
+clone's working-tree Containerfile with a sentinel, materialises, and requires
+the pinned object bytes to win.
+
+**Lifetime.** Created by root at phase 4, create-once. An existing context is
+**refused, not replaced** — an operator disposes of it. Interrupted staging is
+left in place for disposition and never adopted. Nothing deletes the context
+automatically; reboot clears it because it is tmpfs, and that is acceptable
+because re-materialising is free and the context carries no authority.
+
+#### The corrected production build
+
+```bash
+cd /tmp
+
+sudo runuser -u kyri-capability -- env \
+    HOME=/data/kyri/capability XDG_RUNTIME_DIR=/run/user/999 \
+    podman build \
+      --build-arg BASE_IMAGE=cgr.dev/chainguard/python@sha256:84e1f28d… \
+      --file /run/kyri/g5-build-context/Containerfile \
+      --tag kyri-capability-execution:g5 \
+      /run/kyri/g5-build-context
+
+sudo runuser -u kyri-capability -- env \
+    HOME=/data/kyri/capability XDG_RUNTIME_DIR=/run/user/999 \
+    podman image inspect --format '{{.Id}}' kyri-capability-execution:g5
+```
+
+`cd /tmp` is load-bearing: `runuser` inherits the caller's working directory,
+and the caller stands in the checkout. That inheritance is what failed the first
+time, before Podman ran at all. **The command names no checkout path**, asserted
+structurally by the suite.
+
+**Track-B residue.** The store holds a historical Alpine image and seven
+`trackb-*` containers. They are **not removed** and they grant nothing: the
+production image is selected by the exact local `.Id` captured above, and an
+image resolving to no admitted `CIMP` is not authorised however long it has sat
+there. The store is never required to be empty.
+
+**Building is not admitting.** After the build: inspect the ID, the SBOM, and
+the interpreter, then stop for review. Authority bootstrap, genesis, and
+admission are separate later phases and none runs from the build.
+
 #### Candidate evidence, and approval
 
 Two files, and the separation between them is the point.

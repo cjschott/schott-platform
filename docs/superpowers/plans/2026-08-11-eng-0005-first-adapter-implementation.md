@@ -1105,7 +1105,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | generation-6 host prerequisite: /run/kyri/execution-material | **PROVISIONED** 2026-08-14, `root:kyri-capability 0770` |
 | root helper launch-record schema vNext | **IMPLEMENTED** (Pass 3B-ii) |
 | worker governed-profile consumption | **IMPLEMENTED** (Pass 3B-ii) |
-| production G5 image build and CIMP admission | ceremony prepared and tested, **NOT EXECUTED**; blocked on candidate discovery |
+| production G5 image build and CIMP admission | ceremony prepared and tested, **NOT EXECUTED**; base approved, build context ruled |
+| production build context | ruled 2026-08-14 after a live failure: root-owned `/run/kyri/g5-build-context`, **NOT MATERIALISED** |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
 ### Pass 2B — offline bootstrap primitives, implemented

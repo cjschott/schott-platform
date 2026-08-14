@@ -52,7 +52,14 @@ set -Eeuo pipefail
 #   --verify-build-inputs           image definition and base approval
 #   --verify-authority-prerequisites the two namespace roots, before creation
 #   --verify-materialisation        prove the trust boundary end to end
+#   --verify-build-context          may the build context be materialised here?
+#   --verify-materialised-build-context  is the published context exactly right?
+#   --print-production-build        the build command, executable as-is
 #   --print-plan                    the exact mutation sequence, not executed
+#
+# Mutation of /run only (no Podman, no authority, no image):
+#   --materialise-build-context     publish the reviewed context for the
+#                                   execution identity to build from
 #
 # Mutation (each refuses unless its own preconditions hold; none chains):
 #   --bootstrap-authority           create the roots and counters
@@ -96,6 +103,43 @@ AUTHORITY_RECORD_MODE="440"
 CONTROL_DIR_MODE="700"
 STAGING_DIR_MODE="2750"
 
+# --- the production build context ------------------------------------------
+#
+# WHY IT EXISTS. The first production build named the checkout as both
+# --file and context and failed before Podman started:
+#
+#   cannot chdir to /opt/schott-platform: Permission denied
+#
+# /opt/schott-platform is cschott:cschott 0750. kyri-capability is in neither
+# the owner nor the group, so it has no traverse bit -- which is the authority
+# split working, not a misconfiguration. The fix is to give the execution
+# identity a build context it CAN read, on ancestry the coordinator cannot
+# touch, containing exactly the reviewed bytes.
+#
+# /run/kyri is root:root 0755: the coordinator cannot create, rename, or unlink
+# anything inside it, and it is tmpfs, so a build context is ephemeral ceremony
+# material that costs nothing to lose. It sits beside execution-material and
+# never inside it.
+BUILD_CONTEXT="/run/kyri/g5-build-context"
+BUILD_CONTEXT_STAGING="/run/kyri/.g5-build-context.staging"
+BUILD_CONTEXT_PARENT="/run/kyri"
+SNAPSHOT_ROOT="/run/kyri/execution-material"
+BUILD_CONTEXT_DIR_MODE="550"
+BUILD_TAG="kyri-capability-execution:g5"
+
+# Every member of the context, and nothing else. Extra or missing refuses.
+#
+# ONE FILE, deliberately. The Containerfile carries no COPY and no ADD, so
+# nothing in the context can reach the built image; a README alongside it would
+# be bytes to verify that cannot affect the result. If the definition ever
+# gains a COPY, this manifest is wrong and --verify-build-context says so
+# rather than quietly building from a context missing its inputs.
+#
+#   relative-path | repository-path | sha256 | mode
+BUILD_CONTEXT_MEMBERS=(
+"Containerfile|provisioning/image/Containerfile|f543c458fcb1793570010b58417c175e6510fe0d90d2a295ef9d38b0cfdedcbb|0440"
+)
+
 BASE_REPOSITORY="cgr.dev/chainguard/python"
 GOVERNED_PYTHON="3.14.6"
 CONTAINERFILE="provisioning/image/Containerfile"
@@ -107,6 +151,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --bootstrap-instructions|--verify-host|--verify-source|--verify-build-inputs|\
 --verify-authority-prerequisites|--verify-materialisation|--print-plan|\
+--verify-build-context|--materialise-build-context|\
+--verify-materialised-build-context|--print-production-build|\
 --bootstrap-authority|--genesis|--admit)
       [[ -z "${MODE}" ]] || { printf 'ERROR one mode only\n' >&2; exit 2; }
       MODE="$1"; shift ;;
@@ -132,6 +178,10 @@ if [[ -n "${FIXTURE}" ]]; then
   SUDOERS="${FIXTURE}${SUDOERS}"
   CEREMONY_ROOT="${FIXTURE}${CEREMONY_ROOT}"
   BASE_APPROVAL="${FIXTURE}${BASE_APPROVAL}"
+  BUILD_CONTEXT="${FIXTURE}${BUILD_CONTEXT}"
+  BUILD_CONTEXT_STAGING="${FIXTURE}${BUILD_CONTEXT_STAGING}"
+  BUILD_CONTEXT_PARENT="${FIXTURE}${BUILD_CONTEXT_PARENT}"
+  SNAPSHOT_ROOT="${FIXTURE}${SNAPSHOT_ROOT}"
 fi
 
 FAILURES=0
@@ -314,6 +364,220 @@ run_materialised() {
       /usr/bin/python3 -I -B -c "${program}" "${MATERIALISED}" "$@" )
 }
 
+# --- the production build context ------------------------------------------
+context_member() { IFS='|' read -r -a _m <<<"$1"; printf '%s' "${_m[$2]}"; }
+
+# The Containerfile must still carry no COPY and no ADD, or a one-member
+# context is no longer the whole context.
+require_context_is_complete() {
+  local body
+  body="$(git_as_owner cat-file blob "${COMMIT}:provisioning/image/Containerfile")"
+  if grep -qE '^[[:space:]]*(COPY|ADD)[[:space:]]' <<<"${body}"; then
+    halt "the Containerfile at ${COMMIT} carries COPY or ADD: the one-member build-context manifest is incomplete and must be re-derived"
+  fi
+  ok "the image definition copies nothing in: the Containerfile is the whole context"
+}
+
+# The invariant whose violation caused the live failure, asserted the other way
+# round: the checkout must REMAIN untraversable by anyone but the coordinator.
+require_checkout_stays_private() {
+  local mode
+  mode="$(stat -c '%a' "${REPOSITORY}" 2>/dev/null)"
+  [[ -n "${mode}" ]] || { bad "cannot stat ${REPOSITORY}"; return; }
+  # Other must have no execute bit. If it ever gains one, somebody "fixed" the
+  # build failure by opening the checkout to the execution identity.
+  if (( (8#${mode} & 8#0001) != 0 )); then
+    bad "${REPOSITORY} is mode ${mode}: world-traversable, so the execution identity can reach the checkout"
+  else
+    ok "${REPOSITORY} is mode ${mode}: the execution identity still cannot traverse the checkout"
+  fi
+}
+
+classify_build_context() {
+  if [[ -L "${BUILD_CONTEXT}" ]]; then printf 'CONFLICT symlink'; return; fi
+  if [[ ! -e "${BUILD_CONTEXT}" ]]; then printf 'ABSENT'; return; fi
+  if [[ ! -d "${BUILD_CONTEXT}" ]]; then printf 'CONFLICT not-a-directory'; return; fi
+  printf 'PRESENT'
+}
+
+verify_build_context() {
+  require_commit
+  require_context_is_complete
+  require_checkout_stays_private
+
+  local row source expected observed
+  for row in "${BUILD_CONTEXT_MEMBERS[@]}"; do
+    source="$(context_member "${row}" 1)"; expected="$(context_member "${row}" 2)"
+    observed="$(git_as_owner cat-file blob "${COMMIT}:${source}" | sha256sum | cut -d' ' -f1)"
+    [[ "${observed}" == "${expected}" ]] \
+      || bad "${source} at ${COMMIT} is ${observed}, expected the reviewed ${expected}"
+  done
+  (( FAILURES == 0 )) \
+    && ok "every context member matches its pinned digest at ${COMMIT} (${#BUILD_CONTEXT_MEMBERS[@]} objects)"
+
+  if [[ -z "${FIXTURE}" ]]; then
+    [[ "$(stat -c '%U:%G %a' "${BUILD_CONTEXT_PARENT}" 2>/dev/null)" == "root:root 755" ]] \
+      || bad "${BUILD_CONTEXT_PARENT} is not root:root 0755: the coordinator could rename the context"
+    id -nG "${COORDINATOR}" 2>/dev/null | tr ' ' '\n' | grep -qx "${EXECUTION_GROUP}" \
+      && bad "${COORDINATOR} is a member of ${EXECUTION_GROUP}"
+  fi
+
+  [[ ! -e "${BUILD_CONTEXT_STAGING}" ]] \
+    || halt "${BUILD_CONTEXT_STAGING} exists: an earlier materialisation was interrupted and its material is not adopted; an operator disposes of it"
+
+  case "$(classify_build_context)" in
+    ABSENT)  ok "${BUILD_CONTEXT} is absent: eligible to materialise" ;;
+    PRESENT) note "${BUILD_CONTEXT} already exists; --verify-materialised-build-context decides whether it is the reviewed one" ;;
+    *) halt "${BUILD_CONTEXT} exists and is not a directory; nothing was changed" ;;
+  esac
+}
+
+materialise_build_context() {
+  [[ "$(id -u)" -eq 0 || -n "${FIXTURE}" ]] || halt "materialising the build context requires root"
+  verify_build_context
+  (( FAILURES == 0 )) || halt "the build context is not eligible"
+  [[ "$(classify_build_context)" == "ABSENT" ]] \
+    || halt "${BUILD_CONTEXT} already exists; create-once, and an existing context is disposed of by an operator rather than replaced here"
+
+  # Same filesystem as the published name, because publication is a rename.
+  umask 077
+  mkdir -m 0700 "${BUILD_CONTEXT_STAGING}"
+  local row relative source expected mode destination observed
+  for row in "${BUILD_CONTEXT_MEMBERS[@]}"; do
+    relative="$(context_member "${row}" 0)"; source="$(context_member "${row}" 1)"
+    expected="$(context_member "${row}" 2)"; mode="$(context_member "${row}" 3)"
+    [[ "${relative}" =~ ^[A-Za-z0-9_.-]+$ && "${relative}" != *".."* ]] \
+      || halt "the manifest names an unacceptable member and nothing was written: ${relative}"
+    destination="${BUILD_CONTEXT_STAGING}/${relative}"
+    # Bytes come from the git object, read as the repository owner. Root never
+    # runs git inside a directory the coordinator controls, and never reads a
+    # working-tree file.
+    git_as_owner cat-file blob "${COMMIT}:${source}" > "${destination}"
+    observed="$(digest_of "${destination}")"
+    [[ "${observed}" == "${expected}" ]] \
+      || halt "materialised ${relative} is ${observed}, expected ${expected}"
+    chmod "${mode}" "${destination}"
+    [[ -n "${FIXTURE}" ]] || chown "root:${EXECUTION_GROUP}" "${destination}"
+  done
+
+  # Nothing but the manifest, and nothing but regular files.
+  local extra
+  extra="$(find "${BUILD_CONTEXT_STAGING}" -mindepth 1 ! -type f | head -3 || true)"
+  [[ -z "${extra}" ]] || halt "the staged context carries non-regular objects:"$'\n'"${extra}"
+  local staged
+  staged="$(find "${BUILD_CONTEXT_STAGING}" -mindepth 1 | wc -l)"
+  [[ "${staged}" -eq "${#BUILD_CONTEXT_MEMBERS[@]}" ]] \
+    || halt "the staged context holds ${staged} entries, expected ${#BUILD_CONTEXT_MEMBERS[@]}"
+
+  # Ownership and mode are final BEFORE publication, so the published name is
+  # never briefly wrong and nothing is chowned after it is visible.
+  chmod "0${BUILD_CONTEXT_DIR_MODE}" "${BUILD_CONTEXT_STAGING}"
+  [[ -n "${FIXTURE}" ]] || chown "root:${EXECUTION_GROUP}" "${BUILD_CONTEXT_STAGING}"
+  mv -T "${BUILD_CONTEXT_STAGING}" "${BUILD_CONTEXT}"
+  ok "build context published at ${BUILD_CONTEXT}"
+  verify_materialised_build_context
+}
+
+verify_materialised_build_context() {
+  [[ -d "${BUILD_CONTEXT}" && ! -L "${BUILD_CONTEXT}" ]] \
+    || { bad "${BUILD_CONTEXT} is not a directory"; return; }
+  if [[ -z "${FIXTURE}" ]]; then
+    [[ "$(stat -c '%U:%G %a' "${BUILD_CONTEXT}")" == "root:${EXECUTION_GROUP} ${BUILD_CONTEXT_DIR_MODE}" ]] \
+      || bad "${BUILD_CONTEXT} is $(stat -c '%U:%G %a' "${BUILD_CONTEXT}"), expected root:${EXECUTION_GROUP} 0${BUILD_CONTEXT_DIR_MODE}"
+  else
+    [[ "$(stat -c '%a' "${BUILD_CONTEXT}")" == "${BUILD_CONTEXT_DIR_MODE}" ]] \
+      || bad "${BUILD_CONTEXT} is mode $(stat -c '%a' "${BUILD_CONTEXT}"), expected 0${BUILD_CONTEXT_DIR_MODE}"
+  fi
+
+  local row relative expected mode observed present
+  for row in "${BUILD_CONTEXT_MEMBERS[@]}"; do
+    relative="$(context_member "${row}" 0)"; expected="$(context_member "${row}" 2)"
+    mode="$(context_member "${row}" 3)"
+    observed="$(digest_of "${BUILD_CONTEXT}/${relative}")"
+    [[ "${observed}" == "${expected}" ]] \
+      || bad "${relative} is ${observed:-absent}, expected ${expected}"
+    [[ "$(stat -c '%a' "${BUILD_CONTEXT}/${relative}" 2>/dev/null)" == "${mode#0}" ]] \
+      || bad "${relative} has the wrong mode"
+    if [[ -z "${FIXTURE}" ]]; then
+      [[ "$(stat -c '%U:%G' "${BUILD_CONTEXT}/${relative}" 2>/dev/null)" == "root:${EXECUTION_GROUP}" ]] \
+        || bad "${relative} is not root:${EXECUTION_GROUP}"
+    fi
+  done
+
+  present="$(find "${BUILD_CONTEXT}" -mindepth 1 | wc -l)"
+  [[ "${present}" -eq "${#BUILD_CONTEXT_MEMBERS[@]}" ]] \
+    || bad "${BUILD_CONTEXT} holds ${present} entries, expected exactly ${#BUILD_CONTEXT_MEMBERS[@]}"
+  local irregular
+  irregular="$(find "${BUILD_CONTEXT}" -mindepth 1 ! -type f | head -3 || true)"
+  [[ -z "${irregular}" ]] || bad "${BUILD_CONTEXT} carries non-regular objects:"$'\n'"${irregular}"
+  local writable
+  writable="$(find "${BUILD_CONTEXT}" -perm /022 | head -3 || true)"
+  [[ -z "${writable}" ]] || bad "${BUILD_CONTEXT} is group- or other-writable:"$'\n'"${writable}"
+
+  # The ancestry is the authority. Modes on the context cannot protect it if
+  # the coordinator can rename the directory out from under the build.
+  if [[ -z "${FIXTURE}" ]]; then
+    local walk="${BUILD_CONTEXT}" owner
+    while :; do
+      walk="$(dirname "${walk}")"
+      [[ "${walk}" != "/" ]] || break
+      owner="$(stat -c '%U:%G %a' "${walk}")"
+      [[ "${owner}" == "root:root 755" ]] \
+        || bad "ancestor ${walk} is ${owner}, expected root:root 0755"
+    done
+    ok "ancestry root-owned and not coordinator-writable: the context cannot be renamed or replaced"
+    # The sibling this ceremony must not disturb.
+    [[ ! -e "${SNAPSHOT_ROOT}" ]] \
+      || [[ "$(stat -c '%U:%G %a' "${SNAPSHOT_ROOT}")" == "root:${EXECUTION_GROUP} 770" ]] \
+      || bad "${SNAPSHOT_ROOT} changed while the build context was published"
+  fi
+  [[ ! -e "${BUILD_CONTEXT_STAGING}" ]] || bad "${BUILD_CONTEXT_STAGING} residue remains"
+  (( FAILURES == 0 )) \
+    && ok "the published build context is exactly the reviewed one, readable by ${EXECUTION_USER} and writable by nobody"
+}
+
+print_production_build() {
+  local reference="<APPROVED base_image_reference>"
+  if [[ -r "${BASE_APPROVAL}" ]]; then
+    reference="$(grep -E '^base_image_reference=' "${BASE_APPROVAL}" | head -1 | cut -d= -f2- || true)"
+    [[ -n "${reference}" ]] || reference="<APPROVED base_image_reference>"
+  fi
+  cat <<BUILD
+The production build. It runs as ${EXECUTION_USER}, from a cwd that identity
+can traverse, against a context root owns.
+
+  cd /tmp
+
+  sudo runuser -u ${EXECUTION_USER} -- env \\
+      HOME=${EXECUTION_HOME} XDG_RUNTIME_DIR=${EXECUTION_RUNTIME_DIR} \\
+      podman build \\
+        --build-arg BASE_IMAGE=${reference} \\
+        --file ${BUILD_CONTEXT}/Containerfile \\
+        --tag ${BUILD_TAG} \\
+        ${BUILD_CONTEXT}
+
+  # Then the immutable local identity, bare 64 lowercase hex.
+  sudo runuser -u ${EXECUTION_USER} -- env \\
+      HOME=${EXECUTION_HOME} XDG_RUNTIME_DIR=${EXECUTION_RUNTIME_DIR} \\
+      podman image inspect --format '{{.Id}}' ${BUILD_TAG}
+
+WHY \`cd /tmp\`: runuser inherits the caller's working directory, and the
+caller is standing in the checkout. That is what failed the first time --
+"cannot chdir to ${REPOSITORY}: Permission denied" -- before Podman ran at all.
+The execution identity cannot traverse the checkout, by design, and nothing
+about that is being relaxed.
+
+TRACK-B RESIDUE. The store holds historical Alpine artefacts. They are not
+removed and they grant nothing: selection is by the exact local .Id captured
+above, and an image that resolves to no admitted CIMP is not authorised no
+matter how long it has been sitting there.
+
+BUILDING IS NOT ADMITTING. After this, inspect the ID, the SBOM, and the
+interpreter, then stop for review. Authority bootstrap, genesis, and admission
+are later phases and none of them runs from here.
+BUILD
+}
+
 # --- read-only phases ------------------------------------------------------
 verify_host() {
   local installed
@@ -485,42 +749,37 @@ and no verification phase performs a mutation.
     --verify-build-inputs
     OPERATOR REVIEW
 
-  PHASE 4 -- PRODUCTION BUILD                      (execution identity only)
-    Runs as ${EXECUTION_USER}, consumes ONLY the approved digest, never a tag:
+  PHASE 4 -- BUILD CONTEXT                         (root; mutates /run only)
+    The execution identity cannot traverse the checkout -- that is the
+    authority split, and the first production build failed on it. Root
+    materialises the reviewed context where that identity can read it:
+      --verify-build-context --commit <REVIEWED>
+      --materialise-build-context --commit <REVIEWED>
+      --verify-materialised-build-context
+    OPERATOR REVIEW
 
-      sudo runuser -u ${EXECUTION_USER} -- env \\
-        HOME=${EXECUTION_HOME} XDG_RUNTIME_DIR=${EXECUTION_RUNTIME_DIR} \\
-        podman build \\
-          --build-arg BASE_IMAGE=<APPROVED base_image_reference> \\
-          --file ${REPOSITORY}/${CONTAINERFILE} \\
-          --tag kyri-capability-execution:g5 \\
-          ${REPOSITORY}/provisioning/image
+  PHASE 5 -- PRODUCTION BUILD                      (execution identity only)
+    --print-production-build, then run what it prints. It names no checkout
+    path, runs from /tmp, and consumes only the approved digest.
+    OPERATOR REVIEW  -- inspect the ID, the SBOM, and the interpreter before
+    anything is admitted. Building is not admitting.
 
-    Then capture the immutable local identity, bare 64 lowercase hex:
-
-      sudo runuser -u ${EXECUTION_USER} -- env \\
-        HOME=${EXECUTION_HOME} XDG_RUNTIME_DIR=${EXECUTION_RUNTIME_DIR} \\
-        podman image inspect --format '{{.Id}}' kyri-capability-execution:g5
-
-    OPERATOR REVIEW  -- inspect the ID, the SBOM bytes, and the interpreter
-    before anything is admitted. Building is not admitting.
-
-  PHASE 5 -- AUTHORITY BOOTSTRAP                   (root, through the pinned tree)
+  PHASE 6 -- AUTHORITY BOOTSTRAP                   (root, through the pinned tree)
     --bootstrap-authority --commit <REVIEWED>
     OPERATOR REVIEW
 
-  PHASE 6 -- GENESIS                               (root, through the pinned tree)
+  PHASE 7 -- GENESIS                               (root, through the pinned tree)
     --genesis --commit <REVIEWED>
     STOP. Genesis publishes CGEN-000000000000 with an empty authority set and
     grants nothing. Review before admission.
 
-  PHASE 7 -- ADMISSION                             (root, through the pinned tree)
+  PHASE 8 -- ADMISSION                             (root, through the pinned tree)
     --admit --commit <REVIEWED>
     Collects three INDEPENDENT observations of the image identity and requires
     all three to agree. They are never copied from one variable.
     OPERATOR REVIEW
 
-  PHASE 8 -- POST-ADMISSION VERIFICATION           (read-only, runtime reader)
+  PHASE 9 -- POST-ADMISSION VERIFICATION           (read-only, runtime reader)
     Namespace VALID, pending empty, the admitted CIMP resolving to the exact
     image ID, and the image present in the execution identity's store.
 
@@ -602,6 +861,10 @@ case "${MODE}" in
 --verify-build-inputs)    verify_build_inputs || true ;;
 --verify-authority-prerequisites) verify_authority_prerequisites ;;
 --verify-materialisation) verify_materialisation ;;
+--verify-build-context)   verify_build_context ;;
+--verify-materialised-build-context) verify_materialised_build_context ;;
+--print-production-build) print_production_build ;;
+--materialise-build-context) materialise_build_context ;;
 
 --bootstrap-authority|--genesis|--admit)
   # Implemented as an explicit refusal, not as a stub that might one day run

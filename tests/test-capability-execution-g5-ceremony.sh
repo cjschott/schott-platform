@@ -462,26 +462,36 @@ mutations=0
 for forbidden in 'podman (build|run|create|start|pull|load)' 'buildah' \
                  'docker (build|run)' 'kyri-exec-transition[[:space:]]+CINV' \
                  'kyri-exec-worker\.py[[:space:]]+CINV'; do
-  # The plan text quotes the build command for the operator to read; what must
-  # be absent is an executable occurrence, so the heredoc is excluded.
-  if sed '/^print_plan()/,/^}/d' "${CEREMONY}" | grep -qE "${forbidden}"; then
+  # The printed procedures quote the build command for the operator to read;
+  # what must be absent is an executable occurrence, so those heredocs are
+  # excluded and everything else is searched.
+  if sed -e '/^print_plan()/,/^}/d' -e '/^print_production_build()/,/^}/d' \
+       "${CEREMONY}" | grep -qE "${forbidden}"; then
     fail "the ceremony executes: ${forbidden}"
     mutations=$((mutations + 1))
   fi
 done
 (( mutations == 0 )) && pass "outside the printed plan the ceremony starts no container, transition, or worker"
 
-# Checked against the RENDERED plan, not the source: the identity is a
-# variable there, and what the operator will read is what matters.
+# Checked against the RENDERED output: identities are variables in the source,
+# and what the operator will read is what matters. The build command now lives
+# in its own phase -- the context has to exist before the build can run at all
+# -- and the build-context suite owns its detail.
 root="${WORK}/plan"; build_fixture "${root}"
-if run_ceremony "${root}" --print-plan \
+if run_ceremony "${root}" --print-production-build \
    && grep -q 'runuser -u kyri-capability' "${root}/last-run.log" \
    && grep -q 'HOME=/data/kyri/capability' "${root}/last-run.log" \
-   && grep -q 'XDG_RUNTIME_DIR=/run/user/999' "${root}/last-run.log" \
-   && grep -q 'build-arg BASE_IMAGE=<APPROVED' "${root}/last-run.log"; then
-  pass "the documented build runs as the execution identity and consumes only the approved digest"
+   && grep -q 'XDG_RUNTIME_DIR=/run/user/999' "${root}/last-run.log"; then
+  pass "the documented build runs as the execution identity"
 else
   fail "the documented build command is not scoped to the execution identity"
+fi
+if run_ceremony "${root}" --print-plan \
+   && grep -q 'PHASE 4 -- BUILD CONTEXT' "${root}/last-run.log" \
+   && grep -q 'PHASE 5 -- PRODUCTION BUILD' "${root}/last-run.log"; then
+  pass "the plan puts build-context materialisation before the build, as its own phase"
+else
+  fail "the plan does not separate build-context materialisation from the build"
 fi
 if grep -q 'CANDIDATE, never an' "${root}/last-run.log" \
    && grep -q 'OPERATOR REVIEW' "${root}/last-run.log"; then

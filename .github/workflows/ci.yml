@@ -298,6 +298,11 @@ jobs:
       - name: Capability execution G5 supply chain tests
         run: bash tests/test-capability-execution-g5-supply-chain.sh
 
+      # The production build context: pinned git objects onto root-owned
+      # ancestry the coordinator cannot touch. No image build, no Podman.
+      - name: Capability execution G5 build context tests
+        run: bash tests/test-capability-execution-g5-build-context.sh
+
       # Worker driven through a fake backend: no Podman, no subprocess, no
       # container. Real execution is gate G6.
       - name: Capability execution lifecycle tests
