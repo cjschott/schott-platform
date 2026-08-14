@@ -129,6 +129,18 @@ PREDICATE_TYPE="https://spdx.dev/Document"
 PAYLOAD_TYPE="application/vnd.in-toto+json"
 BASE_REPOSITORY="cgr.dev/chainguard/python"
 
+# §27's THIRD independent proof, and the one that was missing. The base digest
+# was pinned and the interpreter was read at evidence time, but nothing ever
+# asked the signed SBOM what Python it describes -- so a candidate whose SBOM
+# said 3.14.7 was approved, built, and only refused at the very last gate, by
+# canonical_evidence, after an image had been produced.
+#
+# The package is NOT named "python". Chainguard's SPDX names it for the minor
+# series, and the interpreter package separately as cpython. Read from the
+# approved child's own attestation rather than assumed.
+GOVERNED_PYTHON_VERSION="3.14.6"
+GOVERNED_SBOM_PACKAGE="python-3.14"
+
 # --- the DISCOVERED CANDIDATE — reviewed by nobody yet ----------------------
 #
 # Recorded so verification can bind to it. Recording a candidate is not
@@ -422,6 +434,26 @@ if not predicate.get("documentNamespace"):
 if not packages:
     raise SystemExit("the SPDX document has an empty package inventory")
 
+# The governed Python, proven from the signed document itself. Every record of
+# the governed package must agree; a document naming it twice at two versions
+# is not something to pick a winner from.
+governed_package, governed_version = sys.argv[6], sys.argv[7]
+found = sorted({p.get("versionInfo") for p in packages
+                if p.get("name") == governed_package})
+if not found:
+    raise SystemExit(
+        "the SPDX document records no %s package; it names: %s"
+        % (governed_package,
+           ", ".join(sorted({p.get("name") or "?" for p in packages})[:8])))
+if len(found) > 1:
+    raise SystemExit("the SPDX document records %s at %s" % (governed_package, found))
+# A vendor package revision -rN may differ as the same upstream Python is
+# rebuilt; the upstream patch version may not.
+if not found[0].startswith(governed_version):
+    raise SystemExit(
+        "the SPDX document records %s %s, and the governed Python is %s"
+        % (governed_package, found[0], governed_version))
+
 # The committed bytes, written verbatim. This is the decoded payload object --
 # never a re-encoding of the parse above, which exists only to inspect.
 if len(sys.argv) > 5 and sys.argv[5]:
@@ -432,9 +464,11 @@ print("      envelope line:        %d" % number)
 print("      spdx version:         %s" % predicate.get("spdxVersion"))
 print("      spdx name:            %s" % predicate.get("name"))
 print("      package inventory:    %d" % len(packages))
+print("      %-21s %s" % (governed_package + ":", found[0]))
 print("      committed bytes:      %d" % len(payload))
 print("      sbom_sha256:          %s" % hashlib.sha256(payload).hexdigest())
-' "${PAYLOAD_TYPE}" "${PREDICATE_TYPE}" "${MANIFEST_DIGEST}" "${ENVELOPE_FILE}" "${PAYLOAD_OUT}" ) \
+' "${PAYLOAD_TYPE}" "${PREDICATE_TYPE}" "${MANIFEST_DIGEST}" "${ENVELOPE_FILE}" \
+      "${PAYLOAD_OUT}" "${GOVERNED_SBOM_PACKAGE}" "${GOVERNED_PYTHON_VERSION}" ) \
     || halt "the attestation did not yield exactly one bound SPDX statement"
   ok "exactly one signed SPDX statement, bound to sha256:${MANIFEST_DIGEST}"
   note "record the sbom_sha256 above as the approval's sbom_sha256; sbom_source is"
@@ -496,7 +530,8 @@ verify_cosign_contract() {
 CANDIDATE_FIELDS=(
   discovery_reference index_digest platform manifest_digest config_digest
   discovered_at discovery_commands sbom_attestation_verified
-  sbom_predicate_type sbom_sha256 cosign_version cosign_sha256
+  sbom_predicate_type sbom_sha256 sbom_python_package sbom_python_version
+  cosign_version cosign_sha256
   signing_identity signing_issuer
 )
 
@@ -524,6 +559,10 @@ verify_candidate() {
     || bad "signing_identity is not the pinned Chainguard identity"
   [[ "$(field_of cosign_sha256 "${CANDIDATE_EVIDENCE}")" == "${COSIGN_BINARY_SHA256}" ]] \
     || bad "cosign_sha256 is not the pinned binary digest"
+  [[ "$(field_of sbom_python_package "${CANDIDATE_EVIDENCE}")" == "${GOVERNED_SBOM_PACKAGE}" ]] \
+    || bad "sbom_python_package is not ${GOVERNED_SBOM_PACKAGE}"
+  [[ "$(field_of sbom_python_version "${CANDIDATE_EVIDENCE}")" == "${GOVERNED_PYTHON_VERSION}"* ]] \
+    || bad "sbom_python_version is not the governed ${GOVERNED_PYTHON_VERSION}"
   [[ "$(field_of sbom_attestation_verified "${CANDIDATE_EVIDENCE}")" == "yes" ]] \
     || bad "sbom_attestation_verified is not yes: the attestation was not cryptographically verified"
   (( FAILURES == 0 )) && ok "candidate evidence is complete and internally consistent"
@@ -536,7 +575,8 @@ verify_candidate() {
 # --- the production approval ------------------------------------------------
 APPROVAL_FIELDS=(
   base_image_reference platform manifest_digest config_digest
-  sbom_source sbom_sha256 cosign_version cosign_sha256
+  sbom_source sbom_sha256 sbom_python_package sbom_python_version
+  cosign_version cosign_sha256
   attestation_predicate_type attestation_signer approved_by approved_at
 )
 
@@ -570,6 +610,10 @@ verify_approval() {
     || bad "config_digest is not a sha256: digest"
   [[ "$(field_of sbom_sha256 "${BASE_APPROVAL}")" =~ ^[0-9a-f]{64}$ ]] \
     || bad "sbom_sha256 is not a bare 64-hex digest"
+  [[ "$(field_of sbom_python_package "${BASE_APPROVAL}")" == "${GOVERNED_SBOM_PACKAGE}" ]] \
+    || bad "sbom_python_package is not ${GOVERNED_SBOM_PACKAGE}"
+  [[ "$(field_of sbom_python_version "${BASE_APPROVAL}")" == "${GOVERNED_PYTHON_VERSION}"* ]] \
+    || bad "sbom_python_version is not the governed ${GOVERNED_PYTHON_VERSION}"
   [[ "$(field_of attestation_predicate_type "${BASE_APPROVAL}")" == "${PREDICATE_TYPE}" ]] \
     || bad "attestation_predicate_type is not ${PREDICATE_TYPE}"
   [[ "$(field_of attestation_signer "${BASE_APPROVAL}")" == "${CHAINGUARD_IDENTITY}" ]] \

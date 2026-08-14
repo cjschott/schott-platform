@@ -60,11 +60,16 @@ import base64, json, sys, pathlib
 
 out, subject, predicate_type = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 
-def statement(ptype=None, subj=None, spdx=True, packages=True, namespace=True, name=True):
+def statement(ptype=None, subj=None, spdx=True, packages=True, namespace=True,
+              name=True, python_version="3.14.6-r4"):
+    # Named as Chainguard actually names it: the minor series, plus cpython
+    # for the interpreter. A fixture calling it "python" would have hidden the
+    # very mismatch this suite now exists to catch.
     predicate = {"spdxVersion": "SPDX-2.3",
-                 "name": "cgr.dev/chainguard/python",
+                 "name": "sbom-sha256:abc",
                  "documentNamespace": "https://spdx.org/spdxdocs/chainguard/abc",
-                 "packages": [{"name": "python", "versionInfo": "3.14.6"}]}
+                 "packages": [{"name": "python-3.14", "versionInfo": python_version},
+                              {"name": "cpython", "versionInfo": "v" + python_version.split("-")[0]}]}
     if not spdx:
         predicate.pop("spdxVersion")
     if not packages:
@@ -101,6 +106,8 @@ for name, st in (
 ):
     (out / (name + ".jsonl")).write_text(envelope(st)[1] + "\n")
 
+(out / "wrong-python.jsonl").write_text(envelope(statement(python_version="3.14.7-r0"))[1] + "\n")
+(out / "no-python.jsonl").write_text(envelope(statement(packages=False))[1] + "\n")
 (out / "duplicate.jsonl").write_text(good + "\n" + good + "\n")
 _, provenance = envelope(statement(ptype="https://slsa.dev/provenance/v1"))
 (out / "mixed.jsonl").write_text(provenance + "\n" + good + "\n")
@@ -184,6 +191,21 @@ else
     && pass "a non-SPDX predicate type yields no match" \
     || fail "wrong predicate refused for the wrong reason"
 fi
+
+# THE REGRESSION. A candidate whose attestation is validly signed, correctly
+# subjected, and digest-pinned still must not pass if the SBOM describes a
+# different governed Python patch version. This is the check whose absence let
+# a 3.14.7 candidate be approved and built before anything refused it.
+if extract wrong-python.jsonl > "${ATT}/wrongpy.log" 2>&1; then
+  fail "an SBOM describing a different governed Python was accepted"
+else
+  grep -q "the governed Python is" "${ATT}/wrongpy.log" \
+    && pass "a signed, correctly-subjected SBOM describing the wrong governed Python is refused" \
+    || fail "the wrong Python was refused for the wrong reason: $(tail -3 "${ATT}/wrongpy.log")"
+fi
+grep -q 'sbom_sha256' "${ATT}/wrongpy.log" \
+  && fail "the wrong-Python refusal still printed a committed digest" \
+  || pass "the wrong-Python refusal prints no sbom_sha256 to transcribe"
 
 for case in not-spdx:"not an SPDX document" empty-packages:"empty package inventory" \
             no-namespace:"no documentNamespace" no-name:"no name"; do
@@ -451,6 +473,8 @@ discovery_commands=sha256:000000000000000000000000000000000000000000000000000000
 sbom_attestation_verified=${1:-yes}
 sbom_predicate_type=${PREDICATE_TYPE}
 sbom_sha256=${reported}
+sbom_python_package=python-3.14
+sbom_python_version=3.14.6-r4
 cosign_version=${COSIGN_VERSION}
 cosign_sha256=${2:-${COSIGN_BINARY_SHA256}}
 signing_identity=${3:-${CHAINGUARD_IDENTITY}}
@@ -510,6 +534,8 @@ manifest_digest=sha256:${MANIFEST}
 config_digest=sha256:${CONFIG}
 sbom_source=decoded DSSE payload, in-toto Statement v0.1, predicateType ${PREDICATE_TYPE}
 sbom_sha256=${reported}
+sbom_python_package=python-3.14
+sbom_python_version=3.14.6-r4
 cosign_version=${2:-${COSIGN_VERSION}}
 cosign_sha256=${COSIGN_BINARY_SHA256}
 attestation_predicate_type=${3:-${PREDICATE_TYPE}}

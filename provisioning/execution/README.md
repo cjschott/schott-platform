@@ -1038,6 +1038,116 @@ there. The store is never required to be empty.
 the interpreter, then stop for review. Authority bootstrap, genesis, and
 admission are separate later phases and none runs from the build.
 
+#### Python-version reconciliation — hard stop 2026-08-14, candidate replaced
+
+Provisioning-evidence collection hit a hard stop. The built image reported
+**Python 3.14.7**, and `canonical_evidence` refuses anything but the governed
+**3.14.6**. The refusal was correct. Nothing was faked, nothing was weakened,
+and the image was not admitted.
+
+**Root cause, two parts.**
+
+1. `cgr.dev/chainguard/python:latest` moved to 3.14.7 between the G4 ruling
+   (which fixed governed Python at 3.14.6) and candidate discovery. Discovery
+   read `:latest`, so it captured whatever was current.
+2. **The ceremony never performed §27's third proof at approval time.** §27
+   requires the base digest, the SBOM's Python version, *and* the interpreter's
+   own report to agree. The digest was pinned and the interpreter was read at
+   evidence time — but nothing ever asked the signed SBOM what Python it
+   described. A 3.14.7 candidate was therefore approved and built, and was
+   refused only at the last gate, after an image existed. That is the defect
+   this pass closes: the SBOM proof now runs at `--extract-sbom`, before
+   approval.
+
+**What the SBOM actually says.** Read from the approved child's own signed
+attestation, subject `84e1f28d…` confirming the right image:
+
+```
+python-3.14        3.14.7-r0
+python-3.14-base   3.14.7-r0
+cpython            v3.14.7
+```
+
+No 3.14.6 record exists in it. Two independent observations — the SBOM and the
+interpreter — agree the candidate is **definitively 3.14.7**. There is no
+ambiguity.
+
+**Governed Python 3.14.6 is preserved.** Chainguard's Tag History API is
+readable anonymously for `:latest`, and pull-by-digest remains available to all
+tiers. Walking that history back finds the last `:latest` that carried 3.14.6:
+
+| | |
+|---|---|
+| was `:latest` at | 2026-08-05T14:46:13Z |
+| index digest | `sha256:1bd5d5a1efa2802a5467a4c1faf54e74150a9c88a8a454cef8f7b11592ea91d9` |
+| linux/amd64 child | `sha256:4b14dc70f04229cafd97b34ef34b16e1e09bdcac6362097cd5c582dca3eff686` |
+| config digest | `sha256:4090f44b5b3c75835c4f41cb5b3c6efa0cc3abbe66a055a1fd017d60eb6803ff` |
+| SPDX subject | `4b14dc70f042…` — the child itself |
+| `python-3.14` | `3.14.6-r4` |
+| `cpython` | `v3.14.6` |
+
+The next `:latest` (2026-08-07) is already 3.14.7, so this is the **last**
+3.14.6 build. **Ruling: replace the candidate, do not migrate the governed
+version.** No `GOVERNED_PYTHON_VERSION` change, no §27 change, no new
+generation.
+
+> **These digests were read WITHOUT cryptographic verification** — this host has
+> no cosign, and the registry walk used the anonymous pull token. They
+> establish that the candidate exists and what it contains. They do **not**
+> replace `cosign verify-attestation`, which the operator must still run
+> against the child before approval.
+
+**Migration was assessed and is not needed.** Recorded because the assessment
+is the reason for the ruling: `3.14.6` appears in the offline provisioning
+module, the operator scripts, the docs and the tests — and **nowhere in the
+installed Generation-6 runtime**, which carries only `CONTAINER_INTERPRETER =
+"/usr/bin/python"`, a path and not a version. A future version migration would
+therefore be an offline-constants change requiring **no runtime change and no
+new generation**. That remains true whenever it is next considered.
+
+#### Retirement, not overwriting
+
+The superseded candidate and approval are **retired, not edited**. Provenance is
+not rewritten:
+
+1. move `/root/kyri-g5-candidate-evidence.txt` and
+   `/root/kyri-g5-approved-base.txt` aside as
+   `…-retired-84e1f28d.txt`, `root:root 0400`;
+2. record why: *superseded — SBOM and interpreter both report 3.14.7 against a
+   governed 3.14.6*;
+3. only then run discovery and approval for `4b14dc70…`.
+
+**Disposition of the built image `a3ef70ee…`.** It was built from the 3.14.7
+base and is **not admissible**. It is admitted by nothing, so it grants nothing
+— an image in the store with no `CIMP` is inert, exactly as Track-B residue is.
+Leave it. Removing it is not required for G5 and, like the Track-B artefacts,
+is deferred to **G7**. Do not reuse its tag: the replacement build must produce
+a new `.Id`, and `kyri-capability-execution:g5` must be re-pointed by the build
+itself, never by hand.
+
+#### `source_commit` semantics — ruled
+
+`source_commit` is the commit **whose Containerfile was materialised into the
+build context that produced the image** — the value passed to
+`--materialise-build-context --commit`. It is not the later
+authority-ceremony commit, and not `HEAD` at admission time. The image is a
+function of that Containerfile and the approved base; recording anything else
+would name a revision that did not produce the artefact.
+
+#### NEWLY DISCOVERED BLOCKER — `sbom_python_package`
+
+`provisioning_evidence.py` requires `sbom_python_package == "python"`. **No
+Chainguard image satisfies that**: their SPDX names the package for the minor
+series (`python-3.14`) and the interpreter separately (`cpython`). A 3.14.6
+image would fail this too.
+
+This pass does **not** change it: it is a ruled schema, the instruction was not
+to weaken `canonical_evidence`, and the correct expectation is a decision, not
+a patch. **It must be ruled before admission can succeed.** The operator tooling
+now verifies the governed package as `python-3.14` at approval time, so the
+mismatch surfaces early rather than at the final gate — but evidence creation
+will still refuse until the schema question is settled.
+
 #### The authority mutation gate — opened 2026-08-14, on evidence
 
 Live operator progression reached the intentionally disabled mutation gate

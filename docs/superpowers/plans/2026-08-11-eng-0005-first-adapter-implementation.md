@@ -1108,6 +1108,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | production G5 image build and CIMP admission | ceremony prepared and tested, **NOT EXECUTED**; base approved, build context ruled |
 | production build context | ruled 2026-08-14 after a live failure: root-owned `/run/kyri/g5-build-context`, **MATERIALISED**, image built |
 | G5 authority mutation gate | opened 2026-08-14 on ruled evidence after the image was built and inspected; **NOT RUN** |
+| governed Python 3.14.6 | **PRESERVED** 2026-08-14; candidate replaced with the last 3.14.6 child `4b14dc70…`, no migration |
+| `sbom_python_package == "python"` | **BLOCKER**: Chainguard names it `python-3.14`; needs a ruling before admission |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
 ### Pass 2B — offline bootstrap primitives, implemented
