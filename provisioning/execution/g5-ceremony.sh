@@ -373,23 +373,23 @@ verify_build_inputs() {
     printf '\n'
     printf 'BASE IMAGE NOT APPROVED. The production build is not eligible.\n'
     printf 'Candidate discovery and base approval are a separate operator\n'
-    printf 'ceremony; run --print-plan for the exact procedure.\n'
+    printf 'ceremony; run --print-plan, and see\n'
+    printf '  provisioning/execution/g5-supply-chain.sh --print-attestation-procedure\n'
     return 1
   fi
-  local reference
-  reference="$(grep -E "^base_image_reference=" "${BASE_APPROVAL}" | head -1 | cut -d= -f2-)"
-  [[ "${reference}" =~ ^"${BASE_REPOSITORY}"@sha256:[0-9a-f]{64}$ ]] \
-    || bad "the approved base ${reference:-absent} is not a digest-pinned ${BASE_REPOSITORY} reference"
-  [[ "${reference}" != *:latest* ]] || bad "the approved base names a tag"
-  if [[ -z "${FIXTURE}" ]]; then
-    [[ "$(stat -c '%U:%G %a' "${BASE_APPROVAL}")" == "root:root 400" ]] \
-      || bad "${BASE_APPROVAL} is not root:root 0400"
+  # One definition of the approval schema, and it lives with the supply-chain
+  # tooling that produces the values. A second copy here would be a second
+  # thing to keep in agreement, and the two would drift at exactly the moment a
+  # field started mattering.
+  local supply="${REPOSITORY}/provisioning/execution/g5-supply-chain.sh"
+  [[ -f "${supply}" ]] || { bad "the supply-chain tooling is absent"; return 1; }
+  local arguments=(--verify-approval)
+  [[ -z "${FIXTURE}" ]] || arguments+=(--fixture "${FIXTURE}")
+  if bash "${supply}" "${arguments[@]}" | sed 's/^/         /'; then
+    ok "the production base approval verifies (digest-pinned, signer-bound, SBOM committed)"
+  else
+    bad "the production base approval does not verify"
   fi
-  local sbom_source
-  sbom_source="$(grep -E "^sbom_source=" "${BASE_APPROVAL}" | head -1 | cut -d= -f2-)"
-  [[ -n "${sbom_source}" ]] \
-    || bad "the approval records no sbom_source: the bytes whose SHA-256 becomes sbom_sha256 must be named before the build"
-  (( FAILURES == 0 )) && ok "approved base ${reference} with an explicit SBOM source"
 }
 
 verify_authority_prerequisites() {

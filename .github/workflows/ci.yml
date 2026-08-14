@@ -293,6 +293,11 @@ jobs:
       - name: Capability execution G5 ceremony tests
         run: bash tests/test-capability-execution-g5-ceremony.sh
 
+      # Cosign trust and Chainguard SPDX attestation semantics, against
+      # synthetic DSSE envelopes. No network, no install, no approval.
+      - name: Capability execution G5 supply chain tests
+        run: bash tests/test-capability-execution-g5-supply-chain.sh
+
       # Worker driven through a fake backend: no Podman, no subprocess, no
       # container. Real execution is gate G6.
       - name: Capability execution lifecycle tests

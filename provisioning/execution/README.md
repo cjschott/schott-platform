@@ -791,30 +791,136 @@ inspecting · the discovery timestamp · the exact commands run.
 The production build then consumes the approved digest and nothing else. A tag
 records an intention; only a digest records an artefact.
 
-#### SBOM authority — the rule, and what is still missing
+#### SBOM authority — resolved: the signed Chainguard SPDX attestation
 
-**Ruled:** `sbom_sha256` is the SHA-256 of an exact, named byte sequence
-recorded as `sbom_source` in the approval **before** the build. Those bytes are
+**Ruled, and now implemented.** `sbom_sha256` is the SHA-256 of an exact, named
+byte sequence recorded as `sbom_source` **before** the build. Those bytes are
 committed verbatim: nothing normalises, re-serialises, pretty-prints, or
-rewrites them after generation, and no canonicaliser is introduced to make a
-hash stable.
+rewrites them, and no canonicaliser was introduced to make a hash stable.
 
-**Not yet satisfiable, and deliberately not worked around.** This host carries
-no SBOM generator — no `syft`, `trivy`, `grype`, `cosign`, `skopeo`, or
-`crane`; Podman 4.9.3 has no SBOM subcommand and the `docker sbom` plugin is
-absent. Installing one is a new reviewed supply-chain dependency, not a detail
-of this ceremony, and choosing a generator that stamps timestamps or random
-document identifiers into its output would put an unstable value under a
-commitment.
+**No local SBOM generator is used, and none is installed.** This host has none
+— no `syft`, `trivy`, `grype`, `cosign`, `skopeo`, or `crane`; Podman 4.9.3 has
+no SBOM subcommand — and a generator would stamp its own timestamps and
+document identifiers into the committed bytes. Chainguard already publishes a
+**signed SPDX attestation** for every public image, so the commitment is over
+something a third party signed, retrieved rather than generated, and immutable
+because the attestation layer is content-addressed in the registry.
 
-The defensible mechanism, and therefore an **approval criterion for the
-candidate**, is that the base image already carries a machine-readable SBOM
-whose bytes are committed by the image digest itself — extracted verbatim, with
-no generator in the path, so determinism follows from the OCI digest rather
-than from a tool's good behaviour. Whether the approved candidate carries one,
-and at what path, cannot be known until discovery runs. **Until then the exact
-SBOM tool, invocation, and format remain an open operator input**, and
-`--verify-build-inputs` refuses an approval that does not name `sbom_source`.
+**Which bytes.** `cosign` emits one DSSE envelope per line:
+`{"payloadType":"application/vnd.in-toto+json","payload":"<base64>","signatures":[…]}`.
+Three representations were considered:
+
+| | Representation | Verdict |
+|---|---|---|
+| A | the whole DSSE envelope | rejected — mostly signature material; re-signing the same SBOM would change the committed bytes |
+| B | **the base64-decoded payload** — the in-toto Statement carrying the SPDX document as its predicate | **CHOSEN** |
+| C | the SPDX predicate alone | rejected — extracting a sub-object means re-emitting JSON, which is the re-serialisation the rule forbids |
+
+B is the only one that is both byte-exact and meaningful. The DSSE signature
+covers `PAE("application/vnd.in-toto+json", payload)`, so these are precisely
+the bytes Chainguard signed, and base64 decoding is a byte-exact transform
+rather than a rendering. The statement is parsed only to read its
+`predicateType` and `subject`; the bytes written out are the decoded payload
+itself.
+
+So `sbom_source` reads: **decoded DSSE payload, in-toto Statement v0.1,
+predicateType `https://spdx.dev/Document`.**
+
+Proven, not asserted: the suite builds a synthetic envelope, extracts through
+the real code path, and **byte-compares the committed bytes against the bytes
+that were encoded into the envelope**. Any re-serialisation anywhere on the
+read path would change them and fail the comparison.
+
+#### Cosign, pinned
+
+| | |
+|---|---|
+| version | **2.6.0** (Chainguard documents 2.2.1+ for attestation platform selection) |
+| artifact | `https://github.com/sigstore/cosign/releases/download/v2.6.0/cosign-linux-amd64` |
+| binary SHA-256 | `ea5c65f99425d6cfbb5c4b5de5dac035f14d09131c1a0ea7c7fc32eab39364f9` |
+| `cosign_checksums.txt` SHA-256 | `423c15cb363bf4fd62bedc7a59d4130d84286e4532b99a0f95bfd4b0195b01c8` |
+| installed at | `/root/kyri-g5-tooling/cosign-2.6.0`, `root:root 0500` |
+
+The checksums file is pinned as well as the binary, because a swapped checksums
+file would otherwise validate a swapped binary quite happily. **The binary is
+referred to only by absolute path** — nothing resolves the name `cosign`
+through `PATH`, so a cosign earlier in an operator's `PATH` cannot substitute
+itself. `provisioning/execution/g5-supply-chain.sh --print-cosign-bootstrap`
+prints the download/verify/install steps; the operator runs them, and
+`--verify-cosign` confirms the result.
+
+#### Chainguard signing identity, pinned
+
+| | |
+|---|---|
+| OIDC issuer | `https://token.actions.githubusercontent.com` |
+| certificate identity | `https://github.com/chainguard-images/images/.github/workflows/release.yaml@refs/heads/main` |
+| predicate type | `https://spdx.dev/Document` |
+
+Confirmed against two independent Chainguard provenance pages (`python` and
+`static`) plus Chainguard Academy; the values are per-registry, not per-image.
+**Verification is `cosign verify-attestation`, never `cosign download
+attestation`** — downloading performs no signature checking at all, and the
+tooling does not offer it as an alternative.
+
+#### Index or child manifest
+
+Cosign is invoked against the **digest-pinned multi-arch index** with
+`--platform linux/amd64`, because that is the reference whose platform
+selection cosign implements. The child is then bound by requiring the signed
+statement's `subject` digest to equal the platform manifest. Passing the child
+digest directly would make `--platform` meaningless and drop the binding.
+
+The discovered candidate under review — a candidate, approved by nobody:
+
+```
+discovery   cgr.dev/chainguard/python:latest        <- discovery only, never authority
+index       sha256:fe9ad068be9f8b9417ffebc049c852c43c03897c364146b9823944cdd7e70b94
+platform    linux/amd64
+child       sha256:84e1f28d16a545d7fdeb0a292005e1d6147059deee4aac8611526888d353f5ca
+config      sha256:a33976e6c3275bab76c89686561e5b8cacf6c6f40b70ec67a3d01c8cf8c2bdd6
+```
+
+A note on discovery: the OCI `/referrers` endpoint returning **count 0** for the
+child manifest does **not** indicate the absence of an attestation. Cosign
+discovers attestations through its tag scheme (`sha256-<digest>.att`), not
+through the referrers API, so referrers is silent about them either way.
+
+#### Deterministic selection, and what is refused
+
+Selection filters on predicate type **and** subject digest, then requires
+**exactly one** survivor. Never "the first result". Refused, each proven by
+test: an attestation for a different image · a non-SPDX predicate type · two
+statements matching the same predicate and subject · a predicate that is not an
+SPDX document, or has no name, no `documentNamespace`, or an empty package
+inventory · a malformed envelope line · an extraction with no subject to bind
+to. A refused statement never prints an `sbom_sha256` an operator could
+transcribe.
+
+**Determinism is mandatory before approval**: retrieve the attestation twice
+and require the committed bytes and digest to be identical. That is a live
+network step and has not been run.
+
+#### Candidate evidence, and approval
+
+Two files, and the separation between them is the point.
+
+`/root/kyri-g5-candidate-evidence.txt` — **candidate, not approval.** Records
+`discovery_reference`, `index_digest`, `platform`, `manifest_digest`,
+`config_digest`, `discovered_at`, `discovery_commands`,
+`sbom_attestation_verified`, `sbom_predicate_type`, `sbom_sha256`,
+`cosign_version`, `cosign_sha256`, `signing_identity`, `signing_issuer`.
+
+`/root/kyri-g5-approved-base.txt` — `root:root 0400`, the production approval.
+Records `base_image_reference` (digest-pinned; a tag is refused), `platform`,
+`manifest_digest`, `config_digest`, `sbom_source`, `sbom_sha256`,
+`cosign_version`, `cosign_sha256`, `attestation_predicate_type`,
+`attestation_signer`, `approved_by`, `approved_at`. Every field is mandatory
+and **none may be inferred during the production build**.
+
+**No script writes the approval.** Nothing in the supply-chain tooling can, and
+the suite asserts it: a human reviews the candidate and root records the
+decision. There is no "if verification passes, write the approval" path.
 
 #### Recorded for the eventual ceremony
 

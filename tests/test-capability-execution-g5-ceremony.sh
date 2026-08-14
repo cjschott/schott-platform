@@ -36,6 +36,15 @@ read_pin() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "${CEREMONY}" | head -1; }
 MANIFEST_DIGEST="$(read_pin MANIFEST_DIGEST)"
 MANIFEST_ENTRIES="$(sed -n 's/^MANIFEST_ENTRIES=\([0-9]*\)$/\1/p' "${CEREMONY}" | head -1)"
 BASE_REPOSITORY="$(read_pin BASE_REPOSITORY)"
+SUPPLY="${REPOSITORY}/provisioning/execution/g5-supply-chain.sh"
+supply_pin() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "${SUPPLY}" | head -1; }
+PREDICATE_TYPE="$(supply_pin PREDICATE_TYPE)"
+COSIGN_VERSION="$(supply_pin COSIGN_VERSION)"
+COSIGN_BINARY_SHA256="$(supply_pin COSIGN_BINARY_SHA256)"
+CHAINGUARD_IDENTITY="$(supply_pin CHAINGUARD_IDENTITY)"
+INDEX_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_INDEX_DIGEST)"
+MANIFEST_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_MANIFEST_DIGEST)"
+CONFIG_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_CONFIG_DIGEST)"
 [[ "${MANIFEST_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || {
   printf 'the ceremony pins no manifest digest\n' >&2; exit 1; }
 
@@ -319,41 +328,67 @@ else
   fail "an unapproved base was not reported: $(tail -6 "${root}/last-run.log")"
 fi
 
+# The approval SCHEMA belongs to the supply-chain tooling and is exercised
+# field by field there. What the ceremony owes is delegation: it must consult
+# that one definition rather than carrying a second, looser copy.
+write_approval() {
+  local root="$1" reference="$2"
+  cat > "${root}/root/kyri-g5-approved-base.txt" <<EOF
+base_image_reference=${reference}
+platform=linux/amd64
+manifest_digest=sha256:${MANIFEST_DIGEST_CANDIDATE}
+config_digest=sha256:${CONFIG_DIGEST_CANDIDATE}
+sbom_source=decoded DSSE payload, in-toto Statement v0.1, predicateType ${PREDICATE_TYPE}
+sbom_sha256=$(printf 'd%.0s' {1..64})
+cosign_version=${COSIGN_VERSION}
+cosign_sha256=${COSIGN_BINARY_SHA256}
+attestation_predicate_type=${PREDICATE_TYPE}
+attestation_signer=${CHAINGUARD_IDENTITY}
+approved_by=cschott
+approved_at=2026-08-14T12:30:00Z
+EOF
+}
+
 root="${WORK}/floatingbase"; build_fixture "${root}"
-printf 'base_image_reference=%s:latest\nsbom_source=/var/lib/db/sbom\n' "${BASE_REPOSITORY}" \
-  > "${root}/root/kyri-g5-approved-base.txt"
+write_approval "${root}" "${BASE_REPOSITORY}:latest"
 if run_ceremony "${root}" --verify-build-inputs; then
   fail "a floating tag was accepted as an approved base"
 else
   if grep -q "not a digest-pinned" "${root}/last-run.log"; then
     pass "a tag can never be an approved production base"
   else
-    fail "a floating base refused for the wrong reason: $(tail -4 "${root}/last-run.log")"
+    fail "a floating base refused for the wrong reason: $(tail -6 "${root}/last-run.log")"
   fi
 fi
 
 root="${WORK}/nosbom"; build_fixture "${root}"
-printf 'base_image_reference=%s@sha256:%s\n' "${BASE_REPOSITORY}" "$(printf 'a%.0s' {1..64})" \
-  > "${root}/root/kyri-g5-approved-base.txt"
+write_approval "${root}" "${BASE_REPOSITORY}@sha256:${INDEX_DIGEST_CANDIDATE}"
+grep -v '^sbom_source=' "${root}/root/kyri-g5-approved-base.txt" > "${root}/tmp"
+mv "${root}/tmp" "${root}/root/kyri-g5-approved-base.txt"
 if run_ceremony "${root}" --verify-build-inputs; then
   fail "an approval without a named SBOM source was accepted"
 else
-  if grep -q "records no sbom_source" "${root}/last-run.log"; then
+  if grep -q "missing sbom_source" "${root}/last-run.log"; then
     pass "an approval must name the exact bytes whose SHA-256 becomes sbom_sha256"
   else
-    fail "missing sbom_source refused for the wrong reason: $(tail -4 "${root}/last-run.log")"
+    fail "missing sbom_source refused for the wrong reason: $(tail -6 "${root}/last-run.log")"
   fi
 fi
 
 root="${WORK}/goodbase"; build_fixture "${root}"
-printf 'base_image_reference=%s@sha256:%s\nsbom_source=/var/lib/db/sbom/python.spdx.json\n' \
-  "${BASE_REPOSITORY}" "$(printf 'b%.0s' {1..64})" \
-  > "${root}/root/kyri-g5-approved-base.txt"
+write_approval "${root}" "${BASE_REPOSITORY}@sha256:${INDEX_DIGEST_CANDIDATE}"
 if run_ceremony "${root}" --verify-build-inputs \
-   && grep -q "approved base ${BASE_REPOSITORY}@sha256:" "${root}/last-run.log"; then
-  pass "a digest-pinned approval naming an SBOM source is accepted"
+   && grep -q "the production base approval verifies" "${root}/last-run.log"; then
+  pass "a complete approval verifies through the single supply-chain definition"
 else
-  fail "a valid approval was rejected: $(tail -6 "${root}/last-run.log")"
+  fail "a valid approval was rejected: $(tail -8 "${root}/last-run.log")"
+fi
+# Delegation, not duplication: a second copy of the schema here would drift.
+if grep -q 'g5-supply-chain.sh' "${CEREMONY}" \
+   && ! grep -q 'attestation_signer' "${CEREMONY}"; then
+  pass "the ceremony delegates the approval schema instead of restating it"
+else
+  fail "the ceremony carries its own copy of the approval schema"
 fi
 
 # ===========================================================================
