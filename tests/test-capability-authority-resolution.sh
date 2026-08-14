@@ -136,7 +136,7 @@ from tools.capability.execution.worker import CONTAINER_INTERPRETER
 from tools.provisioning.authority_bootstrap import (
     provision_control_state, initialise_genesis, IMPLEMENTATIONS,
     CIMP_COUNTER, CGEN_COUNTER, STAGING, CURRENT_GENERATION)
-from tools.provisioning.provisioning_evidence import (
+from tools.provisioning.provisioning_evidence import (GOVERNED_SBOM_PACKAGE,
     EVIDENCE_SCHEMA_VERSION, GOVERNED_PYTHON_VERSION, canonical_evidence,
     evidence_digest)
 from tools.provisioning.authority_admission import (
@@ -156,7 +156,7 @@ def evidence_for(image=IMAGE):
         'oci_image_id': image, 'python_version': GOVERNED_PYTHON_VERSION,
         'interpreter_path': CONTAINER_INTERPRETER, 'interpreter_link': None,
         'interpreter_target': '/usr/lib/python3.14/python',
-        'interpreter_sha256': 'e' * 64, 'sbom_python_package': 'python',
+        'interpreter_sha256': 'e' * 64, 'sbom_python_package': GOVERNED_SBOM_PACKAGE,
         'sbom_python_version': GOVERNED_PYTHON_VERSION, 'sbom_sha256': 'f' * 64,
         'os': 'linux', 'architecture': 'amd64'})
 

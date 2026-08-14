@@ -1134,19 +1134,58 @@ authority-ceremony commit, and not `HEAD` at admission time. The image is a
 function of that Containerfile and the approved base; recording anything else
 would name a revision that did not produce the artefact.
 
-#### NEWLY DISCOVERED BLOCKER — `sbom_python_package`
+#### The governed SBOM package — ruled 2026-08-14
 
-`provisioning_evidence.py` requires `sbom_python_package == "python"`. **No
-Chainguard image satisfies that**: their SPDX names the package for the minor
-series (`python-3.14`) and the interpreter separately (`cpython`). A 3.14.6
-image would fail this too.
+`provisioning_evidence.py` required a package literally named `python`. **No
+Chainguard image satisfies that**, and a 3.14.6 image would have failed it too:
+their signed SPDX names the runtime package for the minor series and records
+the upstream source separately.
 
-This pass does **not** change it: it is a ruled schema, the instruction was not
-to weaken `canonical_evidence`, and the correct expectation is a decision, not
-a patch. **It must be ruled before admission can succeed.** The operator tooling
-now verifies the governed package as `python-3.14` at approval time, so the
-mismatch surfaces early rather than at the final gate — but evidence creation
-will still refuse until the schema question is settled.
+```
+python-3.14        3.14.6-r4     <- the governed runtime package
+python-3.14-base   3.14.6-r4
+cpython            v3.14.6       <- the upstream source record
+```
+
+**Ruled:** `sbom_python_package = "python-3.14"`, `sbom_python_version =
+"3.14.6"`. The runtime package is what the image installs and therefore what
+the governed version describes, so it carries the SBOM proof **alone**.
+`cpython` is not added — the canonical manifest stays at **fifteen fields**.
+
+The package name is **derived** from the governed version's minor series rather
+than written out a second time: two constants that must agree are two constants
+that can disagree, and a future version ruling would otherwise leave the
+package name behind. The supply-chain tooling and the ruled schema are asserted
+to name the same package and version.
+
+**The vendor revision is normalised at extraction, never at admission.**
+`--extract-sbom` reports `3.14.6-r4 (observed)` and `3.14.6 (record)`;
+`canonical_evidence` requires exact equality with the governed version, so a
+`-rN` value reaching evidence is a refusal rather than something quietly
+accepted. Approval and admission hold one semantic value.
+
+#### Discovery by governed version — ruled 2026-08-14
+
+Discovery used to read `:latest` and record whatever was current. That is how a
+3.14.7 candidate came to be approved and built. `provisioning/execution/g5-discover-base.sh`
+now walks Chainguard's Tag History API — anonymously readable, with
+pull-by-digest available across tiers — and selects the newest child whose
+signed SPDX proves the governed package at the governed patch.
+
+**It is a separate artefact because it reaches the network**, and
+`g5-supply-chain.sh` reaches none in any mode — an invariant its suite asserts.
+Discovery pulls no image, writes no approval, and cannot: a candidate is
+promoted by a human.
+
+**Fail-closed, each proven by test:** no governed child in the window · an SPDX
+naming the governed package at two versions · a missing or unreadable
+attestation · an index with no `linux/amd64` child, or with two · a
+non-SPDX predicate. None is answered by widening the search silently, and none
+falls back to `:latest`.
+
+**What discovery does not establish:** the SPDX is read with an anonymous pull
+token and is **not cryptographically verified**. The output is a candidate.
+Approval still requires `cosign verify-attestation` against the child.
 
 #### The authority mutation gate — opened 2026-08-14, on evidence
 

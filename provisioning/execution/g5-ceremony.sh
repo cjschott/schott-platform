@@ -78,7 +78,7 @@ BRANCH="arch/eng-0005-execution-transition"
 # the ceremony may import, as `sha256  path` lines, LC_ALL=C sorted. This digest
 # is the gate. The commit is supplied by the operator and checked for ancestry,
 # but the commit is a name and this is the content.
-MANIFEST_DIGEST="b1dd70973c1b4abddd9bab556647ec7c5088fb0f94954822ae142c3767542560"
+MANIFEST_DIGEST="01d3bdd3cac1493fafbdd3ba62a27fda71bd7a818fd6a52a9d36d0a1503f1c1f"
 MANIFEST_ENTRIES=46
 
 LIBRARY_ROOT="/usr/lib/kyri/python"

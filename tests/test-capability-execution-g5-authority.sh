@@ -126,7 +126,7 @@ open(out, "wb").write(canonical_evidence({
     "interpreter_link": "python3.14", "interpreter_path": "/usr/bin/python",
     "interpreter_sha256": "b" * 64, "interpreter_target": "/usr/bin/python3.14",
     "oci_image_id": image, "os": "linux", "python_version": "3.14.6",
-    "sbom_python_package": "python", "sbom_python_version": "3.14.6",
+    "sbom_python_package": "python-3.14", "sbom_python_version": "3.14.6",
     "sbom_sha256": sbom, "source_commit": commit}))
 PY
 }

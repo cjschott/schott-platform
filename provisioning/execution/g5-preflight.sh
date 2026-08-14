@@ -60,13 +60,13 @@ OPERATOR_MODULES=(
 "tools/provisioning/authority_bootstrap.py|85bb2b3aa18ea348c746af65449a7e90216e6c9d8b32c0877bd1fff0d0dc781e"
 "tools/provisioning/authority_admission.py|65635d4ce66b2e5897a22859b990bc250e77bd425e3f5a5c85e009ab32dfa620"
 "tools/provisioning/authority_disposition.py|5f950ef2f6e7a48d3507e368aa851a363737723d7e2b85d159fd855c73a2cfc7"
-"tools/provisioning/provisioning_evidence.py|0a2616fb38a515f66b9116d77e22b5c52829fdc7d58ff5c47f7541b8cb4bf235"
+"tools/provisioning/provisioning_evidence.py|1a392efffd2a1972752f838dde74921be1a464481a6c4ab4719a0e9f1188932c"
 )
 
 # The image build material, pinned for the same reason.
 IMAGE_MATERIAL=(
 "provisioning/image/Containerfile|f543c458fcb1793570010b58417c175e6510fe0d90d2a295ef9d38b0cfdedcbb"
-"provisioning/image/README.md|b251058847f814b6fb3aa4211d33483ed92833ac5c2d3ff6cd3e315c7584757d"
+"provisioning/image/README.md|9ca8002e7e70295aeffd8884318ef709b06d62f6e0d8d49f801379571307439d"
 )
 
 MODE=""

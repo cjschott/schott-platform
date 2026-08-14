@@ -464,13 +464,18 @@ print("      envelope line:        %d" % number)
 print("      spdx version:         %s" % predicate.get("spdxVersion"))
 print("      spdx name:            %s" % predicate.get("name"))
 print("      package inventory:    %d" % len(packages))
-print("      %-21s %s" % (governed_package + ":", found[0]))
+print("      %-21s %s" % (governed_package + " (observed):", found[0]))
+print("      %-21s %s" % (governed_package + " (record):", governed_version))
 print("      committed bytes:      %d" % len(payload))
 print("      sbom_sha256:          %s" % hashlib.sha256(payload).hexdigest())
 ' "${PAYLOAD_TYPE}" "${PREDICATE_TYPE}" "${MANIFEST_DIGEST}" "${ENVELOPE_FILE}" \
       "${PAYLOAD_OUT}" "${GOVERNED_SBOM_PACKAGE}" "${GOVERNED_PYTHON_VERSION}" ) \
     || halt "the attestation did not yield exactly one bound SPDX statement"
   ok "exactly one signed SPDX statement, bound to sha256:${MANIFEST_DIGEST}"
+  note "record sbom_python_package=${GOVERNED_SBOM_PACKAGE} and"
+  note "  sbom_python_version=${GOVERNED_PYTHON_VERSION} -- the governed upstream patch."
+  note "  The vendor revision is observed and reported above but never recorded: §27"
+  note "  rules -rN may vary while the upstream patch may not."
   note "record the sbom_sha256 above as the approval's sbom_sha256; sbom_source is"
   note "  'decoded DSSE payload, in-toto Statement v0.1, predicateType ${PREDICATE_TYPE}'"
 }
@@ -561,8 +566,11 @@ verify_candidate() {
     || bad "cosign_sha256 is not the pinned binary digest"
   [[ "$(field_of sbom_python_package "${CANDIDATE_EVIDENCE}")" == "${GOVERNED_SBOM_PACKAGE}" ]] \
     || bad "sbom_python_package is not ${GOVERNED_SBOM_PACKAGE}"
-  [[ "$(field_of sbom_python_version "${CANDIDATE_EVIDENCE}")" == "${GOVERNED_PYTHON_VERSION}"* ]] \
-    || bad "sbom_python_version is not the governed ${GOVERNED_PYTHON_VERSION}"
+  # EXACT, not a prefix. The evidence schema requires the governed upstream
+  # patch and refuses a vendor revision, so recording `3.14.6-r4` here would
+  # mean approval and admission disagreed about the same fact.
+  [[ "$(field_of sbom_python_version "${CANDIDATE_EVIDENCE}")" == "${GOVERNED_PYTHON_VERSION}" ]] \
+    || bad "sbom_python_version is not the governed ${GOVERNED_PYTHON_VERSION} (record the upstream patch, not the vendor -rN)"
   [[ "$(field_of sbom_attestation_verified "${CANDIDATE_EVIDENCE}")" == "yes" ]] \
     || bad "sbom_attestation_verified is not yes: the attestation was not cryptographically verified"
   (( FAILURES == 0 )) && ok "candidate evidence is complete and internally consistent"
@@ -612,8 +620,11 @@ verify_approval() {
     || bad "sbom_sha256 is not a bare 64-hex digest"
   [[ "$(field_of sbom_python_package "${BASE_APPROVAL}")" == "${GOVERNED_SBOM_PACKAGE}" ]] \
     || bad "sbom_python_package is not ${GOVERNED_SBOM_PACKAGE}"
-  [[ "$(field_of sbom_python_version "${BASE_APPROVAL}")" == "${GOVERNED_PYTHON_VERSION}"* ]] \
-    || bad "sbom_python_version is not the governed ${GOVERNED_PYTHON_VERSION}"
+  # EXACT, not a prefix. The evidence schema requires the governed upstream
+  # patch and refuses a vendor revision, so recording `3.14.6-r4` here would
+  # mean approval and admission disagreed about the same fact.
+  [[ "$(field_of sbom_python_version "${BASE_APPROVAL}")" == "${GOVERNED_PYTHON_VERSION}" ]] \
+    || bad "sbom_python_version is not the governed ${GOVERNED_PYTHON_VERSION} (record the upstream patch, not the vendor -rN)"
   [[ "$(field_of attestation_predicate_type "${BASE_APPROVAL}")" == "${PREDICATE_TYPE}" ]] \
     || bad "attestation_predicate_type is not ${PREDICATE_TYPE}"
   [[ "$(field_of attestation_signer "${BASE_APPROVAL}")" == "${CHAINGUARD_IDENTITY}" ]] \

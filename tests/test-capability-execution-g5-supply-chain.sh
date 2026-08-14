@@ -458,6 +458,80 @@ else
 fi
 
 # ===========================================================================
+# 7b. the governed SBOM package identity, ruled 2026-08-14
+# ===========================================================================
+# The literal "python" matched no real Chainguard image: their SPDX names the
+# runtime package for the minor series and records the upstream source
+# separately as cpython. Both definitions -- the ruled evidence schema and this
+# operator tooling -- must mean the same package, or approval and admission
+# would be checking different things.
+module_package="$(python3 -c '
+import sys; sys.path.insert(0, sys.argv[1])
+from tools.provisioning.provisioning_evidence import GOVERNED_SBOM_PACKAGE
+print(GOVERNED_SBOM_PACKAGE)' "${REPOSITORY}")"
+module_version="$(python3 -c '
+import sys; sys.path.insert(0, sys.argv[1])
+from tools.provisioning.provisioning_evidence import GOVERNED_PYTHON_VERSION
+print(GOVERNED_PYTHON_VERSION)' "${REPOSITORY}")"
+shell_package="$(read_pin GOVERNED_SBOM_PACKAGE)"
+shell_version="$(read_pin GOVERNED_PYTHON_VERSION)"
+[[ "${module_package}" == "${shell_package}" ]] \
+  && pass "approval tooling and the ruled evidence schema name the same governed package (${shell_package})" \
+  || fail "the tooling says ${shell_package} and the schema says ${module_package}"
+[[ "${module_version}" == "${shell_version}" ]] \
+  && pass "approval tooling and the ruled evidence schema name the same governed version (${shell_version})" \
+  || fail "the tooling says ${shell_version} and the schema says ${module_version}"
+[[ "${shell_package}" == "python-3.14" ]] \
+  && pass "the governed package is the signed name python-3.14, not a normalised label" \
+  || fail "the governed package is ${shell_package}"
+
+# The ruled schema, exercised directly: only the real signed name is accepted,
+# the schema stays at fifteen fields, and cpython cannot stand in for it.
+schema_case() {
+  python3 - "${REPOSITORY}" "$1" "$2" <<'SCHEMA'
+import sys
+sys.path.insert(0, sys.argv[1])
+from tools.provisioning.provisioning_evidence import canonical_evidence, EvidenceError
+document = {"architecture": "amd64",
+            "base_image_reference": "cgr.dev/chainguard/python@sha256:" + "4" * 64,
+            "containerfile_sha256": "a" * 64, "evidence_schema_version": 1,
+            "interpreter_link": "python3", "interpreter_path": "/usr/bin/python",
+            "interpreter_sha256": "b" * 64, "interpreter_target": "/usr/bin/python3.14",
+            "oci_image_id": "c" * 64, "os": "linux", "python_version": "3.14.6",
+            "sbom_python_package": sys.argv[2], "sbom_python_version": sys.argv[3],
+            "sbom_sha256": "d" * 64, "source_commit": "e" * 40}
+try:
+    canonical_evidence(document)
+except EvidenceError:
+    raise SystemExit(1)
+SCHEMA
+}
+schema_case python-3.14 3.14.6 \
+  && pass "the ruled schema accepts the real signed package at the governed version" \
+  || fail "the ruled schema refuses python-3.14 at 3.14.6"
+for bad_case in "python:3.14.6:the bare literal python" \
+                "cpython:3.14.6:cpython alone, which is the upstream source record" \
+                "python-3.14:3.14.7:the right package at the wrong governed version" \
+                "python-3.14:3.14.6-r4:an unnormalised vendor revision" \
+                "python3:3.14.6:an unknown alias" \
+                "python-3.14.6:3.14.6:a patch-level package alias"; do
+  IFS=: read -r case_package case_version case_why <<<"${bad_case}"
+  schema_case "${case_package}" "${case_version}" \
+    && fail "the ruled schema accepted ${case_why}" \
+    || pass "the ruled schema refuses ${case_why}"
+done
+schema_fields="$(python3 -c '
+import sys; sys.path.insert(0, sys.argv[1])
+from tools.provisioning.provisioning_evidence import EVIDENCE_FIELDS
+print(len(EVIDENCE_FIELDS))' "${REPOSITORY}")"
+[[ "${schema_fields}" -eq 15 ]] \
+  && pass "the canonical schema is still exactly fifteen fields: python-3.14 carries the proof alone" \
+  || fail "the canonical schema is ${schema_fields} fields"
+grep -q 'cpython' "${REPOSITORY}/tools/provisioning/provisioning_evidence.py" \
+  && pass "the schema records why cpython is not a field rather than leaving it unexplained" \
+  || fail "nothing explains why cpython is excluded"
+
+# ===========================================================================
 # 8. candidate evidence, and that it is not an approval
 # ===========================================================================
 cand="${WORK}/cand"; mkdir -p "${cand}/root"
@@ -474,7 +548,7 @@ sbom_attestation_verified=${1:-yes}
 sbom_predicate_type=${PREDICATE_TYPE}
 sbom_sha256=${reported}
 sbom_python_package=python-3.14
-sbom_python_version=3.14.6-r4
+sbom_python_version=3.14.6
 cosign_version=${COSIGN_VERSION}
 cosign_sha256=${2:-${COSIGN_BINARY_SHA256}}
 signing_identity=${3:-${CHAINGUARD_IDENTITY}}
@@ -535,7 +609,7 @@ config_digest=sha256:${CONFIG}
 sbom_source=decoded DSSE payload, in-toto Statement v0.1, predicateType ${PREDICATE_TYPE}
 sbom_sha256=${reported}
 sbom_python_package=python-3.14
-sbom_python_version=3.14.6-r4
+sbom_python_version=3.14.6
 cosign_version=${2:-${COSIGN_VERSION}}
 cosign_sha256=${COSIGN_BINARY_SHA256}
 attestation_predicate_type=${3:-${PREDICATE_TYPE}}

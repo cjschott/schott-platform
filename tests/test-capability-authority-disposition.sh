@@ -130,7 +130,7 @@ from tools.provisioning.authority_bootstrap import (
     BootstrapError, ControlStateError, LockUnavailable,
     CIMP_COUNTER, CGEN_COUNTER, STAGING,
     GENESIS_CGEN, IMPLEMENTATIONS, GENERATIONS, CURRENT_GENERATION)
-from tools.provisioning.provisioning_evidence import (
+from tools.provisioning.provisioning_evidence import (GOVERNED_SBOM_PACKAGE,
     EVIDENCE_SCHEMA_VERSION, GOVERNED_PYTHON_VERSION,
     canonical_evidence, evidence_digest)
 from tools.provisioning.authority_admission import (
@@ -164,7 +164,7 @@ def evidence_fields(image=IMAGE, **override):
         'interpreter_link': None,
         'interpreter_target': '/usr/lib/python3.14/python',
         'interpreter_sha256': 'e' * 64,
-        'sbom_python_package': 'python',
+        'sbom_python_package': GOVERNED_SBOM_PACKAGE,
         'sbom_python_version': GOVERNED_PYTHON_VERSION,
         'sbom_sha256': 'f' * 64,
         'os': 'linux',

@@ -2094,6 +2094,25 @@ with no default, and the G5 procedure accepts only
 provisioning discovery to identify a candidate digest and must never reach a
 build, because the vendor's tags float.
 
+**The governed SBOM package is `python-3.14`, ruled 2026-08-14.** The earlier
+implementation required a package literally named `python`, which no Chainguard
+image satisfies: their signed SPDX names the runtime package for the **minor
+series** (`python-3.14 3.14.6-r4`) and records the upstream source separately
+(`cpython v3.14.6`). The runtime package is what the image installs and
+therefore what the governed version describes, so it carries the SBOM proof
+alone — `cpython` is **not** an evidence field and the canonical manifest stays
+at **fifteen fields**. The package name is derived from the governed version's
+minor series rather than written out twice, so a future version ruling cannot
+leave the two disagreeing.
+
+**The vendor revision is normalised at extraction, not at admission.** The SPDX
+records `3.14.6-r4`; `sbom_python_version` records `3.14.6`. Supply-chain
+tooling reports the observed revision and tells the operator to record the
+upstream patch, and `canonical_evidence` requires exact equality with the
+governed version — so a `-rN` value reaching evidence is a refusal rather than
+something quietly accepted. Approval and admission therefore hold one semantic
+value, not two.
+
 **Governed Python is 3.14.6.** Admission must independently prove all three of:
 the OCI base digest equals the expected candidate; the SBOM reports Python
 3.14.6; and `/usr/bin/python` reports 3.14.6. Any disagreement refuses

@@ -36,6 +36,19 @@ EVIDENCE_SCHEMA_VERSION = 1
 # artefact while this fixes the semantics.
 GOVERNED_PYTHON_VERSION = "3.14.6"
 
+# The governed Python RUNTIME package, as the signed Chainguard SPDX actually
+# names it. Ruled 2026-08-14 after the literal "python" was found to match no
+# real image: Chainguard names the runtime package for the minor series and
+# records the upstream source separately as `cpython v3.14.6`. The runtime
+# package is what the image installs and therefore what the governed version
+# describes, so it -- not `cpython` -- carries the SBOM proof, and the schema
+# stays at fifteen fields.
+#
+# Derived from the governed version rather than written out a second time: two
+# constants that must agree are two constants that can disagree, and a future
+# version ruling would otherwise leave the package name behind.
+GOVERNED_SBOM_PACKAGE = "python-" + ".".join(GOVERNED_PYTHON_VERSION.split(".")[:2])
+
 # §27 ruled the base family and the pinned form. A tag may find a candidate
 # during discovery and must never reach a build, so only the digest form is
 # representable here.
@@ -110,13 +123,21 @@ def _validate(document: dict[str, Any]) -> dict[str, Any]:
     # §27's three independent proofs of the governed Python: the interpreter's
     # own reported version and the SBOM must both say it, and the base is
     # pinned by digest above. Agreement is required, not any one of them.
+    #
+    # Exact equality, so a vendor package revision cannot arrive here: the SPDX
+    # records `3.14.6-r4`, and §27 rules that -rN may vary while the upstream
+    # patch may not. Normalising to the upstream version is therefore the
+    # supply-chain tooling's job at extraction, and this refusal is what makes
+    # skipping it impossible rather than merely discouraged.
     for name in ("python_version", "sbom_python_version"):
         if document[name] != GOVERNED_PYTHON_VERSION:
             raise EvidenceError(
                 f"evidence {name} is {document[name]!r}, "
                 f"and the governed version is {GOVERNED_PYTHON_VERSION}")
-    if document["sbom_python_package"] != "python":
-        raise EvidenceError("evidence sbom_python_package is not 'python'")
+    if document["sbom_python_package"] != GOVERNED_SBOM_PACKAGE:
+        raise EvidenceError(
+            f"evidence sbom_python_package is {document['sbom_python_package']!r}, "
+            f"and the governed runtime package is {GOVERNED_SBOM_PACKAGE!r}")
 
     if document["interpreter_path"] != CONTAINER_INTERPRETER:
         raise EvidenceError(

@@ -50,7 +50,11 @@ to a different repository.
 Verify independently, and admit only on unanimous agreement:
 
 1. **OCI base digest** equals the expected candidate digest.
-2. **SBOM** reports the Python package as **3.14.6**.
+2. **SBOM** reports the governed runtime package **`python-3.14`** at
+   **3.14.6** — the package as Chainguard's signed SPDX actually names it. A
+   vendor revision (`3.14.6-r4`) is expected and is normalised to the upstream
+   patch before it is recorded; `cpython v3.14.6` is the upstream source record
+   and is not the governed package.
 3. **`/usr/bin/python` reports 3.14.6** when asked for its version.
 
 If any of the three disagree, **do not admit the image.** A distribution package

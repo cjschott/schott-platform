@@ -1109,7 +1109,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | production build context | ruled 2026-08-14 after a live failure: root-owned `/run/kyri/g5-build-context`, **MATERIALISED**, image built |
 | G5 authority mutation gate | opened 2026-08-14 on ruled evidence after the image was built and inspected; **NOT RUN** |
 | governed Python 3.14.6 | **PRESERVED** 2026-08-14; candidate replaced with the last 3.14.6 child `4b14dc70…`, no migration |
-| `sbom_python_package == "python"` | **BLOCKER**: Chainguard names it `python-3.14`; needs a ruling before admission |
+| `sbom_python_package` | **RULED** 2026-08-14 as `python-3.14`, the signed runtime package; schema stays 15 fields |
+| base discovery | **RULED** 2026-08-14: walk tag history for the governed version, never trust `:latest` |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
 ### Pass 2B — offline bootstrap primitives, implemented

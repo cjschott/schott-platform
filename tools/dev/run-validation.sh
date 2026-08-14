@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=56
+  TOTAL_STEPS=57
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=71
+  TOTAL_STEPS=72
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -289,6 +289,12 @@ run "Capability execution G5 ceremony" \
 # no cosign install, no image pull, and no approval is ever written.
 run "Capability execution G5 supply chain" \
   bash tests/test-capability-execution-g5-supply-chain.sh
+
+# ENG-0005 G5 base discovery. Selection of a base-image candidate by the
+# governed Python version rather than by whatever :latest points at today.
+# Recorded history and recorded SPDX only: no network, no pull, no approval.
+run "Capability execution G5 discovery" \
+  bash tests/test-capability-execution-g5-discovery.sh
 
 # ENG-0005 G5 build context. The execution identity cannot traverse the
 # coordinator's checkout, so the reviewed image context is materialised from
