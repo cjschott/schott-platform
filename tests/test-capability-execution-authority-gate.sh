@@ -212,6 +212,29 @@ def verify(profile, handoff_root, images=None, ctx=None):
     finally:
         os.close(root_fd)
 
+def materialised(profile, handoff_root, verified=None):
+    '''The worker snapshot for a verified execution.
+
+    Pass 4B: create_argv takes the snapshot, not the gate result. The gate is
+    still what produces the input to this, so these cases keep proving the
+    gate while asserting the argv the snapshot yields.
+    '''
+    from tools.capability.execution import snapshot as S
+    # One snapshot root per scene: the handoff lives at <scene>-hand/root, so
+    # the scene name is its parent. Sharing a root would make create-once
+    # collide between unrelated cases.
+    root = os.path.join(WORK, 'snap-'
+                        + os.path.basename(os.path.dirname(handoff_root.rstrip('/'))))
+    os.makedirs(root, exist_ok=True)
+    handoff_fd = os.open(handoff_root, os.O_RDONLY | os.O_DIRECTORY)
+    snap_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return S.materialise(
+            verified if verified is not None else verify(profile, handoff_root),
+            handoff_fd=handoff_fd, snapshot_fd=snap_fd)
+    finally:
+        os.close(handoff_fd); os.close(snap_fd)
+
 def refused(profile, handoff_root, images=None, ctx=None):
     '''The refusal, or an assertion failure if the gate let it through.'''
     try:
@@ -236,7 +259,7 @@ verified = verify(profile, handoff)
 assert isinstance(verified, W.VerifiedExecution)
 assert verified.profile is profile
 assert verified.entrypoint == 'main.py'
-argv = W.create_argv(verified)
+argv = W.create_argv(materialised(profile, handoff, verified))
 assert argv[0] == W.PODMAN and argv[1] == 'create'
 assert argv[-1] == '/kyri/package/main.py'
 assert profile.oci_image_id in argv
@@ -246,11 +269,14 @@ print('OK')
 run_case "create_argv is reachable only through the verified gate" "${PRELUDE}
 import inspect
 params = list(inspect.signature(W.create_argv).parameters)
-assert params == ['verified'], params
+# Pass 4B: the input is the materialised snapshot. A VerifiedExecution is no
+# longer sufficient -- verification without a snapshot would leave Podman
+# binding coordinator-owned paths.
+assert params == ['snapshot'], params
 profile, handoff, package, payload = published('gateonly')
-# Raw profile data, verified handoff sources, and a package binding are each
-# refused: the gate result is the only admissible input.
+verified_only = verify(profile, handoff)
 for bad in (profile, None, 'CINV-000042', (profile, package), package,
+            verified_only,
             dataclasses.asdict(dataclasses.replace(profile))):
     try:
         W.create_argv(bad)
@@ -534,7 +560,7 @@ profile, handoff, package, payload = published('entry')
 assert profile.package_entrypoint == 'main.py'
 verified = verify(profile, handoff)
 assert verified.entrypoint == 'main.py'
-assert W.create_argv(verified)[-1] == '/kyri/package/main.py'
+assert W.create_argv(materialised(profile, handoff, verified))[-1] == '/kyri/package/main.py'
 # A substituted entrypoint is refused: it is committed like every other value.
 # 'helper.py' is deliberately absent from this list: which validated member
 # runs is the coordinator's own invocation authority, and it is committed like
@@ -680,8 +706,7 @@ try:
     refused(profile, handoff, ctx=context(profile, cimp='CIMP-000009'))
     assert calls == [], 'create_argv was reached on a refusal path'
     # And the accepted path does reach it exactly once.
-    verified = verify(profile, handoff)
-    W.create_argv(verified)
+    W.create_argv(materialised(profile, handoff))
     assert len(calls) == 1, calls
 finally:
     W.create_argv = original

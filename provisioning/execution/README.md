@@ -885,11 +885,15 @@ mount shares that tree for the container's whole lifetime. Reproduced
 empirically — gate satisfied, payload and entrypoint replaced afterwards, bind
 sources still resolving to the mutated bytes.
 
-**Pass 4B is ruled (design §14.5, Option A) and NOT IMPLEMENTED.** The worker
-will copy verified material into a snapshot it owns, recompute both commitments
-over the snapshot, and Podman will bind only that. It brings one **new
-generation-6 host prerequisite**, applied with the generation-6 installation and
-not before:
+**Pass 4B is implemented in source (design §14.5, Option A).** The worker
+copies verified material into a snapshot it owns, recomputes both commitments
+over the snapshot, and `create_argv` binds only that — proven behaviourally
+against retained writable descriptors, handoff `chmod` and rename, package
+directory replacement, repeated mutation, and cross-`CINV` substitution. It
+brings one **new generation-6 host prerequisite**, applied with the
+generation-6 installation and not before. The artifact is committed at
+`provisioning/execution/tmpfiles.d/kyri-execution-material.conf` and is
+installed by nothing in this repository:
 
 | Object | Owner | Mode | Created by |
 |---|---|---|---|
@@ -913,6 +917,17 @@ to watch.
 
 `…/<CINV>/out/` does **not** move: it is already worker-owned, and the §34
 project quota on `/data` is what bounds it.
+
+**Before provisioning, verify on the live host** — the guarantee depends on it:
+
+```bash
+id -nG cschott | tr ' ' '\n' | grep -x kyri-capability   # must print nothing
+sudo install -m 0644 -o root -g root \
+  provisioning/execution/tmpfiles.d/kyri-execution-material.conf /etc/tmpfiles.d/
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/kyri-execution-material.conf
+namei -l /run/kyri/execution-material                     # ancestry root-owned
+stat -c '%U:%G %a' /run/kyri /run/kyri/execution-material # root:root 755, root:kyri-capability 770
+```
 
 Two earlier handoff models were accepted and then disproved empirically — a
 root-owned path freeze and descriptor anchoring to the coordinator's inode.

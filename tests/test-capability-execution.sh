@@ -211,7 +211,13 @@ assert_backstop_coverage() {
                  # Backstopped by tests/test-capability-authority-resolution.sh,
                  # which proves it is read-only, reaches no offline writer, and
                  # names no production path.
-                 "authorisation.py")
+                 "authorisation.py"
+                 # Backstopped by tests/test-capability-execution-snapshot.sh,
+                 # which proves it imports no subprocess, ctypes or socket,
+                 # calls no chown or privilege primitive, names no runtime, and
+                 # accepts no caller-chosen destination -- and behaviourally
+                 # that what it writes cannot be altered by the coordinator.
+                 "snapshot.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

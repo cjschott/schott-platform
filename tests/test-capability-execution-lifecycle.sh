@@ -288,13 +288,26 @@ def verified(name='v', cinv=CINV, entrypoint='main.py', extra=()):
     root_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
     try:
         from tools.capability.execution.profile import fingerprint
-        return W.verify_execution(
+        gate = W.verify_execution(
             W.require_launch_context(
                 cinv=cinv, cimp=built.cimp,
                 profile_digest=fingerprint(built).profile_digest),
             built, root_fd=root_fd, images=Images())
     finally:
         os.close(root_fd)
+    # Pass 4B: create_argv binds the worker snapshot, so the fixture
+    # materialises one exactly as the worker will.
+    from tools.capability.execution import snapshot as S
+    snap_root = os.path.join(WORK, name + '-snap')
+    if os.path.isdir(snap_root):
+        chmod_tree(snap_root); shutil.rmtree(snap_root)
+    os.makedirs(snap_root)
+    handoff_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+    snap_fd = os.open(snap_root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return S.materialise(gate, handoff_fd=handoff_fd, snapshot_fd=snap_fd)
+    finally:
+        os.close(handoff_fd); os.close(snap_fd)
 
 def make_handoff(name='h', cinv=CINV, mode_pkg=0o555, mode_payload=0o444,
                  mode_out=0o700, mode_inv=0o555, entrypoint='main.py',
@@ -616,14 +629,22 @@ print('OK')
 "
 
 run_case "the three mounts carry the exact sources, destinations and access" "${PRELUDE}
+from tools.capability.execution import snapshot as S
 found = sources('mounts')
 argv = W.create_argv(verified('found'))
 mounts = [argv[i + 1] for i, a in enumerate(argv) if a == '--mount']
 assert len(mounts) == 3, mounts
 joined = ' '.join(mounts)
-assert f'src={found.package},dst=/kyri/package' in joined, mounts
-assert f'src={found.payload},dst=/run/kyri/input/payload' in joined, mounts
+# Pass 4B: the two read-only inputs are the worker snapshot, and the writable
+# output leaf stays in the handoff where the /data project quota bounds it.
+assert f'src={S.SNAPSHOT_ROOT}/{CINV}/package,dst=/kyri/package' in joined, mounts
+assert f'src={S.SNAPSHOT_ROOT}/{CINV}/payload,dst=/run/kyri/input/payload' in joined, mounts
 assert f'src={found.output},dst=/kyri/output' in joined, mounts
+# No input bind may resolve into the coordinator-owned handoff.
+for mount in mounts:
+    source = mount.split('src=')[1].split(',')[0]
+    if not source.endswith('/out'):
+        assert not source.startswith(W.HANDOFF_ROOT), mount
 package = [m for m in mounts if '/kyri/package' in m][0]
 payload = [m for m in mounts if 'input/payload' in m][0]
 output = [m for m in mounts if '/kyri/output' in m][0]
@@ -673,9 +694,9 @@ code = code_of(W)
 assert '/kyri/package/main.py' not in code, 'a hard-coded entrypoint remains'
 assert 'main.py' not in code, 'the worker names a specific script'
 params = list(inspect.signature(W.create_argv).parameters)
-# Pass 4A: one input, and it is a proof. Separate profile/sources/package
-# arguments were a caller's opportunity to supply an unverified one.
-assert params == ['verified'], params
+# Pass 4A made it one input, and it is a proof; Pass 4B made that input the
+# materialised snapshot, so the argv can only name worker-owned paths.
+assert params == ['snapshot'], params
 assert 'entrypoint' not in params, params
 # The entrypoint cannot arrive as a raw string.
 from tools.capability.execution.worker import WorkerRefused

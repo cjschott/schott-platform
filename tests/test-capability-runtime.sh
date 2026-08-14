@@ -98,6 +98,17 @@ WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py",
                         # this set does not: no deletion, no mode or owner
                         # change, and no execution.
                         "quarantine.py",
+                        # Pass 4B. The worker-owned invocation snapshot is a
+                        # copy, and a copy writes. It exists because a check
+                        # could not close the race: Podman binds a pathname,
+                        # and the coordinator owns the handoff, so the only way
+                        # to give the container material the coordinator cannot
+                        # reach is to put it somewhere else. Its own backstop
+                        # forbids what this set cannot express -- no chown, no
+                        # privilege, no Podman, no destination the caller
+                        # names, create-once allocation, and both commitments
+                        # recomputed over the result.
+                        "snapshot.py",
                         # T16. Cleanup removes the per-CINV handoff subtree,
                         # which is the inverse authority: its own backstop
                         # forbids creating, writing, renaming, and changing a

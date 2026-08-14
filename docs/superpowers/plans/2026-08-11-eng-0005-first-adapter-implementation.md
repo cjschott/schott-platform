@@ -1101,8 +1101,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | profile policy re-derivation at the worker | **IMPLEMENTED** (Pass 4A) |
 | payload/package digest commitment and entrypoint transport | **IMPLEMENTED** (Pass 4A) |
 | generation 6 | **SOURCE COMPLETE / NOT INSTALLED** |
-| worker-owned execution snapshot | **RULED** (Pass 4B, Option A), not implemented |
-| generation-6 host prerequisite: /run/kyri/execution-material | **RULED**, not provisioned |
+| worker-owned execution snapshot | **IMPLEMENTED** (Pass 4B) |
+| generation-6 host prerequisite: /run/kyri/execution-material | artifact committed, **NOT PROVISIONED** |
 | root helper launch-record schema vNext | **IMPLEMENTED** (Pass 3B-ii) |
 | worker governed-profile consumption | **IMPLEMENTED** (Pass 3B-ii) |
 | production G5 image build and CIMP admission | NOT STARTED |
@@ -1589,6 +1589,58 @@ worker-owned and the XFS quota is what bounds it.
 
 **Status: REQUIRED BUT NOT YET IMPLEMENTED.** Generation 5 remains active,
 generation 6 remains source-only, and G6 stays closed.
+
+### Pass 4B — worker-owned invocation snapshot, implemented
+
+Design §14.5 implemented. **Generation 6 is source complete and not installed;
+G6 stays closed.**
+
+`snapshot.py` materialises verified invocation material into
+`/run/kyri/execution-material/<CINV>/` and `create_argv` binds only that. The
+two read-only input mounts are now worker-owned; the writable `out/` leaf stays
+in the handoff, because it is already worker-owned and the `/data` project
+quota is what bounds it.
+
+**The payload is never reopened.** `VerifiedExecution` carries the bytes Pass
+4A already read and verified, and the snapshot is written from those. The
+package is copied descriptor-relatively from the handoff, and then **both**
+commitments are recomputed over the finished snapshot and required to equal the
+authenticated profile — which is what makes the copy safe rather than the copy
+being quick. A source that moved under the copy produces a mismatch and a
+refusal. There is no retry, asserted structurally.
+
+**Empirically, not by inspection.** A writable descriptor retained from before
+the modes were tightened rewrites and shortens the source after the snapshot
+exists, and the snapshot is unchanged. The handoff directory is `chmod`ed,
+members renamed, the package directory deleted and rebuilt — snapshot
+unchanged. Five rounds of source mutation, as a coordinator could manage
+throughout container execution — snapshot unchanged. Cross-`CINV` substitution
+before the copy is refused; after a successful copy it cannot reach the
+snapshot at all.
+
+**Bounded and create-once.** Package and payload bounds come from the existing
+contracts, not a second policy; allocation is create-once and a collision
+refuses rather than adopting, merging, or deleting; a refused snapshot removes
+its own partial tree so nothing is left for a later attempt to misread. The
+worker discards its own snapshot — `discard` refuses when there is nothing to
+remove, for the same reason handoff cleanup does.
+
+**Two guards fired as designed and were widened by enumeration, not relaxed:**
+the capability-runtime write guard (a new module is read-only until authorised)
+and the T1 backstop-coverage guard (a new module must name the suite that
+backstops it).
+
+**One test defect this pass exposed:** the generation-5 installer harness built
+its fixture library from the checkout, so a generation that *adds* a runtime
+module made the fixture 44 files where generation 5 has 43. The fixture now
+takes its file **set** as well as its bytes from the pinned generation-5
+commit.
+
+Unchanged: the four privileged files, `PROFILE_FD`, the seal contract, the
+five-element argv, root opacity, the credential ordering, `PROFILE_SCHEMA_VERSION`
+= 2, the payload schema, the protocol, the launch record, and the `CIMP`/`CGEN`
+schemas. Pass 4A's gate is unchanged and still runs in full before any snapshot
+exists.
 
 ## 6. Sequencing rules
 

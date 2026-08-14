@@ -265,6 +265,12 @@ jobs:
       - name: Capability execution authority gate tests
         run: bash tests/test-capability-execution-authority-gate.sh
 
+      # The worker-owned invocation snapshot: real filesystem mutation against
+      # fixture trees, proving the container-consumed material is independent
+      # of the coordinator handoff. No privilege, no container, no Podman.
+      - name: Capability execution snapshot tests
+        run: bash tests/test-capability-execution-snapshot.sh
+
       # Generation-5 installer, driven against throwaway fixture trees only:
       # failure injected at every commit position, every interrupted
       # transaction replayed. Installs nothing and needs no privilege.

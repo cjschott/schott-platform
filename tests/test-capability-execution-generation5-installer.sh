@@ -226,21 +226,30 @@ build_fixture() {
            "${root}/usr/lib/kyri/python/tools/common" \
            "${root}/usr/libexec" "${root}/root"
 
-  # The rest of the library tree, from this checkout.
+  # The rest of the library tree, from the generation-5 commit -- the file
+  # SET as well as the bytes. Taking it from the checkout was correct until a
+  # later generation added a runtime module, at which point the fixture would
+  # have held 44 files while generation 5 has 43, and the installer would have
+  # refused a baseline that was never generation 5.
   while IFS= read -r file; do
     relative="${file}"
     mkdir -p "${root}/usr/lib/kyri/python/$(dirname "${relative}")"
     rm -f "${root}/usr/lib/kyri/python/${relative}"
-    cp "${REPOSITORY}/${file}" "${root}/usr/lib/kyri/python/${relative}"
+    git -C "${REPOSITORY}" cat-file blob "${GEN5_COMMIT}:${file}" \
+      > "${root}/usr/lib/kyri/python/${relative}"
     chmod 0444 "${root}/usr/lib/kyri/python/${relative}"
-  done < <(cd "${REPOSITORY}" && { printf 'tools/__init__.py\n'
-             find tools/capability tools/common -type f -name '*.py' \
-               -not -path '*__pycache__*' | sort; })
-  cp "${REPOSITORY}/provisioning/execution/kyri-exec-quota.py" \
-     "${root}/usr/lib/kyri/python/kyri_exec_quota.py"
+  done < <(git -C "${REPOSITORY}" ls-tree -r --name-only "${GEN5_COMMIT}" \
+             -- tools/__init__.py tools/capability tools/common \
+           | grep '\.py$' | grep -v '__pycache__' | sort)
+  rm -f "${root}/usr/lib/kyri/python/kyri_exec_quota.py"
+  git -C "${REPOSITORY}" cat-file blob \
+    "${GEN5_COMMIT}:provisioning/execution/kyri-exec-quota.py" \
+    > "${root}/usr/lib/kyri/python/kyri_exec_quota.py"
   chmod 0444 "${root}/usr/lib/kyri/python/kyri_exec_quota.py"
-  cp "${REPOSITORY}/provisioning/execution/kyri-exec-quota.py" \
-     "${root}/usr/libexec/kyri-exec-quota"
+  rm -f "${root}/usr/libexec/kyri-exec-quota"
+  git -C "${REPOSITORY}" cat-file blob \
+    "${GEN5_COMMIT}:provisioning/execution/kyri-exec-quota.py" \
+    > "${root}/usr/libexec/kyri-exec-quota"
   chmod 0555 "${root}/usr/libexec/kyri-exec-quota"
 
   # The seven, from pinned history, each proved against the installer's own

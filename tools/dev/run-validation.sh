@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=49
+  TOTAL_STEPS=50
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=64
+  TOTAL_STEPS=65
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -248,6 +248,12 @@ run "Capability execution profile transport" \
 # and package commitments. Builds an argv tuple and executes nothing.
 run "Capability execution authority gate" \
   bash tests/test-capability-execution-authority-gate.sh
+
+# ENG-0005 Pass 4B. The worker-owned invocation snapshot: the copy that closes
+# the race a second verification could not. Real filesystem mutation against
+# fixture trees; no privilege, no container, no Podman.
+run "Capability execution snapshot" \
+  bash tests/test-capability-execution-snapshot.sh
 
 # ENG-0005 generation-5 installer. Drives the operator installer against
 # throwaway fixture trees only: failure is injected at every commit position

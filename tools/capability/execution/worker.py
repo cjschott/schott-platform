@@ -377,10 +377,11 @@ class VerifiedExecution:
     anything that did not run them.
     """
 
-    __slots__ = ("profile", "sources", "entrypoint")
+    __slots__ = ("profile", "sources", "entrypoint", "payload_bytes")
 
     def __init__(self, token: Any, *, profile: ExecutionProfile,
-                 sources: "HandoffSources", entrypoint: str) -> None:
+                 sources: "HandoffSources", entrypoint: str,
+                 payload_bytes: bytes) -> None:
         if token is not _VERIFIED:
             raise WorkerRefused(
                 "a verified execution is produced by verify_execution and "
@@ -388,6 +389,9 @@ class VerifiedExecution:
         object.__setattr__(self, "profile", profile)
         object.__setattr__(self, "sources", sources)
         object.__setattr__(self, "entrypoint", entrypoint)
+        # Carried so the snapshot is written from bytes already verified rather
+        # than from a reopened source: the reopen is the window.
+        object.__setattr__(self, "payload_bytes", payload_bytes)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise WorkerRefused("the verified execution is immutable")
@@ -444,8 +448,13 @@ def require_image_present(profile: ExecutionProfile, images: Any) -> None:
             "the authorised image is not present in the execution identity's store")
 
 
-def _verify_payload(profile: ExecutionProfile, invocation_fd: int) -> None:
-    """Confirm the published payload is the committed bytes, or refuse."""
+def _verify_payload(profile: ExecutionProfile, invocation_fd: int) -> bytes:
+    """Confirm the published payload is the committed bytes, and return them.
+
+    The bytes are returned rather than discarded because the snapshot is
+    written from exactly these — reopening the source to copy it would put back
+    the window this whole verification exists to remove.
+    """
     try:
         handle = os.open(PAYLOAD_NAME, _READ_FLAGS, dir_fd=invocation_fd)
     except OSError as error:
@@ -465,6 +474,7 @@ def _verify_payload(profile: ExecutionProfile, invocation_fd: int) -> None:
         raise WorkerRefused("the payload exceeds the governed bound")
     if hashlib.sha256(body).hexdigest() != profile.payload_digest:
         raise WorkerRefused("the published payload is not the committed payload")
+    return body
 
 
 def _verify_package(profile: ExecutionProfile, invocation_fd: int) -> str:
@@ -535,13 +545,13 @@ def verify_execution(context: LaunchContext, profile: ExecutionProfile, *,
     except OSError as error:
         raise WorkerRefused(f"the handoff is unusable: {error}") from None
     try:
-        _verify_payload(profile, invocation)
+        payload_bytes = _verify_payload(profile, invocation)
         entrypoint = _verify_package(profile, invocation)
     finally:
         os.close(invocation)
 
     return VerifiedExecution(_VERIFIED, profile=profile, sources=sources,
-                             entrypoint=entrypoint)
+                             entrypoint=entrypoint, payload_bytes=payload_bytes)
 
 
 def _container_entrypoint(entrypoint: str) -> str:
@@ -562,7 +572,7 @@ def _container_entrypoint(entrypoint: str) -> str:
     return f"{PACKAGE_DESTINATION}/{entrypoint}"
 
 
-def create_argv(verified: VerifiedExecution) -> tuple[str, ...]:
+def create_argv(snapshot: Any) -> tuple[str, ...]:
     """The complete creation arguments, closed against everything else.
 
     Every security-critical control is stated explicitly even where Podman's
@@ -571,17 +581,24 @@ def create_argv(verified: VerifiedExecution) -> tuple[str, ...]:
 
     **One input, and it is a proof.** The profile, the bind sources, and the
     entrypoint no longer arrive separately, because a caller able to supply
-    them separately is a caller able to supply an unverified one. The gate
+    them separately is a caller able to supply an unverified one. The snapshot
     produces this value or nothing does.
-    """
-    if not isinstance(verified, VerifiedExecution):
-        raise WorkerRefused("a verified execution is required")
-    profile = verified.profile
-    sources = verified.sources
-    if profile.cinv != sources.cinv:
-        raise WorkerRefused("the profile and handoff name different invocations")
 
-    entrypoint = _container_entrypoint(verified.entrypoint)
+    **The input binds are the worker's snapshot, never the handoff.** The
+    handoff is coordinator-owned, and a bind mount would keep exposing it for
+    the container's whole lifetime. Only the writable output leaf still lives
+    under the handoff, because it is already worker-owned and the `/data`
+    project quota is what bounds it.
+    """
+    from .snapshot import SnapshotBinding
+
+    if not isinstance(snapshot, SnapshotBinding):
+        raise WorkerRefused("a materialised snapshot is required")
+    profile = snapshot.profile
+    if profile.cinv != snapshot.cinv:
+        raise WorkerRefused("the profile and snapshot name different invocations")
+
+    entrypoint = _container_entrypoint(snapshot.entrypoint)
     environment: tuple[str, ...] = tuple(
         argument
         for name, value in CONTAINER_ENVIRONMENT
@@ -603,11 +620,11 @@ def create_argv(verified: VerifiedExecution) -> tuple[str, ...]:
         "--tmpfs", (f"/tmp:size=16m,mode=1777,"
                     + ",".join(profile.tmpfs_options)),
         *environment,
-        "--mount", (f"type=bind,src={sources.package},"
+        "--mount", (f"type=bind,src={snapshot.package},"
                     f"dst={PACKAGE_DESTINATION},ro=true"),
-        "--mount", (f"type=bind,src={sources.payload},"
+        "--mount", (f"type=bind,src={snapshot.payload},"
                     f"dst={PAYLOAD_DESTINATION},ro=true"),
-        "--mount", (f"type=bind,src={sources.output},"
+        "--mount", (f"type=bind,src={snapshot.output},"
                     f"dst={OUTPUT_DESTINATION},ro=false"),
         profile.oci_image_id,
         CONTAINER_INTERPRETER, entrypoint,
