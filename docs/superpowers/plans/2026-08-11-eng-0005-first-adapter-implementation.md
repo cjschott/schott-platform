@@ -1076,7 +1076,7 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | image presence ≠ authority · tag ≠ authority | **IMPLEMENTED** |
 | worker chooses no image; no runtime pull or fetch | **IMPLEMENTED** |
 | corruption remains globally fail-closed | **IMPLEMENTED** |
-| `PROFILE_SCHEMA_VERSION = 1` | **IMPLEMENTED** |
+| `PROFILE_SCHEMA_VERSION` pinned by the runtime | **IMPLEMENTED**; now **2** since Pass 4A re-derivation |
 | three-state reader model and pending disposition | **IMPLEMENTED** (Pass 2A) |
 | `PENDING_ADMISSION` / `PENDING_RETIREMENT` subtypes | **IMPLEMENTED** (Pass 2A) |
 | `CIMP-000000` reserved; semantic rejection | **IMPLEMENTED** (Pass 2A) |
@@ -1089,7 +1089,7 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | COMPLETE and RETIRE disposition ceremonies | **IMPLEMENTED** (Pass 2D) |
 | ordinary admission transaction | **IMPLEMENTED** (Pass 2C) |
 | orphan-generation reconciliation | REQUIRED, NOT YET IMPLEMENTED |
-| authority and control namespaces on disk | REQUIRED, NOT YET IMPLEMENTED |
+| authority and control namespaces on disk | ruled `2750` setgid 2026-08-14; ceremony prepared, **NOT EXECUTED** |
 | canonical provisioning-evidence manifest, 15 fields | **IMPLEMENTED** (Pass 2C) |
 | `provisioning_evidence_digest` = SHA-256 of canonical bytes | **IMPLEMENTED** (Pass 2C) |
 | `python-podman-v1` · `fixed-python-entrypoint-v1` as constants | **IMPLEMENTED** (Pass 2C) |
@@ -1100,12 +1100,12 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | generation-5 installation | **INSTALLED / ACTIVE / ACCEPTED** |
 | profile policy re-derivation at the worker | **IMPLEMENTED** (Pass 4A) |
 | payload/package digest commitment and entrypoint transport | **IMPLEMENTED** (Pass 4A) |
-| generation 6 | **SOURCE COMPLETE / NOT INSTALLED** |
+| generation 6 | **INSTALLED / ACTIVE / ACCEPTED** 2026-08-14 |
 | worker-owned execution snapshot | **IMPLEMENTED** (Pass 4B) |
-| generation-6 host prerequisite: /run/kyri/execution-material | artifact committed, **NOT PROVISIONED** |
+| generation-6 host prerequisite: /run/kyri/execution-material | **PROVISIONED** 2026-08-14, `root:kyri-capability 0770` |
 | root helper launch-record schema vNext | **IMPLEMENTED** (Pass 3B-ii) |
 | worker governed-profile consumption | **IMPLEMENTED** (Pass 3B-ii) |
-| production G5 image build and CIMP admission | NOT STARTED |
+| production G5 image build and CIMP admission | ceremony prepared and tested, **NOT EXECUTED**; blocked on candidate discovery |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
 ### Pass 2B — offline bootstrap primitives, implemented

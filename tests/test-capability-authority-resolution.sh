@@ -170,6 +170,13 @@ def built(name, images=(IMAGE,)):
     authority = os.path.join(base, 'authority')
     control = os.path.join(base, 'control')
     os.makedirs(authority); os.makedirs(control)
+    # The ruled layout: the authority root and staging/ carry setgid so every
+    # published object inherits the coordinator group with no chown anywhere.
+    # A fixture cannot own anything as root:cschott, so it uses a group this
+    # process is really in -- inheritance is the mechanism under test.
+    os.chmod(authority, 0o2750)
+    os.mkdir(os.path.join(control, 'staging'), 0o2750)
+    os.chmod(os.path.join(control, 'staging'), 0o2750)
     a, c = fd(authority), fd(control)
     try:
         provision_control_state(c)

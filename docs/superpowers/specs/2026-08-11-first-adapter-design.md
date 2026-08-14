@@ -429,20 +429,45 @@ grants authority to an interrupted artifact.
 ### 5.7 Authority namespace on disk
 
 Published authority lives at `/var/lib/kyri/implementation-authority`;
-directories `root:cschott 0750` and immutable records `root:cschott 0440`.
+directories `root:cschott 2750` and immutable records `root:cschott 0440`.
 `/var/lib/kyri` stays `root:root 0711`. Read — not merely traverse — is
 required because the reader enumerates `implementations/`. The coordinator
 reads and never writes; `kyri-capability` gets no access at all; every ancestor
 is root-owned and non-writable by both, so neither can rename, replace, or
 shadow the namespace.
 
+**The setgid bit is the architecture, not an operator workaround** (ruled
+2026-08-14). Root creates every published object, so without it every
+directory and record would come out `root:root` and the coordinator could not
+read the namespace it is required to read. The alternative — chowning after
+publication — was rejected: it mutates the metadata of an object this section
+calls immutable, and a crash between publication and the chown leaves
+authority published and readable by nobody. With setgid the group arrives by
+inheritance at creation time, so **no `chown` occurs anywhere in the
+lifecycle** and there is no window to crash in.
+
+Two roots carry it, and only those two. `implementations/` and `generations/`
+are created directly under the authority root, so it needs setgid;
+`<CIMP>/` and `<CGEN>/` are created inside `staging/` and renamed into place,
+and `rename(2)` preserves the group the object was created with, so staging
+needs it too. Records inherit from the directory they are created in and are
+`0440` regardless.
+
 Operator-only mutable control state is structurally separate, at
 `/var/lib/kyri/implementation-authority-control` (`root:root 0700`), holding
 `cimp-counter` and `cgen-counter` (`root:root 0600`), the `implementation-lifecycle`
-lock (`root:root 0600`), and `staging/` (`root:root 0700`). The coordinator
-requires no access to any of it. Keeping counters and lock outside the
-published namespace means coordinator-invisibility is structural rather than
-dependent on the reader happening not to enumerate the authority root.
+lock (`root:root 0600`), and `staging/` (`root:cschott 2750`). The coordinator
+requires no access to any of it, and gets none: staging carries the coordinator
+group so published material can inherit it, but sits inside a `0700` root the
+coordinator cannot traverse, so the group grants nothing here and everything
+downstream. Keeping counters and lock outside the published namespace means
+coordinator-invisibility is structural rather than dependent on the reader
+happening not to enumerate the authority root.
+
+**`staging/` is provisioned by the operator, never created by the bootstrap
+primitives.** Whatever creates it decides what every published object inherits,
+and the primitives carry no production identity — the same reason the counters
+are provisioned rather than bootstrapped by whoever first needs one.
 
 **Immutable and create-once:** CIMP admission records, retirement records,
 authority sets, generation records, and generation directories.

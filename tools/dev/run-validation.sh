@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=52
+  TOTAL_STEPS=53
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=67
+  TOTAL_STEPS=68
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -276,6 +276,13 @@ run "Capability execution generation-6 installer" \
 # by fixtures. Builds no image, creates no authority state, invokes no Podman.
 run "Capability execution G5 preflight" \
   bash tests/test-capability-execution-g5-preflight.sh
+
+# ENG-0005 G5 ceremony. The operator artifact and, above all, the trust
+# boundary it rests on: root materialises the pinned commit from git objects
+# into a root-owned tree and imports nothing else. Each isolation property is
+# proven by attacking it. Builds no image, creates no authority state.
+run "Capability execution G5 ceremony" \
+  bash tests/test-capability-execution-g5-ceremony.sh
 
 # ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
 # no subprocess, no container, no Podman. Real execution is gate G6.

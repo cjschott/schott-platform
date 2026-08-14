@@ -175,13 +175,31 @@ def _advance(name: str, digits: int, dir_fd: int) -> int:
 
 
 def provision_control_state(control_fd: int) -> None:
-    """Create the counters and the staging root, exactly once.
+    """Create the counters, exactly once, over an operator-provisioned staging root.
 
     Both counters start at zero so that the first allocation returns ordinal
     one. That is also what keeps ``CIMP-000000`` and ``CGEN-000000000000``
     unreachable from the allocators: they are never emitted and then filtered,
     they are simply never produced.
+
+    **``staging/`` is required, not created.** Everything published into the
+    authority namespace is created inside staging and renamed out, and
+    ``rename(2)`` preserves the group the object was created with -- so
+    staging's group is what every published record and directory inherits.
+    Creating it here would give it this process's group, which for root is
+    ``root``, and the coordinator would then be unable to read a namespace it
+    is required to read. Setting it afterwards would mean a ``chown`` on
+    authority material, and a crash between publication and that ``chown``
+    leaves the coordinator locked out of a namespace that already grants
+    authority.
+
+    So the operator provisions it with the ruled ``root:cschott 2750`` and the
+    setgid bit does the work, exactly as the counters are provisioned rather
+    than bootstrapped by whoever happens to need one. The mode is not checked
+    here: this module carries no production identity, and the ceremony that
+    knows the ruled owner is the thing that verifies it.
     """
+    _require_staging_directory(control_fd)
     for name, digits in ((CIMP_COUNTER, CIMP_DIGITS), (CGEN_COUNTER, CGEN_DIGITS)):
         try:
             _write_durable(name, f"{0:0{digits}d}\n".encode("ascii"), control_fd)
@@ -189,11 +207,27 @@ def provision_control_state(control_fd: int) -> None:
             raise ControlStateError(
                 f"{name} already exists; a counter is never re-provisioned "
                 "over a live one") from None
-    try:
-        os.mkdir(STAGING, 0o700, dir_fd=control_fd)
-    except FileExistsError:
-        raise ControlStateError(f"{STAGING} already exists") from None
     os.fsync(control_fd)
+
+
+def _require_staging_directory(control_fd: int) -> None:
+    """``staging/`` must already exist, be a real directory, and be empty."""
+    try:
+        status = os.lstat(STAGING, dir_fd=control_fd)
+    except FileNotFoundError:
+        raise ControlStateError(
+            f"{STAGING} is absent and is never created on demand; the operator "
+            "provisions it with the ruled ownership so published material "
+            "inherits it") from None
+    if (status.st_mode & 0o170000) != 0o040000:
+        raise ControlStateError(f"{STAGING} is not a directory")
+    handle = os.open(STAGING, _DIR_FLAGS, dir_fd=control_fd)
+    try:
+        with os.scandir(handle) as entries:
+            for entry in entries:
+                raise ControlStateError(f"{STAGING} already carries {entry.name}")
+    finally:
+        os.close(handle)
 
 
 def allocate_cimp(control_fd: int) -> str:

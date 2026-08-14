@@ -131,16 +131,21 @@ run_case() {
 }
 
 PRELUDE="
-import hashlib, os, shutil
+import hashlib, os, shutil, stat
 from tools.provisioning.authority_bootstrap import (
     provision_control_state, allocate_cimp, allocate_cgen,
     implementation_lifecycle_lock, initialise_genesis,
     BootstrapError, ControlStateError, LockUnavailable, AlreadyInitialised,
     CIMP_COUNTER, CGEN_COUNTER, LIFECYCLE_LOCK, STAGING,
-    GENESIS_CGEN, IMPLEMENTATIONS, GENERATIONS, CURRENT_GENERATION)
+    GENESIS_CGEN, IMPLEMENTATIONS, GENERATIONS, CURRENT_GENERATION,
+    AUTHORITY_SET, GENERATION)
 from tools.capability.execution.implementation_authority import (
     current_generation, NamespaceState)
 WORK = os.environ['WORKDIR']
+# A group this process is genuinely a member of, preferring one that is not the
+# primary group so inheritance is visibly different from 'whatever root made'.
+_candidates = [g for g in os.getgroups() if g != os.getgid()]
+INHERITED_GID = _candidates[0] if _candidates else os.getgid()
 
 def roots(name):
     '''One hermetic pair: published authority and operator control.
@@ -156,6 +161,17 @@ def roots(name):
     control = os.path.join(base, 'implementation-authority-control')
     os.makedirs(authority)
     os.makedirs(control)
+    # Ruled layout: the authority root and staging/ carry setgid so every
+    # object published beneath them inherits the coordinator group without any
+    # chown. A fixture cannot own anything as root:cschott, so it uses a group
+    # this process really is in -- the mechanism under test is inheritance,
+    # not the particular group name.
+    os.chown(authority, -1, INHERITED_GID)
+    os.chmod(authority, 0o2750)
+    staging = os.path.join(control, STAGING)
+    os.mkdir(staging)
+    os.chown(staging, -1, INHERITED_GID)
+    os.chmod(staging, 0o2750)
     return authority, control
 
 def fd(path):
@@ -169,6 +185,13 @@ def provisioned(name):
     finally:
         os.close(handle)
     return authority, control
+
+def with_authority(authority, control, action):
+    a, c = fd(authority), fd(control)
+    try:
+        return action(a, c)
+    finally:
+        os.close(a); os.close(c)
 
 def with_control(control, action):
     handle = fd(control)
@@ -205,13 +228,41 @@ def tree_digest(root):
 
 # --- control state ------------------------------------------------------------
 
-run_case "provisioning creates counters at zero and an empty staging root" "${PRELUDE}
+run_case "provisioning creates counters at zero over an operator-provisioned staging root" "${PRELUDE}
 authority, control = roots('prov')
 with_control(control, provision_control_state)
 assert read(os.path.join(control, CIMP_COUNTER)) == b'000000' + b'\n'
 assert read(os.path.join(control, CGEN_COUNTER)) == b'000000000000' + b'\n'
 assert os.path.isdir(os.path.join(control, STAGING))
 assert os.listdir(os.path.join(control, STAGING)) == []
+print('OK')
+"
+
+run_case "provisioning refuses to create staging itself" "${PRELUDE}
+# staging/ is what every published object inherits its group from, and this
+# module has no production identity to give it. Creating it here would hand
+# published authority the group root, and the coordinator would be unable to
+# read a namespace it is required to read.
+authority, control = roots('nostaging')
+shutil.rmtree(os.path.join(control, STAGING))
+refuses(lambda: with_control(control, provision_control_state), ControlStateError)
+assert not os.path.exists(os.path.join(control, CIMP_COUNTER)), \\
+    'a counter was provisioned over an absent staging root'
+print('OK')
+"
+
+run_case "provisioning refuses a staging root that already carries material" "${PRELUDE}
+authority, control = roots('dirtystaging')
+open(os.path.join(control, STAGING, 'residue'), 'wb').close()
+refuses(lambda: with_control(control, provision_control_state), ControlStateError)
+print('OK')
+"
+
+run_case "provisioning refuses a staging root that is not a directory" "${PRELUDE}
+authority, control = roots('filestaging')
+os.rmdir(os.path.join(control, STAGING))
+open(os.path.join(control, STAGING), 'wb').close()
+refuses(lambda: with_control(control, provision_control_state), ControlStateError)
 print('OK')
 "
 
@@ -450,6 +501,86 @@ assert (status.st_mode & 0o170000) == 0o100000, oct(status.st_mode)
 body = read(pointer)
 assert body.startswith(b'{') and body.endswith(b'}'), body
 assert b'CGEN-000000000000' in body
+print('OK')
+"
+
+# --- setgid inheritance: the ruled ownership, with no chown anywhere ----------
+#
+# The design rules published authority directories 2750 and records 0440, both
+# group-owned by the coordinator so the reader can enumerate implementations/.
+# Nothing chowns: the group arrives by inheritance from two setgid roots, and
+# these cases prove that end to end rather than by reading the mode off a
+# directory somebody set by hand.
+
+run_case "genesis publishes every object with the inherited group and no chown" "${PRELUDE}
+authority, control = provisioned('inherit')
+with_authority(authority, control, initialise_genesis)
+published = []
+for base, dirs, files in os.walk(authority):
+    for name in sorted(dirs) + sorted(files):
+        published.append(os.path.join(base, name))
+published.append(authority)
+assert len(published) > 4, published
+for path in published:
+    status = os.lstat(path)
+    assert status.st_gid == INHERITED_GID, (path, status.st_gid, INHERITED_GID)
+    if stat.S_ISDIR(status.st_mode):
+        # Directories carry setgid so the next publication inherits too: the
+        # property has to survive being extended, not just being created once.
+        assert status.st_mode & stat.S_ISGID, (path, oct(status.st_mode))
+        assert stat.S_IMODE(status.st_mode) == 0o2750, (path, oct(status.st_mode))
+    else:
+        assert stat.S_IMODE(status.st_mode) == 0o440, (path, oct(status.st_mode))
+print('OK')
+"
+
+run_case "rename out of staging preserves the group the object was created with" "${PRELUDE}
+# The step the whole model rests on: a generation directory is created inside
+# staging and renamed into generations/, and rename(2) carries ownership with
+# it. If it did not, publication would need a chown and there would be a
+# window where authority is readable by nobody.
+authority, control = provisioned('renamegroup')
+with_authority(authority, control, initialise_genesis)
+staged = os.path.join(authority, GENERATIONS, GENESIS_CGEN)
+assert os.path.isdir(staged), staged
+assert os.lstat(staged).st_gid == INHERITED_GID
+for name in (AUTHORITY_SET, GENERATION):
+    record = os.path.join(staged, name)
+    assert os.lstat(record).st_gid == INHERITED_GID, record
+    assert stat.S_IMODE(os.lstat(record).st_mode) == 0o440, record
+print('OK')
+"
+
+run_case "a staging root without setgid publishes the wrong group" "${PRELUDE}
+# The negative that gives the positive its meaning. Strip setgid from staging
+# and the published generation directory comes back with this process's group
+# instead of the inherited one -- which on a production host is root, and the
+# coordinator cannot read it. This is exactly the defect the ruling closed.
+authority, control = provisioned('nosetgid')
+staging = os.path.join(control, STAGING)
+os.chmod(staging, 0o750)
+os.chown(staging, -1, os.getgid())
+with_authority(authority, control, initialise_genesis)
+published = os.path.join(authority, GENERATIONS, GENESIS_CGEN)
+assert os.lstat(published).st_gid == os.getgid(), 'inheritance came from nowhere'
+if INHERITED_GID != os.getgid():
+    assert os.lstat(published).st_gid != INHERITED_GID, \\
+        'the ruled group appeared without setgid'
+print('OK')
+"
+
+run_case "the control root itself is never group-inheriting" "${PRELUDE}
+# Counters and the lock must stay root-only. They are created directly in the
+# control root, which is deliberately NOT setgid, so they inherit nothing --
+# and 0600 means the group name could not grant access even if it did.
+authority, control = provisioned('controlgroup')
+with_control(control, allocate_cimp)
+with_control(control, allocate_cgen)
+for name in (CIMP_COUNTER, CGEN_COUNTER):
+    status = os.lstat(os.path.join(control, name))
+    assert status.st_gid == os.getgid(), (name, status.st_gid)
+    assert stat.S_IMODE(status.st_mode) == 0o600, (name, oct(status.st_mode))
+assert not (os.lstat(control).st_mode & stat.S_ISGID), 'the control root is setgid'
 print('OK')
 "
 

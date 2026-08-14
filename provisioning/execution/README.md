@@ -602,8 +602,8 @@ Published authority — the coordinator reads it, nothing else touches it:
 | Path | Owner | Mode |
 |---|---|---|
 | `/var/lib/kyri` | `root:root` | `0711` (already exists, unchanged) |
-| `/var/lib/kyri/implementation-authority` | `root:cschott` | `0750` |
-| `…/implementations/`, `…/generations/`, `…/generations/<CGEN>/` | `root:cschott` | `0750` |
+| `/var/lib/kyri/implementation-authority` | `root:cschott` | `2750` |
+| `…/implementations/`, `…/generations/`, `…/generations/<CGEN>/` | `root:cschott` | `2750` |
 | `…/current-generation` | `root:cschott` | `0440` |
 | admission, retirement, `authority-set`, `generation` records | `root:cschott` | `0440` |
 
@@ -615,10 +615,22 @@ that coordinator-invisibility is structural rather than incidental:
 | `/var/lib/kyri/implementation-authority-control` | `root:root` | `0700` |
 | `…/cimp-counter`, `…/cgen-counter` | `root:root` | `0600` |
 | `…/implementation-lifecycle` (lock) | `root:root` | `0600` |
-| `…/staging/` | `root:root` | `0700` |
+| `…/staging/` | `root:cschott` | `2750` |
 
 `0750` on the authority directories is required rather than generous: the reader
 enumerates `implementations/`, which needs the read bit and not merely traverse.
+**The setgid bit is the architecture** (ruled 2026-08-14): root creates every
+published object, so without inheritance every directory and record would come
+out `root:root` and the coordinator could not read the namespace at all. The
+alternative — chowning after publication — was rejected because it mutates an
+object this runbook calls immutable and leaves a window in which authority is
+published and readable by nobody. Two roots carry it and only two: the authority
+root, because `implementations/` and `generations/` are created directly beneath
+it, and `staging/`, because `<CIMP>/` and `<CGEN>/` are created there and
+`rename(2)` preserves the group they were created with. `staging/` carries the
+coordinator group so published material inherits it, and sits inside a `0700`
+root the coordinator cannot traverse, so the group grants nothing there and
+everything downstream. **No `chown` occurs anywhere in the lifecycle.**
 The coordinator needs no access to the control namespace, and
 `kyri-capability` needs none to either. Every ancestor is root-owned and
 non-writable by `cschott` and `kyri-capability`, so neither can rename, replace,
@@ -650,98 +662,159 @@ deliberately outside the §8.2 install matrix — which covers `tools/__init__.p
 coordinator reads published authority and never writes it, and keeping the
 writer out of `/usr/lib/kyri/python` makes that a property of the host rather
 than a rule. It carries no absolute path, so the operator supplies both roots
-as open descriptors when the eventual provisioning ceremony runs.
+as open descriptors when the provisioning ceremony runs. `provision_control_state`
+creates the counters and **requires** an operator-provisioned `staging/` rather
+than creating one: whatever creates staging decides what every published object
+inherits, and these primitives hold no production identity to give it.
 
-### G5 ceremony — designed, BLOCKED on three rulings
+### G5 ceremony — all three rulings resolved, prepared, NOT EXECUTED
 
-**Nothing below has been executed, and the mutation ceremony is deliberately
-not written.** `provisioning/execution/g5-preflight.sh` is read-only in every
-mode: it proves the host is at the ruled G5 starting position, and it reports
-the three decisions that must be ruled before a mutation ceremony can be
-authored at all. Its suite is
-`tests/test-capability-execution-g5-preflight.sh`.
+**Nothing below has been executed.** The three architecture rulings that
+blocked G5 are resolved and implemented; the ceremony is written and its trust
+boundary is proven by test. No image has been built, no authority root created,
+no identifier allocated, and nothing admitted. **G5 remains CLOSED.**
+
+| Artifact | Path |
+|---|---|
+| ceremony | `provisioning/execution/g5-ceremony.sh` |
+| ceremony suite | `tests/test-capability-execution-g5-ceremony.sh` |
+| starting-position preflight | `provisioning/execution/g5-preflight.sh` |
+| preflight suite | `tests/test-capability-execution-g5-preflight.sh` |
+
+#### How the three rulings were resolved
+
+**1. Base-image authority.** Candidate discovery and the production build are
+two ceremonies with an operator review between them. Discovery may reach the
+network; its output is a **candidate**, never an approval. Only a reviewed
+approval recorded at `/root/kyri-g5-approved-base.txt` (`root:root 0400`) makes
+the build eligible, and the build consumes that digest and nothing else. A tag,
+a `:latest`, or a digest read back off the build result is refused by
+`--verify-build-inputs`. The approval must also name `sbom_source` — the exact
+bytes whose SHA-256 becomes `sbom_sha256` — before the build is eligible.
+
+**2. Authority ownership.** Setgid `2750` is now the canonical architecture on
+the authority root and on `staging/`; see the mode tables above. Published
+directories and records inherit group `cschott` at creation, so **no `chown`
+occurs anywhere** and there is no publish-then-chown window. Proven end to end
+in `tests/test-capability-authority-bootstrap.sh`: genesis publishes every
+object with the inherited group, `rename(2)` out of staging preserves it, a
+staging root *without* setgid demonstrably publishes the wrong group, and the
+control root is never group-inheriting.
+
+**3. Root execution.** Root never imports the working tree. It materialises the
+pinned commit from git objects into a root-owned `0700` tree, verifies a pinned
+manifest digest and every file, and runs `python3 -I -B` with that tree as the
+only import root.
+
+#### The root-owned execution model
 
 ```
-bash provisioning/execution/g5-preflight.sh --verify-host     # host readiness
-bash provisioning/execution/g5-preflight.sh --verify-source   # root-execution trust
-bash provisioning/execution/g5-preflight.sh --blockers        # the three rulings
+reviewed git object → root-owned staging → verified manifest → isolated python
 ```
 
-`--blockers` exits **3** — outstanding rulings are neither success nor a host
-failure, and collapsing them into either would be a lie in one direction.
+* materialisation is **per-file `git cat-file blob`**, not `git archive`.
+  Inspection decided it: `git archive` applies the `text`/`eol` attributes
+  recorded in the archived tree, so its output is a filtered rendering rather
+  than the blob, and it emits whatever members the tree carries. Manifest-driven
+  blob extraction can emit no unexpected member, traverse no path, and rewrite
+  no byte.
+* **git runs as the repository owner, never as root.** A git invocation reads
+  the repository's own `.git/config`, and configuration can name programs to
+  run; root running git inside a coordinator-controlled directory would execute
+  coordinator-chosen code before any boundary exists. The coordinator running
+  git against its own repository escalates nothing, and root treats the result
+  as untrusted input.
+* the staging tree is `0700 root:root`, every file `0400 root:root`, `umask
+  077` during construction; symlinks, non-regular objects, group- or
+  other-writable objects, and any `__pycache__`/`.pyc` are refused.
+* verification happens **after** the bytes are inside the root-owned tree, so
+  what was verified is what gets imported — a digest check against the live
+  checkout would leave a verify-then-import race.
+* execution is `env -i … /usr/bin/python3 -I -B` from cwd `/`, with `sys.path`
+  holding only the staging root. `-I` ignores `PYTHONPATH` and `PYTHONHOME`,
+  excludes the user site directory, and keeps the working directory off
+  `sys.path`.
+* an independent anchor that does not involve the repository at all: the
+  materialised runtime half must be byte-identical to the installed root-owned
+  `/usr/lib/kyri/python`.
 
-#### What G5 CLOSED requires — the acceptance target
+Every one of those properties is proven by attacking it. The suite plants a
+hostile module that raises on import, reachable simultaneously through
+`PYTHONPATH`, the working directory, and a compiled `__pycache__`, and requires
+the pinned object to win — with a control arm proving the same decoy **is**
+imported by an unisolated interpreter, so the case is not vacuous.
 
-G5 is *production image build and CIMP admission* (reviewer-gate table above).
-Derived from design §5.1–§5.7 and §27, it closes only when **all** of:
+#### The bootstrap trust boundary
 
-| # | Condition | Evidence |
-|---|---|---|
-| 1 | production execution image built from the reviewed `Containerfile` | build log, `BASE_IMAGE` digest-pinned |
-| 2 | exact local OCI image ID captured as bare 64-hex | `podman image inspect --format '{{.Id}}'` |
-| 3 | that exact ID present in the **`kyri-capability`** rootless store | `podman image exists <id>` as the execution identity |
-| 4 | canonical provisioning evidence generated, 15 fields, validated | `provisioning_evidence.canonical_evidence` |
-| 5 | authority genesis published | `CGEN-000000000000`, empty authority set |
-| 6 | exactly one production `CIMP` admitted | `AdmissionResult.cimp` |
-| 7 | successor `CGEN` is current | `current-generation` names it |
-| 8 | the **runtime reader** reports `NamespaceState.VALID` | `current_generation()` |
-| 9 | no pending disposition | `generation.pending` empty |
-| 10 | the admitted `CIMP` resolves to that exact image ID | `resolve_implementation()` |
-| 11 | no execution has occurred | G6 still closed |
+`sudo bash /opt/schott-platform/provisioning/execution/g5-ceremony.sh` would
+have root execute a file the coordinator can rewrite, including between the
+check and the read. That is not hand-waved; it is removed:
 
-**Image existence is not admission, and admission is not execution.** Condition
-3 grants nothing on its own — an image can sit in the store forever without
-authority — and conditions 5–10 grant authority to be *selected later*, not
-permission for the coordinator to cross root. After G5 closes, `/etc/sudoers.d/kyri-exec`
-is still absent, the transition is still uncallable, and **G6 and G7 remain
-closed**. G3 stays a separate gate: image admission must not depend on sudoers
-and does not.
+```bash
+# 1. As the coordinator. From the reviewed git OBJECT, not the working tree.
+git -C /opt/schott-platform cat-file blob \
+    <REVIEWED_COMMIT>:provisioning/execution/g5-ceremony.sh > /tmp/g5-ceremony.sh
 
-#### The three blockers
+# 2. As root. Into root-owned 0700 space, then print the digest.
+sudo install -d -m 0700 -o root -g root /root/kyri-g5-bootstrap
+sudo install -m 0500 -o root -g root /tmp/g5-ceremony.sh \
+    /root/kyri-g5-bootstrap/g5-ceremony.sh
+sudo sha256sum /root/kyri-g5-bootstrap/g5-ceremony.sh
 
-1. **No candidate base-image digest exists in this repository.** §27 requires
-   admission to prove the OCI base digest equals *the expected candidate*, and
-   the `Containerfile` correctly names no base. But nothing records what the
-   candidate is, so there is nothing to compare against — and discovering one
-   at build time would be the floating-tag failure wearing a digest. No
-   build-time network access is authorised anywhere in this design either.
-   The SBOM tooling behind `sbom_sha256` is likewise unspecified: the schema
-   requires the digest, nothing says what is hashed or whether it is
-   deterministic.
+# 3. COMPARE by eye against the reviewed value, then and only then:
+sudo bash /root/kyri-g5-bootstrap/g5-ceremony.sh --verify-host
+```
 
-2. **The ruled authority ownership cannot be produced as written.** §5.7 rules
-   published directories `root:cschott 0750` and records `root:cschott 0440`;
-   the reader runs as the coordinator and *enumerates* `implementations/`, so
-   group read is required. But `authority_bootstrap` and `authority_admission`
-   create every object with plain `os.mkdir`/`os.open` and never `chown` — run
-   as root that yields `root:root`, and the coordinator cannot read the
-   namespace at all. **Measured, not assumed:** with the setgid bit on *both*
-   the authority root and `staging/`, records land at exactly the ruled
-   `root:cschott 0440` and directories at `2750` rather than `0750`. Both roots
-   need it — `implementations/` and `generations/` are created directly under
-   the authority root, while `<CIMP>/` and `<CGEN>/` are created inside
-   `staging/` and renamed in, and rename preserves the group they were created
-   with. Needs a ruling: accept setgid and amend `0750` to `2750`, or add an
-   explicit ownership step — noting that chowning after publication mutates the
-   metadata of an object this design calls immutable, and a crash between
-   publication and chown locks the coordinator out of a namespace that already
-   grants authority.
+`cat-file blob <40-hex>:<path>` is content-addressed, so substituting the bytes
+needs a SHA-1 preimage rather than a file write; and the digest compared is the
+copy in `0700 root:root` space, which nothing can swap between the comparison
+and the run. **Exactly one coordinator-authored artefact is executed by root
+before the boundary exists — this script, verified by digest, from root-owned
+space.** It sources nothing, reads no configuration file, and calls
+`/usr/bin/git`, `/usr/sbin/runuser`, and `/usr/bin/python3` by absolute path.
+Everything after that is materialised from pinned objects.
 
-3. **Root execution of coordinator-writable code is not yet safe.** The
-   operator modules live in a checkout owned `cschott:cschott` with `tools/`
-   and `tools/provisioning/` at `0775`, and they import the runtime half —
-   `ADAPTER_IDENTITY`, `ARGV_CONTRACT_IDENTITY`, `PAYLOAD_SCHEMA_VERSION`,
-   `PROFILE_SCHEMA_VERSION`, `CONTAINER_INTERPRETER`. Every one of those is
-   committed verbatim into the admission record, so whoever controls those
-   bytes controls what gets admitted. Coordinator-owned `__pycache__` compounds
-   it: `-B` and `PYTHONDONTWRITEBYTECODE` stop root *writing* a cache, not
-   *reading* one. **Proposed, needs ruling:** root never executes the working
-   tree. It materialises the pinned commit into a root-owned `0700` directory
-   with `git archive` — which reads git objects, not the working tree, so a
-   dirty or hostile tree cannot inject anything — verifies every digest there,
-   and runs `python3 -I -B` with `sys.path` holding only that directory. That
-   removes the coordinator's write authority at execution time and closes the
-   verify-then-import race, which digest-checking the live checkout does not.
+Run `g5-ceremony.sh --bootstrap-instructions` for this, and `--print-plan` for
+the full nine-phase sequence with its review boundaries.
+
+#### Candidate discovery — a separate ceremony, not performed here
+
+Discovery may reach the network. **Its output is a candidate.** The reviewer,
+not a script, promotes one. Record for the review, and keep the record with the
+approval:
+
+registry · repository · the tag used for discovery **only** · the immutable
+index/manifest digest · architecture · os · platform · the reported Python
+version · the interpreter path · any local Podman identity observed while
+inspecting · the discovery timestamp · the exact commands run.
+
+The production build then consumes the approved digest and nothing else. A tag
+records an intention; only a digest records an artefact.
+
+#### SBOM authority — the rule, and what is still missing
+
+**Ruled:** `sbom_sha256` is the SHA-256 of an exact, named byte sequence
+recorded as `sbom_source` in the approval **before** the build. Those bytes are
+committed verbatim: nothing normalises, re-serialises, pretty-prints, or
+rewrites them after generation, and no canonicaliser is introduced to make a
+hash stable.
+
+**Not yet satisfiable, and deliberately not worked around.** This host carries
+no SBOM generator — no `syft`, `trivy`, `grype`, `cosign`, `skopeo`, or
+`crane`; Podman 4.9.3 has no SBOM subcommand and the `docker sbom` plugin is
+absent. Installing one is a new reviewed supply-chain dependency, not a detail
+of this ceremony, and choosing a generator that stamps timestamps or random
+document identifiers into its output would put an unstable value under a
+commitment.
+
+The defensible mechanism, and therefore an **approval criterion for the
+candidate**, is that the base image already carries a machine-readable SBOM
+whose bytes are committed by the image digest itself — extracted verbatim, with
+no generator in the path, so determinism follows from the OCI digest rather
+than from a tool's good behaviour. Whether the approved candidate carries one,
+and at what path, cannot be known until discovery runs. **Until then the exact
+SBOM tool, invocation, and format remain an open operator input**, and
+`--verify-build-inputs` refuses an approval that does not name `sbom_source`.
 
 #### Recorded for the eventual ceremony
 

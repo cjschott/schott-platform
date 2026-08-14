@@ -288,6 +288,11 @@ jobs:
       - name: Capability execution G5 preflight tests
         run: bash tests/test-capability-execution-g5-preflight.sh
 
+      # The G5 ceremony and its trust boundary: pinned-object materialisation,
+      # isolated execution, and each isolation property proven by attack.
+      - name: Capability execution G5 ceremony tests
+        run: bash tests/test-capability-execution-g5-ceremony.sh
+
       # Worker driven through a fake backend: no Podman, no subprocess, no
       # container. Real execution is gate G6.
       - name: Capability execution lifecycle tests

@@ -7,23 +7,20 @@ set -Eeuo pipefail
 # THIS SCRIPT MUTATES NOTHING, IN ANY MODE. It builds no image, creates no
 # authority root, runs no genesis, allocates no CIMP or CGEN, writes no sudoers
 # policy, and invokes neither Podman, the transition, nor the worker. It reads
-# and reports. The G5 mutation ceremony is deliberately NOT implemented here --
-# see --blockers for why.
+# and reports. The ceremony itself is provisioning/execution/g5-ceremony.sh.
 #
-# WHY A PREFLIGHT EXISTS BEFORE THE CEREMONY DOES
-# ===============================================
-# Three decisions the G5 ceremony depends on are recorded as ruled but are not
-# yet satisfiable as written. Encoding a mutation ceremony around an unruled
-# decision would put the wrong thing on the host under a reviewed label. What
-# IS fully ruled is the host state the ceremony must start from, and that is
-# what this verifies -- so the reviewer resolves three questions rather than
-# re-deriving the whole starting position.
+# WHAT THIS IS FOR, NOW THAT THE CEREMONY EXISTS
+# ==============================================
+# The three architecture rulings that once blocked G5 are resolved, and
+# --blockers records their resolution rather than the block. This stays the
+# cheap, dependency-free check that the host is at the ruled starting position
+# before an operator begins: it needs no commit, materialises nothing, and can
+# be run by the coordinator.
 #
 # Usage:
 #   g5-preflight.sh --verify-host    is this host at the ruled G5 starting state?
-#   g5-preflight.sh --verify-source  may root execute the reviewed operator
-#                                    modules, and from where?
-#   g5-preflight.sh --blockers       what must be ruled before the ceremony runs
+#   g5-preflight.sh --verify-source  is the root-owned execution model in place?
+#   g5-preflight.sh --blockers       the three rulings, and how each was resolved
 #
 # Test-only:
 #   --fixture DIR   operate on a fixture tree instead of the host.
@@ -60,7 +57,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 # than at the moment it runs as root.
 OPERATOR_MODULES=(
 "tools/provisioning/__init__.py|f5ff47311a43e29a46e89f3856ec25638519d8852566127211fc53a86abcedc7"
-"tools/provisioning/authority_bootstrap.py|9595fb3ac5c92c5dd86628c4b9b14c874b58ebbf15b28104b98f21e11ec47d44"
+"tools/provisioning/authority_bootstrap.py|85bb2b3aa18ea348c746af65449a7e90216e6c9d8b32c0877bd1fff0d0dc781e"
 "tools/provisioning/authority_admission.py|65635d4ce66b2e5897a22859b990bc250e77bd425e3f5a5c85e009ab32dfa620"
 "tools/provisioning/authority_disposition.py|5f950ef2f6e7a48d3507e368aa851a363737723d7e2b85d159fd855c73a2cfc7"
 "tools/provisioning/provisioning_evidence.py|0a2616fb38a515f66b9116d77e22b5c52829fdc7d58ff5c47f7541b8cb4bf235"
@@ -301,89 +298,67 @@ require_operator_source() {
   (( drift == 0 )) \
     && ok "the checkout's runtime half is byte-identical to the installed root-owned runtime (${checked} objects)"
 
-  # Compiled bytecode is the live escalation path, and it is not hypothetical:
-  # PYTHONDONTWRITEBYTECODE and -B stop root WRITING a cache, not READING one
-  # the coordinator already wrote.
-  local caches
+  # Compiled bytecode and a coordinator-writable checkout are both still facts
+  # about this tree. They stopped being blockers when the ceremony stopped
+  # importing the tree: root materialises the pinned commit from git objects
+  # into a root-owned 0700 directory and runs `python3 -I -B` against that
+  # alone. Reported, because an operator reading this should know why the
+  # obvious hazard is not one, rather than not seeing it mentioned.
+  local caches owner mode
   caches="$(find "${REPOSITORY}/tools" -name '__pycache__' -type d 2>/dev/null | wc -l)"
-  if [[ "${caches}" -ne 0 ]]; then
-    block "${caches} coordinator-owned __pycache__ directories exist under ${REPOSITORY}/tools;"
-    block "  root importing from this tree would consult bytecode ${COORDINATOR} can write"
-  else
-    ok "no coordinator-owned bytecode cache under ${REPOSITORY}/tools"
-  fi
-
-  local mode owner
   owner="$(stat -c '%U:%G' "${REPOSITORY}/tools/provisioning" 2>/dev/null)"
   mode="$(stat -c '%a' "${REPOSITORY}/tools/provisioning" 2>/dev/null)"
+  note "${caches} coordinator-owned __pycache__ directories exist under ${REPOSITORY}/tools"
   note "${REPOSITORY}/tools/provisioning is ${owner} ${mode}: writable by the coordinator"
-  block "root must NOT import operator modules directly from the coordinator-writable checkout;"
-  block "  see --blockers for the ruled-source staging mechanism this requires"
+  note "neither reaches root: see provisioning/execution/g5-ceremony.sh --verify-materialisation"
+
+  local ceremony="${REPOSITORY}/provisioning/execution/g5-ceremony.sh"
+  [[ -f "${ceremony}" ]] || bad "the G5 ceremony artifact is absent"
+  # The unexpanded literal IS the assertion, so it must not expand.
+  # shellcheck disable=SC2016
+  grep -qF 'cat-file blob "${COMMIT}:' "${ceremony}" \
+    || bad "the ceremony does not materialise from pinned git objects"
+  grep -qF '/usr/bin/python3 -I -B -c' "${ceremony}" \
+    || bad "the ceremony does not run Python in isolation"
+  (( FAILURES == 0 )) \
+    && ok "root-owned pinned-code execution is implemented; the checkout is never imported"
 }
 
 report_blockers() {
   cat <<'BLOCKERS'
-Three decisions must be ruled before the G5 mutation ceremony may be written,
-let alone run. Each is recorded here with what is actually true today, so the
-reviewer resolves a question rather than rediscovering one.
+All three architecture rulings that blocked the G5 ceremony are RESOLVED and
+implemented. Recorded here so the resolution is as visible as the block was.
 
-1. NO CANDIDATE BASE IMAGE DIGEST IS RECORDED ANYWHERE.
-   design §27 and provisioning/image/README.md both require admission to prove
-   "the OCI base digest equals the expected candidate digest", and the
-   Containerfile correctly refuses to name a base. But no expected candidate
-   digest exists in this repository, so there is nothing to compare against.
-   The ceremony therefore cannot be fully specified: it would have to discover
-   a digest from cgr.dev at build time and admit whatever it found, which is
-   the floating-tag failure wearing a digest.
-   NEEDS: a reviewed candidate digest recorded in the repository, plus a
-   ruling on how discovery may reach the network at all -- no build-time
-   network access is currently authorised anywhere in this design.
-   ALSO UNSPECIFIED: which tool produces the SBOM whose SHA-256 becomes
-   `sbom_sha256`, and whether that tool's output is deterministic. The
-   evidence schema requires the digest; nothing says what is hashed.
+1. BASE IMAGE AUTHORITY -- RESOLVED IN MECHANISM, PENDING AN OPERATOR INPUT.
+   Candidate discovery and production build are now two ceremonies with an
+   operator review between them. Discovery may reach the network; its output is
+   a CANDIDATE. Only a reviewed approval recorded at
+   /root/kyri-g5-approved-base.txt (root:root 0400) makes the build eligible,
+   and the build consumes that digest and nothing else. A tag, a :latest, or a
+   digest derived from the build result is refused.
+   STILL REQUIRED, and deliberately not chosen here: the candidate digest
+   itself, and the exact SBOM bytes. Both are operator inputs.
 
-2. THE RULED AUTHORITY-NAMESPACE OWNERSHIP CANNOT BE PRODUCED AS WRITTEN.
-   design §5.7 and the runbook both rule the published directories
-   `root:cschott 0750` and the records `root:cschott 0440`. The reader runs as
-   the coordinator and enumerates implementations/, so group read is required,
-   not optional.
-   But authority_bootstrap and authority_admission create every object with
-   plain os.mkdir/os.open and never chown. Run as root that yields root:root,
-   and the coordinator cannot read the namespace at all -- the runtime reader
-   would fail and G5 could not close.
-   MEASURED, not assumed: with the setgid bit on BOTH the authority root and
-   staging/, group inheritance produces records at exactly the ruled
-   `root:cschott 0440` and directories at `2750` rather than `0750`. Both are
-   needed: implementations/ and generations/ are created directly under the
-   authority root, while <CIMP>/ and <CGEN>/ are created inside staging/ and
-   renamed in, and rename preserves the group it was created with.
-   NEEDS: a ruling. Either accept setgid roots and amend `0750` to `2750`, or
-   add an explicit ownership step to the ceremony -- but note that chowning
-   after publication mutates the metadata of an object the design calls
-   immutable, and a crash between publication and chown leaves the coordinator
-   locked out of a namespace that already grants authority.
+2. AUTHORITY OWNERSHIP -- RESOLVED. Setgid inheritance is now the architecture,
+   not a workaround. The authority root and staging/ carry 2750; published
+   directories and records inherit group cschott with no chown anywhere, so
+   there is no publish-then-chown window. provision_control_state no longer
+   creates staging: it requires an operator-provisioned one, because whatever
+   creates it decides what every published object inherits.
 
-3. ROOT EXECUTION OF COORDINATOR-WRITABLE CODE IS NOT YET SAFE.
-   The operator modules live in a checkout owned cschott:cschott, with
-   tools/ and tools/provisioning/ at 0775. They import the runtime half --
-   ADAPTER_IDENTITY, ARGV_CONTRACT_IDENTITY, PAYLOAD_SCHEMA_VERSION,
-   PROFILE_SCHEMA_VERSION, CONTAINER_INTERPRETER -- and every one of those
-   constants is committed verbatim into the admission record. Whoever controls
-   those bytes controls what gets admitted, which is exactly the property
-   "governed values are derived, never supplied" exists to guarantee.
-   Coordinator-owned __pycache__ compounds it: -B and
-   PYTHONDONTWRITEBYTECODE stop root writing a cache, not reading one.
-   PROPOSED, NEEDS RULING: root never executes the working tree. Instead it
-   materialises the pinned commit into a root-owned 0700 directory with
-   `git archive`, which reads git objects rather than the working tree, so a
-   dirty or hostile tree cannot inject anything; verifies every digest there;
-   and runs `python3 -I -B` with sys.path holding only that directory. That
-   removes the coordinator's write authority at execution time and closes the
-   verify-then-import race, which digest-checking the live checkout does not.
+3. ROOT EXECUTION -- RESOLVED. Root materialises the pinned commit from git
+   objects into a root-owned 0700 tree, verifies a pinned manifest digest and
+   every file, and runs python3 -I -B with that tree as the only import root.
+   Git runs as the repository owner, never as root. The single coordinator-
+   authored artefact root executes before the boundary is the ceremony script
+   itself, verified by digest in root-owned space.
+
+Run: provisioning/execution/g5-ceremony.sh --print-plan
 BLOCKERS
   printf '\n'
-  block "three rulings are outstanding; the G5 mutation ceremony is not written"
+  ok "all three rulings are implemented; the ceremony is prepared"
 }
+
 
 # ===========================================================================
 printf '== G5 preflight (%s) ==\n\n' "${MODE#--}"
