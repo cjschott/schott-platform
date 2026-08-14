@@ -213,9 +213,17 @@ print('OK')
 
 run_case "no image was built, pulled, loaded, or admitted" "${PRELUDE}
 import os
-# The rootless store and the provisioned runtime are both still absent, which
-# is what G4 and G5 remaining closed looks like from here.
-assert not Path('/run/kyri').exists(), 'a runtime directory exists'
+# What G5 remaining closed actually looks like from here: no implementation
+# authority exists, so no CIMP can have been minted and no image can have been
+# admitted. This used to assert '/run/kyri' is absent, which was true only
+# until generation 6 was installed -- that directory is a generation-6 runtime
+# prerequisite an operator provisions, and it never had anything to say about
+# whether an image was admitted. A proxy that stops tracking the thing it
+# stands for is worse than no check.
+assert not Path('/var/lib/kyri/implementation-authority').exists(), \
+    'an implementation-authority namespace exists'
+assert not Path('/var/lib/kyri/implementation-authority-control').exists(), \
+    'an implementation-authority control namespace exists'
 assert not Path('/etc/sudoers.d/kyri-exec').exists(), 'a sudoers drop-in exists'
 assert os.getuid() != 0
 print('OK')

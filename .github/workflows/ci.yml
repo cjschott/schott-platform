@@ -283,6 +283,11 @@ jobs:
       - name: Capability execution generation-6 installer tests
         run: bash tests/test-capability-execution-generation6-installer.sh
 
+      # The read-only G5 ceremony preflight. Fixture trees only: it builds no
+      # image, creates no authority state, and invokes no container runtime.
+      - name: Capability execution G5 preflight tests
+        run: bash tests/test-capability-execution-g5-preflight.sh
+
       # Worker driven through a fake backend: no Podman, no subprocess, no
       # container. Real execution is gate G6.
       - name: Capability execution lifecycle tests

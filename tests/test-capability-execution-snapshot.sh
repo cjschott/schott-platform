@@ -774,15 +774,28 @@ print('OK')
 
 run_case "the prerequisite is an artifact and is installed by nothing here" "${PRELUDE}
 from pathlib import Path
-assert not os.path.exists('/run/kyri'), 'the snapshot root exists on this host'
-assert not os.path.exists('/etc/tmpfiles.d/kyri-execution-material.conf')
+# The claim is about this REPOSITORY, not about the host: nothing here installs
+# the prerequisite. It asserted absence until generation 6 was installed, at
+# which point an operator provisioned it through the ruled ceremony and the
+# absence assertion started failing for the one reason that is not a defect.
+# What survives the transition is the property actually being protected -- if
+# the fragment is installed, it is byte-for-byte the artifact in this
+# repository, so nothing here or anywhere else substituted one.
+installed = Path('/etc/tmpfiles.d/kyri-execution-material.conf')
+if installed.exists():
+    committed = Path('provisioning/execution/tmpfiles.d/kyri-execution-material.conf')
+    assert installed.read_bytes() == committed.read_bytes(), \
+        'the installed fragment is not the artifact in this repository'
+    assert os.path.isdir('/run/kyri/execution-material'), \
+        'the fragment is installed but the snapshot root is not a directory'
 # Two suites may NAME systemd-tmpfiles: this one, and the generation-6
 # installer harness, whose whole purpose is to prove the installer never runs
 # it. Naming it is allowed for exactly those two; RUNNING it is allowed for
 # none, and that is now asserted directly rather than approximated by banning
 # the word.
 may_name = {'test-capability-execution-snapshot.sh',
-            'test-capability-execution-generation6-installer.sh'}
+            'test-capability-execution-generation6-installer.sh',
+            'test-capability-execution-g5-preflight.sh'}
 for suite in Path('tests').glob('*.sh'):
     text = suite.read_text(encoding='utf-8')
     assert 'systemd-tmpfiles' not in text or suite.name in may_name, suite.name

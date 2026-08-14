@@ -652,6 +652,138 @@ writer out of `/usr/lib/kyri/python` makes that a property of the host rather
 than a rule. It carries no absolute path, so the operator supplies both roots
 as open descriptors when the eventual provisioning ceremony runs.
 
+### G5 ceremony — designed, BLOCKED on three rulings
+
+**Nothing below has been executed, and the mutation ceremony is deliberately
+not written.** `provisioning/execution/g5-preflight.sh` is read-only in every
+mode: it proves the host is at the ruled G5 starting position, and it reports
+the three decisions that must be ruled before a mutation ceremony can be
+authored at all. Its suite is
+`tests/test-capability-execution-g5-preflight.sh`.
+
+```
+bash provisioning/execution/g5-preflight.sh --verify-host     # host readiness
+bash provisioning/execution/g5-preflight.sh --verify-source   # root-execution trust
+bash provisioning/execution/g5-preflight.sh --blockers        # the three rulings
+```
+
+`--blockers` exits **3** — outstanding rulings are neither success nor a host
+failure, and collapsing them into either would be a lie in one direction.
+
+#### What G5 CLOSED requires — the acceptance target
+
+G5 is *production image build and CIMP admission* (reviewer-gate table above).
+Derived from design §5.1–§5.7 and §27, it closes only when **all** of:
+
+| # | Condition | Evidence |
+|---|---|---|
+| 1 | production execution image built from the reviewed `Containerfile` | build log, `BASE_IMAGE` digest-pinned |
+| 2 | exact local OCI image ID captured as bare 64-hex | `podman image inspect --format '{{.Id}}'` |
+| 3 | that exact ID present in the **`kyri-capability`** rootless store | `podman image exists <id>` as the execution identity |
+| 4 | canonical provisioning evidence generated, 15 fields, validated | `provisioning_evidence.canonical_evidence` |
+| 5 | authority genesis published | `CGEN-000000000000`, empty authority set |
+| 6 | exactly one production `CIMP` admitted | `AdmissionResult.cimp` |
+| 7 | successor `CGEN` is current | `current-generation` names it |
+| 8 | the **runtime reader** reports `NamespaceState.VALID` | `current_generation()` |
+| 9 | no pending disposition | `generation.pending` empty |
+| 10 | the admitted `CIMP` resolves to that exact image ID | `resolve_implementation()` |
+| 11 | no execution has occurred | G6 still closed |
+
+**Image existence is not admission, and admission is not execution.** Condition
+3 grants nothing on its own — an image can sit in the store forever without
+authority — and conditions 5–10 grant authority to be *selected later*, not
+permission for the coordinator to cross root. After G5 closes, `/etc/sudoers.d/kyri-exec`
+is still absent, the transition is still uncallable, and **G6 and G7 remain
+closed**. G3 stays a separate gate: image admission must not depend on sudoers
+and does not.
+
+#### The three blockers
+
+1. **No candidate base-image digest exists in this repository.** §27 requires
+   admission to prove the OCI base digest equals *the expected candidate*, and
+   the `Containerfile` correctly names no base. But nothing records what the
+   candidate is, so there is nothing to compare against — and discovering one
+   at build time would be the floating-tag failure wearing a digest. No
+   build-time network access is authorised anywhere in this design either.
+   The SBOM tooling behind `sbom_sha256` is likewise unspecified: the schema
+   requires the digest, nothing says what is hashed or whether it is
+   deterministic.
+
+2. **The ruled authority ownership cannot be produced as written.** §5.7 rules
+   published directories `root:cschott 0750` and records `root:cschott 0440`;
+   the reader runs as the coordinator and *enumerates* `implementations/`, so
+   group read is required. But `authority_bootstrap` and `authority_admission`
+   create every object with plain `os.mkdir`/`os.open` and never `chown` — run
+   as root that yields `root:root`, and the coordinator cannot read the
+   namespace at all. **Measured, not assumed:** with the setgid bit on *both*
+   the authority root and `staging/`, records land at exactly the ruled
+   `root:cschott 0440` and directories at `2750` rather than `0750`. Both roots
+   need it — `implementations/` and `generations/` are created directly under
+   the authority root, while `<CIMP>/` and `<CGEN>/` are created inside
+   `staging/` and renamed in, and rename preserves the group they were created
+   with. Needs a ruling: accept setgid and amend `0750` to `2750`, or add an
+   explicit ownership step — noting that chowning after publication mutates the
+   metadata of an object this design calls immutable, and a crash between
+   publication and chown locks the coordinator out of a namespace that already
+   grants authority.
+
+3. **Root execution of coordinator-writable code is not yet safe.** The
+   operator modules live in a checkout owned `cschott:cschott` with `tools/`
+   and `tools/provisioning/` at `0775`, and they import the runtime half —
+   `ADAPTER_IDENTITY`, `ARGV_CONTRACT_IDENTITY`, `PAYLOAD_SCHEMA_VERSION`,
+   `PROFILE_SCHEMA_VERSION`, `CONTAINER_INTERPRETER`. Every one of those is
+   committed verbatim into the admission record, so whoever controls those
+   bytes controls what gets admitted. Coordinator-owned `__pycache__` compounds
+   it: `-B` and `PYTHONDONTWRITEBYTECODE` stop root *writing* a cache, not
+   *reading* one. **Proposed, needs ruling:** root never executes the working
+   tree. It materialises the pinned commit into a root-owned `0700` directory
+   with `git archive` — which reads git objects, not the working tree, so a
+   dirty or hostile tree cannot inject anything — verifies every digest there,
+   and runs `python3 -I -B` with `sys.path` holding only that directory. That
+   removes the coordinator's write authority at execution time and closes the
+   verify-then-import race, which digest-checking the live checkout does not.
+
+#### Recorded for the eventual ceremony
+
+**Three-way image agreement** (`AdmissionRequest`, exactly three fields —
+`oci_image_id`, `evidence`, `observed_image_id`). The three readings must come
+from three independent observations: the identity captured at build, the
+identity recorded into the evidence manifest, and the identity observed from
+the store at admission time. Copying one value into all three slots satisfies
+the comparison and proves nothing, which is the one way this check can be
+defeated.
+
+**Track-B residue.** The `kyri-capability` store still holds historical Alpine
+artefacts. G5 does **not** require the store to be empty — physical emptiness
+was never a G5 or G6 requirement, and their removal is G7. What G5 requires is
+exact identity selection: `podman image exists <64-hex>` for the admitted ID
+only. An unrelated image must never satisfy presence, and the residue gives
+that a free negative test — a Track-B image ID is present in the store and
+resolves to no `CIMP`. The store is unreadable as `cschott` by design, so its
+inventory is an operator observation:
+
+```bash
+sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman images --no-trunc --format \
+  '{{.Id}} {{.Repository}}:{{.Tag}} {{.Created}}'
+```
+
+Run it from a directory the execution identity can traverse, such as `/tmp` —
+`runuser` inherits the coordinator checkout as its working directory otherwise
+and emits a `cannot chdir` warning that is informational only.
+
+**Crash consequences** are already ruled in design §5.6 and are not restated
+here. The rule that matters operationally: **a G5 admission that crashes
+leaving a pending `CIMP` does not close G5**, and it is resolved only through
+the ruled COMPLETE or RETIRE disposition ceremony. Identifiers stay burned
+where they were allocated, gaps are permanent and expected, and published
+generations are never deleted to make the next run tidier.
+
+**The G5 record to capture afterwards** — not filled in, because none of it has
+happened: image ID · provisioning-evidence digest · `CIMP` · `CGEN` ·
+authority-set digest · generation digest · date/time · host · namespace
+classification · pending count · image-presence result.
+
 **Generation 3 — installed and accepted 2026-08-12**, from the `oci_image_id`
 correction. The execution-authority field was renamed from `oci_digest` and its
 syntax corrected to bare `^[0-9a-f]{64}$`, and the observation path was moved

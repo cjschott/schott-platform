@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=51
+  TOTAL_STEPS=52
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=66
+  TOTAL_STEPS=67
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -269,6 +269,13 @@ run "Capability execution generation-5 installer" \
 # tmpfiles fragment, creates no snapshot root, and never runs systemd-tmpfiles.
 run "Capability execution generation-6 installer" \
   bash tests/test-capability-execution-generation6-installer.sh
+
+# ENG-0005 G5 preparation. The read-only ceremony preflight: it proves the host
+# is at the ruled G5 starting position and reports the three outstanding
+# rulings. Read-only in every mode, asserted against its own source as well as
+# by fixtures. Builds no image, creates no authority state, invokes no Podman.
+run "Capability execution G5 preflight" \
+  bash tests/test-capability-execution-g5-preflight.sh
 
 # ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
 # no subprocess, no container, no Podman. Real execution is gate G6.

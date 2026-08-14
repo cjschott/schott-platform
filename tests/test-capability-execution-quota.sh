@@ -407,9 +407,14 @@ print('OK')
 run_case "nothing was installed and no quota was established" "${PRELUDE}
 import json, os
 assert os.getuid() != 0, 'this suite must not run privileged'
-# Gate state: absent on every host until G3 opens, so absence is still the
-# correct assertion for these two.
-for path in ('/etc/sudoers.d/kyri-exec', '/run/kyri'):
+# Gate state. The sudoers drop-in is absent on every host until G3 opens, and
+# the authority namespace until G5 does. '/run/kyri' used to be listed here as
+# a third: it is a generation-6 runtime prerequisite an operator provisions,
+# not a gate marker, and it stopped being absent the moment generation 6 was
+# installed.
+for path in ('/etc/sudoers.d/kyri-exec',
+             '/var/lib/kyri/implementation-authority',
+             '/var/lib/kyri/implementation-authority-control'):
     assert not Path(path).exists(), path + ' exists'
 # G4 artifacts: present on a provisioned host by design, so the claim is that
 # this suite left them alone.
