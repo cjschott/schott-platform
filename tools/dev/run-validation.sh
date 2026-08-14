@@ -105,10 +105,10 @@ skipped_note() {
 # about everything else it reports. The ENG-0005 execution suites are all
 # always-on, so each one added raises both totals.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=50
+  TOTAL_STEPS=51
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=65
+  TOTAL_STEPS=66
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -261,6 +261,14 @@ run "Capability execution snapshot" \
 # privilege, and snapshots the production paths to prove it touched none.
 run "Capability execution generation-5 installer" \
   bash tests/test-capability-execution-generation5-installer.sh
+
+# ENG-0005 generation-6 installer. The same model with one runtime object that
+# is NEW, so rollback has to REMOVE rather than restore. Failure is injected at
+# every commit position, every interrupted transaction is replayed, and the
+# create pathname is attacked directly. Fixture trees only: it installs no
+# tmpfiles fragment, creates no snapshot root, and never runs systemd-tmpfiles.
+run "Capability execution generation-6 installer" \
+  bash tests/test-capability-execution-generation6-installer.sh
 
 # ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
 # no subprocess, no container, no Podman. Real execution is gate G6.

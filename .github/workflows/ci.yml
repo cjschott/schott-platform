@@ -277,6 +277,12 @@ jobs:
       - name: Capability execution generation-5 installer tests
         run: bash tests/test-capability-execution-generation5-installer.sh
 
+      # Generation-6 installer: one NEW runtime object, so rollback removes
+      # rather than restores. Fixture trees only -- no tmpfiles fragment is
+      # installed, no snapshot root is created, systemd-tmpfiles never runs.
+      - name: Capability execution generation-6 installer tests
+        run: bash tests/test-capability-execution-generation6-installer.sh
+
       # Worker driven through a fake backend: no Podman, no subprocess, no
       # container. Real execution is gate G6.
       - name: Capability execution lifecycle tests

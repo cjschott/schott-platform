@@ -776,9 +776,20 @@ run_case "the prerequisite is an artifact and is installed by nothing here" "${P
 from pathlib import Path
 assert not os.path.exists('/run/kyri'), 'the snapshot root exists on this host'
 assert not os.path.exists('/etc/tmpfiles.d/kyri-execution-material.conf')
+# Two suites may NAME systemd-tmpfiles: this one, and the generation-6
+# installer harness, whose whole purpose is to prove the installer never runs
+# it. Naming it is allowed for exactly those two; RUNNING it is allowed for
+# none, and that is now asserted directly rather than approximated by banning
+# the word.
+may_name = {'test-capability-execution-snapshot.sh',
+            'test-capability-execution-generation6-installer.sh'}
 for suite in Path('tests').glob('*.sh'):
     text = suite.read_text(encoding='utf-8')
-    assert 'systemd-tmpfiles' not in text or suite.name == 'test-capability-execution-snapshot.sh', suite.name
+    assert 'systemd-tmpfiles' not in text or suite.name in may_name, suite.name
+    for line in text.splitlines():
+        stripped = line.strip()
+        assert not stripped.startswith('systemd-tmpfiles'), (suite.name, line)
+        assert not stripped.startswith('sudo systemd-tmpfiles'), (suite.name, line)
     assert '/etc/tmpfiles.d/kyri-execution-material.conf' not in text.replace(
         \"assert not os.path.exists('/etc/tmpfiles.d/kyri-execution-material.conf')\", '') \\
         or suite.name == 'test-capability-execution-snapshot.sh', suite.name

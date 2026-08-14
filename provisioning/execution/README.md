@@ -842,6 +842,126 @@ change has been reviewed. If a run is interrupted, rerun `--install` (or
 unknown state, and drive the host to one complete generation or stop for
 disposition.
 
+### Generation 6 — the installer, and the twelve-step ceremony
+
+**NOT INSTALLED. Nothing below has been run against this host.** The
+Generation-6 installer is `provisioning/execution/install-generation-6.sh`,
+with its failure-injection suite at
+`tests/test-capability-execution-generation6-installer.sh`. Both are operator
+tooling on the same terms as Generation 5: mode `0644`, never executed
+directly, absent from the install matrix, and never copied under
+`/usr/lib/kyri/python` or `/usr/libexec`.
+
+The runtime delta is **six objects, all under `tools/capability/execution/`**:
+
+| Object | Operation | Generation 5 |
+|---|---|---|
+| `snapshot.py` | **CREATE** | **absent** |
+| `types.py` | REPLACE | `dede9777…` |
+| `authorisation.py` | REPLACE | `191bb7b8…` |
+| `profile.py` | REPLACE | `f2feb37a…` |
+| `handoff.py` | REPLACE | `150356ed…` |
+| `worker.py` | REPLACE | `1678302a…` |
+
+`/usr/libexec` is **not touched**: the Generation-5 privileged boundary —
+policy, action, entrypoint, worker entrypoint, `PROFILE_FD = 3`, the sealed
+`memfd`, the four seals, the five-element worker argv — stays byte-identical,
+and the installer verifies that against the Generation-5 helper evidence rather
+than asserting it. The installed library count moves **43 → 44**, but the count
+is a backstop: the primary proof is exact per-object digest verification
+against the accepted Generation-5 evidence and the pinned commits.
+
+**What is new, and why it is the whole difficulty.** One object is created
+rather than replaced, so its rollback is a **removal**. A removal that gets it
+wrong destroys somebody else's file. So:
+
+- before PREPARE the pathname must be **absent**; anything there is refused and
+  never overwritten, adopted, or deleted
+- it is published with `link(2)`, which fails `EEXIST` rather than silently
+  overwriting the way `rename(2)` would
+- rollback removes it **only** when its bytes, mode, and ownership are still
+  exactly what this transaction installed; otherwise it fails closed for
+  operator disposition and leaves the object alone
+
+Everything else is the Generation-5 model unchanged: durable journal at
+`/root/kyri-gen6-transaction/`, per-path atomic publication, deterministic
+recovery from actual bytes, `UNKNOWN` refusal, and evidence written only after
+the complete set verifies. The guarantee is the same one, stated the same way:
+**transactional crash-recoverable installation, not six-path atomic
+visibility.** The installer re-proves the premise that makes the commit window
+safe — no sudoers policy, no systemd unit or cron entry naming `kyri-exec` —
+at run time, and refuses to start if a live caller exists.
+
+#### The host prerequisite is a separate ceremony, and the installer will not perform it
+
+Generation-6 source materialises a worker-owned snapshot under
+`/run/kyri/execution-material`. That root must exist, root-owned, **before** the
+runtime is installed — and it is created by `systemd-tmpfiles` from a fragment
+an operator installs, not by the installer. Making `--install` create root-owned
+host directories as a side effect would hide a privilege-boundary change inside
+a library upgrade. It does not: `--verify` refuses to report the runtime
+ready-to-install while the prerequisite is absent, and `--install` re-checks the
+prerequisite immediately before PREPARE and refuses.
+
+Two read-only modes serve the ceremony, and neither mutates anything:
+
+| Mode | Question it answers |
+|---|---|
+| `--verify-prerequisite` | may an operator provision the snapshot root here? |
+| `--verify-prerequisite-installed` | did provisioning produce exactly the ruled layout? |
+
+`--verify-prerequisite` checks that `kyri-capability` exists at the ruled
+uid/gid, that `cschott` is **not** in the `kyri-capability` group, that `/run`
+is `root:root` and not coordinator-writable, that the repository artifact still
+carries exactly two directives with the ruled ownership and modes and no age or
+cleanup field, and that the fragment and both directories are either **absent**
+or **already exactly right**. Anything else conflicts and is refused; nothing is
+overwritten. On this host today — fragment absent, `/run/kyri` absent — the
+correct verdict is `ELIGIBLE TO PROVISION`, which is a readiness statement, not
+a corruption report.
+
+#### The twelve steps
+
+Each lettered boundary is a stop. **Nothing here is chained**: no step runs the
+next, and every mutation is separated from its verification by an operator
+reading the output.
+
+```
+A.  repository checks              tools/dev/run-validation.sh
+B.  prerequisite eligibility       sudo bash provisioning/execution/install-generation-6.sh --verify-prerequisite
+C.  OPERATOR REVIEW                confirm ELIGIBLE TO PROVISION: cschott outside
+                                   kyri-capability, /run root-owned, no conflicting
+                                   fragment or directory. Stop here if anything reads wrong.
+D.  install the fragment           sudo install -m 0644 -o root -g root \
+                                     provisioning/execution/tmpfiles.d/kyri-execution-material.conf \
+                                     /etc/tmpfiles.d/
+E.  create the snapshot root       sudo systemd-tmpfiles --create /etc/tmpfiles.d/kyri-execution-material.conf
+F.  verify ancestry by hand        namei -l /run/kyri/execution-material
+                                   stat -c '%U:%G %a' /run/kyri /run/kyri/execution-material
+                                   expect: root:root 755, root:kyri-capability 770
+G.  prerequisite confirmation      sudo bash provisioning/execution/install-generation-6.sh --verify-prerequisite-installed
+H.  runtime preflight              sudo bash provisioning/execution/install-generation-6.sh --verify
+I.  OPERATOR REVIEW                confirm: Generation-5 baseline verified against its own
+                                   evidence, six source digests match the pinned commit,
+                                   /usr/libexec unchanged, snapshot.py absent, prerequisite
+                                   installed, no transaction in progress, gates closed.
+J.  install                        sudo bash provisioning/execution/install-generation-6.sh --install
+K.  OPERATOR REVIEW                confirm COMMIT completed, or that a rollback restored a
+                                   complete Generation 5. A rollback is a correct outcome,
+                                   not a partial state to repair by hand.
+L.  read-only confirmation         sudo bash provisioning/execution/install-generation-6.sh --verify-installed
+                                   then record /root/kyri-gen6-library-digests.txt and
+                                   /root/kyri-gen6-helper-digests.txt beside the untouched
+                                   G4/G4c/G5 evidence
+```
+
+**Do not chain J to H,** and do not chain D or E to B. `--verify-prerequisite`
+succeeding means the host is *eligible*, not that the change has been reviewed;
+`--verify` succeeding means the transaction is *ready*, not that it has been
+approved. If a run is interrupted, rerun `--install` (or `--recover`): it
+inspects actual bytes, never starts a fresh transaction over unknown state, and
+drives the host to one complete generation or stops for disposition.
+
 #### Carried forward to G6 — now ruled, not yet implemented
 
 Both questions the sealed-transport ruling deliberately did not answer have
@@ -922,12 +1042,15 @@ project quota on `/data` is what bounds it.
 
 ```bash
 id -nG cschott | tr ' ' '\n' | grep -x kyri-capability   # must print nothing
-sudo install -m 0644 -o root -g root \
-  provisioning/execution/tmpfiles.d/kyri-execution-material.conf /etc/tmpfiles.d/
-sudo systemd-tmpfiles --create /etc/tmpfiles.d/kyri-execution-material.conf
 namei -l /run/kyri/execution-material                     # ancestry root-owned
 stat -c '%U:%G %a' /run/kyri /run/kyri/execution-material # root:root 755, root:kyri-capability 770
 ```
+
+Provisioning it is steps **B–G** of the twelve-step Generation-6 ceremony above,
+not a command sequence to paste: the eligibility check, the operator review, the
+two mutations, and the two verifications are separate steps on purpose, and
+`install-generation-6.sh --verify-prerequisite` is what decides whether this
+host may be provisioned at all.
 
 Two earlier handoff models were accepted and then disproved empirically — a
 root-owned path freeze and descriptor anchoring to the coordinator's inode.
