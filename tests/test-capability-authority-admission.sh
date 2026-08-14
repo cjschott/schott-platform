@@ -734,10 +734,63 @@ assert name in Path('.github/workflows/ci.yml').read_text(encoding='utf-8')
 print('OK')
 "
 
+run_case "admission publishes coordinator-readable objects under a hostile umask" "${PRELUDE}
+# The published CIMP directory and its admission record are created inside
+# staging and renamed in, and rename carries the mode with them -- so a masked
+# creation mode reaches the published namespace intact. Under umask 077 that
+# produced 2700 and 0400 in production, and root verification did not notice.
+import stat
+authority, control = genesis('hostileadmission')
+os.umask(0o077)
+try:
+    result = admit(authority, control)
+finally:
+    os.umask(0o022)
+published = []
+for base, dirs, files in os.walk(authority):
+    published.extend(os.path.join(base, name) for name in sorted(dirs) + sorted(files))
+assert any(result.cimp in path for path in published), result.cimp
+for path in published:
+    status = os.lstat(path)
+    mode = stat.S_IMODE(status.st_mode)
+    if stat.S_ISDIR(status.st_mode):
+        assert mode == 0o2750, (path, oct(mode))
+        assert mode & 0o050 == 0o050, ('group cannot enumerate', path, oct(mode))
+    else:
+        assert mode == 0o440, (path, oct(mode))
+        assert mode & 0o040, ('group cannot read', path, oct(mode))
+    assert not mode & 0o022, ('group- or other-writable', path, oct(mode))
+print('OK')
+"
+
+run_case "the runtime reader resolves an admission published under a hostile umask" "${PRELUDE}
+authority, control = genesis('hostileresolve')
+os.umask(0o077)
+try:
+    result = admit(authority, control)
+finally:
+    os.umask(0o022)
+handle = fd(authority)
+try:
+    generation = current_generation(handle)
+    admitted = resolve_implementation(handle, result.cimp, generation=generation)
+finally:
+    os.close(handle)
+assert generation.state is NamespaceState.VALID, generation.state
+assert not generation.pending, generation.pending
+assert admitted.oci_image_id == IMAGE, admitted.oci_image_id
+print('OK')
+"
+
 run_case "no production authority path is created by this suite" "${PRELUDE}
 for production in ('/var/lib/kyri/implementation-authority',
                    '/var/lib/kyri/implementation-authority-control'):
-    assert not os.path.exists(production), production + ' exists'
+    # The production namespace legitimately exists once an operator has run the
+    # admission ceremony. What this suite owes is that IT created nothing
+    # there, which being unprivileged against a root-owned path establishes.
+    if os.path.exists(production):
+        assert os.stat(production).st_uid == 0, production + ' is not root-owned'
+        assert not os.access(production, os.W_OK), production + ' is writable here'
 assert os.getuid() != 0, 'these tests must not run as root'
 print('OK')
 "

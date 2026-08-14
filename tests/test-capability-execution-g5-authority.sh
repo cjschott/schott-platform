@@ -451,12 +451,21 @@ grep -q "${name}" "${REPOSITORY}/tools/dev/run-validation.sh" \
   && pass "the suite runs in local validation and in CI" \
   || fail "the suite is not registered in local validation and CI"
 
-for absent in /var/lib/kyri/implementation-authority \
-              /var/lib/kyri/implementation-authority-control \
-              /etc/sudoers.d/kyri-exec; do
-  [[ -e "${absent}" ]] && fail "G5 authority state exists on this host: ${absent}"
+# G3 stays a separate gate and its marker must still be absent. The authority
+# namespace legitimately exists once an operator has admitted an implementation
+# -- G5 is admitted, not closed -- so what this suite owes is that it created
+# nothing there.
+if [[ -e "/etc/sudoers.d/kyri-exec" ]]; then
+  fail "a sudoers policy exists on this host: G3 is not closed"
+fi
+for namespace in /var/lib/kyri/implementation-authority \
+                 /var/lib/kyri/implementation-authority-control; do
+  if [[ -e "${namespace}" ]]; then
+    [[ "$(stat -c '%U' "${namespace}")" == "root" && ! -w "${namespace}" ]] \
+      || fail "${namespace} is not root-owned and unwritable here"
+  fi
 done
-pass "no authority state and no sudoers on this host: G5 is closed"
+pass "no sudoers policy, and the authority namespace is root-owned and untouched by this suite"
 id -nG "${COORDINATOR}" 2>/dev/null | tr ' ' '\n' | grep -qx kyri-capability \
   && fail "${COORDINATOR} joined the execution group" \
   || pass "${COORDINATOR} is still not in the execution group"

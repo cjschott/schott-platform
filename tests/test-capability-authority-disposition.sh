@@ -675,10 +675,21 @@ print('OK')
 "
 
 run_case "no production authority path is created by this suite" "${PRELUDE}
+# The production namespace legitimately exists once an operator has run the
+# admission ceremony, so its absence stopped being the thing to assert. What
+# this suite owes is that IT creates nothing there -- which the fixture-only
+# design gives structurally, and which is checked by requiring the suite to be
+# unprivileged and every root it writes to be under WORK.
+assert os.getuid() != 0, 'these tests must not run as root'
+assert WORK.startswith('/tmp/') or WORK.startswith('/var/tmp/'), WORK
 for production in ('/var/lib/kyri/implementation-authority',
                    '/var/lib/kyri/implementation-authority-control'):
-    assert not os.path.exists(production), production + ' exists'
-assert os.getuid() != 0, 'these tests must not run as root'
+    assert not production.startswith(WORK), production
+    # Unprivileged and root-owned: this suite could not have created it and
+    # cannot write into it.
+    if os.path.exists(production):
+        assert os.stat(production).st_uid == 0, production + ' is not root-owned'
+        assert not os.access(production, os.W_OK), production + ' is writable here'
 print('OK')
 "
 

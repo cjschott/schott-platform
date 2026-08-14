@@ -187,11 +187,16 @@ def _successor_authority_set(generation: Any, cimp: str,
 
 def _stage(staging_fd: int, name: str, files: dict[str, bytes]) -> None:
     """Build one staged directory and prove its bytes before publication."""
-    os.mkdir(name, 0o750, dir_fd=staging_fd)
+    # Final modes before publication: the staged directory and its records are
+    # renamed into the published namespace, and rename carries the mode with
+    # them. Setting them afterwards would be a publish-then-chmod window on
+    # authority material.
+    bootstrap._make_directory(name, staging_fd)
     handle = os.open(name, bootstrap._DIR_FLAGS, dir_fd=staging_fd)
     try:
         for filename, body in files.items():
-            bootstrap._write_durable(filename, body, handle, 0o440)
+            bootstrap._write_durable(filename, body, handle,
+                                     bootstrap.PUBLISHED_RECORD_MODE)
         for filename, body in files.items():
             if bootstrap._read_regular(filename, handle, 1 << 20) != body:
                 raise AdmissionRefused(f"the staged {filename} did not verify")
@@ -247,7 +252,8 @@ def advance_pointer(authority_fd: int, *, cgen: str, generation_digest: str) -> 
     temporary = f".{bootstrap.CURRENT_GENERATION}.{cgen}"
     with contextlib.suppress(FileNotFoundError):
         os.unlink(temporary, dir_fd=authority_fd)
-    bootstrap._write_durable(temporary, pointer, authority_fd, 0o440)
+    bootstrap._write_durable(temporary, pointer, authority_fd,
+                             bootstrap.PUBLISHED_RECORD_MODE)
     os.rename(temporary, bootstrap.CURRENT_GENERATION,
               src_dir_fd=authority_fd, dst_dir_fd=authority_fd)
     os.fsync(authority_fd)

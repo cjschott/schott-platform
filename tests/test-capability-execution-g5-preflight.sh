@@ -424,14 +424,23 @@ fi
 # ===========================================================================
 # 7. G5 is still closed, and this suite left the host alone
 # ===========================================================================
-for absent in /var/lib/kyri/implementation-authority \
-              /var/lib/kyri/implementation-authority-control \
-              /etc/sudoers.d/kyri-exec; do
-  if [[ -e "${absent}" ]]; then
-    fail "G5 state exists on this host: ${absent}"
+# G3 is a separate gate and its marker must still be absent. The authority
+# namespace, by contrast, legitimately exists once an operator has admitted an
+# implementation -- G5 is admitted, not closed -- so what this suite owes is
+# that it created nothing there.
+if [[ -e "/etc/sudoers.d/kyri-exec" ]]; then
+  fail "a sudoers policy exists on this host: G3 is not closed"
+else
+  pass "no sudoers policy on this host: G3 is closed"
+fi
+for namespace in /var/lib/kyri/implementation-authority \
+                 /var/lib/kyri/implementation-authority-control; do
+  if [[ -e "${namespace}" ]]; then
+    [[ "$(stat -c '%U' "${namespace}")" == "root" && ! -w "${namespace}" ]] \
+      || fail "${namespace} is not root-owned and unwritable here"
   fi
 done
-pass "no sudoers policy and no authority state exist on this host: G5 is closed"
+pass "the authority namespace, where present, is root-owned and untouched by this suite"
 
 PRODUCTION_AFTER="$(snapshot_production "${PRODUCTION_PATHS[@]}")"
 if [[ "${PRODUCTION_BEFORE}" == "${PRODUCTION_AFTER}" ]]; then

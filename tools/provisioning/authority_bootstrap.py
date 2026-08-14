@@ -51,6 +51,21 @@ AUTHORITY_SET = "authority-set"
 
 GENESIS_CGEN = "CGEN-000000000000"
 
+# The canonical published modes, defined once. Every object in the authority
+# namespace gets its mode from here, and admission and disposition import these
+# rather than restating them -- a second copy is a second thing to keep in
+# agreement, and the one that drifts is the one nobody is looking at.
+#
+# §5.7: directories 2750 and records 0440, group-owned by the coordinator,
+# because the reader ENUMERATES implementations/ and must open what it finds.
+# The setgid bit is part of the directory mode, not an accident of the parent:
+# a chmod that dropped it would stop the next publication inheriting the group.
+PUBLISHED_DIRECTORY_MODE = 0o2750
+PUBLISHED_RECORD_MODE = 0o0440
+
+# Control state is root-only and stays that way.
+CONTROL_RECORD_MODE = 0o0600
+
 CIMP_DIGITS = 6
 CGEN_DIGITS = 12
 
@@ -121,14 +136,24 @@ def _read_regular(name: str, dir_fd: int, maximum: int) -> bytes:
     return body
 
 
-def _write_durable(name: str, body: bytes, dir_fd: int, mode: int = 0o600) -> None:
-    """Create ``name`` exactly once, durably.
+def _write_durable(name: str, body: bytes, dir_fd: int,
+                   mode: int = CONTROL_RECORD_MODE) -> None:
+    """Create ``name`` exactly once, durably, at exactly ``mode``.
 
     ``O_EXCL`` is what makes create-once real: a second attempt fails in the
     kernel rather than in a check that could race with one.
+
+    **The mode is set explicitly, because ``os.open`` masks it.** A caller
+    running under umask 077 -- which the G5 ceremony did, having set it for its
+    own root-owned tree and never restored it -- turns a 0440 record into 0400,
+    and the coordinator can no longer read a namespace it is required to
+    enumerate. Root verification still passed, because root ignores the mode
+    bits. ``fchmod`` is not masked, and it runs before a single byte is
+    written, so the file never exists at a mode anything could act on.
     """
     handle = os.open(name, _CREATE_FLAGS, mode, dir_fd=dir_fd)
     try:
+        os.fchmod(handle, mode)
         written = 0
         while written < len(body):
             written += os.write(handle, body[written:])
@@ -136,6 +161,26 @@ def _write_durable(name: str, body: bytes, dir_fd: int, mode: int = 0o600) -> No
     finally:
         os.close(handle)
     os.fsync(dir_fd)
+
+
+def _make_directory(name: str, dir_fd: int,
+                    mode: int = PUBLISHED_DIRECTORY_MODE) -> None:
+    """Create one directory at exactly ``mode``, umask or no umask.
+
+    ``os.mkdir`` masks its mode exactly as ``os.open`` does, and the bit that
+    goes missing first is group read -- so the directory is created, the
+    publication succeeds, and only the coordinator ever notices. The mode is
+    re-applied through a descriptor opened ``O_NOFOLLOW|O_DIRECTORY``, so there
+    is nothing to substitute between the two calls, and it carries the setgid
+    bit because a plain 0750 chmod would strip the inheritance the next
+    publication depends on.
+    """
+    os.mkdir(name, mode, dir_fd=dir_fd)
+    handle = os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
+    try:
+        os.fchmod(handle, mode)
+    finally:
+        os.close(handle)
 
 
 def _read_counter(name: str, digits: int, dir_fd: int) -> int:
@@ -258,7 +303,8 @@ def implementation_lifecycle_lock(control_fd: int) -> Iterator[None]:
     root and are never held by this process.
     """
     try:
-        handle = os.open(LIFECYCLE_LOCK, _LOCK_FLAGS, 0o600, dir_fd=control_fd)
+        handle = os.open(LIFECYCLE_LOCK, _LOCK_FLAGS, CONTROL_RECORD_MODE,
+                         dir_fd=control_fd)
     except OSError as error:
         raise ControlStateError(
             f"the {LIFECYCLE_LOCK} lock is unusable: {error}") from None
@@ -266,6 +312,7 @@ def implementation_lifecycle_lock(control_fd: int) -> Iterator[None]:
         status = os.fstat(handle)
         if not (status.st_mode & 0o170000) == 0o100000:
             raise ControlStateError(f"{LIFECYCLE_LOCK} is not a regular file")
+        os.fchmod(handle, CONTROL_RECORD_MODE)
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -297,7 +344,7 @@ def _require_absent(name: str, dir_fd: int) -> None:
 def _empty_directory(name: str, dir_fd: int) -> None:
     """Create ``name`` if absent; require it present, real, and empty."""
     try:
-        os.mkdir(name, 0o750, dir_fd=dir_fd)
+        _make_directory(name, dir_fd)
         os.fsync(dir_fd)
         return
     except FileExistsError:
@@ -381,11 +428,13 @@ def initialise_genesis(authority_fd: int, control_fd: int) -> str:
                 "authority_set_digest": hashlib.sha256(authority_set).hexdigest(),
             })
 
-            os.mkdir(GENESIS_CGEN, 0o750, dir_fd=staging_fd)
+            _make_directory(GENESIS_CGEN, staging_fd)
             staged_fd = os.open(GENESIS_CGEN, _DIR_FLAGS, dir_fd=staging_fd)
             try:
-                _write_durable(AUTHORITY_SET, authority_set, staged_fd, 0o440)
-                _write_durable(GENERATION, generation, staged_fd, 0o440)
+                _write_durable(AUTHORITY_SET, authority_set, staged_fd,
+                               PUBLISHED_RECORD_MODE)
+                _write_durable(GENERATION, generation, staged_fd,
+                               PUBLISHED_RECORD_MODE)
                 # Read the staged bytes back before publishing them, so what
                 # becomes immutable is what was verified rather than what was
                 # intended.
@@ -413,7 +462,7 @@ def initialise_genesis(authority_fd: int, control_fd: int) -> str:
         temporary = f".{CURRENT_GENERATION}.genesis"
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary, dir_fd=authority_fd)
-        _write_durable(temporary, pointer, authority_fd, 0o440)
+        _write_durable(temporary, pointer, authority_fd, PUBLISHED_RECORD_MODE)
         os.rename(temporary, CURRENT_GENERATION,
                   src_dir_fd=authority_fd, dst_dir_fd=authority_fd)
         os.fsync(authority_fd)

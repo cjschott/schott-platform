@@ -831,9 +831,16 @@ print('OK')
 run_case "the suite touched no production object" "${PRELUDE}
 assert os.getuid() != 0
 for path in ('/data/kyri/capability-handoff/CINV-000042',
-             '/etc/sudoers.d/kyri-exec',
-             '/var/lib/kyri/implementation-authority'):
+             '/etc/sudoers.d/kyri-exec'):
     assert not os.path.exists(path), path
+# The authority namespace legitimately exists once an operator has admitted an
+# implementation, so its absence stopped being the property to assert. What
+# this suite owes is that it touched nothing there, which being unprivileged
+# against a root-owned namespace establishes.
+authority = '/var/lib/kyri/implementation-authority'
+if os.path.exists(authority):
+    assert os.stat(authority).st_uid == 0, authority + ' is not root-owned'
+    assert not os.access(authority, os.W_OK), authority + ' is writable here'
 print('OK')
 "
 

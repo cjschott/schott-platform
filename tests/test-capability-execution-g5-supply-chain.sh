@@ -701,10 +701,19 @@ grep -q 'g5-supply-chain.sh' "${REPOSITORY}/provisioning/execution/README.md" \
   && pass "the runbook documents the supply-chain tooling" \
   || fail "the runbook does not document the supply-chain tooling"
 
-for absent in /var/lib/kyri/implementation-authority \
-              /var/lib/kyri/implementation-authority-control \
-              /etc/sudoers.d/kyri-exec; do
-  [[ -e "${absent}" ]] && fail "G5 state exists on this host: ${absent}"
+# G3 stays a separate gate and its marker must still be absent. The authority
+# namespace legitimately exists once an operator has admitted an implementation
+# -- G5 is admitted, not closed -- so what this suite owes is that it created
+# nothing there.
+if [[ -e "/etc/sudoers.d/kyri-exec" ]]; then
+  fail "a sudoers policy exists on this host: G3 is not closed"
+fi
+for namespace in /var/lib/kyri/implementation-authority \
+                 /var/lib/kyri/implementation-authority-control; do
+  if [[ -e "${namespace}" ]]; then
+    [[ "$(stat -c '%U' "${namespace}")" == "root" && ! -w "${namespace}" ]] \
+      || fail "${namespace} is not root-owned and unwritable here"
+  fi
 done
 command -v cosign >/dev/null 2>&1 && fail "cosign was installed onto PATH by this suite"
 pass "no authority state, no approval, and no cosign installation on this host: G5 is closed"

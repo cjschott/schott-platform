@@ -1111,6 +1111,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | governed Python 3.14.6 | **PRESERVED** 2026-08-14; candidate replaced with the last 3.14.6 child `4b14dc70…`, no migration |
 | `sbom_python_package` | **RULED** 2026-08-14 as `python-3.14`, the signed runtime package; schema stays 15 fields |
 | base discovery | **RULED** 2026-08-14: walk tag history for the governed version, never trust `:latest` |
+| authority publication modes | defect found live 2026-08-14: umask masked the ruled group bits; **source corrected**, live namespace awaiting authorised mode repair |
+| G5 | **ADMITTED, NOT ACCEPTED**: CIMP-000001/CGEN-000000000001 published; coordinator readability pending repair |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
 ### Pass 2B — offline bootstrap primitives, implemented

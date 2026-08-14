@@ -1134,6 +1134,96 @@ authority-ceremony commit, and not `HEAD` at admission time. The image is a
 function of that Containerfile and the approved base; recording anything else
 would name a revision that did not produce the artefact.
 
+### Publication modes — defect found live 2026-08-14, source corrected
+
+Post-admission verification as the coordinator failed:
+
+```
+PermissionError: [Errno 13] Permission denied: 'current-generation'
+```
+
+`CIMP-000001` and `CGEN-000000000001` were admitted, the privileged reader
+reported the namespace **valid, pending 0**, image presence passed, and sudoers
+was absent. The namespace was nonetheless unreadable by the identity that has
+to read it.
+
+**Root cause.** `mkdir(2)` and `open(2)` **mask** the mode they are given, and
+the ceremony ran the authority modules under `umask 077` — `materialise()` set
+it for its own root-owned tree and never restored it. Proven, not inferred:
+
+| umask | `implementations/` | `current-generation` |
+|---|---|---|
+| `022` | `2750` | `0440` |
+| `077` | **`2700`** | **`0400`** |
+
+which is exactly the live state. Group ownership inheritance worked perfectly —
+setgid gave every object `root:cschott`. **Group ownership and group
+readability are different properties**, and only the first was ever inherited.
+Root verification passed throughout because root ignores mode bits entirely.
+
+**Why the tests missed it.** They asserted `2750` and `0440` — the assertions
+were right. Nothing ever challenged them: the harness ran under the developer's
+`umask 022`, so the modes came out correct by accident. The suites now run the
+primitives under `umask 077` and require the ruled modes anyway, and ask the
+question the old cases did not — *can the group read it?*
+
+**The fix is in the primitives, not the ceremony.** Canonical modes are defined
+once in `authority_bootstrap` (`PUBLISHED_DIRECTORY_MODE = 0o2750`,
+`PUBLISHED_RECORD_MODE = 0o0440`, `CONTROL_RECORD_MODE = 0o0600`) and applied
+with `fchmod`, which is not masked — on files before a byte is written, on
+directories through an `O_NOFOLLOW|O_DIRECTORY` descriptor so there is nothing
+to substitute between the two calls. Directory modes carry the setgid bit
+explicitly, because a plain `0750` chmod would strip the inheritance the next
+publication depends on. Staged objects reach their final mode **before**
+`rename`, so there is no publish-then-chmod window, and **nothing is chowned
+after publication**. The ceremony's umask leak is closed as well — the modules
+no longer depend on any caller's umask, and it is restored regardless.
+
+#### The already-published namespace — repair is SAFE but NOT YET RULED
+
+**The digests commit bytes, not metadata.** `admission_digest`,
+`authority_set_digest`, `generation_digest` and `provisioning_evidence_digest`
+are each SHA-256 over canonical JSON **bytes**; the runtime reader verifies
+those bytes and never inspects a mode. So `CIMP-000001`, `CGEN-000000000001`
+and every recorded digest **remain valid**, and a mode repair would change no
+authority identity whatsoever.
+
+**But an operator mutation of the published namespace is not a ruled
+ceremony.** The design rules records immutable and forbids chown after
+publication; it says nothing about repairing mode bits in place. Rather than
+quietly prescribe a `chmod`, the position is:
+
+> Repair is architecturally safe on the evidence above, and it requires an
+> explicit authorisation this pass does not have. **G5 is admitted but NOT
+> accepted**, pending that decision.
+
+If authorised, the bounded procedure — verify before and after, touch modes
+only, never ownership or bytes:
+
+```bash
+# BEFORE: record what is there, including digests, so the repair can be shown
+# to have changed no content.
+sudo find /var/lib/kyri/implementation-authority -printf '%M %u:%g %p
+' | sort
+sudo find /var/lib/kyri/implementation-authority -type f -exec sha256sum {} +
+
+# REPAIR: modes only, and only these two modes.
+sudo find /var/lib/kyri/implementation-authority -type d -exec chmod 2750 {} +
+sudo find /var/lib/kyri/implementation-authority -type f -exec chmod 0440 {} +
+
+# AFTER: the same digests, the ruled modes, and the coordinator can read it.
+sudo find /var/lib/kyri/implementation-authority -type f -exec sha256sum {} +
+cat /var/lib/kyri/implementation-authority/current-generation
+```
+
+The control namespace is **not** touched: `implementation-authority-control`
+stays `0700` with counters and lock at `0600`, and widening it is not part of
+any repair.
+
+The alternative — disposing of `CIMP-000001` through the ruled RETIRE ceremony
+and republishing — is available and is **not** recommended: it burns
+identifiers permanently to fix metadata that commits nothing.
+
 #### The governed SBOM package — ruled 2026-08-14
 
 `provisioning_evidence.py` required a package literally named `python`. **No

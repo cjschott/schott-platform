@@ -584,6 +584,94 @@ assert not (os.lstat(control).st_mode & stat.S_ISGID), 'the control root is setg
 print('OK')
 "
 
+# --- coordinator readability, under a hostile umask ---------------------------
+#
+# THE DEFECT THESE EXIST FOR. Group ownership inheritance and group READABILITY
+# are different properties, and the earlier cases only proved the first. The
+# mode assertions were right; nothing ever challenged them, because the harness
+# ran under the developer's umask 022 and the modes came out correct by
+# accident. The live ceremony ran under umask 077 -- materialise() set it and
+# never restored it -- and every published object came out 2700 or 0400. Root
+# verification passed, because root ignores mode bits; the coordinator could not
+# read the namespace at all.
+#
+# So these run the primitives under umask 077 and require the ruled modes
+# anyway, and they ask the question the old cases did not: can the GROUP read
+# it?
+
+run_case "genesis publishes coordinator-readable objects under a hostile umask" "${PRELUDE}
+authority, control = roots('hostileumask')
+os.umask(0o077)
+try:
+    with_control(control, provision_control_state)
+    with_authority(authority, control, initialise_genesis)
+finally:
+    os.umask(0o022)
+published = [authority]
+for base, dirs, files in os.walk(authority):
+    published.extend(os.path.join(base, name) for name in sorted(dirs) + sorted(files))
+assert len(published) > 4, published
+for path in published:
+    status = os.lstat(path)
+    mode = stat.S_IMODE(status.st_mode)
+    if stat.S_ISDIR(status.st_mode):
+        assert mode == 0o2750, (path, oct(mode))
+        # r-x for the group: the reader ENUMERATES implementations/, so
+        # traverse alone is not enough.
+        assert mode & 0o050 == 0o050, (path, oct(mode))
+    else:
+        assert mode == 0o440, (path, oct(mode))
+        assert mode & 0o040, (path, oct(mode))
+    assert not mode & 0o022, ('group- or other-writable', path, oct(mode))
+    assert status.st_gid == INHERITED_GID, (path, status.st_gid)
+print('OK')
+"
+
+run_case "the runtime reader works on a namespace published under a hostile umask" "${PRELUDE}
+authority, control = roots('hostilereader')
+os.umask(0o077)
+try:
+    with_control(control, provision_control_state)
+    with_authority(authority, control, initialise_genesis)
+finally:
+    os.umask(0o022)
+handle = fd(authority)
+try:
+    generation = current_generation(handle)
+finally:
+    os.close(handle)
+assert generation.cgen == GENESIS_CGEN, generation.cgen
+assert generation.state is NamespaceState.VALID, generation.state
+print('OK')
+"
+
+run_case "control state stays root-only when the namespace is group-readable" "${PRELUDE}
+# Widening the published namespace must not widen the control namespace: the
+# counters and the lock are the two things the coordinator must never see.
+authority, control = provisioned('controlisolation')
+with_control(control, allocate_cimp)
+for name in (CIMP_COUNTER, CGEN_COUNTER):
+    mode = stat.S_IMODE(os.lstat(os.path.join(control, name)).st_mode)
+    assert mode == 0o600, (name, oct(mode))
+    assert not mode & 0o077, ('readable beyond root', name, oct(mode))
+print('OK')
+"
+
+run_case "the lifecycle lock is root-only however it was created" "${PRELUDE}
+authority, control = provisioned('lockmode')
+os.umask(0o000)
+try:
+    def take(handle):
+        with implementation_lifecycle_lock(handle):
+            return True
+    assert with_control(control, take)
+finally:
+    os.umask(0o022)
+mode = stat.S_IMODE(os.lstat(os.path.join(control, LIFECYCLE_LOCK)).st_mode)
+assert mode == 0o600, oct(mode)
+print('OK')
+"
+
 run_case "genesis leaves no staging residue behind" "${PRELUDE}
 authority, control = provisioned('gen4')
 a, c = fd(authority), fd(control)
@@ -800,10 +888,21 @@ print('OK')
 "
 
 run_case "no production authority path is created by this suite" "${PRELUDE}
+# The production namespace legitimately exists once an operator has run the
+# admission ceremony, so its absence stopped being the thing to assert. What
+# this suite owes is that IT creates nothing there -- which the fixture-only
+# design gives structurally, and which is checked by requiring the suite to be
+# unprivileged and every root it writes to be under WORK.
+assert os.getuid() != 0, 'these tests must not run as root'
+assert WORK.startswith('/tmp/') or WORK.startswith('/var/tmp/'), WORK
 for production in ('/var/lib/kyri/implementation-authority',
                    '/var/lib/kyri/implementation-authority-control'):
-    assert not os.path.exists(production), production + ' exists'
-assert os.getuid() != 0, 'these tests must not run as root'
+    assert not production.startswith(WORK), production
+    # Unprivileged and root-owned: this suite could not have created it and
+    # cannot write into it.
+    if os.path.exists(production):
+        assert os.stat(production).st_uid == 0, production + ' is not root-owned'
+        assert not os.access(production, os.W_OK), production + ' is writable here'
 print('OK')
 "
 

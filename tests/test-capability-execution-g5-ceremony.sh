@@ -543,10 +543,19 @@ else
   fail "the runbook does not document the ceremony"
 fi
 
-for absent in /var/lib/kyri/implementation-authority \
-              /var/lib/kyri/implementation-authority-control \
-              /etc/sudoers.d/kyri-exec; do
-  [[ -e "${absent}" ]] && fail "G5 state exists on this host: ${absent}"
+# G3 stays a separate gate and its marker must still be absent. The authority
+# namespace legitimately exists once an operator has admitted an implementation
+# -- G5 is admitted, not closed -- so what this suite owes is that it created
+# nothing there.
+if [[ -e "/etc/sudoers.d/kyri-exec" ]]; then
+  fail "a sudoers policy exists on this host: G3 is not closed"
+fi
+for namespace in /var/lib/kyri/implementation-authority \
+                 /var/lib/kyri/implementation-authority-control; do
+  if [[ -e "${namespace}" ]]; then
+    [[ "$(stat -c '%U' "${namespace}")" == "root" && ! -w "${namespace}" ]] \
+      || fail "${namespace} is not root-owned and unwritable here"
+  fi
 done
 if find /root -maxdepth 1 -name 'kyri-g5-ceremony-*' 2>/dev/null | grep -q .; then
   fail "a materialised ceremony tree exists under /root"

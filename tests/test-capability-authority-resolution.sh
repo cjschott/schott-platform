@@ -507,7 +507,12 @@ worker = Path('provisioning/execution/kyri-exec-worker.py').read_text(encoding='
 assert 'no governed runtime backend is bound' in worker
 for production in ('/var/lib/kyri/implementation-authority',
                    '/var/lib/kyri/implementation-authority-control'):
-    assert not os.path.exists(production), production + ' exists'
+    # The production namespace legitimately exists once an operator has run the
+    # admission ceremony. What this suite owes is that IT created nothing
+    # there, which being unprivileged against a root-owned path establishes.
+    if os.path.exists(production):
+        assert os.stat(production).st_uid == 0, production + ' is not root-owned'
+        assert not os.access(production, os.W_OK), production + ' is writable here'
 assert os.getuid() != 0, 'these tests must not run as root'
 print('OK')
 "

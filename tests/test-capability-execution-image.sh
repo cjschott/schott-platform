@@ -211,21 +211,21 @@ assert 'Nothing in this repository builds' in PROSE, \
 print('OK')
 "
 
-run_case "no image was built, pulled, loaded, or admitted" "${PRELUDE}
+run_case "this suite builds, pulls, loads, and admits nothing" "${PRELUDE}
 import os
-# What G5 remaining closed actually looks like from here: no implementation
-# authority exists, so no CIMP can have been minted and no image can have been
-# admitted. This used to assert '/run/kyri' is absent, which was true only
-# until generation 6 was installed -- that directory is a generation-6 runtime
-# prerequisite an operator provisions, and it never had anything to say about
-# whether an image was admitted. A proxy that stops tracking the thing it
-# stands for is worse than no check.
-assert not Path('/var/lib/kyri/implementation-authority').exists(), \
-    'an implementation-authority namespace exists'
-assert not Path('/var/lib/kyri/implementation-authority-control').exists(), \
-    'an implementation-authority control namespace exists'
+# This asserted that no authority namespace existed, which was the right claim
+# while G5 was closed and became false the moment an operator admitted an
+# implementation. The claim it was standing in for -- that THIS SUITE does none
+# of those things -- survives the transition, and is what it now asserts.
+#
+# G3 is a different gate and its marker must still be absent.
+assert os.getuid() != 0, 'this suite must not run privileged'
 assert not Path('/etc/sudoers.d/kyri-exec').exists(), 'a sudoers drop-in exists'
-assert os.getuid() != 0
+for namespace in ('/var/lib/kyri/implementation-authority',
+                  '/var/lib/kyri/implementation-authority-control'):
+    if os.path.exists(namespace):
+        assert os.stat(namespace).st_uid == 0, namespace + ' is not root-owned'
+        assert not os.access(namespace, os.W_OK), namespace + ' is writable here'
 print('OK')
 "
 

@@ -428,10 +428,21 @@ if [[ -e "${BUILD_CONTEXT_ABS}" ]]; then
 else
   pass "no production build context exists on this host"
 fi
-for absent in /var/lib/kyri/implementation-authority /etc/sudoers.d/kyri-exec; do
-  [[ -e "${absent}" ]] && fail "G5 state exists on this host: ${absent}"
+# G3 stays a separate gate and its marker must still be absent. The authority
+# namespace legitimately exists once an operator has admitted an implementation
+# -- G5 is admitted, not closed -- so what this suite owes is that it created
+# nothing there.
+if [[ -e "/etc/sudoers.d/kyri-exec" ]]; then
+  fail "a sudoers policy exists on this host: G3 is not closed"
+fi
+for namespace in /var/lib/kyri/implementation-authority \
+                 /var/lib/kyri/implementation-authority-control; do
+  if [[ -e "${namespace}" ]]; then
+    [[ "$(stat -c '%U' "${namespace}")" == "root" && ! -w "${namespace}" ]] \
+      || fail "${namespace} is not root-owned and unwritable here"
+  fi
 done
-pass "no authority state and no sudoers on this host: G5 is closed"
+pass "no sudoers policy, and the authority namespace is root-owned and untouched by this suite"
 
 PRODUCTION_AFTER="$(snapshot_production "${PRODUCTION_PATHS[@]}")"
 if [[ "${PRODUCTION_BEFORE}" == "${PRODUCTION_AFTER}" ]]; then

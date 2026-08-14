@@ -78,7 +78,7 @@ BRANCH="arch/eng-0005-execution-transition"
 # the ceremony may import, as `sha256  path` lines, LC_ALL=C sorted. This digest
 # is the gate. The commit is supplied by the operator and checked for ancestry,
 # but the commit is a name and this is the content.
-MANIFEST_DIGEST="01d3bdd3cac1493fafbdd3ba62a27fda71bd7a818fd6a52a9d36d0a1503f1c1f"
+MANIFEST_DIGEST="88d0718fb151f3dad038a2f10c62ae53c3e5ec129186bda92b4cc73f372b70d7"
 MANIFEST_ENTRIES=46
 
 LIBRARY_ROOT="/usr/lib/kyri/python"
@@ -305,6 +305,15 @@ materialise() {
   # 0700 rather than whatever the invoking account's umask happens to be. A
   # umask of 002 would otherwise leave the tree group-writable, which is the
   # one property the whole boundary depends on.
+  #
+  # RESTORED AFTERWARDS. It was not, and the leak reached the authority
+  # modules: mkdir and open mask their mode, so published directories came out
+  # 2700 and records 0400, and the coordinator could not read a namespace it is
+  # required to enumerate. The modules now set their modes explicitly and no
+  # longer depend on any caller's umask; this restores it regardless, because a
+  # process-wide setting that outlives its purpose will find something else to
+  # break.
+  local previous_umask; previous_umask="$(umask)"
   umask 077
   mkdir -p "$(dirname "${staging}")"
   mkdir -m 0700 "${staging}"
@@ -364,6 +373,7 @@ materialise() {
   done < <(cd "${staging}" && find tools -type f -name '*.py' ! -path 'tools/provisioning/*' | LC_ALL=C sort)
   (( drift == 0 )) || halt "${drift} materialised runtime objects differ from the installed runtime"
 
+  umask "${previous_umask}"
   MATERIALISED="${staging}"
   ok "materialised ${verified} objects into ${staging} (0700, root-owned, no symlinks, no bytecode)"
   ok "the materialised runtime half is byte-identical to ${LIBRARY_ROOT}"
@@ -387,7 +397,11 @@ discard_materialised() {
 run_materialised() {
   local program="$1"; shift
   [[ -n "${MATERIALISED}" ]] || halt "no materialised tree"
-  ( cd / && /usr/bin/env -i \
+  # umask 022 explicitly: the authority modes are 2750 and 0440, and a
+  # restrictive ambient umask used to silently strip the group bits from both.
+  # The modules no longer depend on this, and it is set anyway -- defence that
+  # costs nothing against a class of bug that cost a production namespace.
+  ( cd / && umask 022 && /usr/bin/env -i \
       PATH=/usr/bin:/bin \
       PYTHONDONTWRITEBYTECODE=1 \
       /usr/bin/python3 -I -B -c "${program}" "${MATERIALISED}" "$@" )
