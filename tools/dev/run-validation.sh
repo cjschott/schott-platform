@@ -108,7 +108,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=57
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=73
+  TOTAL_STEPS=74
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -389,6 +389,15 @@ run "Capability authority resolution" \
 # Installs nothing, mounts nothing, and creates no sudoers policy.
 run "Capability execution provisioning artifacts" \
   bash tests/test-capability-execution-provisioning.sh
+
+# ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
+# verification-only artifacts: transactional create-once publication of five
+# new objects onto a verified generation-6 baseline, with failure injected at
+# every commit position and every interrupted transaction replayed. Fixture
+# trees only -- it installs nothing, writes no sudoers, invokes no transition
+# or worker, and contacts no container runtime.
+run "Capability execution generation-7 (G6.1A) ceremony" \
+  bash tests/test-capability-execution-generation7-installer.sh
 
 # ENG-0005 G6.1. The whole privileged chain up to, and deliberately short of,
 # container execution: the transition selects a verification-only worker that

@@ -1114,6 +1114,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | authority publication modes | defect found live 2026-08-14: umask masked the ruled group bits; **source corrected**, live namespace awaiting authorised mode repair |
 | G5 | **ADMITTED, NOT ACCEPTED**: CIMP-000001/CGEN-000000000001 published; coordinator readability pending repair |
 | G6.1 verification-only transition and worker | **IMPLEMENTED, NOT LIVE-ACCEPTED**: source only; no sudoers installed, no transition performed, no worker executed |
+| G6.1A trusted-runtime installation ceremony | **IMPLEMENTED, NOT EXECUTED**: `install-generation-7.sh`; installs the five artifacts, writes no grant |
+| G6.1B grant and first live crossing | **NOT STARTED**: separate ceremony; digest-binds the installed helper and performs the first crossing |
 | G6 first container execution | **CLOSED**; the production worker still refuses for want of a bound runtime backend |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
@@ -1731,10 +1733,13 @@ identity, and exercises the rest of it with that one fact stood in for. The
 live ceremony is what closes it, which is the reason G6.1 exists.
 
 **Installing it is a runtime-library generation change and is NOT part of this
-pass.** `/usr/lib/kyri/python` would move from 44 objects to 46
-(`verification.py`, `image_store.py`), plus `kyri_exec_verify.py` in the
-library root and two new `/usr/libexec` artifacts. No installer for that
-generation exists and none was written here.
+pass.** `/usr/lib/kyri/python` moves from 44 `.py` objects to **47** —
+`verification.py`, `image_store.py`, and `kyri_exec_verify.py` in the library
+root — plus two new `/usr/libexec` artifacts. (An earlier statement of this
+said 46; that counted the two `tools/` modules and described the flattened
+policy module separately, but the installed count is a `find -name '*.py'`
+over the whole root and all three are in it.) The installer for that
+generation is G6.1A, written in the following pass.
 
 **The G5 ceremony pin deliberately did NOT move.** `MANIFEST_DIGEST` was bumped
 to HEAD and then reverted, because the ceremony materialises the reviewed
@@ -1749,6 +1754,61 @@ commit the pin actually describes.
 
 **Status: IMPLEMENTED, NOT LIVE-ACCEPTED.** G5 is accepted; G6 and G7 remain
 closed; nothing was installed, invoked, or pushed.
+
+### G6.1A — the trusted-runtime installation ceremony
+
+**Implemented in source. Not executed. `install-generation-7.sh` has never been
+run against the live host.**
+
+G6.1 designed a privilege boundary and installed none of it. G6.1A installs
+exactly the five verification-only artifacts and nothing else, leaving the
+boundary present and reachable by nobody — which is the state an operator
+should be able to inspect before granting anything. **G6.1B**, separately, will
+digest-bind the installed helper into a sudoers grant and perform the first
+live `cschott → root → kyri-capability → verification-worker` crossing.
+
+**It is the existing installer primitive, instantiated a third time.** The
+transactional PREPARE / JOURNAL / COMMIT / ROLLBACK / RECOVER model with
+per-target pinned digests and create-once publication already exists and has
+been executed twice, as `install-generation-5.sh` and `install-generation-6.sh`.
+The repository's convention is that operator ceremonies source nothing and
+carry their own constants, so that primitive is embodied per generation rather
+than as a library. Extracting a shared framework would mean refactoring two
+already-executed, accepted installations of a privilege boundary — a larger and
+riskier change than the one being made, and the "parallel framework" to be
+avoided is precisely what a second, differently-shaped installer would be.
+
+**One property comes from the G5 ceremony instead.** `git` never runs as root
+inside the coordinator's repository: it executes hooks, pagers, aliases and
+filters from configuration a coordinator can write, so every invocation drops
+to the repository owner through `git_as_owner` and root only sees bytes on the
+far side of a pipe. The Generation-6 installer ran `git cat-file` as root;
+Generation 7 does not, and the suite asserts no bare `git` call site remains.
+
+**Every target is a CREATE.** There is nothing to restore, so rollback is
+uniformly REMOVE — and removal happens only when the bytes, mode and ownership
+are still exactly what the transaction installed. Publication is `link(2)`,
+which fails `EEXIST` rather than silently overwriting, and the entrypoint is
+published last because it is the pathname a future grant would name.
+
+**The baseline is proven, not assumed.** 44 library objects, each matching the
+Generation-6 evidence; every installed object accounted for in that evidence;
+the three `/usr/libexec` helpers byte-identical; all five target pathnames free;
+neither sudoers grant present; and the implementation-authority namespace
+compared across the run to prove it was not disturbed.
+
+**`--verify-installed` proves installed bytes against the reviewed commit** —
+the pinned digest and the blob at the commit must agree and the installed object
+must equal both — then the installed contract read off installed bytes with
+docstrings stripped, then the import boundary: under `env -i -I -B`, the three
+modules import and the interpreter is asked what it loaded. `snapshot` must be
+absent from `sys.modules` and `create_argv` unbound. Structural non-execution,
+measured where it will run.
+
+**Status: IMPLEMENTED, NOT EXECUTED.** No sudoers written, no transition
+invoked, no worker executed, no container runtime contacted, no authority
+mutated, no identifier allocated. G6 stays closed: the production worker
+entrypoint is a Generation-5 object and still refuses.
 
 ## 6. Sequencing rules
 

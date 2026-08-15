@@ -377,6 +377,12 @@ jobs:
       - name: Capability execution provisioning artifact tests
         run: bash tests/test-capability-execution-provisioning.sh
 
+      # G6.1A: the trusted-runtime installation ceremony. Transactional
+      # create-once publication of five new objects onto a verified
+      # generation-6 baseline, driven against throwaway fixture trees only.
+      - name: Capability execution generation-7 (G6.1A) ceremony tests
+        run: bash tests/test-capability-execution-generation7-installer.sh
+
       # G6.1: the privileged chain up to, and short of, container execution.
       # The verification-only worker runs the same shared gate production runs
       # and emits a proof instead of creating a container. Installs no sudoers,

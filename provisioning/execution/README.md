@@ -1979,3 +1979,137 @@ governed paths before and after to prove it changed none of them.
 
 **Do not install the drop-in or the helpers until this milestone is reviewed and
 the G6.1 ceremony is authorised.**
+
+## G6.1A — the trusted-runtime installation ceremony
+
+**PREPARED IN SOURCE. NOT EXECUTED.** `provisioning/execution/install-generation-7.sh`
+has never been run against this host. The installed library is still 44 objects,
+`/usr/libexec` still holds three files, and none of the five verification-only
+artifacts exists.
+
+### What it installs, and what it deliberately does not
+
+Exactly the five artifacts G6.1 designed, from the reviewed commit
+`153066a57bd2e3e0a13840c3bdd44dd7c4ef7917`:
+
+| target | mode | operation |
+|---|---|---|
+| `/usr/lib/kyri/python/tools/capability/execution/image_store.py` | `0444` | CREATE |
+| `/usr/lib/kyri/python/tools/capability/execution/verification.py` | `0444` | CREATE |
+| `/usr/lib/kyri/python/kyri_exec_verify.py` | `0444` | CREATE |
+| `/usr/libexec/kyri-exec-verify-worker.py` | `0444` | CREATE |
+| `/usr/libexec/kyri-exec-verify` | `0555` | CREATE |
+
+The installed library moves **44 → 47** objects. `/usr/libexec` gains two and
+none of its three existing objects changes by a single byte.
+
+**It installs no sudoers policy.** Granting `cschott` the authority to run
+`/usr/libexec/kyri-exec-verify` is **G6.1B**: a separate ceremony that
+digest-binds the installed helper and then performs the first live
+`cschott → root → kyri-capability → verification-worker` crossing. G6.1A ends
+with the boundary installed and reachable by nobody — which is precisely the
+state an operator should be able to inspect before granting anything.
+
+It also never invokes the transition, never executes any worker, never contacts
+a container runtime, never touches the implementation-authority namespace,
+never allocates an identifier, and never opens G6. The production worker
+entrypoint is a Generation-5 object here and stays byte-identical, so it still
+refuses for want of a bound runtime backend.
+
+### Why it is a third instance of an existing primitive, not a new framework
+
+The transactional installer already exists and has been executed twice —
+`install-generation-5.sh` and `install-generation-6.sh` — as
+PREPARE / JOURNAL / COMMIT / ROLLBACK / RECOVER with per-target pinned digests
+and create-once publication. The repository's convention is that operator
+ceremonies source nothing and carry their own constants, so the primitive is
+embodied as a per-generation script rather than as a shared library.
+
+Generation 7 instantiates that same primitive a third time. Extracting a shared
+framework would mean refactoring two already-executed, accepted installations
+of a privilege boundary, which is a larger and riskier change than the one
+being made — and the "parallel framework" the ruling warns against is exactly
+what a second, differently-shaped installer would be.
+
+One property is taken from the **G5 ceremony** rather than from the Generation-6
+installer: **git never runs as root inside the coordinator's repository.** git
+executes hooks, pagers, aliases and filters from configuration a coordinator can
+write, so every invocation here is dropped to the repository owner through
+`git_as_owner` and root only ever sees bytes on the far side of a pipe. The
+Generation-6 installer ran `git cat-file` as root; Generation 7 does not, and
+the suite asserts there is no bare `git` call site left in the file.
+
+### The transaction
+
+Every target is a **CREATE**, which makes this both simpler and stricter than
+Generation 6:
+
+- **PREPARE** stages each object beside its target on the target's own
+  filesystem, with final bytes, owner and mode, fsynced. A pathname that is
+  already occupied — by a file, a directory, or a symlink — refuses the whole
+  transaction rather than being adopted or overwritten.
+- **JOURNAL** records intent, pinned digests, and per-target progress durably at
+  `/root/kyri-gen7-transaction/journal`, fsynced before each irreversible step.
+- **COMMIT** publishes with one `link(2)` per target, which fails `EEXIST`
+  rather than silently overwriting, then verifies bytes, mode and owner
+  immediately. The entrypoint is published **last**, because it is the pathname
+  a future grant would name.
+- **ROLLBACK** *removes* — there is nothing to restore — and only when what is
+  there is still exactly the bytes, mode and ownership this transaction
+  installed. Anything else is somebody else's object and is left alone.
+- **RECOVER** re-enters an interrupted transaction from actual bytes: forward
+  when every remaining prepared object verifies, back otherwise, and fails
+  closed on unknown bytes.
+
+### The baseline it requires
+
+Generation 6, proven rather than assumed: 44 library objects, every one matching
+`/root/kyri-gen6-library-digests.txt`, every installed object accounted for in
+that evidence, the three `/usr/libexec` helpers byte-identical to
+`/root/kyri-gen6-helper-digests.txt`, all five target pathnames free, and
+**neither** `/etc/sudoers.d/kyri-exec` nor `/etc/sudoers.d/kyri-exec-verify`
+present. The implementation-authority namespace exists — G5 was accepted — and
+is compared across the run to prove it was not disturbed.
+
+### What `--verify-installed` proves
+
+That every installed byte corresponds exactly to the reviewed commit: the pinned
+digest and the blob at `${COMMIT}` must agree, and the installed object must
+equal both. Then the installed **contract**, read off the installed bytes with
+docstrings and comments stripped:
+
+- `verification.py` names no `create_argv`, reaches no snapshot module, declares
+  `verification-only`, and calls the shared gate
+- `image_store.py` imports no `subprocess` and names no container runtime
+- `kyri_exec_verify.py` names the verification worker and not the production one
+- `/usr/libexec/kyri-exec-verify` compiles in `POLICY_MODULE = "kyri_exec_verify"`
+- `/usr/libexec/kyri-exec-worker.py` still refuses: G6 stays closed
+
+And finally the **import boundary**, which is the strongest available proof that
+the installed bytes cannot reach execution: under `env -i` with `-I -B`, the
+three modules are imported and the interpreter is asked what it loaded.
+`tools.capability.execution.snapshot` must be absent from `sys.modules` and
+`create_argv` must be unbound. Structural non-execution, measured where it will
+actually run.
+
+### The operator sequence
+
+```bash
+# 1. read-only: is this host ready?
+sudo bash provisioning/execution/install-generation-7.sh --verify
+
+# 2. operator review
+
+# 3. the transaction
+sudo bash provisioning/execution/install-generation-7.sh --install
+
+# 4. read-only: does every installed byte correspond to the reviewed commit?
+sudo bash provisioning/execution/install-generation-7.sh --verify-installed
+```
+
+Step 1 mutates nothing. Step 3 is the only mutating step and is the only one
+requiring root. If it is interrupted, rerun it: `--install` recovers rather than
+starting a second transaction, and `--recover` recovers without ever starting
+one.
+
+**Do not proceed to G6.1B until this ceremony has been run and reviewed.**
