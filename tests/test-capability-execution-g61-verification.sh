@@ -331,6 +331,24 @@ assert refuses(store('not json at all')), 'a malformed index answered'
 assert refuses(store({'images': []})), 'an index that is not a list answered'
 assert refuses(store([{'id': IMAGE}, 'not an image'])), \\
     'an index holding a non-image answered'
+# Ruled: an unknown or malformed containers/storage representation is a
+# refusal, never a record to be skipped past. Skipping one would be a
+# heuristic -- 'that entry cannot have been the image I was asked about' -- and
+# a store this process cannot fully read is a store it cannot answer from.
+assert refuses(store([{'id': IMAGE}, {'names': ['no id at all']}])), \\
+    'an index record with no id was skipped rather than refused'
+assert refuses(store([{'id': IMAGE}, {'id': None}])), \\
+    'an index record with a null id was skipped rather than refused'
+assert refuses(store([{'id': IMAGE}, {'id': 12345}])), \\
+    'an index record with a non-string id was skipped rather than refused'
+assert refuses(store([{'id': IMAGE}, {'id': 'not-64-hex'}])), \\
+    'an index record with a malformed id was skipped rather than refused'
+assert refuses(store([{'id': IMAGE}, {'id': 'A' * 64}])), \\
+    'an index record with an uppercase id was skipped rather than refused'
+# And no fallback exists to consult anything else when the index cannot be read.
+code = comment_free('${IMAGE_STORE}')
+for banned in ('except Exception', 'fallback', 'best_effort', 'try:\\n        return False'):
+    assert banned not in code, banned
 # A store owned by somebody else is not this identity's store.
 assert refuses(store([{'id': IMAGE}], owner=os.geteuid() + 1)), \\
     'a store owned by another identity answered'

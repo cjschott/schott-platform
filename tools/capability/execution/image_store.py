@@ -27,9 +27,17 @@ happens to exist would let the layout answer a question about authority.
 
 **Every uncertainty is a refusal, never an absence.** A missing store, an
 unreadable index, a store owned by somebody else, malformed JSON, an oversized
-file — each raises, and `require_image_present` turns any exception into a
-refusal to execute. "I could not tell" and "it is not there" are different
-facts, and only one of them is safe to act on.
+file, or **any record whose representation this does not recognise** — each
+raises, and `require_image_present` turns any exception into a refusal to
+execute. "I could not tell" and "it is not there" are different facts, and only
+one of them is safe to act on.
+
+**There is no heuristic and no fallback.** An unrecognised entry is not skipped
+past on the reasoning that it cannot have been the image in question: that is a
+guess about a representation this process does not understand, and the answer
+being guessed at is a security decision. Nor is there a second source to
+consult when the index cannot be read — no Podman invocation, no other driver
+directory, no cached answer. One reading, or a refusal.
 
 **This is not a container-runtime binding.** Driving a container needs
 ``create_argv`` and the terminal actions behind it, and none of that is here or
@@ -176,13 +184,20 @@ class RootlessImageStore:
             if not isinstance(entry, dict):
                 raise ImageStoreUnreadable("the image index holds a non-image entry")
             identity = entry.get("id")
-            # A record without a usable ID is skipped rather than refused: it
-            # cannot be the image being asked about, and refusing the whole
-            # store because of an unrelated record would be a denial of service
-            # dressed as caution.
-            if isinstance(identity, str) and len(identity) == 64 \
-                    and not (set(identity) - _HEX):
-                found.add(identity)
+            # A record this cannot read is a refusal, not a record to skip.
+            #
+            # Skipping looks harmless -- "that entry cannot have been the image
+            # I was asked about" -- but it is a guess about a representation
+            # this process does not understand, and the whole answer is a
+            # security decision. An index containing something unrecognised is
+            # an index whose meaning is unknown, and "I could not read the
+            # store" must not be delivered as "the image is not there".
+            if not isinstance(identity, str) or len(identity) != 64 \
+                    or set(identity) - _HEX:
+                raise ImageStoreUnreadable(
+                    "the image index holds a record whose id is not a bare "
+                    "64-hex identity; this store cannot be read")
+            found.add(identity)
         return frozenset(found)
 
     def present(self, oci_image_id: str) -> bool:
