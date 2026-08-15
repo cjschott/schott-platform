@@ -1580,16 +1580,34 @@ print('OK')
 # I. Nothing here is live
 # ===========================================================================
 
-run_case "this suite runs unprivileged and the G6.1 boundary is not live" "${SCAN_PRELUDE}
+run_case "this suite runs unprivileged and the G6.1B grant is not live" "${SCAN_PRELUDE}
 assert os.getuid() != 0, 'this suite must not run privileged'
-# The G6.1 markers. Their absence is the statement that the privilege boundary
-# this milestone designs has not been installed or exercised.
-for marker in ('/etc/sudoers.d/kyri-exec-verify',
-               '/usr/libexec/kyri-exec-verify',
-               '/usr/libexec/kyri-exec-verify-worker.py',
-               '/usr/lib/kyri/python/kyri_exec_verify.py',
-               '/usr/lib/kyri/python/tools/capability/execution/verification.py'):
-    assert not os.path.exists(marker), marker + ' exists; G6.1 is not live'
+# The G6.1B marker, and the only one whose absence is still a statement. The
+# grant is what makes the verification boundary reachable by anybody; the
+# artifacts merely make it exist. So this is asserted unconditionally, and it
+# is the assertion that says the first live crossing has not been authorised.
+assert not os.path.exists('/etc/sudoers.d/kyri-exec-verify'), \\
+    '/etc/sudoers.d/kyri-exec-verify exists; G6.1B is not live'
+# The G6.1A artifacts. This suite runs both in CI, where that installation
+# ceremony has not been performed, and on a host where it has, so presence is
+# not the assertion -- coherence is. A partial set is the one state the
+# transactional installer exists to prevent, and it is refused here rather than
+# read as 'some of them happen to be missing'. Whether present bytes are the
+# reviewed bytes belongs to 'install-generation-7.sh --verify-installed', which
+# holds the reviewed commit; restating it here would be a second opinion.
+installed = ('/usr/libexec/kyri-exec-verify',
+             '/usr/libexec/kyri-exec-verify-worker.py',
+             '/usr/lib/kyri/python/kyri_exec_verify.py',
+             '/usr/lib/kyri/python/tools/capability/execution/verification.py')
+present = tuple(marker for marker in installed if os.path.exists(marker))
+assert len(present) in (0, len(installed)), \\
+    'the G6.1A artifacts are partially installed: ' + repr(present)
+# Present means installed by that ceremony, which published every one of them
+# root-owned and read-only. An artifact this suite could write to would be one
+# the boundary does not actually rest on.
+for marker in present:
+    assert os.stat(marker).st_uid == 0, marker + ' is not root-owned'
+    assert not os.access(marker, os.W_OK), marker + ' is writable here'
 # Roots from earlier gates keep the ownership those gates gave them, and this
 # suite may write to none of them. The runtime library and the authority
 # namespace are root-authored; the handoff and execution roots are the
