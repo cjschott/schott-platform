@@ -2065,11 +2065,24 @@ Generation 6:
 
 Generation 6, proven rather than assumed: 44 library objects, every one matching
 `/root/kyri-gen6-library-digests.txt`, every installed object accounted for in
-that evidence, the three `/usr/libexec` helpers byte-identical to
-`/root/kyri-gen6-helper-digests.txt`, all five target pathnames free, and
-**neither** `/etc/sudoers.d/kyri-exec` nor `/etc/sudoers.d/kyri-exec-verify`
-present. The implementation-authority namespace exists — G5 was accepted — and
-is compared across the run to prove it was not disturbed.
+that evidence, the three `/usr/libexec` helpers byte-identical to what
+`/root/kyri-gen6-helper-digests.txt` records for them, all five target pathnames
+free, and **neither** `/etc/sudoers.d/kyri-exec` nor
+`/etc/sudoers.d/kyri-exec-verify` present. The implementation-authority
+namespace exists — G5 was accepted — and is compared across the run to prove it
+was not disturbed.
+
+**The helper evidence is not a list of helpers.** The Generation-6 installer
+wrote seven lines: the three helper digests, the digest of the tmpfiles
+prerequisite that generation also required, and three metadata lines — four of
+them digest-bearing. So the helper baseline is proven by **pathname**: each of
+the three ruled pathnames must appear exactly once and match the installed
+bytes. An absent helper, a helper recorded twice, a recorded digest that
+disagrees with the installed bytes, or any additional
+`/usr/libexec/kyri-exec-*` record that would enlarge the privileged surface is a
+refusal. A record that is none of those — the tmpfiles prerequisite, or any
+future non-libexec prerequisite — is not this ceremony's business: it is neither
+counted as a helper nor allowed to refuse anything.
 
 ### What `--verify-installed` proves
 

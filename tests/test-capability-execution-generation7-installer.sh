@@ -121,6 +121,14 @@ GEN6_COMMIT="$(read_pin GEN6_COMMIT)"
 GEN5_COMMIT="$(read_pin GEN5_COMMIT)"
 SUDOERS_ABS="$(read_pin SUDOERS)"
 VERIFY_SUDOERS_ABS="$(read_pin VERIFY_SUDOERS)"
+# The Generation-6 helper evidence records this alongside the three helpers. It
+# is read from the Generation-6 installer, which is what wrote that file, so the
+# fixture reproduces the real record rather than a guess at it.
+GEN6_INSTALLER="${REPOSITORY}/provisioning/execution/install-generation-6.sh"
+TMPFILES_SOURCE="$(sed -n 's/^TMPFILES_SOURCE="\(.*\)"$/\1/p' "${GEN6_INSTALLER}" | head -1)"
+TMPFILES_TARGET_ABS="$(sed -n 's/^TMPFILES_TARGET="\(.*\)"$/\1/p' "${GEN6_INSTALLER}" | head -1)"
+[[ -n "${TMPFILES_SOURCE}" && "${TMPFILES_TARGET_ABS}" == /etc/* ]] || {
+  printf 'the generation-6 installer does not pin the tmpfiles prerequisite\n' >&2; exit 1; }
 EXPECTED_GEN6="$(read_number EXPECTED_LIBRARY_FILES_GEN6)"
 EXPECTED_GEN7="$(read_number EXPECTED_LIBRARY_FILES_GEN7)"
 for name in COMMIT GEN6_COMMIT GEN5_COMMIT; do
@@ -243,10 +251,22 @@ build_fixture() {
     && find . -type f -name '*.py' -print0 | sort -z | xargs -0 sha256sum ) \
     | sed 's#  \./#  /usr/lib/kyri/python/#' \
     > "${root}/root/kyri-gen6-library-digests.txt"
-  ( cd "${root}" && sha256sum usr/libexec/kyri-exec-transition \
-      usr/libexec/kyri-exec-worker.py usr/libexec/kyri-exec-quota ) \
-    | sed 's#  usr/libexec/#  /usr/libexec/#' \
-    > "${root}/root/kyri-gen6-helper-digests.txt"
+  # The helper evidence in the shape the Generation-6 installer actually wrote
+  # it, which is SEVEN lines and not three: the three /usr/libexec helpers, the
+  # tmpfiles prerequisite the Generation-6 host also required, and three
+  # metadata lines. A fixture that recorded only the helpers made Generation 7
+  # look correct while the live file would have refused it.
+  mkdir -p "${root}/etc/tmpfiles.d"
+  materialise "${GEN6_COMMIT}" "${TMPFILES_SOURCE}" "${root}${TMPFILES_TARGET_ABS}"
+  {
+    ( cd "${root}" && sha256sum usr/libexec/kyri-exec-transition \
+        usr/libexec/kyri-exec-worker.py usr/libexec/kyri-exec-quota ) \
+      | sed 's#  usr/libexec/#  /usr/libexec/#'
+    printf '%s  %s\n' "$(digest_of "${root}${TMPFILES_TARGET_ABS}")" "${TMPFILES_TARGET_ABS}"
+    printf 'commit %s\n' "${GEN6_COMMIT}"
+    printf 'baseline_commit %s\n' "${GEN5_COMMIT}"
+    printf 'transaction gen6-%s\n' "${GEN6_COMMIT:0:12}"
+  } > "${root}/root/kyri-gen6-helper-digests.txt"
 }
 
 library_count() { find "$1/usr/lib/kyri/python" -type f -name '*.py' | wc -l; }
@@ -553,6 +573,90 @@ else
     pass "a drifted /usr/libexec helper refuses the transaction"
   else
     fail "helper drift refused for the wrong reason: $(tail -8 "${helper}/last-run.log")"
+  fi
+fi
+
+# ===========================================================================
+# 6b. the helper baseline is proven by pathname, not by counting records
+# ===========================================================================
+# The accepted Generation-6 helper evidence is SEVEN lines: three helper
+# digests, the tmpfiles prerequisite digest, and three metadata lines. Treating
+# every digest-bearing record as a helper made the live file refuse a host with
+# no drift at all. What must be proven is the three ruled pathnames, and what
+# must be refused is anything that would enlarge that set.
+
+helper_evidence() { printf '%s' "$1/root/kyri-gen6-helper-digests.txt"; }
+
+if [[ "$(grep -c . "$(helper_evidence "${happy}")")" -eq 7 \
+      && "$(grep -cE '^[0-9a-f]{64}' "$(helper_evidence "${happy}")")" -eq 4 ]]; then
+  pass "the fixture reproduces the real generation-6 evidence shape: 7 lines, 4 digest records"
+else
+  fail "the fixture evidence is not the real shape: $(grep -c . "$(helper_evidence "${happy}")") lines"
+fi
+
+# The legitimate tmpfiles record is not a helper and must not refuse anything.
+# Already proven by every accepting case above, which now all carry it. Proven
+# again explicitly with a SECOND non-helper record, so the rule is "not a
+# helper pathname" rather than "exactly one known extra line".
+extra="${WORK}/extra-nonhelper"; build_fixture "${extra}"
+printf '%s  %s\n' "$(printf 'd%.0s' {1..64})" "/etc/tmpfiles.d/some-other-prerequisite.conf" \
+  >> "$(helper_evidence "${extra}")"
+if run_ceremony "${extra}" "" --verify; then
+  pass "a non-helper digest record in the evidence is not counted and does not refuse"
+else
+  fail "a non-helper evidence record refused a clean host: $(tail -8 "${extra}/last-run.log")"
+fi
+
+missing="${WORK}/helper-missing"; build_fixture "${missing}"
+grep -v 'kyri-exec-quota' "$(helper_evidence "${missing}")" > "${missing}/evidence.tmp"
+mv "${missing}/evidence.tmp" "$(helper_evidence "${missing}")"
+if run_ceremony "${missing}" "" --install; then
+  fail "a helper absent from the generation-6 evidence was accepted"
+else
+  if grep -q 'kyri-exec-quota' "${missing}/last-run.log" \
+     && [[ "$(census "${missing}")" == "GEN6=5 GEN7=0 UNKNOWN=0" ]]; then
+    pass "a required helper absent from the generation-6 evidence refuses, naming it"
+  else
+    fail "a missing helper record was refused for the wrong reason: $(tail -8 "${missing}/last-run.log")"
+  fi
+fi
+
+dup="${WORK}/helper-dup"; build_fixture "${dup}"
+duplicate_line="$(grep 'kyri-exec-transition$' "$(helper_evidence "${dup}")")"
+printf '%s\n' "${duplicate_line}" >> "$(helper_evidence "${dup}")"
+if run_ceremony "${dup}" "" --install; then
+  fail "a helper recorded twice in the generation-6 evidence was accepted"
+else
+  if grep -q 'more than once' "${dup}/last-run.log"; then
+    pass "a required helper recorded more than once refuses the transaction"
+  else
+    fail "a duplicated helper record was refused for the wrong reason: $(tail -8 "${dup}/last-run.log")"
+  fi
+fi
+
+enlarge="${WORK}/helper-enlarge"; build_fixture "${enlarge}"
+printf '%s  %s\n' "$(printf 'e%.0s' {1..64})" "/usr/libexec/kyri-exec-something-else" \
+  >> "$(helper_evidence "${enlarge}")"
+if run_ceremony "${enlarge}" "" --install; then
+  fail "evidence naming an extra privileged helper was accepted"
+else
+  if grep -q 'kyri-exec-something-else' "${enlarge}/last-run.log"; then
+    pass "evidence naming an unexpected /usr/libexec/kyri-exec-* pathname refuses"
+  else
+    fail "an enlarged helper baseline was refused for the wrong reason: $(tail -8 "${enlarge}/last-run.log")"
+  fi
+fi
+
+recorded="${WORK}/helper-recorded"; build_fixture "${recorded}"
+sed -i "s#^[0-9a-f]\{64\}\(  /usr/libexec/kyri-exec-quota\)\$#$(printf 'f%.0s' {1..64})\1#" \
+  "$(helper_evidence "${recorded}")"
+if run_ceremony "${recorded}" "" --install; then
+  fail "a helper whose recorded digest does not match the installed bytes was accepted"
+else
+  if grep -q 'drifted' "${recorded}/last-run.log"; then
+    pass "a recorded helper digest that disagrees with the installed bytes refuses"
+  else
+    fail "a mismatched helper record was refused for the wrong reason: $(tail -8 "${recorded}/last-run.log")"
   fi
 fi
 

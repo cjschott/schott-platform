@@ -503,23 +503,70 @@ require_gen6_baseline() {
 # helper -- stays byte-identical, and that is verified rather than asserted.
 require_helpers_unchanged() {
   [[ -f "${GEN6_HELPER_EVIDENCE}" ]] || halt "Generation-6 helper evidence is absent"
-  local line recorded path observed drift=0 seen=0
+
+  # The evidence is not a list of helpers. The Generation-6 installer wrote the
+  # three helper digests, the digest of the tmpfiles prerequisite that
+  # generation also required, and three metadata lines -- seven lines, four of
+  # them digest-bearing. Counting digest records and requiring three was a
+  # category error: it refused a host with no drift at all, because a
+  # legitimate non-helper record is still a digest record.
+  #
+  # What must be proven is the three ruled PATHNAMES, each present exactly once
+  # and matching the installed bytes. What must be refused is anything that
+  # would ENLARGE the privileged helper baseline. A record that is neither --
+  # the tmpfiles prerequisite, or any future non-libexec prerequisite -- is not
+  # this ceremony's business and is neither counted nor refused.
+  local line recorded path observed drift=0 enlarged=0 other=0
+  declare -A RECORDED_HELPER=()
+  declare -A HELPER_RECORDS=()
+  local helper
+  for helper in "${HELPERS[@]}"; do HELPER_RECORDS["${helper}"]=0; done
+
   while IFS= read -r line; do
-    [[ "${line}" =~ ^[0-9a-f]{64} ]] || continue
+    # A digest followed by whitespace and a pathname. `commit <sha>` and
+    # `transaction gen6-...` are metadata and do not match.
+    [[ "${line}" =~ ^[0-9a-f]{64}[[:space:]]+ ]] || continue
     recorded="${line%% *}"
     path="${line#* }"; path="${path# }"
     [[ -n "${FIXTURE}" ]] && path="${FIXTURE}${path}"
-    observed="$(digest_of "${path}")"
-    seen=$((seen + 1))
-    if [[ "${observed}" != "${recorded}" ]]; then
-      bad "privileged helper drifted: ${path} is ${observed:-absent}, Generation-6 evidence says ${recorded}"
+
+    if [[ -n "${HELPER_RECORDS[${path}]+set}" ]]; then
+      HELPER_RECORDS["${path}"]=$(( HELPER_RECORDS["${path}"] + 1 ))
+      RECORDED_HELPER["${path}"]="${recorded}"
+      continue
+    fi
+
+    # Not one of the three. The only kind of stranger that matters here is one
+    # that claims the privileged helper surface is larger than it is.
+    case "${path}" in
+      "${LIBEXEC}"/kyri-exec-*)
+        bad "the Generation-6 evidence records an unexpected privileged helper: ${path}"
+        enlarged=$((enlarged + 1)) ;;
+      *)
+        other=$((other + 1)) ;;
+    esac
+  done < "${GEN6_HELPER_EVIDENCE}"
+
+  (( enlarged == 0 )) \
+    || halt "${enlarged} unexpected /usr/libexec/kyri-exec-* records would enlarge the privileged helper baseline"
+
+  for helper in "${HELPERS[@]}"; do
+    case "${HELPER_RECORDS[${helper}]}" in
+      0) halt "the Generation-6 evidence does not record the required helper ${helper}" ;;
+      1) ;;
+      *) halt "the Generation-6 evidence records ${helper} more than once (${HELPER_RECORDS[${helper}]} times)" ;;
+    esac
+    observed="$(digest_of "${helper}")"
+    if [[ "${observed}" != "${RECORDED_HELPER[${helper}]}" ]]; then
+      bad "privileged helper drifted: ${helper} is ${observed:-absent}, Generation-6 evidence says ${RECORDED_HELPER[${helper}]}"
       drift=$((drift + 1))
     fi
-  done < "${GEN6_HELPER_EVIDENCE}"
-  (( seen == ${#HELPERS[@]} )) \
-    || halt "the Generation-6 helper evidence records ${seen} objects, expected ${#HELPERS[@]}"
+  done
   (( drift == 0 )) || halt "${drift} privileged helpers drifted: the existing boundary is not intact"
-  ok "the three existing /usr/libexec objects are byte-identical (${seen} objects)"
+
+  (( other == 0 )) \
+    || note "${other} non-helper record(s) in the Generation-6 evidence were not treated as helpers"
+  ok "the three ruled /usr/libexec objects are recorded once each and byte-identical (${#HELPERS[@]} helpers)"
 }
 
 require_no_extra_delta() {
