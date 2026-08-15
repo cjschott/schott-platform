@@ -108,7 +108,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=57
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=72
+  TOTAL_STEPS=73
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -389,6 +389,15 @@ run "Capability authority resolution" \
 # Installs nothing, mounts nothing, and creates no sudoers policy.
 run "Capability execution provisioning artifacts" \
   bash tests/test-capability-execution-provisioning.sh
+
+# ENG-0005 G6.1. The whole privileged chain up to, and deliberately short of,
+# container execution: the transition selects a verification-only worker that
+# runs the SAME shared gate production runs and then emits a proof instead of
+# creating a container. Structural non-execution is asserted rather than
+# assumed. Installs no sudoers, invokes no sudo, performs no transition,
+# executes no worker, and invokes no container runtime.
+run "Capability execution G6.1 verification" \
+  bash tests/test-capability-execution-g61-verification.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no

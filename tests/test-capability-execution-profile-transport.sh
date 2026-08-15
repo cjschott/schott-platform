@@ -1043,12 +1043,17 @@ print('OK')
 run_case "the worker argv is built by policy from the authenticated record" "${PRELUDE}
 env = scene('argv-policy')
 launch = authenticated(env)
-argv = policy_mod.worker_argv(launch)
+# G6.1: the target comes from the authorised policy rather than from this
+# module's own constant, and has no default. Both are compiled-in and neither
+# is caller-reachable; what the keyword buys is that the transition acts on the
+# decision it was authorised to act on.
+target = policy_mod.policy_for(['prog', 'CINV-000042']).worker_script
+argv = policy_mod.worker_argv(launch, worker_script=target)
 assert argv == ('/usr/bin/python3', '/usr/libexec/kyri-exec-worker.py',
                 'CINV-000042', 'CIMP-000001', env.profile_digest), argv
 for stand_in in (None, 'CINV-000042', {'cinv': 'CINV-000042'}, 42):
     try:
-        policy_mod.worker_argv(stand_in)
+        policy_mod.worker_argv(stand_in, worker_script=target)
     except policy_mod.TransitionRefused:
         continue
     raise AssertionError('argv was built from an unauthenticated value')

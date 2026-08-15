@@ -377,6 +377,13 @@ jobs:
       - name: Capability execution provisioning artifact tests
         run: bash tests/test-capability-execution-provisioning.sh
 
+      # G6.1: the privileged chain up to, and short of, container execution.
+      # The verification-only worker runs the same shared gate production runs
+      # and emits a proof instead of creating a container. Installs no sudoers,
+      # invokes no sudo, performs no transition, runs no container runtime.
+      - name: Capability execution G6.1 verification tests
+        run: bash tests/test-capability-execution-g61-verification.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

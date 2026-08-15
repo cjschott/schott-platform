@@ -656,14 +656,33 @@ assert policy.worker_script == '/usr/libexec/kyri-exec-worker.py', policy.worker
 # vNext: argv is five elements and is built from the AUTHENTICATED record, not
 # from the command line -- the CIMP and the profile digest cannot be known
 # before the record is read, and must never come from a caller.
+#
+# G6.1: the target is a required keyword taken from the policy that was
+# authorised, not from this module's own constant. It has no default -- a
+# default would silently restore the divergence -- and it is still not
+# caller-reachable, because policy_for is the only producer of a policy and
+# each governed policy module compiles in exactly one target.
 authenticated = helper.check_launch_authorisation(record(), 'CINV-000042')
-argv = helper.worker_argv(authenticated)
+argv = helper.worker_argv(authenticated, worker_script=policy.worker_script)
 assert argv == ('/usr/bin/python3', '/usr/libexec/kyri-exec-worker.py',
                 'CINV-000042', 'CIMP-000001', 'a' * 64), argv
 assert len(argv) == 5, argv
+try:
+    helper.worker_argv(authenticated)
+except TypeError:
+    pass
+else:
+    raise AssertionError('the worker target carries a default')
+for ungoverned in ('', '/tmp/worker.py', 'kyri-exec-worker.py', None, 42,
+                   '../usr/libexec/kyri-exec-worker.py'):
+    try:
+        helper.worker_argv(authenticated, worker_script=ungoverned)
+    except helper.TransitionRefused:
+        continue
+    raise AssertionError('argv was built for an ungoverned target')
 for stand_in in (None, 'CINV-000042', dict(record()), 42, ('CINV-000042',)):
     try:
-        helper.worker_argv(stand_in)
+        helper.worker_argv(stand_in, worker_script=policy.worker_script)
     except helper.TransitionRefused:
         continue
     raise AssertionError('argv was built from an unauthenticated value')

@@ -217,7 +217,19 @@ assert_backstop_coverage() {
                  # calls no chown or privilege primitive, names no runtime, and
                  # accepts no caller-chosen destination -- and behaviourally
                  # that what it writes cannot be altered by the coordinator.
-                 "snapshot.py")
+                 "snapshot.py"
+                 # Backstopped by tests/test-capability-execution-g61-verification.sh,
+                 # which proves it imports no snapshot module, binds no
+                 # create_argv, and that a successful verification never loads
+                 # either -- and behaviourally that it refuses outside the
+                 # execution identity the transition creates.
+                 "verification.py"
+                 # Backstopped by the same suite, which proves it starts no
+                 # process, invokes no container runtime, reads one compiled-in
+                 # location no-follow and descriptor-relatively, matches only
+                 # the image ID, and refuses every uncertainty rather than
+                 # answering that the image is absent.
+                 "image_store.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

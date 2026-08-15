@@ -422,7 +422,7 @@ def check_profile_object(info: os.stat_result, *, expected_uid: int) -> None:
              f"the published profile is not within 1..{MAXIMUM_PROFILE_BYTES} bytes")
 
 
-def worker_argv(launch: Any) -> tuple[str, ...]:
+def worker_argv(launch: Any, *, worker_script: str) -> tuple[str, ...]:
     """The exact five-element worker command line, or refuse.
 
     Every element is a compiled-in constant or a field of an authenticated
@@ -430,10 +430,23 @@ def worker_argv(launch: Any) -> tuple[str, ...]:
     an argument, and the two added values exist because the worker cannot
     check `profile.cimp` or the digest against the profile itself — that is
     circular — and must not read the coordinator-owned launch record.
+
+    **`worker_script` is required and has no default.** It comes from the
+    `TransitionPolicy` a governed policy module built, which is where the
+    target was already declared and — until G6.1 — was then ignored here in
+    favour of this module's own constant. Requiring it means the exec site acts
+    on the policy that was decided rather than on a second copy of it, and a
+    default would silently restore the divergence.
+
+    It is still not caller-reachable: `policy_for` is the only producer of a
+    `TransitionPolicy`, each governed policy module compiles in exactly one
+    target, and nothing on the command line contributes to either.
     """
     _require(isinstance(launch, AuthenticatedLaunch),
              "the worker command line requires an authenticated launch record")
-    return (WORKER_INTERPRETER, WORKER_SCRIPT, launch.cinv, launch.cimp,
+    _require(isinstance(worker_script, str) and worker_script.startswith("/usr/libexec/"),
+             "the worker target must be an absolute governed path")
+    return (WORKER_INTERPRETER, worker_script, launch.cinv, launch.cimp,
             launch.profile_digest)
 
 

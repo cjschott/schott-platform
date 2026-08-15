@@ -527,7 +527,15 @@ def perform_transition(policy: Any, *, launch_authorisation: Any, backend: Any,
         raise refused("credentials changed after verification")
 
     try:
-        backend.execve(policy.worker_interpreter, module.worker_argv(launch),
+        # The target comes from the authenticated policy, not from the policy
+        # module's own constant. Both are compiled-in and neither is
+        # caller-reachable, but only one of them is the decision this
+        # transition was authorised to act on -- which is what lets a governed
+        # verification-only policy select a different terminal target without
+        # a flag, an environment variable, or a caller-supplied pathname.
+        backend.execve(policy.worker_interpreter,
+                       module.worker_argv(launch,
+                                          worker_script=policy.worker_script),
                        policy.environment)
     except OSError as error:
         # The syscall conclusively failed, so nothing ran. There is no second

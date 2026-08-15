@@ -78,6 +78,16 @@ BRANCH="arch/eng-0005-execution-transition"
 # the ceremony may import, as `sha256  path` lines, LC_ALL=C sorted. This digest
 # is the gate. The commit is supplied by the operator and checked for ancestry,
 # but the commit is a name and this is the content.
+#
+# THIS PIN DESCRIBES THE INSTALLED GENERATION, NOT HEAD. The materialisation
+# below requires the runtime half of the package to be byte-identical to the
+# root-owned installed library, so the reviewed commit for a ceremony run is
+# the one whose `tools/capability` and `tools/common` are what is running --
+# not whatever the checkout has reached since. G6.1 added two runtime modules
+# in source and installed neither, so HEAD's manifest is deliberately NOT this
+# value: bumping it would pin the ceremony to bytes root would then refuse to
+# materialise. It moves when the runtime library moves, as part of the
+# generation install that moves it.
 MANIFEST_DIGEST="88d0718fb151f3dad038a2f10c62ae53c3e5ec129186bda92b4cc73f372b70d7"
 MANIFEST_ENTRIES=46
 

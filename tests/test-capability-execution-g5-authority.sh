@@ -36,7 +36,33 @@ read_pin() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "${CEREMONY}" | head -1; }
 BUILD_TAG="$(read_pin BUILD_TAG)"
 COORDINATOR="$(read_pin COORDINATOR)"
 EVIDENCE_ABS="$(read_pin PRODUCTION_EVIDENCE)"
-COMMIT="$(git -C "${REPOSITORY}" rev-parse HEAD)"
+MANIFEST_DIGEST="$(read_pin MANIFEST_DIGEST)"
+
+# The reviewed commit: the one the ceremony's pinned manifest describes, which
+# is the generation that is installed. NOT HEAD -- the ceremony requires the
+# runtime half of the reviewed package to equal the root-owned installed
+# library, and source may legitimately lead it (G6.1 adds two runtime modules
+# and installs neither).
+manifest_at() {
+  local commit="$1" file
+  git -C "${REPOSITORY}" ls-tree -r --name-only "${commit}" \
+      -- tools/__init__.py tools/capability tools/common tools/provisioning \
+    | grep '\.py$' | grep -v '__pycache__' | LC_ALL=C sort \
+    | while IFS= read -r file; do
+        printf '%s  %s\n' \
+          "$(git -C "${REPOSITORY}" cat-file blob "${commit}:${file}" | sha256sum | cut -d' ' -f1)" \
+          "${file}"
+      done | sha256sum | cut -d' ' -f1
+}
+COMMIT=""
+while IFS= read -r candidate; do
+  if [[ "$(manifest_at "${candidate}")" == "${MANIFEST_DIGEST}" ]]; then
+    COMMIT="${candidate}"; break
+  fi
+done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD)
+[[ -n "${COMMIT}" ]] || {
+  printf 'no ancestor within 40 commits carries the pinned operator package\n' >&2
+  exit 1; }
 
 # The live facts this pass was given. Constants here, evidence on the host.
 IMAGE_ID="a3ef70eee8c906c4604f53bb1874ab5bf4922bab9c5f0ba6b6d9ce126f589b69"

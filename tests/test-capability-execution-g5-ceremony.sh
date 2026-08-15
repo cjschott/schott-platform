@@ -48,9 +48,40 @@ CONFIG_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_CONFIG_DIGEST)"
   printf 'the ceremony pins no manifest digest\n' >&2; exit 1; }
 
 # The commit under test. The ceremony deliberately refuses to infer this: a
-# production run names the reviewed commit explicitly. A suite may use HEAD,
-# because HEAD in a test run IS the revision being validated.
-COMMIT="$(git -C "${REPOSITORY}" rev-parse HEAD)"
+# production run names the reviewed commit explicitly.
+#
+# It is NOT HEAD, and using HEAD was wrong the moment source could legitimately
+# lead the installed runtime. The ceremony materialises the reviewed package and
+# then requires its runtime half to be byte-identical to the root-owned
+# installed library, so the reviewed commit is by definition the one the pinned
+# manifest describes -- the generation that is actually installed. G6.1 adds two
+# runtime modules in source and installs neither, so HEAD is deliberately not
+# that commit.
+#
+# Searched rather than pinned a second time: the digest above is already the
+# statement of which package is reviewed, and a second copy of that fact is one
+# more thing to keep in step.
+manifest_at() {
+  local commit="$1" file
+  git -C "${REPOSITORY}" ls-tree -r --name-only "${commit}" \
+      -- tools/__init__.py tools/capability tools/common tools/provisioning \
+    | grep '\.py$' | grep -v '__pycache__' | LC_ALL=C sort \
+    | while IFS= read -r file; do
+        printf '%s  %s\n' \
+          "$(git -C "${REPOSITORY}" cat-file blob "${commit}:${file}" | sha256sum | cut -d' ' -f1)" \
+          "${file}"
+      done | sha256sum | cut -d' ' -f1
+}
+
+COMMIT=""
+while IFS= read -r candidate; do
+  if [[ "$(manifest_at "${candidate}")" == "${MANIFEST_DIGEST}" ]]; then
+    COMMIT="${candidate}"; break
+  fi
+done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD)
+[[ -n "${COMMIT}" ]] || {
+  printf 'no ancestor within 40 commits carries the pinned operator package\n' >&2
+  exit 1; }
 
 # ===========================================================================
 # Fixture-only guard
@@ -103,6 +134,11 @@ build_fixture() {
   [[ -d "${root}" ]] && chmod -R u+w "${root}" >/dev/null 2>&1
   mkdir -p "${root}/usr/lib/kyri/python" "${root}/usr/libexec" \
            "${root}/var/lib/kyri" "${root}/etc/sudoers.d" "${root}/root"
+  # The INSTALLED library, taken from the reviewed commit -- which is the
+  # generation that is running, not the checkout. Its file SET matters as much
+  # as its bytes: the ceremony asserts an exact object count on the host, and a
+  # later commit that adds a runtime module -- G6.1 adds two -- must not make
+  # the fixture disagree with every real installation.
   while IFS= read -r file; do
     mkdir -p "${root}/usr/lib/kyri/python/$(dirname "${file}")"
     git -C "${REPOSITORY}" cat-file blob "${COMMIT}:${file}" \
@@ -186,18 +222,6 @@ fi
 # the case silently stopped testing anything the moment a commit landed that
 # touched only docs and tests: HEAD~1's manifest was then identical to the pin,
 # so the gate had nothing to refuse and passed for the wrong reason.
-manifest_at() {
-  local commit="$1" file
-  git -C "${REPOSITORY}" ls-tree -r --name-only "${commit}" \
-      -- tools/__init__.py tools/capability tools/common tools/provisioning \
-    | grep '\.py$' | grep -v '__pycache__' | LC_ALL=C sort \
-    | while IFS= read -r file; do
-        printf '%s  %s\n' \
-          "$(git -C "${REPOSITORY}" cat-file blob "${commit}:${file}" | sha256sum | cut -d' ' -f1)" \
-          "${file}"
-      done | sha256sum | cut -d' ' -f1
-}
-
 OLD_COMMIT=""
 while IFS= read -r candidate; do
   [[ "${candidate}" != "${COMMIT}" ]] || continue

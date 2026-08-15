@@ -1113,6 +1113,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | base discovery | **RULED** 2026-08-14: walk tag history for the governed version, never trust `:latest` |
 | authority publication modes | defect found live 2026-08-14: umask masked the ruled group bits; **source corrected**, live namespace awaiting authorised mode repair |
 | G5 | **ADMITTED, NOT ACCEPTED**: CIMP-000001/CGEN-000000000001 published; coordinator readability pending repair |
+| G6.1 verification-only transition and worker | **IMPLEMENTED, NOT LIVE-ACCEPTED**: source only; no sudoers installed, no transition performed, no worker executed |
+| G6 first container execution | **CLOSED**; the production worker still refuses for want of a bound runtime backend |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
 ### Pass 2B — offline bootstrap primitives, implemented
@@ -1648,6 +1650,105 @@ five-element argv, root opacity, the credential ordering, `PROFILE_SCHEMA_VERSIO
 = 2, the payload schema, the protocol, the launch record, and the `CIMP`/`CGEN`
 schemas. Pass 4A's gate is unchanged and still runs in full before any snapshot
 exists.
+
+### G6.1 — the whole chain, proven, and stopped before execution
+
+**Implemented in source. Not installed, not invoked, not accepted. G6 remains
+closed and the production execution path remains closed.**
+
+G6.1 exists because the chain from `cschott` to a running container has never
+been executed end to end, and the last mile of it — root's descriptor
+transport, the credential drop, `no_new_privs`, and the worker-side gate — can
+only be observed from inside the process the transition creates. Opening G6 to
+find out would mean learning whether the boundary holds by running a container
+through it. G6.1 runs everything except that.
+
+**A separate worker, not a mode.** The privileged transition selects the
+terminal target from the governed policy module the entrypoint compiled in:
+`/usr/libexec/kyri-exec-verify` loads `kyri_exec_verify`, which names
+`/usr/libexec/kyri-exec-verify-worker.py`. There is no `--dry-run`, no
+environment variable, no caller-supplied pathname, and no field added to the
+production `ExecutionProfile`. The two grants are grants over two paths, so
+"verification authority is not execution authority" is a property of which
+programs exist rather than of a check somebody remembered to write.
+
+**The same verification, because it is the same function.**
+`verification.verify_only` calls `worker.verify_execution` — the Pass 4A gate,
+unchanged, the only route to `create_argv`. Nothing is subset, relaxed, or
+skipped. Only the terminal action differs: production materialises a snapshot
+and creates a container; this returns a record and exits 0.
+
+**Non-execution is structural.** `verification.py` imports named symbols from
+`worker` and never binds the module object; it does not import `snapshot` and
+does not reference `create_argv`; `worker.create_argv` imports `snapshot`
+lazily inside its own body, so a verification run never loads that module at
+all. The suite asserts the absence directly and additionally poisons both, so a
+future change that reintroduces reachability fails loudly rather than quietly
+gaining a capability.
+
+**One privileged change, and it removes a divergence.** `TransitionPolicy`
+already declared `worker_script` and the exec site ignored it in favour of the
+policy module's own constant. `worker_argv` now requires the target as a
+keyword with no default, and the action passes `policy.worker_script`. Both
+values were compiled-in and neither was ever caller-reachable; what changes is
+that the transition acts on the decision it was authorised to act on.
+
+**What the record says, and what it refuses to say.** One line of canonical
+JSON on success and nothing at all on failure: `result`, `cinv`, `cimp`,
+`execution_uid`, `execution_gid`, `profile_sealed`, `handoff_verified`,
+`podman_invoked: false`, `image_presence_probed: true`,
+`profile_schema_version`, `worker_mode: verification-only`. The identity and
+schema are read from the governed contracts rather than written out again, so
+the record cannot agree with itself while disagreeing with the runtime. No
+payload bytes, no package bytes, no profile contents, no environment, and no
+authority record beyond the two identifiers the proof is about.
+
+**`image_presence_probed` is stated so `podman_invoked` cannot overclaim.**
+`require_image_present` consults the execution identity's rootless store, and
+`image_store.RootlessImageStore` answers by **reading** that store's own image
+index — no process is started and Podman is not invoked, exactly as
+`kyri-exec-quota` sets an XFS project through `ioctl` rather than by driving
+`xfs_quota`. The whole `tools/capability` package is asserted to import no
+`subprocess`, and this file is the one that would have had the strongest excuse
+to. Every uncertainty — an absent store, an unreadable index, a store owned by
+another identity, malformed JSON — is a refusal rather than an answer of
+'absent'.
+
+**Three transition claims are checked from the far side of `execve`.** The
+credential drop is verified against the *saved* set as well as the effective
+one, the descriptor table is required to hold exactly 0, 1, 2 and the sealed
+profile, and `no_new_privs` is read from `/proc/self/status`. The transition
+already checks all three in its own process; a claim verified only by the party
+making it is not verified.
+
+**What the suite could not establish unprivileged, and why.** The three checks
+above are facts about the process the transition creates. Descriptor closure
+and `no_new_privs` are exercised for real — by arranging the descriptors and by
+running under `setpriv --no-new-privs`. The credential check cannot be: this
+suite runs as `cschott`, and passing it would require *being* uid 999/gid 987.
+So the suite proves that `verify_only` refuses here, naming the governed
+identity, and exercises the rest of it with that one fact stood in for. The
+live ceremony is what closes it, which is the reason G6.1 exists.
+
+**Installing it is a runtime-library generation change and is NOT part of this
+pass.** `/usr/lib/kyri/python` would move from 44 objects to 46
+(`verification.py`, `image_store.py`), plus `kyri_exec_verify.py` in the
+library root and two new `/usr/libexec` artifacts. No installer for that
+generation exists and none was written here.
+
+**The G5 ceremony pin deliberately did NOT move.** `MANIFEST_DIGEST` was bumped
+to HEAD and then reverted, because the ceremony materialises the reviewed
+package and requires its *runtime half* to be byte-identical to the root-owned
+installed library. Pinning it to a commit carrying two runtime modules that are
+not installed would pin it to bytes root would then refuse to materialise — the
+anchor working, not a defect. So the pin stays at the installed generation, and
+it moves when the library moves, as part of the install that moves it. The
+ceremony suite was taking its reviewed commit from `HEAD`, which was correct
+only while source and installed runtime advanced together; it now finds the
+commit the pin actually describes.
+
+**Status: IMPLEMENTED, NOT LIVE-ACCEPTED.** G5 is accepted; G6 and G7 remain
+closed; nothing was installed, invoked, or pushed.
 
 ## 6. Sequencing rules
 

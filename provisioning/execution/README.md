@@ -1859,3 +1859,123 @@ an explicit, reviewed re-provisioning event that re-runs this runbook and
 re-captures digests. **No automatic synchronisation between the checkout and
 `/usr/lib/kyri/python` is authorised**, and a drift check that silently
 reinstalls would defeat the authority split the installed tree exists to create.
+
+## G6.1 — the whole chain, proven, and stopped before execution
+
+**PREPARED IN SOURCE. NOT INSTALLED, NOT INVOKED, NOT ACCEPTED.** Nothing below
+has been run on this host. No sudoers drop-in exists, no `/usr/libexec/kyri-exec-verify`
+exists, the runtime library is unchanged at 44 objects, and G6 stays closed.
+
+### Why it exists
+
+The chain from `cschott` to a running container has never been executed. Its
+last mile — root's sealed-descriptor transport, the credential drop,
+`no_new_privs`, and the worker-side gate — can only be observed from inside the
+process the transition creates, and the only way to observe it so far would have
+been to open G6 and run a container. G6.1 runs every step of that chain and
+stops at the point where a container would be created.
+
+### The artifacts
+
+| repository source | installed as | owner | mode |
+|---|---|---|---|
+| `provisioning/execution/kyri-exec-verify-entrypoint.py` | `/usr/libexec/kyri-exec-verify` | `root:root` | `0555` |
+| `provisioning/execution/kyri-exec-verify.py` | `/usr/lib/kyri/python/kyri_exec_verify.py` | `root:root` | `0444` |
+| `provisioning/execution/kyri-exec-verify-worker.py` | `/usr/libexec/kyri-exec-verify-worker.py` | `root:root` | `0444` |
+| `tools/capability/execution/verification.py` | `/usr/lib/kyri/python/tools/capability/execution/verification.py` | `root:root` | `0444` |
+| `tools/capability/execution/image_store.py` | `/usr/lib/kyri/python/tools/capability/execution/image_store.py` | `root:root` | `0444` |
+| `provisioning/execution/sudoers.d/kyri-exec-verify.example` | `/etc/sudoers.d/kyri-exec-verify` | `root:root` | `0440` |
+
+Neither worker file carries a shebang or an executable bit: the transition names
+the interpreter and passes the file to it as an argument, exactly as for the
+production worker.
+
+**Installing this is a runtime-library generation change.** `/usr/lib/kyri/python`
+moves from 44 `.py` objects to 46, plus one new library-root module and two new
+`/usr/libexec` artifacts. **No installer for that generation exists**, and none
+was written as part of this work. Writing it, reviewing it, and running it is
+the G6.1 ceremony and is a separate authorised step.
+
+### The selection mechanism — a path, never a flag
+
+`/usr/libexec/kyri-exec-verify` compiles in `POLICY_MODULE = "kyri_exec_verify"`.
+That module compiles in `WORKER_SCRIPT = /usr/libexec/kyri-exec-verify-worker.py`
+and replaces exactly one field of the production `TransitionPolicy`. The
+privileged action execs the worker named by the policy it was authorised to act
+on.
+
+There is no `--dry-run`, no environment variable, no caller-supplied worker
+path, and no field added to the production `ExecutionProfile`. Nothing on the
+command line contributes to the target. Reaching production execution from the
+verification grant would require different bytes at `/usr/libexec/kyri-exec-verify`,
+which changes the sudoers digest, which fails closed as a review event.
+
+### What runs, and in what order
+
+Production, unmodified, for every privileged step: establish the output quota →
+authenticate the launch record → authenticate and seal the profile → place
+descriptor 3 → close every other descriptor → verify the sealed descriptor →
+`setgroups` → `setgid` → `setuid` → verify the drop → set and read back
+`no_new_privs` → `execve`.
+
+Then, in the verification worker: confirm the execution identity → build the
+launch context → read the sealed profile from descriptor 3 → confirm the
+credential drop is permanent (real, effective **and saved**) → confirm the
+descriptor table holds exactly 0, 1, 2, 3 → confirm `no_new_privs` from
+`/proc/self/status` → run `worker.verify_execution`, the same gate production
+runs → emit one line of JSON → exit 0.
+
+### The success record
+
+```json
+{"cimp":"CIMP-000001","cinv":"CINV-000042","execution_gid":987,"execution_uid":999,"handoff_verified":true,"image_presence_probed":true,"podman_invoked":false,"profile_schema_version":2,"profile_sealed":true,"result":"verified","worker_mode":"verification-only"}
+```
+
+Canonical JSON, one line, sorted keys, ASCII. The identity and schema values are
+read from the governed contracts rather than restated, so the record cannot
+agree with itself while disagreeing with the runtime.
+
+`podman_invoked: false` means no container was created, started, or run,
+`create_argv` was never called, and no container-runtime process was started at
+all. `image_presence_probed: true` is stated separately because
+`require_image_present` does consult the rootless store: it **reads**
+`$HOME/.local/share/containers/storage/overlay-images/images.json`, no-follow
+and descriptor-relatively, and matches the already-authorised 64-hex image ID
+against the `id` fields it records. Names and tags are ignored, because a store
+that could be matched by name would be choosing what runs. An absent store, an
+unreadable index, a store owned by another identity, or malformed JSON is a
+refusal, never an answer of 'absent'.
+
+**Any failure exits non-zero having printed nothing.** There is no partial
+record, no diagnostic on stdout, and no continuation toward execution.
+
+### Nothing here can reach container execution
+
+`verification.py` imports named symbols from `worker` and never binds the module
+object, so `create_argv` is not reachable by attribute access. It does not
+import `snapshot`, and `worker.create_argv` imports `snapshot` lazily inside its
+own body — so a verification run never loads that module at all. The suite
+asserts the absence directly, and additionally poisons both, so a change that
+reintroduces reachability fails loudly instead of quietly gaining a capability.
+
+### The one privileged change
+
+`TransitionPolicy` already declared `worker_script` and the exec site ignored it
+in favour of the policy module's own constant. `worker_argv` now requires the
+target as a keyword with no default, and the action passes
+`policy.worker_script`. Both values were compiled-in and neither was ever
+caller-reachable; what changed is that the transition acts on the decision it
+was authorised to act on rather than on a second copy of it.
+
+### The next operator step is READ-ONLY
+
+```bash
+bash tests/test-capability-execution-g61-verification.sh
+```
+
+It installs nothing, invokes no `sudo`, performs no transition, executes no
+worker, and invokes no container runtime, and it snapshots the installed and
+governed paths before and after to prove it changed none of them.
+
+**Do not install the drop-in or the helpers until this milestone is reviewed and
+the G6.1 ceremony is authorised.**
