@@ -1118,7 +1118,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | coordinator execution-authorization bridge | **IMPLEMENTED** 2026-08-16: `execution/launch.py`; lifecycle authority, journalled projection, published handoff |
 | launch-authorisation CMUT target kind | **IMPLEMENTED** 2026-08-16: fifth closed kind, target derived wholly from a validated `CINV` |
 | generation 7 | **INSTALLED / ACTIVE / ACCEPTED**; reviewed authority `153066a5…`, untouched by the bridge |
-| generation 8 | **DEVELOPMENT ONLY** 2026-08-16: declared closed delta of two runtime objects; **not installed, not live-accepted**, no installer exists |
+| generation 8 | **REVIEWED SOURCE** `bc05f911…` 2026-08-16: closed delta of two runtime objects; **not installed, not live-accepted** |
+| generation-8 installation ceremony | **IMPLEMENTED, NOT EXECUTED** 2026-08-16: `install-generation-8.sh`; one REPLACE and one CREATE, Generation-6 retained-baseline transaction |
 | G6.1B grant and first live crossing | **NOT STARTED**: separate ceremony; digest-binds the installed helper and performs the first crossing. Still needs live Trust/Fabric/Capability seed data |
 | G6 first container execution | **CLOSED**; the production worker still refuses for want of a bound runtime backend |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
@@ -1949,8 +1950,61 @@ undeclared bytes all fail.
 **This is not an installation claim.** `install-generation-7.sh
 --verify-installed` is untouched and continues to prove only installed
 Generation 7 against its reviewed source authority. Generation-7 evidence is
-not rewritten. Installing Generation 8 is a separate operator ceremony that
-does not exist yet, and G6.1B remains **CLOSED**.
+not rewritten. G6.1B remains **CLOSED**.
+
+### The Generation-8 installation ceremony — built, not executed
+
+`provisioning/execution/install-generation-8.sh` exists as of 2026-08-16 and
+has **never been run against this host**. Generation 7 is still installed; the
+live library is still 47 objects.
+
+**Why it is shaped like Generation 6 rather than Generation 7.** Generation 7
+was five CREATEs, so its rollback was removal and there was never a byte to put
+back. Generation 8 carries one REPLACE and one CREATE, which means the accepted
+Generation-7 `mutation.py` must survive until the transaction has durably
+committed and must be restorable exactly. That is the Generation-6 problem, so
+it reuses the Generation-6 mechanism: retain the baseline first, verify it
+against the accepted digest, stage beside the target, publish atomically,
+verify, and only then discard the rollback material.
+
+**Order is dependency order and it matters.** `launch.py` imports the new
+target kind from `mutation.py`, so mutation.py is published first and launch.py
+last. The only intermediate state the transaction can be interrupted in —
+mutation at Generation 8, launch absent — is therefore one where nothing
+imports a symbol that is not there. The reverse order would not be.
+
+**The commit point is `journal_write COMMITTED`.** Before it, any failure
+restores the exact accepted Generation-7 state. After it, Generation 8 is
+authoritative and is never rolled back — not for a failed cleanup, not for a
+failed evidence write. A cleanup failure after the commit point leaves
+artefacts behind and says so; `--verify-installed` reports them as untidy
+rather than as a reason to disbelieve a generation whose bytes verify.
+
+**Nothing is trusted for being where it was expected.** The retained rollback
+object is verified against the accepted Generation-7 digest before it can be
+used to restore anything — "whatever bytes happened to be installed" is not a
+rollback target. Targets are classified GEN7 / GEN8 / UNKNOWN from their actual
+bytes, never from the journal or from a pathname existing, and UNKNOWN halts
+for operator disposition rather than being repaired. An object at the CREATE
+pathname that this transaction did not put there is refused and never deleted.
+
+**Journal states** are `NONE → PREPARED → COMMITTING → COMMITTED`, with
+`ROLLING_BACK → ROLLED_BACK` as the failure path. Recovery completes forward
+when every remaining prepared object verifies, rolls back otherwise, and fails
+closed on unknown bytes.
+
+**Generation-8 evidence** is written only after the commit point, under new
+names, recording the reviewed authority, the predecessor generation, both delta
+operations with their old and new digests, and the resulting object count.
+Generation-7 evidence is preserved untouched.
+
+**Status: IMPLEMENTED AND TESTED, NOT EXECUTED.** The suite drives thirty-nine
+cases against throwaway Generation-7 fixtures, including failure injection at
+both publication boundaries, an unverifiable rollback object, a post-commit
+cleanup failure, and unknown bytes at either target. No sudoers policy, no
+privileged helper, no worker, no container runtime, no identifier, and no live
+Trust, Fabric, Capability Runtime, quota, or authority state is involved
+anywhere in it.
 
 ## 6. Sequencing rules
 

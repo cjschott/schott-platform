@@ -110,10 +110,10 @@ skipped_note() {
 # was already correct. Both are now read off a real run, which is the only way
 # this number stays true.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=64
+  TOTAL_STEPS=65
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=75
+  TOTAL_STEPS=76
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -420,6 +420,13 @@ run "Capability execution G6.1 verification" \
 # nothing, and contacts no container runtime.
 run "Capability execution launch bridge" \
   bash tests/test-capability-execution-launch-bridge.sh
+
+# The Generation-8 installation ceremony: one REPLACE and one CREATE, so the
+# accepted Generation-7 mutation.py must survive until the transaction commits
+# and must be restorable exactly. Fixture-only: installs nothing on this host,
+# writes no sudoers, invokes no helper, and contacts no container runtime.
+run "Capability execution generation-8 installer" \
+  bash tests/test-capability-execution-generation8-installer.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no

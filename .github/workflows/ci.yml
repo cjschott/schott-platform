@@ -396,6 +396,11 @@ jobs:
       - name: Capability execution launch bridge tests
         run: bash tests/test-capability-execution-launch-bridge.sh
 
+      # The Generation-8 installation ceremony, fixture-only. Installs nothing,
+      # writes no sudoers, invokes no helper, contacts no container runtime.
+      - name: Capability execution generation-8 installer tests
+        run: bash tests/test-capability-execution-generation8-installer.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations
