@@ -52,6 +52,40 @@ COORDINATOR="cschott"
 
 TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d9"
 
+# --- generation 8, the development generation -------------------------------
+#
+# THE DURABLE RULE. An intentional byte change to an object inside an accepted
+# installed Kyri runtime generation creates a new runtime generation, unless an
+# existing normative generation mechanism explicitly defines otherwise. There
+# is no list of "important" installed modules and no object is exempt: the
+# installed surface is the unit, so a change anywhere in it advances the whole
+# generation.
+#
+# WHAT THIS DECLARATION IS, AND IS NOT. Generation 7 remains the accepted,
+# installed, live generation. Generation 8 exists only in this checkout: it is
+# not installed, not live-accepted, and nothing here installs it. This block
+# says exactly which installed-runtime objects the checkout is legitimately
+# ahead on, so that "a new generation is in development" and "an installed
+# object quietly changed" stop being the same observation. Everything outside
+# it is still drift and still fails.
+#
+# It is closed in both directions. A declared REPLACE that is not actually a
+# difference is a partial or already-applied state and fails; a declared CREATE
+# that is absent from the checkout, present in the installed tree, or carrying
+# other bytes fails; and an undeclared difference anywhere fails.
+#
+# Digests, not a commit. Generation 8 has no reviewed source authority yet
+# because it has not been committed, and inventing a SHA before the commit
+# exists would be pinning something nobody reviewed. The bytes are pinned
+# instead, so the delta is exact today and a later ordinary commit can become
+# the reviewed authority an installer would pin.
+#
+#   source_path|operation|installed_baseline_digest|generation8_digest
+GENERATION8_DELTA=(
+"tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
+"tools/capability/execution/launch.py|CREATE|ABSENT|ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f"
+)
+
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
 # would be executing, and so a later edit to any of them is visible here rather
 # than at the moment it runs as root.
@@ -273,6 +307,25 @@ require_image_material() {
   ok "the image definition is reviewed, names no base, and pins no floating tag"
 }
 
+# Whether one observed difference is exactly a declared generation-8 REPLACE.
+#
+# Both ends are checked. The installed copy must be the baseline the delta says
+# it moves from, and the checkout must be the bytes it says it moves to -- so an
+# installed object holding something nobody declared, or a checkout carrying
+# bytes nobody reviewed, is drift rather than development. Anything not named
+# in the declaration returns false and is reported as drift by the caller.
+generation8_replaces() {
+  local file="$1" installed="$2" checkout="$3" row
+  for row in "${GENERATION8_DELTA[@]}"; do
+    [[ "$(field "${row}" 0)" == "${file}" ]] || continue
+    [[ "$(field "${row}" 1)" == "REPLACE" ]] || return 1
+    [[ "${installed}" == "$(field "${row}" 2)" ]] || return 1
+    [[ "${checkout}" == "$(field "${row}" 3)" ]] || return 1
+    return 0
+  done
+  return 1
+}
+
 # --- root-execution trust model --------------------------------------------
 require_operator_source() {
   local row source expected observed
@@ -289,14 +342,62 @@ require_operator_source() {
   # schema versions and CONTAINER_INTERPRETER, and every one of those is
   # committed verbatim into an admission record -- so "which copy did root
   # import" decides what gets admitted.
-  local drift=0 checked=0 file
+  local drift=0 checked=0 declared=0 file installed checkout
+  local -a satisfied=()
   while IFS= read -r file; do
     checked=$((checked + 1))
-    [[ "$(digest_of "${LIBRARY_ROOT}/${file}")" == "$(digest_of "${REPOSITORY}/${file}")" ]] \
-      || { bad "checkout and installed runtime disagree at ${file}"; drift=$((drift + 1)); }
+    installed="$(digest_of "${LIBRARY_ROOT}/${file}")"
+    checkout="$(digest_of "${REPOSITORY}/${file}")"
+    [[ "${installed}" == "${checkout}" ]] && continue
+    if generation8_replaces "${file}" "${installed}" "${checkout}"; then
+      declared=$((declared + 1)); satisfied+=("${file}")
+      note "generation-8 development: ${file} is ahead of the installed generation by declaration"
+    else
+      bad "checkout and installed runtime disagree at ${file}"; drift=$((drift + 1))
+    fi
   done < <(cd "${LIBRARY_ROOT}" && find tools -type f -name '*.py' | sort)
-  (( drift == 0 )) \
-    && ok "the checkout's runtime half is byte-identical to the installed root-owned runtime (${checked} objects)"
+
+  # The declaration is closed the other way too. A REPLACE nobody observed as a
+  # difference describes a change that is not there -- an abandoned, partial, or
+  # already-applied generation-8 source state -- and a CREATE has to be present
+  # in the checkout, absent from the installed tree, and carry the declared
+  # bytes. Either way the answer is a refusal, not a quieter report.
+  local row source operation expected observed entry seen complete
+  for row in "${GENERATION8_DELTA[@]}"; do
+    source="$(field "${row}" 0)"; operation="$(field "${row}" 1)"
+    expected="$(field "${row}" 3)"
+    if [[ "${operation}" == "REPLACE" ]]; then
+      seen=0
+      for entry in ${satisfied[@]+"${satisfied[@]}"}; do
+        if [[ "${entry}" == "${source}" ]]; then seen=1; break; fi
+      done
+      if (( seen == 0 )); then
+        bad "the declared generation-8 change at ${source} is not present as a difference"
+        drift=$((drift + 1))
+      fi
+      continue
+    fi
+    complete=1
+    observed="$(digest_of "${REPOSITORY}/${source}")"
+    if [[ "${observed}" != "${expected}" ]]; then
+      bad "the declared generation-8 object ${source} is ${observed:-absent}, not the declared ${expected}"
+      drift=$((drift + 1)); complete=0
+    fi
+    if [[ -e "${LIBRARY_ROOT}/${source}" ]]; then
+      bad "the declared generation-8 CREATE ${source} already exists in the installed runtime"
+      drift=$((drift + 1)); complete=0
+    fi
+    if (( complete == 1 )); then declared=$((declared + 1)); fi
+  done
+
+  if (( drift == 0 )); then
+    if (( declared == 0 )); then
+      ok "the checkout's runtime half is byte-identical to the installed root-owned runtime (${checked} objects)"
+    else
+      ok "the checkout is the declared generation-8 candidate: ${declared} declared object(s) ahead, ${checked} installed object(s) compared, no undeclared difference"
+      note "generation 7 remains the accepted installed generation; generation 8 is not installed and is not live-accepted"
+    fi
+  fi
 
   # Compiled bytecode and a coordinator-writable checkout are both still facts
   # about this tree. They stopped being blockers when the ceremony stopped

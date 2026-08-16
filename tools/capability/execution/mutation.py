@@ -100,12 +100,28 @@ class TargetKind(enum.Enum):
     # would need an authority this journal deliberately does not have.
     QUARANTINE_RESERVATION = "quarantine-reservation"
     QUARANTINE_RELEASE = "quarantine-release"
+    # Added at the coordinator execution-authorization bridge. The privileged
+    # transition reads exactly one governed projection of the lifecycle
+    # authority, at `<CINV>/launch-authorisation` beneath the execution root.
+    # It is authority-bearing, so it is journalled like everything else rather
+    # than written beside the substrate that exists to make writes accountable.
+    LAUNCH_AUTHORISATION = "launch-authorisation"
 
 
 _TARGET_DIRECTORY = {TargetKind.EXECUTION_STATE: _STATE,
                      TargetKind.EXECUTION_TRANSITION: _TRANSITIONS,
                      TargetKind.QUARANTINE_RESERVATION: _QUARANTINE_RESERVATIONS,
                      TargetKind.QUARANTINE_RELEASE: _QUARANTINE_RELEASES}
+
+# The one record name the launch-authorisation kind may ever write. A constant
+# rather than a parameter: a caller able to name the file is a caller able to
+# name a different one, and the privileged reader knows exactly this name.
+LAUNCH_AUTHORISATION_NAME = "launch-authorisation"
+
+# Kinds whose directory is derived from the validated target name rather than
+# fixed. The derivation is total -- the name has already satisfied the kind's
+# grammar -- so there is no component here a caller contributed.
+_PER_INVOCATION_KINDS = frozenset({TargetKind.LAUNCH_AUTHORISATION})
 
 
 def _is_cinv(name: str) -> bool:
@@ -122,7 +138,8 @@ def _is_sequenced_cinv(name: str) -> bool:
 _TARGET_GRAMMAR = {TargetKind.EXECUTION_STATE: _is_cinv,
                    TargetKind.EXECUTION_TRANSITION: _is_sequenced_cinv,
                    TargetKind.QUARANTINE_RESERVATION: _is_cinv,
-                   TargetKind.QUARANTINE_RELEASE: _is_cinv}
+                   TargetKind.QUARANTINE_RELEASE: _is_cinv,
+                   TargetKind.LAUNCH_AUTHORISATION: _is_cinv}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -147,7 +164,30 @@ class MutationTarget:
 
     @property
     def directory(self) -> str:
+        """The directory this target installs into, relative to the root.
+
+        For the four fixed kinds this is the kind's own directory, unchanged.
+        For a per-invocation kind it is the validated identity itself — which
+        is a derivation from a name the grammar has already proved is eleven
+        characters of `CINV-` and digits, so it can carry no separator, no
+        traversal, and no component a caller chose.
+        """
+        if self.kind in _PER_INVOCATION_KINDS:
+            return self.name
         return _TARGET_DIRECTORY[self.kind]
+
+    @property
+    def record_name(self) -> str:
+        """The filename installed inside :attr:`directory`.
+
+        Identical to ``name`` for every pre-existing kind, so the path each of
+        them resolves to is exactly what it was. A per-invocation kind spends
+        its name on the directory instead, and takes its filename from a
+        module constant so there is nothing left for a caller to aim.
+        """
+        if self.kind is TargetKind.LAUNCH_AUTHORISATION:
+            return LAUNCH_AUTHORISATION_NAME
+        return self.name
 
 
 @dataclasses.dataclass(frozen=True)
@@ -361,22 +401,32 @@ class Mutation:
         self._root.reverify()
         kind = TargetKind(intent["target_kind"])
         target = MutationTarget(kind=kind, name=intent["target_name"])
+        if kind in _PER_INVOCATION_KINDS:
+            # The containing directory is derived, not authority: an existing
+            # one is the ordinary state after an interrupted run, and the
+            # create-once guarantee lives on the record inside it.
+            try:
+                os.mkdir(target.directory, 0o700, dir_fd=self._root.fd)
+            except FileExistsError:
+                pass
+            os.fsync(self._root.fd)
         directory = _open_dir(target.directory, self._root.fd)
         try:
-            temporary = f".{target.name}.{cmut}"
+            record = target.record_name
+            temporary = f".{record}.{cmut}"
             try:
                 _write_durable(temporary, body, directory)
             except FileExistsError:
                 raise AlreadyInstalled(
                     f"{cmut} already attempted installation") from None
             try:
-                os.stat(target.name, dir_fd=directory, follow_symlinks=False)
+                os.stat(record, dir_fd=directory, follow_symlinks=False)
             except FileNotFoundError:
                 pass
             else:
                 os.unlink(temporary, dir_fd=directory)
-                raise AlreadyInstalled(f"{target.name} is already installed")
-            os.rename(temporary, target.name,
+                raise AlreadyInstalled(f"{record} is already installed")
+            os.rename(temporary, record,
                       src_dir_fd=directory, dst_dir_fd=directory)
             os.fsync(directory)
         finally:
@@ -470,10 +520,16 @@ class Mutation:
     @staticmethod
     def _probe(root_fd: int, target: MutationTarget, expected: str,
                cmut: str) -> bool:
-        directory = _open_dir(target.directory, root_fd)
+        try:
+            directory = _open_dir(target.directory, root_fd)
+        except FileNotFoundError:
+            # Only reachable for a derived directory, and only when the crash
+            # landed before it was created. Nothing was installed.
+            return False
         try:
             try:
-                body = _read_file(target.name, directory, _MAXIMUM_RECORD_BYTES)
+                body = _read_file(target.record_name, directory,
+                                  _MAXIMUM_RECORD_BYTES)
             except FileNotFoundError:
                 return False
         finally:

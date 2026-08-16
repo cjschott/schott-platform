@@ -1115,7 +1115,11 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | G5 | **ADMITTED, NOT ACCEPTED**: CIMP-000001/CGEN-000000000001 published; coordinator readability pending repair |
 | G6.1 verification-only transition and worker | **IMPLEMENTED, NOT LIVE-ACCEPTED**: source only; no sudoers installed, no transition performed, no worker executed |
 | G6.1A trusted-runtime installation ceremony | **IMPLEMENTED, NOT EXECUTED**: `install-generation-7.sh`; installs the five artifacts, writes no grant |
-| G6.1B grant and first live crossing | **NOT STARTED**: separate ceremony; digest-binds the installed helper and performs the first crossing |
+| coordinator execution-authorization bridge | **IMPLEMENTED** 2026-08-16: `execution/launch.py`; lifecycle authority, journalled projection, published handoff |
+| launch-authorisation CMUT target kind | **IMPLEMENTED** 2026-08-16: fifth closed kind, target derived wholly from a validated `CINV` |
+| generation 7 | **INSTALLED / ACTIVE / ACCEPTED**; reviewed authority `153066a5…`, untouched by the bridge |
+| generation 8 | **DEVELOPMENT ONLY** 2026-08-16: declared closed delta of two runtime objects; **not installed, not live-accepted**, no installer exists |
+| G6.1B grant and first live crossing | **NOT STARTED**: separate ceremony; digest-binds the installed helper and performs the first crossing. Still needs live Trust/Fabric/Capability seed data |
 | G6 first container execution | **CLOSED**; the production worker still refuses for want of a bound runtime backend |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
 
@@ -1809,6 +1813,144 @@ measured where it will run.
 invoked, no worker executed, no container runtime contacted, no authority
 mutated, no identifier allocated. G6 stays closed: the production worker
 entrypoint is a Generation-5 object and still refuses.
+
+### The coordinator execution-authorization bridge — implemented 2026-08-16
+
+`prepare_invocation` ended at `execution-prepared`, and the privileged
+transition expected a launch-authorisation record and a published handoff that
+nothing in the repository produced. `tools/capability/execution/launch.py`
+closes that gap and stops.
+
+**The lifecycle transition is the authority.** `RESERVED -> LAUNCH_AUTHORIZED`
+is committed through the existing §16 state chain and is the only thing that
+decides whether a launch was approved. Everything after it is derived:
+
+```
+validate the execution-prepared invocation
+  -> derive the deterministic execution profile
+  -> derive the launch-authorisation projection
+  -> commit LAUNCH_AUTHORIZED            (authority)
+  -> journal the projection through CMUT (projection)
+  -> publish the handoff                 (materialisation)
+  -> verify the materialisation
+  -> ready for privileged verification
+```
+
+**Ruling A — the commitment.** `commitment_digest` is the lowercase 64-hex body
+of the prepared invocation's existing `binding_digest`, and nothing else. That
+binding already commits to the invocation identity together with the governed
+selection, instance, package, actor and payload, so a second canonicalisation
+over the same facts would be a second answer to one question. The record's
+other six fields independently bind the `CINV`, the `CIMP`, the execution
+profile, the fixed handoff root, the transport schema, and the lifecycle state.
+
+**Ruling B — where it is stored.** The launch-authorisation is authority-bearing
+and is written only through the CMUT substrate. `TargetKind` gains a fifth
+member, `LAUNCH_AUTHORISATION`, whose complete target is derived from a
+validated `CINV`: the directory is the identity, the filename is a module
+constant, and the caller supplies neither. The four existing grammars are
+untouched, and `record_name` equals `name` for every one of them, so the paths
+they resolve to are exactly what they were.
+
+**Interruption semantics.** Two post-crash states are legitimate. *State A* —
+lifecycle `LAUNCH_AUTHORIZED`, projection and handoff absent. *State B* —
+lifecycle and projection committed, handoff absent. A rerun resumes by
+reconstructing the deterministic remainder from the committed authority; it
+never makes a second authorisation decision. Anything that disagrees with that
+authority is refused. There is no repair path: the module contains no
+`os.unlink`, no `rmtree(`, no `os.chmod`, and no truncating or creating open,
+because a bridge that could tidy a disagreement could tidy away the evidence of
+one. An existing handoff is verified completely — bytes, modes, and a package
+re-validated through the contract that bound it — because a pathname that
+exists is not a handoff.
+
+**Idempotency.** An exact repeat returns the same authority with `resumed=True`
+and allocates nothing: no second transition record, no second `CMUT`, no second
+handoff, no new invocation identity. A conflicting repeat refuses.
+
+**Replay responsibility, and the hard G6 prerequisite.** Repeated presentation
+of an exact `LAUNCH_AUTHORIZED` `CINV` is acceptable under G6.1B, because the
+verification worker executes no capability, contacts no container runtime, and
+the per-`CINV` quota project assignment is deterministic and idempotent. It is
+**not** acceptable for G6. **Before G6 opens, the coordinator execution-start
+path must durably advance `LAUNCH_AUTHORIZED -> CREATED` before the production
+crossing**, so a second attempt observes that the `CINV` is no longer
+`LAUNCH_AUTHORIZED` and refuses. That belongs to the execution-start increment
+and is deliberately not implemented here; no consume-once mechanism was added
+to the privileged helper.
+
+**Backing-store descriptor — resolved.** `/etc/kyri/backing-store.json` is host
+configuration, not authority: `root:root 0444` inside `/etc/kyri` at `0711`, so
+the unprivileged coordinator can open it by path without the directory being
+listable. Its schema is closed canonical JSON with exactly `filesystem_uuid`,
+`filesystem_type` and `mount_point`. It is provisioned by the operator runbook
+in `provisioning/execution/README.md` §5.2 and the runtime cannot create,
+repair, or regenerate it. The coordinator observes the UUID from
+`/dev/disk/by-uuid` and the mount facts from the kernel, both unprivileged.
+
+**Status: IMPLEMENTED, NOT LIVE-EXERCISED.** No sudoers written, no privileged
+helper invoked, no worker executed, no container runtime contacted, no live
+Trust or Fabric record created. Live seed data remains a G6.1B prerequisite and
+is a separate operator-controlled ceremony-preparation increment.
+
+### Generation 8 — the development generation, 2026-08-16
+
+**The durable rule, ruled here and applying from here on:**
+
+> An intentional byte change to an object inside an accepted installed Kyri
+> runtime generation creates a new runtime generation, unless an existing
+> normative generation mechanism explicitly defines otherwise.
+
+There is no list of "important" installed modules, no object is exempt, and the
+installed-runtime correspondence checks are not weakened to accommodate a
+change. The installed surface is the unit: a change anywhere in it advances the
+whole generation.
+
+The bridge adds the governed launch-authorisation target to
+`tools/capability/execution/mutation.py`, which is inside the accepted
+Generation-7 installed surface. **That is why generation advancement is
+required** — not because the change is large, but because the object is
+installed and its authority behaviour changed.
+
+| | |
+|---|---|
+| **LIVE** | Generation 7, reviewed source authority `153066a57bd2e3e0a13840c3bdd44dd7c4ef7917`, installed and **accepted** |
+| **DEVELOPMENT** | Generation 8, in this checkout only — **not installed, not live-accepted** |
+
+**The exact Generation-8 delta.** Two runtime objects, declared closed and
+pinned by digest in `provisioning/execution/g5-preflight.sh`:
+
+| source | operation | installed baseline | generation-8 |
+|---|---|---|---|
+| `tools/capability/execution/mutation.py` | REPLACE | `9a8d071f…` | `94500b6a…` |
+| `tools/capability/execution/launch.py` | CREATE | ABSENT | `ca606a94…` |
+
+Everything else the bridge touches is outside the installed surface: the
+bridge's own suite, the purity-backstop registry, the validator and CI
+registrations, and this document. Tests and documentation do not enlarge a
+runtime generation.
+
+**Digests, not a commit.** Generation 8 has no reviewed source authority yet,
+because it has not been committed; pinning a SHA before the commit exists would
+pin something nobody reviewed. The delta is therefore exact today by bytes, and
+a later ordinary commit becomes the reviewed authority a Generation-8 installer
+would pin.
+
+**How validation tells development from drift.** The G5 preflight's
+byte-identity invariant is unchanged and unnarrowed. What it gained is a
+classification: a difference that matches a declared entry — installed copy
+equal to the declared baseline *and* checkout equal to the declared
+generation-8 digest — is reported as generation-8 development; every other
+difference is still drift and still fails. The declaration is closed in both
+directions, so a declared REPLACE that is not actually a difference, a declared
+CREATE already present in the installed runtime, and a declared object carrying
+undeclared bytes all fail.
+
+**This is not an installation claim.** `install-generation-7.sh
+--verify-installed` is untouched and continues to prove only installed
+Generation 7 against its reviewed source authority. Generation-7 evidence is
+not rewritten. Installing Generation 8 is a separate operator ceremony that
+does not exist yet, and G6.1B remains **CLOSED**.
 
 ## 6. Sequencing rules
 

@@ -100,15 +100,20 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 55 checks plus the closing summary. Quick mode drops
-# ten of them. A validation tool that miscounts its own steps invites doubt
-# about everything else it reports. The ENG-0005 execution suites are all
-# always-on, so each one added raises both totals.
+# Counted, not guessed: every check plus the closing summary. A validation tool
+# that miscounts its own steps invites doubt about everything else it reports.
+# The ENG-0005 execution suites are all always-on, so each one added raises
+# both totals.
+#
+# The quick total had drifted six steps below what quick mode actually runs
+# and was corrected here from measurement rather than from arithmetic. Full mode
+# was already correct. Both are now read off a real run, which is the only way
+# this number stays true.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=57
+  TOTAL_STEPS=64
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=74
+  TOTAL_STEPS=75
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -407,6 +412,14 @@ run "Capability execution generation-7 (G6.1A) ceremony" \
 # executes no worker, and invokes no container runtime.
 run "Capability execution G6.1 verification" \
   bash tests/test-capability-execution-g61-verification.sh
+
+# The coordinator execution-authorization bridge: execution-prepared to a
+# handoff a privileged boundary may later verify, and no further. The lifecycle
+# transition is the authority, the launch-authorisation is its journalled
+# projection, and the handoff is materialisation. Elevates nothing, executes
+# nothing, and contacts no container runtime.
+run "Capability execution launch bridge" \
+  bash tests/test-capability-execution-launch-bridge.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no

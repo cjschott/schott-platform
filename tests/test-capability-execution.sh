@@ -229,7 +229,15 @@ assert_backstop_coverage() {
                  # location no-follow and descriptor-relatively, matches only
                  # the image ID, and refuses every uncertainty rather than
                  # answering that the image is absent.
-                 "image_store.py")
+                 "image_store.py"
+                 # Backstopped by tests/test-capability-execution-launch-bridge.sh,
+                 # which proves it starts no process, elevates nothing, names no
+                 # container runtime, reaches no create_argv, loads no module
+                 # that could execute, re-runs no Fabric selection and consults
+                 # no Trust -- and behaviourally that it repairs nothing, so a
+                 # disagreement with the committed authority is refused rather
+                 # than tidied away.
+                 "launch.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do
