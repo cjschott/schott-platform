@@ -401,6 +401,11 @@ jobs:
       - name: Capability execution generation-8 installer tests
         run: bash tests/test-capability-execution-generation8-installer.sh
 
+      # The governed S5 operator surface, fixture-only. Elevates nothing,
+      # seeds no governance store, contacts no container runtime.
+      - name: Capability execution launch CLI tests
+        run: bash tests/test-capability-execution-launch-cli.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

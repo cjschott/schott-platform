@@ -1119,7 +1119,11 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | launch-authorisation CMUT target kind | **IMPLEMENTED** 2026-08-16: fifth closed kind, target derived wholly from a validated `CINV` |
 | generation 7 | **INSTALLED / ACTIVE / ACCEPTED**; reviewed authority `153066a5…`, untouched by the bridge |
 | generation 8 | **REVIEWED SOURCE** `bc05f911…` 2026-08-16: closed delta of two runtime objects; **not installed, not live-accepted** |
-| generation-8 installation ceremony | **IMPLEMENTED, NOT EXECUTED** 2026-08-16: `install-generation-8.sh`; one REPLACE and one CREATE, Generation-6 retained-baseline transaction |
+| generation-8 installation ceremony | **IMPLEMENTED** 2026-08-16; **EXECUTED and ACCEPTED**: generation 8 is the live installed generation |
+| G4 project-quota prerequisite | **ACCEPTED** 2026-08-16: XFS, accounting and enforcement ON, defaults 32 MiB / 512 inodes, enforcement proven empirically on disposable project `999000` and cleaned up |
+| G6.1B seed discovery | **COMPLETE** 2026-08-16: S1–S4 have supported governed interfaces; S5 had none |
+| S5 governed operator surface | **IMPLEMENTED** 2026-08-16: `capability authorise-launch`, a thin adapter over the Generation-8 bridge |
+| generation 9 | **DEVELOPMENT ONLY** 2026-08-16: one REPLACE (`tools/capability/cli.py`); **not installed, not live-accepted**, no installer exists |
 | G6.1B grant and first live crossing | **NOT STARTED**: separate ceremony; digest-binds the installed helper and performs the first crossing. Still needs live Trust/Fabric/Capability seed data |
 | G6 first container execution | **CLOSED**; the production worker still refuses for want of a bound runtime backend |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
@@ -1815,6 +1819,36 @@ invoked, no worker executed, no container runtime contacted, no authority
 mutated, no identifier allocated. G6 stays closed: the production worker
 entrypoint is a Generation-5 object and still refuses.
 
+### Normative governance store roots — ruled 2026-08-16
+
+| Plane | Root |
+|---|---|
+| Trust | `/data/kyri/trust` |
+| Fabric | `/data/kyri/fabric` |
+| Capability Runtime | `/data/kyri/capability-runtime` |
+
+**The Capability Runtime root carries two different logical components.** The
+`CapabilityStore` owns the immutable record directories — `capability-invocations/`,
+`capability-results/`, `sequences/` — and the execution substrate owns
+`execution/` with `state/`, `transitions/`, `mutations/`, `locks/`,
+`quarantine-reservations/`, `quarantine-releases/` and the `cmut`/`cadm`
+counters beneath it. They are separate components that share a root, not one
+store: the first records what was attempted, the second records lifecycle
+authority, and neither writes the other's objects.
+
+As of this ruling only the execution substrate exists on the live host; the
+record directories are absent because no invocation has ever been prepared.
+That is a normal empty state and **is not provisioned here** — the S0 ceremony
+will create and verify it explicitly.
+
+None of the three roots is a CLI default. `invoke`, `inspect` and `validate`
+still require `--store-root` explicitly, because those verbs legitimately run
+against a store an operator chose. `authorise-launch` compiles its roots in
+instead, which is a stronger statement than a default: there is no way to
+supply another one, and the privileged transition compiles in the same paths on
+its side, so the ceremony and the boundary that consumes it agree by
+construction.
+
 ### The coordinator execution-authorization bridge — implemented 2026-08-16
 
 `prepare_invocation` ended at `execution-prepared`, and the privileged
@@ -1998,13 +2032,64 @@ names, recording the reviewed authority, the predecessor generation, both delta
 operations with their old and new digests, and the resulting object count.
 Generation-7 evidence is preserved untouched.
 
-**Status: IMPLEMENTED AND TESTED, NOT EXECUTED.** The suite drives thirty-nine
-cases against throwaway Generation-7 fixtures, including failure injection at
-both publication boundaries, an unverifiable rollback object, a post-commit
-cleanup failure, and unknown bytes at either target. No sudoers policy, no
-privileged helper, no worker, no container runtime, no identifier, and no live
-Trust, Fabric, Capability Runtime, quota, or authority state is involved
-anywhere in it.
+**Status: EXECUTED AND ACCEPTED 2026-08-16.** Generation 8 is the live
+installed generation; `--verify-installed` passed independently.
+
+### Generation 9 — the S5 operator surface, 2026-08-16
+
+The seed discovery found that S1–S4 each have a supported governed interface
+and **S5 had none**: `authorise_launch` was a Python function whose only callers
+were tests. Producing a launch authorisation therefore required calling library
+code directly, which is exactly the "manufacture the state" path a governed
+ceremony may not take.
+
+`capability authorise-launch` closes that, as a **thin adapter**. It parses a
+closed argument set, opens the ruled roots as descriptors, calls the
+Generation-8 bridge unchanged, and renders identifiers and digests. It owns no
+eligibility policy, no lifecycle transition, no commitment digest, no
+launch-authorisation schema, no CMUT target, no handoff, and no replay
+semantics — all of which stay where they were reviewed, and all of which the
+suite asserts structurally.
+
+**The operator chooses as little as possible.** Every root is compiled in;
+none is an argument. The staged package tree comes from the invocation's own
+durable record rather than from a flag, because an operator able to name it
+would be an operator able to name a different one. What remains operator-chosen
+is exactly: the `CINV`, the `CIMP` — which §14.2.2 already establishes as the
+coordinator's legitimate authority — the payload being re-presented, the
+package entrypoint, and the store ownership expectations.
+
+**Known limitation, preserved rather than papered over.**
+`--package-entrypoint` stays operator-supplied because **no governed record
+carries it**: the Fabric package declaration does not, the artifact manifest's
+closed schema does not, and neither does the durable invocation record. It is
+not derivable today, and inventing a derivation would be manufacturing
+governance the runtime never recorded. It is safe as it stands — a wrong
+entrypoint is refused by `validate_package` against the actual staged tree, and
+the profile commits to the value that survived — but it is authority the S5
+operator holds and arguably should not.
+
+> **Future architecture consideration.** The package entrypoint may eventually
+> belong in governed package or invocation evidence, so that the S5 operator
+> cannot select it independently. That is a package-governance change, not a
+> Generation-9 one, and it does not block Generation 9.
+
+**Generation 9 is development only.** The delta is one object:
+
+| source | operation | generation-8 baseline | generation-9 |
+|---|---|---|---|
+| `tools/capability/cli.py` | REPLACE | `990bd8ca…` | `c10bf11e…` |
+
+Generation 8 remains the accepted installed generation. Generation 9 is not
+installed, is not live-accepted, and has no installer.
+
+The declaration mechanism was refined at the same time. A declaration describes
+a **transition**, and a transition is coherent whether it is still pending or
+has already been applied — so an installed object may hold the declared
+baseline or the declared result, while a checkout must always hold the result.
+That is what lets one declaration be checked against both the live host and a
+fixture pinned to an older generation without describing either loosely. Bytes
+that are neither still fail, and undeclared differences still fail.
 
 ## 6. Sequencing rules
 

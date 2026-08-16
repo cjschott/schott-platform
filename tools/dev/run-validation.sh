@@ -110,10 +110,10 @@ skipped_note() {
 # was already correct. Both are now read off a real run, which is the only way
 # this number stays true.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=65
+  TOTAL_STEPS=66
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=76
+  TOTAL_STEPS=77
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -427,6 +427,12 @@ run "Capability execution launch bridge" \
 # writes no sudoers, invokes no helper, and contacts no container runtime.
 run "Capability execution generation-8 installer" \
   bash tests/test-capability-execution-generation8-installer.sh
+
+# The governed S5 operator surface: `capability authorise-launch`, a thin
+# adapter over the Generation-8 bridge. Fixture-only; elevates nothing, seeds
+# no governance store, and contacts no container runtime.
+run "Capability execution launch CLI" \
+  bash tests/test-capability-execution-launch-cli.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no

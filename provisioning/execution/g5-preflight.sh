@@ -52,7 +52,7 @@ COORDINATOR="cschott"
 
 TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d9"
 
-# --- generation 8, the development generation -------------------------------
+# --- the declared next-generation delta -------------------------------------
 #
 # THE DURABLE RULE. An intentional byte change to an object inside an accepted
 # installed Kyri runtime generation creates a new runtime generation, unless an
@@ -61,29 +61,36 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 # installed surface is the unit, so a change anywhere in it advances the whole
 # generation.
 #
-# WHAT THIS DECLARATION IS, AND IS NOT. Generation 7 remains the accepted,
-# installed, live generation. Generation 8 exists only in this checkout: it is
-# not installed, not live-accepted, and nothing here installs it. This block
-# says exactly which installed-runtime objects the checkout is legitimately
-# ahead on, so that "a new generation is in development" and "an installed
-# object quietly changed" stop being the same observation. Everything outside
-# it is still drift and still fails.
+# WHAT THIS DECLARATION IS, AND IS NOT. Generation 8 is the accepted, installed,
+# live generation. Generation 9 exists only in this checkout: it is not
+# installed, not live-accepted, and nothing here installs it. This block says
+# exactly which installed-runtime objects the checkout is legitimately ahead on,
+# so that "a new generation is in development" and "an installed object quietly
+# changed" stop being the same observation. Everything outside it is still drift
+# and still fails.
 #
-# It is closed in both directions. A declared REPLACE that is not actually a
-# difference is a partial or already-applied state and fails; a declared CREATE
-# that is absent from the checkout, present in the installed tree, or carrying
-# other bytes fails; and an undeclared difference anywhere fails.
+# A declaration describes a TRANSITION, and a transition is coherent whether it
+# is still pending or has already been applied. So an installed object may hold
+# either the declared baseline (pending) or the declared new bytes (applied);
+# what is never coherent is an installed object holding neither, or a checkout
+# holding anything but the declared new bytes. That is what lets one declaration
+# be checked against both a live host and a fixture pinned to an older
+# generation, without either being described loosely.
 #
-# Digests, not a commit. Generation 8 has no reviewed source authority yet
-# because it has not been committed, and inventing a SHA before the commit
-# exists would be pinning something nobody reviewed. The bytes are pinned
-# instead, so the delta is exact today and a later ordinary commit can become
-# the reviewed authority an installer would pin.
+# The rows are cumulative from the oldest baseline this file is checked against,
+# which is why an entry can survive its own generation being installed.
 #
-#   source_path|operation|installed_baseline_digest|generation8_digest
-GENERATION8_DELTA=(
+# Digests, not a commit. The newest generation has no reviewed source authority
+# until it is committed, and inventing a SHA before the commit exists would be
+# pinning something nobody reviewed. The bytes are pinned instead, so the delta
+# is exact today and a later ordinary commit can become the reviewed authority
+# an installer would pin.
+#
+#   source_path|operation|installed_baseline_digest|next_generation_digest
+GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|CREATE|ABSENT|ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745|c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
@@ -314,9 +321,9 @@ require_image_material() {
 # installed object holding something nobody declared, or a checkout carrying
 # bytes nobody reviewed, is drift rather than development. Anything not named
 # in the declaration returns false and is reported as drift by the caller.
-generation8_replaces() {
+generation_declares() {
   local file="$1" installed="$2" checkout="$3" row
-  for row in "${GENERATION8_DELTA[@]}"; do
+  for row in "${GENERATION_DELTA[@]}"; do
     [[ "$(field "${row}" 0)" == "${file}" ]] || continue
     [[ "$(field "${row}" 1)" == "REPLACE" ]] || return 1
     [[ "${installed}" == "$(field "${row}" 2)" ]] || return 1
@@ -324,6 +331,24 @@ generation8_replaces() {
     return 0
   done
   return 1
+}
+
+# Whether a declared row is coherent on this host, independent of whether the
+# difference is still pending. `satisfied` names the rows the drift loop already
+# saw as a declared difference; anything else must be provably already applied.
+generation_row_coherent() {
+  local source="$1" operation="$2" expected="$3" installed
+  installed="$(digest_of "${LIBRARY_ROOT}/${source}")"
+  if [[ "${operation}" == "CREATE" ]]; then
+    # Absent is the pending state of a CREATE, and the drift loop can never
+    # report it: that loop walks installed objects, and this one is not there
+    # yet. Present with the declared bytes is the applied state. Present with
+    # anything else is somebody else's object.
+    if [[ ! -e "${LIBRARY_ROOT}/${source}" ]]; then return 0; fi
+    [[ "${installed}" == "${expected}" ]]
+    return
+  fi
+  [[ "${installed}" == "${expected}" ]]
 }
 
 # --- root-execution trust model --------------------------------------------
@@ -349,9 +374,9 @@ require_operator_source() {
     installed="$(digest_of "${LIBRARY_ROOT}/${file}")"
     checkout="$(digest_of "${REPOSITORY}/${file}")"
     [[ "${installed}" == "${checkout}" ]] && continue
-    if generation8_replaces "${file}" "${installed}" "${checkout}"; then
+    if generation_declares "${file}" "${installed}" "${checkout}"; then
       declared=$((declared + 1)); satisfied+=("${file}")
-      note "generation-8 development: ${file} is ahead of the installed generation by declaration"
+      note "generation-9 development: ${file} is ahead of the installed generation by declaration"
     else
       bad "checkout and installed runtime disagree at ${file}"; drift=$((drift + 1))
     fi
@@ -363,39 +388,39 @@ require_operator_source() {
   # in the checkout, absent from the installed tree, and carry the declared
   # bytes. Either way the answer is a refusal, not a quieter report.
   local row source operation expected observed entry seen complete
-  for row in "${GENERATION8_DELTA[@]}"; do
+  for row in "${GENERATION_DELTA[@]}"; do
     source="$(field "${row}" 0)"; operation="$(field "${row}" 1)"
     expected="$(field "${row}" 3)"
-    if [[ "${operation}" == "REPLACE" ]]; then
-      seen=0
-      for entry in ${satisfied[@]+"${satisfied[@]}"}; do
-        if [[ "${entry}" == "${source}" ]]; then seen=1; break; fi
-      done
-      if (( seen == 0 )); then
-        bad "the declared generation-8 change at ${source} is not present as a difference"
-        drift=$((drift + 1))
-      fi
-      continue
-    fi
     complete=1
+    # The checkout side is absolute: whatever the installed generation is, the
+    # checkout must carry exactly the bytes the row declares.
     observed="$(digest_of "${REPOSITORY}/${source}")"
     if [[ "${observed}" != "${expected}" ]]; then
-      bad "the declared generation-8 object ${source} is ${observed:-absent}, not the declared ${expected}"
+      bad "the declared object ${source} is ${observed:-absent}, not the declared ${expected}"
       drift=$((drift + 1)); complete=0
     fi
-    if [[ -e "${LIBRARY_ROOT}/${source}" ]]; then
-      bad "the declared generation-8 CREATE ${source} already exists in the installed runtime"
-      drift=$((drift + 1)); complete=0
+    seen=0
+    for entry in ${satisfied[@]+"${satisfied[@]}"}; do
+      if [[ "${entry}" == "${source}" ]]; then seen=1; break; fi
+    done
+    if (( seen == 0 )); then
+      # Not observed as a pending difference, so it must be already applied --
+      # the installed object holding the declared new bytes. Anything else is a
+      # row that describes neither the host nor the checkout.
+      if ! generation_row_coherent "${source}" "${operation}" "${expected}"; then
+        bad "the declared change at ${source} is neither pending nor applied"
+        drift=$((drift + 1)); complete=0
+      fi
     fi
-    if (( complete == 1 )); then declared=$((declared + 1)); fi
+    if (( complete == 1 && seen == 1 )); then declared=$((declared + 1)); fi
   done
 
   if (( drift == 0 )); then
     if (( declared == 0 )); then
       ok "the checkout's runtime half is byte-identical to the installed root-owned runtime (${checked} objects)"
     else
-      ok "the checkout is the declared generation-8 candidate: ${declared} declared object(s) ahead, ${checked} installed object(s) compared, no undeclared difference"
-      note "generation 7 remains the accepted installed generation; generation 8 is not installed and is not live-accepted"
+      ok "the checkout is the declared generation-9 candidate: ${declared} declared object(s) ahead, ${checked} installed object(s) compared, no undeclared difference"
+      note "generation 8 remains the accepted installed generation; generation 9 is not installed and is not live-accepted"
     fi
   fi
 

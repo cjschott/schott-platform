@@ -351,9 +351,9 @@ fi
 # language of development rather than of drift.
 root="${WORK}/g8-declared"; build_fixture "${root}"
 if run_preflight "${root}" --verify-source \
-   && grep -q "generation-8 development" "${root}/last-run.log" \
+   && grep -q "generation-9 development" "${root}/last-run.log" \
    && ! grep -q "checkout and installed runtime disagree" "${root}/last-run.log"; then
-  pass "the declared generation-8 delta is classified as development, not drift"
+  pass "the declared generation-9 delta is classified as development, not drift"
 else
   fail "the declared delta was not classified: $(tail -12 "${root}/last-run.log")"
 fi
@@ -384,43 +384,44 @@ printf '\n# not the declared baseline\n' >> "${baseline}"
 if run_preflight "${root}" --verify-source; then
   fail "a declared object with unexpected installed bytes was accepted"
 else
-  pass "a declared object whose installed bytes are not the declared baseline fails"
+  pass "a declared object whose installed bytes are neither baseline nor applied fails"
 fi
 
-# The other direction. A declaration says an object differs; if the installed
-# copy already holds the checkout bytes then the change it describes is not a
-# pending delta at all, and treating that as generation-8 development would let
-# an already-applied or partial state validate as one still to come.
+# The other direction. A declaration describes a transition, so an installed
+# object already holding the checkout bytes is that transition APPLIED -- which
+# is exactly the state of a host whose generation has since been installed, and
+# is coherent rather than a failure. What must still fail is bytes that are
+# neither the baseline nor the declared result, which the case above covers.
 root="${WORK}/g8-applied"; build_fixture "${root}"
 applied="${root}/usr/lib/kyri/python/tools/capability/execution/mutation.py"
 chmod u+w "${applied}"
 cat "${REPOSITORY}/tools/capability/execution/mutation.py" > "${applied}"
 if run_preflight "${root}" --verify-source; then
-  fail "a declared delta that is not actually a difference was accepted"
+  pass "a declared change already applied on the host is coherent, not a failure"
 else
-  pass "a declared generation-8 change absent from the delta fails"
+  fail "an already-applied declared change was rejected: $(tail -8 "${root}/last-run.log")"
 fi
 
 # Determinism: the classification is a function of bytes, so running it twice
 # against the same tree must produce the same answer.
 root="${WORK}/g8-repeat"; build_fixture "${root}"
 run_preflight "${root}" --verify-source >/dev/null 2>&1 || true
-first="$(grep -c "generation-8 development" "${root}/last-run.log" || true)"
+first="$(grep -c "generation-9 development" "${root}/last-run.log" || true)"
 run_preflight "${root}" --verify-source >/dev/null 2>&1 || true
-second="$(grep -c "generation-8 development" "${root}/last-run.log" || true)"
+second="$(grep -c "generation-9 development" "${root}/last-run.log" || true)"
 if [[ "${first}" == "${second}" && "${first}" != "0" ]]; then
-  pass "the generation-8 classification is deterministic across runs"
+  pass "the generation-9 classification is deterministic across runs"
 else
   fail "the classification varied between runs: ${first} then ${second}"
 fi
 
 # The development declaration is not an installation claim. Generation 7 stays
 # the accepted live generation, and nothing here may say otherwise.
-if grep -q "generation 7 remains the accepted installed generation" \
+if grep -q "generation 8 remains the accepted installed generation" \
      "${root}/last-run.log"; then
-  pass "the declaration states generation 7 is still the live accepted one"
+  pass "the declaration states generation 8 is still the live accepted one"
 else
-  fail "the declaration does not preserve generation 7 as live: $(tail -8 "${root}/last-run.log")"
+  fail "the declaration does not preserve generation 8 as live: $(tail -8 "${root}/last-run.log")"
 fi
 
 # ===========================================================================
