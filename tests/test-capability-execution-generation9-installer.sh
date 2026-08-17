@@ -555,6 +555,102 @@ else
 fi
 
 # ===========================================================================
+# 8b. the ceremony describes the transaction it actually performs
+# ===========================================================================
+# Ceremony output is audit evidence. A run that installs one object while
+# reporting two is not a cosmetic problem: it is a record that disagrees with
+# the host, and an operator reconciling them later has no way to tell which was
+# wrong. These cases exist because exactly that happened -- the Generation-9
+# ceremony was derived from Generation 8 and kept its two-object narrative.
+
+# The tokens that can only be describing the Generation-8 transaction. Assembled
+# from the matrix rather than restated, so a future generation cannot pass by
+# renaming the prose while keeping the wrong shape.
+G9_TARGET_BASENAME="$(basename "${SOURCE_PATH}")"
+
+# 1. Operator-visible strings. Every ok/note/bad/halt message in the ceremony,
+#    checked for claims the one-row matrix cannot support.
+messages="$(grep -oE '\b(ok|note|bad|halt)[[:space:]]+"[^"]*"' "${CEREMONY}" || true)"
+# One pattern rather than a list of remembered phrases: it catches the plural
+# CONSTRUCTION, so a future rewording cannot slip a two-object claim past it.
+STALE_CLAIMS='mutation\.py|launch\.py|two objects|\bboth\b|either of|pathname reserved|\b47\b'
+stale=0
+if grep -qiE "${STALE_CLAIMS}" <<<"${messages}"; then
+  grep -oiE "${STALE_CLAIMS}" <<<"${messages}" | sort -u \
+    | while IFS= read -r hit; do
+        printf 'stale operator message contains %s\n' "${hit}" >&2
+      done
+  stale=1
+fi
+if (( stale == 0 )); then
+  pass "no operator-visible message claims anything the one-row matrix cannot support"
+else
+  fail "${stale} operator-visible message(s) still describe the Generation-8 transaction"
+fi
+
+# 2. The header must describe THIS transaction: one REPLACE of cli.py, and an
+#    object count that does not move.
+header="$(sed -n '1,60p' "${CEREMONY}")"
+problems=""
+grep -qF "${G9_TARGET_BASENAME}" <<<"${header}" || problems+=" header-omits-${G9_TARGET_BASENAME}"
+grep -qE 'mutation\.py|launch\.py' <<<"$(grep -A 12 'WHAT IT INSTALLS' <<<"${header}")" \
+  && problems+=" installs-section-names-a-generation-8-object"
+grep -qE '47[[:space:]]*(->|→)[[:space:]]*48' <<<"${header}" && problems+=" claims-47-to-48"
+grep -qE '48[[:space:]]*(->|→)[[:space:]]*48|stays at 48|remains.*48' <<<"${header}" \
+  || problems+=" header-does-not-state-the-count-is-unchanged"
+grep -qiE 'exactly two objects' <<<"${header}" && problems+=" claims-two-objects"
+if [[ -z "${problems}" ]]; then
+  pass "the header describes one REPLACE of ${G9_TARGET_BASENAME} at an unchanged object count"
+else
+  fail "the header still describes the Generation-8 transaction:${problems}"
+fi
+
+# 3. Historical references are legitimate, but they must be accurate. Generation
+#    8 was one REPLACE and one CREATE; describing it as five CREATEs is a claim
+#    about the predecessor that is simply false.
+if grep -qiE 'Generation 8 was five CREATEs' "${CEREMONY}"; then
+  fail "the ceremony misdescribes Generation 8 as five CREATEs"
+else
+  pass "historical references to Generation 8 are not misdescribed"
+fi
+
+# 4. The strongest check: a real run, and what it actually printed. Output is
+#    the audit record, so it is read back rather than reasoned about.
+spoken="${WORK}/spoken"; build_fixture "${spoken}"
+run_ceremony "${spoken}" "" --install || true
+spoken_problems=""
+grep -qE 'PREPARE complete' "${spoken}/last-run.log" || spoken_problems+=" no-prepare-line"
+grep -qE 'COMMIT complete' "${spoken}/last-run.log" || spoken_problems+=" no-commit-line"
+if grep -qiE "${STALE_CLAIMS}" "${spoken}/last-run.log"; then
+  spoken_problems+=" said:$(grep -oiE "${STALE_CLAIMS}" "${spoken}/last-run.log" \
+    | sort -u | tr '\n' ',' | tr ' ' '_')"
+fi
+grep -qF "${G9_TARGET_BASENAME}" "${spoken}/last-run.log" \
+  || spoken_problems+=" never-named-the-actual-target"
+if [[ -z "${spoken_problems}" ]]; then
+  pass "an actual --install run describes only the transaction it performed"
+else
+  fail "an actual --install run misreported itself:${spoken_problems}"
+fi
+
+# 5. Every mode's operator output, not just --install.
+for mode in --verify --verify-installed; do
+  spoken_mode="${WORK}/spoken${mode}"; build_fixture "${spoken_mode}"
+  [[ "${mode}" == "--verify-installed" ]] && run_ceremony "${spoken_mode}" "" --install >/dev/null 2>&1
+  run_ceremony "${spoken_mode}" "" "${mode}" || true
+  mode_problems=""
+  if grep -qiE "${STALE_CLAIMS}" "${spoken_mode}/last-run.log"; then
+    mode_problems+=" said:$(grep -oiE "${STALE_CLAIMS}" "${spoken_mode}/last-run.log" \
+      | sort -u | tr '\n' ',' | tr ' ' '_')"
+  fi
+  if [[ -z "${mode_problems}" ]]; then
+    pass "${mode} output describes only the Generation-9 transaction"
+  else
+    fail "${mode} output still describes Generation 8:${mode_problems}"
+  fi
+done
+
+# ===========================================================================
 # 9. registration and isolation
 # ===========================================================================
 if grep -q "tests/test-capability-execution-generation9-installer.sh" \

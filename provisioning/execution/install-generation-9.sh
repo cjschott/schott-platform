@@ -1,38 +1,52 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# The Generation-9 installation ceremony: the coordinator execution-authorization
-# bridge.
+# The Generation-9 installation ceremony: the governed operator surface.
 #
 # WHAT IT INSTALLS
 # ================
-# Exactly two objects, and nothing else:
+# Exactly one runtime change, and nothing else:
 #
-#   REPLACE  tools/capability/execution/mutation.py   -- the governed
-#            launch-authorisation target kind
-#   CREATE   tools/capability/execution/launch.py     -- the bridge itself
+#   REPLACE  tools/capability/cli.py   -- the governed `authorise-launch`
+#            operator surface
 #
-# The installed library moves 47 -> 48 objects. /usr/libexec gains nothing and
-# none of its five objects changes by a single byte.
+# The installed library stays at 48 -> 48 objects, because a REPLACE moves no
+# count. /usr/libexec gains nothing and none of its five objects changes by a
+# single byte.
 #
-# WHY THIS IS NOT GENERATION 7 AGAIN
-# ==================================
-# Generation 8 was five CREATEs, so its rollback was removal and there was never
-# a byte to put back. Generation 9 carries a REPLACE, which means the accepted
-# Generation-8 `mutation.py` must survive until this transaction has durably
-# committed and must be restorable exactly. That is the whole reason this file
-# follows the Generation-6 shape -- PREPARE with a retained baseline, then
-# COMMIT, then and only then discard the rollback material -- rather than
-# Generation 8's removal-only model.
+# WHERE THIS SITS
+# ===============
+# Generation 8 introduced the coordinator execution-authorization bridge: it
+# replaced `tools/capability/execution/mutation.py` to add the governed
+# launch-authorisation target kind, and created
+# `tools/capability/execution/launch.py` as the bridge itself. Those objects are
+# already installed and are not touched here.
 #
-# ORDER IS DEPENDENCY ORDER, AND IT MATTERS
-# =========================================
-# `launch.py` imports the new target kind from `mutation.py`. So mutation.py is
-# published first and launch.py last, which makes the one intermediate state
-# this transaction can be interrupted in -- mutation at Generation 9, launch
-# absent -- a state where nothing imports anything that is not there. The
-# reverse order would leave a module importing a symbol the installed
-# `mutation.py` does not yet carry.
+# Generation 9 consumes those existing bridge capabilities and adds the missing
+# governed operator surface over them, by replacing `cli.py` with a version
+# carrying the `authorise-launch` verb. Nothing new is created.
+#
+# WHY A RETAINED BASELINE, WITH NO CREATE
+# =======================================
+# This transaction contains a REPLACE, so there are accepted bytes that must
+# survive until it has durably committed and must be restorable exactly. A
+# CREATE rolls back by removal and needs no retained bytes; a REPLACE rolls back
+# by putting exact bytes back, and bytes nobody proved were the accepted
+# predecessor are not a rollback target. The Generation-8 `cli.py` is therefore
+# retained before anything is staged, verified against the accepted digest at
+# retention, and verified again before it is ever restored from.
+#
+# There is no CREATE in Generation 9, and no dependency-order question either:
+# the matrix has one target, so there is no intermediate state in which one
+# object expects another that is not there yet. What replaces the ordering
+# problem is a sharper one -- this is a live Python module, and between the
+# rename and its verification the retained object is the only proof of the
+# predecessor.
+#
+# The implementation below still handles CREATE generically, because it is the
+# accepted Generation-8 transaction reused rather than a second protocol. That
+# is an implementation capability this matrix does not exercise; the ceremony
+# never claims a CREATE occurred.
 #
 # THE COMMIT POINT IS `journal_write COMMITTED`
 # ============================================
@@ -95,7 +109,7 @@ AUTHORITY_ROOT="/var/lib/kyri/implementation-authority"
 CONTROL_ROOT="/var/lib/kyri/implementation-authority-control"
 
 # A pure REPLACE moves no object count. Both are stated anyway, so a matrix
-# that quietly grew a CREATE fails here rather than at publication.
+# that quietly grew an object fails here rather than at publication.
 EXPECTED_LIBRARY_FILES_GEN8=48
 EXPECTED_LIBRARY_FILES_GEN9=48
 
@@ -157,6 +171,29 @@ MATRIX=(
 )
 
 field() { IFS='|' read -r -a _f <<<"$1"; printf '%s' "${_f[$2]}"; }
+
+# Operator-visible prose is derived from the matrix rather than written out, so
+# a ceremony can no longer describe a transaction it is not performing. That is
+# not a style preference: ceremony output is audit evidence, and a run that
+# installs one object while reporting two leaves a record nobody can reconcile
+# against the host afterwards.
+matrix_count() { printf '%s' "${#MATRIX[@]}"; }
+matrix_count_of() {
+  local wanted="$1" row n=0
+  for row in "${MATRIX[@]}"; do
+    [[ "$(field "${row}" 3)" == "${wanted}" ]] && n=$((n + 1))
+  done
+  printf '%s' "${n}"
+}
+matrix_names() {
+  local row out=""
+  for row in "${MATRIX[@]}"; do
+    out+="${out:+, }$(basename "$(field "${row}" 1)")"
+  done
+  printf '%s' "${out}"
+}
+# "object" or "objects", so a one-row matrix does not report in the plural.
+plural() { [[ "$1" == "1" ]] && printf '%s' "$2" || printf '%s' "$3"; }
 
 # Test-only failure injection. Impossible without --fixture, so a production run
 # cannot reach any of it. Every boundary the transaction can be interrupted at
@@ -253,9 +290,10 @@ journal_transaction() {
 # --- classification --------------------------------------------------------
 #
 # GEN8 / GEN9 / UNKNOWN, decided from actual bytes and never from the journal or
-# from a pathname existing. For the CREATE target GEN8 means ABSENT, and ABSENT
-# means nothing at all there -- a directory or a dangling symlink is UNKNOWN,
-# because it is something this transaction did not put there.
+# from a pathname existing. For a CREATE row -- generic capability this matrix
+# does not use -- GEN8 means ABSENT, and ABSENT means nothing at all there: a
+# directory or a dangling symlink is UNKNOWN, because it is something this
+# transaction did not put there.
 classify() {
   local target="$1" gen8="$2" gen9="$3" observed
   if [[ "${gen8}" == "ABSENT" ]]; then
@@ -329,7 +367,9 @@ require_source_digests() {
       || note "${source} in the working tree is ${worktree:-absent}; the ceremony installs the commit object, not this"
   done
   (( drift == 0 )) || halt "the reviewed commit does not carry the pinned Generation-9 bytes"
-  ok "both Generation-9 source objects match the reviewed commit exactly"
+  local checked_n
+  checked_n="$(matrix_count)"
+  ok "${checked_n} Generation-9 source $(plural "${checked_n}" object objects) ($(matrix_names)) $(plural "${checked_n}" matches match) the reviewed commit exactly"
 }
 
 # --- generation-8 baseline --------------------------------------------------
@@ -366,8 +406,8 @@ require_gen8_baseline() {
 }
 
 # The targets themselves, and nothing pretending to be one. The REPLACE target
-# must be exactly the accepted Generation-8 bytes; the CREATE pathname must be
-# genuinely free.
+# must be exactly the accepted Generation-8 bytes. A CREATE pathname would have
+# to be genuinely free, but this matrix declares none.
 require_target_state() {
   classify_all
   if (( UNKNOWN_COUNT > 0 )); then
@@ -479,10 +519,10 @@ prepare() {
           || halt "the retained Generation-8 copy of ${target} is ${observed}, expected ${gen8}"
       fi
     else
-      # A CREATE has no Generation-8 bytes to retain: its rollback is removal.
-      # What it does require is that the pathname is genuinely free. An object
-      # here belongs to somebody else and this transaction will not adopt,
-      # overwrite, or delete it.
+      # Generic capability, unused by this matrix: a CREATE has no Generation-8
+      # bytes to retain, so its rollback is removal. What it does require is
+      # that the pathname is genuinely free. An object there belongs to somebody
+      # else and this transaction will not adopt, overwrite, or delete it.
       [[ ! -e "${target}" && ! -L "${target}" ]] \
         || halt "${target} already exists and this transaction did not create it: refusing to overwrite an unknown object"
       rm -f "${backup}"
@@ -505,7 +545,12 @@ prepare() {
   done
   injected_at prepared && halt "injected failure before the PREPARED journal write"
   journal_write PREPARED
-  ok "PREPARE complete: two objects staged, one Generation-8 copy retained and verified, one pathname reserved"
+  local staged_n replaced_n created_n
+  staged_n="$(matrix_count)"; replaced_n="$(matrix_count_of REPLACE)"
+  created_n="$(matrix_count_of CREATE)"
+  local reserved_clause=""
+  (( created_n > 0 )) && reserved_clause=", ${created_n} $(plural "${created_n}" pathname pathnames) reserved"
+  ok "PREPARE complete: ${staged_n} $(plural "${staged_n}" object objects) staged ($(matrix_names)), ${replaced_n} Generation-8 $(plural "${replaced_n}" copy copies) retained and verified${reserved_clause}"
 }
 
 verify_prepared_set() {
@@ -520,7 +565,7 @@ verify_prepared_set() {
         || halt "retained Generation-8 copy for ${target} does not verify"
     fi
   done
-  ok "prepared set and rollback material both verify"
+  ok "the prepared set verifies, and so does the retained rollback material"
 }
 
 # --- COMMIT ----------------------------------------------------------------
@@ -624,18 +669,24 @@ commit_targets() {
   injected_at postcommit \
     && bad "injected failure immediately after COMMITTED; Generation 9 stands"
   OUTCOME="COMMITTED"
-  ok "COMMIT complete: mutation.py replaced and launch.py created, both verified"
+  local published_n
+  published_n="$(matrix_count)"
+  ok "COMMIT complete: $(matrix_names) replaced and verified (${published_n} $(plural "${published_n}" object objects))"
   return 0
 }
 
 # --- ROLLBACK --------------------------------------------------------------
 #
-# Reachable only before COMMITTED. The REPLACE target is restored from its
-# retained, verified Generation-8 copy; the CREATE target is REMOVED, and only
-# when what is there is still exactly what this transaction installed. If the
-# bytes, mode, or ownership have moved, the object is somebody else's, and
-# deleting somebody else's file to tidy up a failed installation is the one
-# thing a rollback must never do.
+# Reachable only before COMMITTED. A REPLACE target is restored from its
+# retained, verified Generation-8 copy -- which is every target this matrix has.
+#
+# The CREATE branch below is generic implementation retained from the accepted
+# Generation-8 transaction; Generation 9 has no CREATE row, so it is never
+# taken here. Where it does apply it removes an object only when what is there
+# is still exactly what that transaction installed: if the bytes, mode, or
+# ownership have moved, the object is somebody else's, and deleting somebody
+# else's file to tidy up a failed installation is the one thing a rollback must
+# never do.
 rollback() {
   local reason="$1"
   printf '\nROLLING BACK: %s\n' "${reason}" >&2
@@ -689,7 +740,9 @@ rollback() {
   if (( GEN8_COUNT == ${#MATRIX[@]} )); then
     journal_write ROLLED_BACK
     OUTCOME="ROLLED_BACK"
-    ok "ROLLBACK complete: both targets are Generation 8 again (${restored} restored, ${removed} removed)"
+    local rolled_n
+    rolled_n="$(matrix_count)"
+    ok "ROLLBACK complete: ${rolled_n} $(plural "${rolled_n}" target targets) back at Generation 8 (${restored} restored, ${removed} removed)"
   else
     journal_write ROLLING_BACK
     bad "ROLLBACK INCOMPLETE: GEN8=${GEN8_COUNT} GEN9=${GEN9_COUNT} UNKNOWN=${UNKNOWN_COUNT}"
@@ -702,8 +755,8 @@ rollback() {
 # Direction is decided from provable material, never guessed:
 #
 #   * unknown bytes anywhere            -> fail closed for operator disposition
-#   * both targets already Generation 9 -> already committed
-#   * both targets Generation 8         -> nothing was published
+#   * every target already Generation 9 -> already committed
+#   * every target still Generation 8   -> nothing was published
 #   * mixed, and every remaining prepared object verifies -> complete FORWARD
 #   * mixed otherwise                   -> roll BACK to a complete Generation 8
 recover() {
@@ -877,7 +930,7 @@ case "${MODE}" in
   if (( GEN8_COUNT == ${#MATRIX[@]} )); then
     ok "the host is at Generation 8 and ready for the Generation-9 installation"
   elif (( GEN9_COUNT == ${#MATRIX[@]} )); then
-    note "both objects are already at Generation 9"
+    note "$(matrix_names) is already at Generation 9"
   else
     bad "mixed target state: GEN8=${GEN8_COUNT} GEN9=${GEN9_COUNT}"
   fi
