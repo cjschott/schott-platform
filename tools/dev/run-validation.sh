@@ -110,10 +110,10 @@ skipped_note() {
 # was already correct. Both are now read off a real run, which is the only way
 # this number stays true.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=66
+  TOTAL_STEPS=67
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=77
+  TOTAL_STEPS=78
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -433,6 +433,12 @@ run "Capability execution generation-8 installer" \
 # no governance store, and contacts no container runtime.
 run "Capability execution launch CLI" \
   bash tests/test-capability-execution-launch-cli.sh
+
+# The Generation-9 installation ceremony: a single atomic REPLACE of a live
+# Python module, so the retained rollback object is the whole safety story.
+# Fixture-only; installs nothing here, runs the verb it installs never.
+run "Capability execution generation-9 installer" \
+  bash tests/test-capability-execution-generation9-installer.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no

@@ -406,6 +406,10 @@ jobs:
       - name: Capability execution launch CLI tests
         run: bash tests/test-capability-execution-launch-cli.sh
 
+      # The Generation-9 installation ceremony, fixture-only.
+      - name: Capability execution generation-9 installer tests
+        run: bash tests/test-capability-execution-generation9-installer.sh
+
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
       - name: Validate Docker Compose configurations

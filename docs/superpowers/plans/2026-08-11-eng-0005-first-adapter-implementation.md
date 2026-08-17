@@ -1123,7 +1123,8 @@ occur, and the test now asserts that with a retired entry holding the ordinal.
 | G4 project-quota prerequisite | **ACCEPTED** 2026-08-16: XFS, accounting and enforcement ON, defaults 32 MiB / 512 inodes, enforcement proven empirically on disposable project `999000` and cleaned up |
 | G6.1B seed discovery | **COMPLETE** 2026-08-16: S1–S4 have supported governed interfaces; S5 had none |
 | S5 governed operator surface | **IMPLEMENTED** 2026-08-16: `capability authorise-launch`, a thin adapter over the Generation-8 bridge |
-| generation 9 | **DEVELOPMENT ONLY** 2026-08-16: one REPLACE (`tools/capability/cli.py`); **not installed, not live-accepted**, no installer exists |
+| generation 9 | **REVIEWED SOURCE** `38261704…` 2026-08-16: one REPLACE (`tools/capability/cli.py`); **not installed, not live-accepted** |
+| generation-9 installation ceremony | **IMPLEMENTED, NOT EXECUTED** 2026-08-17: `install-generation-9.sh`; a single atomic REPLACE with a verified retained rollback object |
 | G6.1B grant and first live crossing | **NOT STARTED**: separate ceremony; digest-binds the installed helper and performs the first crossing. Still needs live Trust/Fabric/Capability seed data |
 | G6 first container execution | **CLOSED**; the production worker still refuses for want of a bound runtime backend |
 | Track-B residue cannot grant production authority | holds structurally; no admission path exists yet |
@@ -1818,6 +1819,50 @@ measured where it will run.
 invoked, no worker executed, no container runtime contacted, no authority
 mutated, no identifier allocated. G6 stays closed: the production worker
 entrypoint is a Generation-5 object and still refuses.
+
+### The Generation-9 installation ceremony — built, not executed
+
+`provisioning/execution/install-generation-9.sh` exists as of 2026-08-17 and
+has **never been run against this host**. Generation 8 is still installed.
+
+**Why a single REPLACE is not the easy case.** Generation 8 was one REPLACE and
+one CREATE, so an interruption between them still left every module importable.
+Generation 9 is a single atomic replacement of a live Python module, which
+makes the retained rollback object the only thing standing between an
+interrupted run and a host whose operator CLI is neither one generation nor the
+other. A CREATE rolls back by removal and needs no retained bytes; a REPLACE
+rolls back by putting exact bytes back, and bytes nobody proved were the
+accepted predecessor are not a rollback target. The predecessor is therefore
+retained before anything is staged, verified against the accepted digest before
+it is trusted, and verified again before it is ever restored from.
+
+**The matrix is one row**, pinned to the reviewed source authority
+`38261704b65465d441b03a5e59698b642c330809`:
+
+| source | operation | G8 predecessor | G9 |
+|---|---|---|---|
+| `tools/capability/cli.py` | REPLACE | `990bd8ca…f745` | `c10bf11e…4305` |
+
+The installed object count stays at 48, because a pure REPLACE moves none. Both
+counts are stated in the ceremony anyway, so a matrix that quietly grew a CREATE
+fails at preflight rather than at publication.
+
+**Twelve failure boundaries are injected at, not reasoned about**: before
+staging, after staging, after retaining the rollback object, before PREPARED,
+after COMMITTING, before publication, during post-publication verification,
+before the durable commit point, after it, during evidence writing, during
+cleanup, and with a deliberately corrupted rollback object. Every pre-commit
+boundary must leave the exact Generation-8 bytes; every post-commit one must
+leave Generation 9 installed and never revert.
+
+**It never runs the verb it installs.** Installing the operator surface and
+using it are separate ceremonies, and one that did both would be deciding for
+the operator that the new surface is safe to exercise.
+
+**Status: IMPLEMENTED AND TESTED, NOT EXECUTED.** Forty-nine cases against
+throwaway Generation-8 fixtures. No sudoers policy, no privileged helper, no
+worker, no `authorise-launch` call, no container runtime, no identifier, and no
+live Trust, Fabric, Capability Runtime, quota or authority state is involved.
 
 ### Normative governance store roots — ruled 2026-08-16
 
