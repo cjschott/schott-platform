@@ -185,6 +185,11 @@ jobs:
       - name: Fabric runtime tests
         run: bash tests/test-fabric-runtime.sh
 
+      # The governed resource vocabulary and its one satisfaction rule. Pure
+      # functions over mappings: no store, no record, no identifier.
+      - name: Fabric resource semantics tests
+        run: bash tests/test-fabric-resources.sh
+
       # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
       # the permanent backstop asserting the package executes nothing. Builds
       # temporary stores only. No network, no Docker, no capability execution.

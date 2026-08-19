@@ -115,14 +115,14 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both totals.
 #
 # Both totals are read off a real run rather than computed, which is the only
-# way this number stays true. The Generation-10 installer suite added one step
-# to each mode, and each was re-measured rather than incremented on the
-# assumption that it runs in both.
+# way this number stays true. Each suite added since has been re-measured in
+# both modes rather than incremented on the assumption that it runs in both --
+# the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
   TOTAL_STEPS=68
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=79
+  TOTAL_STEPS=80
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -190,6 +190,11 @@ if (( QUICK == 0 )); then
   # builds synthetic records in memory and spawns Python, so it sits with the
   # other subprocess-driving suites rather than in the quick path.
   run "Fabric runtime" bash tests/test-fabric-runtime.sh
+
+  # The governed resource vocabulary and the one satisfaction rule both the
+  # admission and eligibility planes consume. Pure functions over mappings: it
+  # opens no store, writes no record, and allocates no identifier.
+  run "Fabric resource semantics" bash tests/test-fabric-resources.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds

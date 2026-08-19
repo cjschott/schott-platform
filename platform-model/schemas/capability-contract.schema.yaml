@@ -40,7 +40,8 @@ required_fields:
   - determinism_class
   # The resources the interface itself requires, in the host resource-profile
   # vocabulary. A package may declare more for its own implementation; it may
-  # never declare less than its contract.
+  # never declare less than its contract. Enforced at package declaration --
+  # see `package_requirement_relation` on capability-package.
   - resource_requirements
   # Explicit list of prior contract versions this one is compatible with.
   # Empty means compatible with nothing, which is a valid and honest answer.

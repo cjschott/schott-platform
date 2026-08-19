@@ -71,9 +71,23 @@ optional_fields:
 
 # The controlled vocabulary for heterogeneous hardware. Expressed in terms no
 # vendor owns, so a new accelerator generation is a value, not a schema change.
+#
+# CLOSED. A dimension outside this vocabulary is refused wherever a resource
+# mapping is recorded — on a host profile, a package or contract requirement,
+# and an advertised claim. An unrecognised dimension is not a narrower claim;
+# it is a claim nobody validated, and under containment it would silently
+# satisfy nothing and constrain nothing.
+#
+# Each entry declares how it is COMPARED, because "requirement" means two
+# different things here. A `capacity` is a quantity and is satisfied when what
+# is available is at least what was required. A `token` is an identity from a
+# closed set and is satisfied only by the same token. Comparing a capacity for
+# equality — which the runtime did until this was made explicit — refuses every
+# machine larger than the one asked for.
 resource_profile_vocabulary:
   accelerator_class:
     description: The kind of acceleration available, if any.
+    comparison: exact-token-equality
     values:
       - none
       - integrated-gpu
@@ -83,22 +97,43 @@ resource_profile_vocabulary:
   accelerator_memory_mb:
     description: Usable accelerator memory in mebibytes.
     type: integer
+    value_domain: positive-integer
+    comparison: available-at-least-required
   accelerator_compute_capability:
     description: >-
       Opaque vendor capability string. Compared only by declared match rules,
       never ordered numerically: ordering vendor strings works until the
       generation where it does not.
     type: string
-    comparison: declared-match-rules-only
+    # The one declared match rule is equality. Stated rather than left implicit:
+    # this previously said "declared match rules only" and declared none, which
+    # reads as a promise that some other rule exists somewhere.
+    comparison: exact-token-equality
   host_memory_mb:
     description: Usable system memory in mebibytes.
     type: integer
+    value_domain: positive-integer
+    comparison: available-at-least-required
   host_cpu_cores:
     description: Usable CPU cores.
     type: integer
+    value_domain: positive-integer
+    comparison: available-at-least-required
   architecture:
-    description: Instruction set architecture of the host.
+    description: >-
+      Instruction set architecture of the HOST. Independent of any container
+      image's architecture: an OCI image reporting `amd64` describes the image,
+      not this machine, and the two are never compared directly.
     type: string
+    comparison: exact-token-equality
+    # Governed tokens, not producer spellings. `uname -m` reports `x86_64` and
+    # `dpkg --print-architecture` reports `amd64` for this same ISA, so no
+    # producer's spelling can be the governed value without picking a vendor.
+    # Raw observations are normalised once, where an operator constructs
+    # verified evidence, and the raw values are retained there as evidence.
+    # Extended only by a reviewed decision, never by observing a new machine.
+    values:
+      - x86-64
 
 enums:
   location_class:

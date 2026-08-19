@@ -360,6 +360,42 @@ for value in ("none", "integrated-gpu", "discrete-gpu", "dedicated-accelerator",
               "remote-service"):
     check(value in accelerator_classes,
           f"accelerator class vocabulary includes {value}")
+check("accelerator_compute_capability" in profile,
+      "resource profile vocabulary defines accelerator_compute_capability")
+
+# Every dimension declares HOW it is compared. A vocabulary that named its
+# fields but not their comparison is what let a capacity be compared for
+# equality, refusing every machine larger than the one asked for.
+for attribute, expected in (("host_memory_mb", "available-at-least-required"),
+                            ("host_cpu_cores", "available-at-least-required"),
+                            ("accelerator_memory_mb", "available-at-least-required"),
+                            ("architecture", "exact-token-equality"),
+                            ("accelerator_class", "exact-token-equality"),
+                            ("accelerator_compute_capability", "exact-token-equality")):
+    check((profile.get(attribute) or {}).get("comparison") == expected,
+          f"{attribute} declares {expected} comparison")
+for attribute in ("host_memory_mb", "host_cpu_cores", "accelerator_memory_mb"):
+    check((profile.get(attribute) or {}).get("value_domain") == "positive-integer",
+          f"{attribute} declares a positive-integer domain")
+
+# The governed architecture value space is closed and holds the canonical
+# token only. A producer spelling in this list would make one vendor's
+# convention the governed value.
+architectures = (profile.get("architecture") or {}).get("values") or []
+check(architectures == ["x86-64"],
+      f"the governed architecture value space is exactly ['x86-64'] ({architectures})")
+for spelling in ("x86_64", "amd64", "arm64", "aarch64"):
+    check(spelling not in architectures,
+          f"the raw observation {spelling} is not a governed architecture value")
+
+# Both halves of the containment invariant are declared, not merely narrated.
+package_schema = schemas.get("capability-package", {})
+check(package_schema.get("resource_matching")
+      == "satisfaction-against-verified-profile",
+      "the package schema declares typed satisfaction against the verified profile")
+check(package_schema.get("package_requirement_relation")
+      == "contract-requirements-satisfied-by-package",
+      "the package schema declares that a package may not weaken its contract")
 
 location_classes = (host.get("enums") or {}).get("location_class") or []
 for value in ("on-premises", "operator-controlled-remote", "third-party-hosted"):

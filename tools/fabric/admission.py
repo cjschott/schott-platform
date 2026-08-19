@@ -40,6 +40,8 @@ from typing import Any, Mapping
 from ..trust.identifiers import RECORD_ID as TRUST_RECORD_ID
 from .errors import FabricError
 from .evidence import assemble_evidence, validate_record_evidence
+from .resources import (REASON_MALFORMED_VALUE, REASON_UNKNOWN_DIMENSION,
+                        satisfies, validate_resource_map)
 from .identifiers import ID_FIELDS as ID_FIELD_FOR, PATTERNS, PREFIXES
 from .models import (
     EFFECT_CLASSES, INSTANCE_LIFECYCLE_STATES, RECORD_MODELS,
@@ -76,6 +78,8 @@ REASON_CONTRACT_OWNER = "contract-not-of-capability"
 REASON_PACKAGE_CONTRACT = "contract-not-of-package"
 REASON_VERSIONS = "versions-not-declared"
 REASON_RESOURCE_CLAIM = "resource-claim-not-verified"
+REASON_UNGOVERNED_DIMENSION = REASON_UNKNOWN_DIMENSION
+REASON_PACKAGE_WEAKER = "package-requirements-weaker-than-contract"
 REASON_WINDOW = "invalid-validity-window"
 REASON_NAIVE_INSTANT = "timestamp-carries-no-offset"
 REASON_SUBJECT_MISMATCH = "trust-subject-mismatch"
@@ -562,18 +566,20 @@ def _binding_root(records: Mapping[str, Any], identifier: str) -> str:
         walked.append(identifier)
 
 
-def _contained(claim: Mapping[str, Any], verified: Mapping[str, Any]) -> bool:
-    """Containment, not interpretation.
+def _resources(value: Any) -> Mapping[str, Any]:
+    """One governed resource mapping, or a refusal naming what was wrong.
 
-    Every claimed dimension must be one the operator verified, with the value
-    the operator verified. Ordering a memory size here would be the
-    interpretation the accepted vocabulary rules out, and a dimension nobody
-    verified is a claim about something nobody looked at.
+    Every resource mapping this plane records passes through here, so an
+    ungoverned dimension or a malformed capacity is refused where it is
+    declared rather than discovered later by a comparison that could not
+    interpret it.
     """
-    for name, value in claim.items():
-        if name not in verified or verified[name] != value:
-            return False
-    return True
+    problem = validate_resource_map(value)
+    if problem is REASON_UNKNOWN_DIMENSION:
+        _refuse(REFUSED, REASON_UNGOVERNED_DIMENSION)
+    if problem is not None:
+        _refuse(INVALID, REASON_CONTENT)
+    return value
 
 
 def _human_preflight(actor: Any, approving_authority: Any, *instants: Any) -> None:
@@ -772,6 +778,7 @@ def declare_contract(store, *, request_id: Any, actor: Any,
         _text(determinism_class, REASON_CONTENT)
         modes = _sequence(failure_modes)
         compatible = _sequence(compatible_with)
+        _resources(resource_requirements)
         _resolve(store, "capability-definition", capability_id)
         evidence = _evidence(
             "capability-contract", actor=actor,
@@ -838,6 +845,15 @@ def declare_package(store, *, request_id: Any, actor: Any,
         # Explicit, never inferred from a version string.
         if contract.get("contract_version") not in versions:
             _refuse(REFUSED, REASON_VERSIONS)
+        # The earliest boundary holding both sides of the invariant. A package
+        # may require MORE than its contract -- a stronger implementation is
+        # still an implementation -- but it may not drop or weaken a dimension
+        # the interface declared, because the contract is what a caller was
+        # promised and the package is only how it is met.
+        _resources(resource_requirements)
+        if not satisfies(contract.get("resource_requirements"),
+                         resource_requirements):
+            _refuse(REFUSED, REASON_PACKAGE_WEAKER)
         evidence = _evidence(
             "capability-package", actor=actor,
             approving_authority=approving_authority, reason_category="declaration",
@@ -891,7 +907,7 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
         _text(location_class, REASON_CONTENT)
         _text(data_classification, REASON_CONTENT)
         _text(availability_intent, REASON_CONTENT)
-        profile = _mapping(verified_resource_profile)
+        profile = _resources(_mapping(verified_resource_profile))
         # Verified out of band, and provably so. A profile with nothing
         # recording how it was obtained cannot be distinguished from one copied
         # off an advertisement, which §6.2 rejects.
@@ -991,7 +1007,7 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
             _refuse(REFUSED, REASON_WINDOW)
 
     def accept(identifier, digest):
-        claim = _mapping(advertised_resource_profile)
+        claim = _resources(_mapping(advertised_resource_profile))
         versions = _sequence(satisfied_contract_versions)
         if not versions:
             _refuse(REFUSED, REASON_VERSIONS)
@@ -1018,7 +1034,9 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
         if any(version not in declared for version in versions):
             _refuse(REFUSED, REASON_VERSIONS)
         # Containment against what the operator verified.
-        if not _contained(claim, host.get("verified_resource_profile") or {}):
+        # A self-report may never enlarge what an operator attested: the
+        # verified profile must satisfy the claim, not the other way round.
+        if not satisfies(claim, host.get("verified_resource_profile") or {}):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
 
         evidence = _evidence(
@@ -1113,13 +1131,13 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         versions = _exact_strings(satisfied_contract_versions)
         if not versions:
             _refuse(REFUSED, REASON_VERSIONS)
-        _mapping(verified_resource_profile)
+        _resources(_mapping(verified_resource_profile))
         _mapping(provenance)
         _admission_scope(admission_scope)
 
     def accept(identifier, digest):
         versions = _exact_strings(satisfied_contract_versions)
-        profile = _mapping(verified_resource_profile)
+        profile = _resources(_mapping(verified_resource_profile))
         bound = _admission_scope(admission_scope)
 
         # 1. Every reference resolves before any relationship is read from it.
@@ -1227,7 +1245,7 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         if not isinstance(verified, Mapping) or dict(profile) != dict(verified):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
         requirements = package.get("resource_requirements")
-        if not isinstance(requirements, Mapping) or not _contained(requirements, verified):
+        if not isinstance(requirements, Mapping) or not satisfies(requirements, verified):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
 
         # 10. The intersection, computed here. Then what it actually covers.
@@ -1608,7 +1626,7 @@ def refresh_subject(store, trust_store, *, request_id: Any, actor: Any,
         _member_of(data_classification, WORKLOAD_DATA_CLASSIFICATIONS,
                    REASON_UNKNOWN_CLASSIFICATION)
         _member_of(availability_intent, AVAILABILITY_INTENTS, REASON_UNKNOWN_INTENT)
-        _mapping(verified_resource_profile)
+        _resources(_mapping(verified_resource_profile))
         _mapping(provenance)
 
     def accept(identifier, digest):

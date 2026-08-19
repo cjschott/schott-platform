@@ -74,7 +74,18 @@ optional_fields:
 # Matching compares requirements against the host's VERIFIED profile, never the
 # advertised one. The advertised profile is a self-report, and the resource
 # profile is the one field an attacker would edit to attract workloads.
-resource_matching: containment-against-verified-profile
+#
+# Satisfaction is per-dimension and typed, not dictionary equality: a capacity
+# is satisfied when the host has at least what is required, a token only by the
+# same token. See `resource_profile_vocabulary` on capability-host.
+resource_matching: satisfaction-against-verified-profile
+
+# The other half of the invariant, and the half that had no enforcement. A
+# package implements an interface, so it may require MORE than its contract but
+# never less: dropping a dimension the contract declared would let a caller be
+# promised something the implementation never checked. Enforced where a package
+# is declared, which is the earliest boundary holding both records.
+package_requirement_relation: contract-requirements-satisfied-by-package
 
 forbidden_fields:
   - capability_host_id

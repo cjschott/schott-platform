@@ -1396,7 +1396,7 @@ def accepted_records():
              contract_version="1.0.0", effect_class="read-only",
              determinism_class="deterministic", request_shape={"text": "string"},
              response_shape={"summary": "string"}, failure_modes=("unavailable",),
-             resource_requirements={"memory_mb": 512}, compatible_with=(),
+             resource_requirements={"host_memory_mb": 512}, compatible_with=(),
              provenance=ORIGIN,
              evidence=fixture_evidence("capability-contract"))),
         ("capability-package", "capability-packages", "CPKG-0001",
@@ -1405,14 +1405,14 @@ def accepted_records():
              contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
              package_version="1.0.0",
              artifact_reference="oci://registry.invalid/summarise",
-             resource_requirements={"memory_mb": 512},
+             resource_requirements={"host_memory_mb": 512},
              trust_domain="schott-platform", provenance=ORIGIN,
              evidence=fixture_evidence("capability-package"))),
         ("capability-host", "capability-hosts", "CHOST-0001",
          "capability_host_id", CapabilityHost(
              capability_host_id="CHOST-0001", node_identity_reference="node/schai",
              fabric_node_trust_record_id="TAUTH-000001",
-             verified_resource_profile={"memory_mb": 8192},
+             verified_resource_profile={"host_memory_mb": 8192},
              location_class="on-premises", data_classification="internal",
              availability_intent="available", provenance=ORIGIN,
              evidence=fixture_evidence("capability-host"))),
@@ -1421,7 +1421,7 @@ def accepted_records():
              advertisement_id="CADV-000001", capability_host_id="CHOST-0001",
              capability_package_id="CPKG-0001", contract_id="CCON-0001",
              satisfied_contract_versions=("1.0.0",),
-             advertised_resource_profile={"memory_mb": 512},
+             advertised_resource_profile={"host_memory_mb": 512},
              observed_at=WHEN, valid_until=UNTIL, provenance=ORIGIN,
              evidence=fixture_evidence("capability-advertisement"))),
         ("capability-instance", "capability-instances", "CINST-000001",
@@ -1429,7 +1429,7 @@ def accepted_records():
              instance_id="CINST-000001", capability_id="CAPDEF-0001",
              capability_package_id="CPKG-0001", capability_host_id="CHOST-0001",
              contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
-             verified_resource_profile={"memory_mb": 512},
+             verified_resource_profile={"host_memory_mb": 512},
              admission_decision_id="TDEC-000001",
              package_trust_record_id="TAUTH-000002",
              host_trust_record_id="TAUTH-000001",
@@ -1759,7 +1759,7 @@ CONTRACT = {
     "request_shape": {"text": "string"},
     "response_shape": {"summary": "string"},
     "failure_modes": ["unavailable"],
-    "resource_requirements": {"memory_mb": 512},
+    "resource_requirements": {"host_memory_mb": 512},
     "compatible_with": [],
     "provenance": PROV,
 }
@@ -1770,7 +1770,7 @@ PACKAGE = {
     "satisfied_contract_versions": ["1.0.0"],
     "package_version": "1.0.0",
     "artifact_reference": "oci://registry.invalid/summarise",
-    "resource_requirements": {"memory_mb": 512},
+    "resource_requirements": {"host_memory_mb": 512},
     "trust_domain": "schott-platform",
     "provenance": PROV,
 }
@@ -1778,7 +1778,7 @@ HOST = {
     "capability_host_id": "CHOST-0001",
     "node_identity_reference": "node/schai",
     "fabric_node_trust_record_id": "TAUTH-000001",
-    "verified_resource_profile": {"memory_mb": 8192},
+    "verified_resource_profile": {"host_memory_mb": 8192},
     "location_class": "on-premises",
     "data_classification": "internal",
     "availability_intent": "available",
@@ -1790,7 +1790,7 @@ ADVERTISEMENT = {
     "capability_package_id": "CPKG-0001",
     "contract_id": "CCON-0001",
     "satisfied_contract_versions": ["1.0.0"],
-    "advertised_resource_profile": {"memory_mb": 512},
+    "advertised_resource_profile": {"host_memory_mb": 512},
     "observed_at": STAMP,
     "valid_until": LATER,
     "provenance": PROV,
@@ -1802,7 +1802,7 @@ INSTANCE = {
     "capability_host_id": "CHOST-0001",
     "contract_id": "CCON-0001",
     "satisfied_contract_versions": ["1.0.0"],
-    "verified_resource_profile": {"memory_mb": 512},
+    "verified_resource_profile": {"host_memory_mb": 512},
     "admission_decision_id": "TDEC-000001",
     "package_trust_record_id": "TAUTH-000002",
     "host_trust_record_id": "TAUTH-000001",
@@ -2737,30 +2737,30 @@ def accepted(kind, evidence):
             contract_version="1.0.0", effect_class="read-only",
             determinism_class="deterministic", request_shape={"text": "string"},
             response_shape={"summary": "string"}, failure_modes=("unavailable",),
-            resource_requirements={"memory_mb": 512}, compatible_with=(), provenance=PROV),
+            resource_requirements={"host_memory_mb": 512}, compatible_with=(), provenance=PROV),
         "capability-package": dict(
             capability_package_id="CPKG-0001", capability_id="CAPDEF-0001",
             contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
             package_version="1.0.0", artifact_reference="oci://registry.invalid/summarise",
-            resource_requirements={"memory_mb": 512}, trust_domain="schott-platform",
+            resource_requirements={"host_memory_mb": 512}, trust_domain="schott-platform",
             provenance=PROV),
         "capability-host": dict(
             capability_host_id="CHOST-0001", node_identity_reference="node/schai",
             fabric_node_trust_record_id="TAUTH-000001",
-            verified_resource_profile={"memory_mb": 8192}, location_class="on-premises",
+            verified_resource_profile={"host_memory_mb": 8192}, location_class="on-premises",
             data_classification="internal", availability_intent="available",
             provenance=PROV),
         "capability-advertisement": dict(
             advertisement_id="CADV-000001", capability_host_id="CHOST-0001",
             capability_package_id="CPKG-0001", contract_id="CCON-0001",
             satisfied_contract_versions=("1.0.0",),
-            advertised_resource_profile={"memory_mb": 512},
+            advertised_resource_profile={"host_memory_mb": 512},
             observed_at=WHEN, valid_until=UNTIL, provenance=PROV),
         "capability-instance": dict(
             instance_id="CINST-000001", capability_id="CAPDEF-0001",
             capability_package_id="CPKG-0001", capability_host_id="CHOST-0001",
             contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
-            verified_resource_profile={"memory_mb": 512},
+            verified_resource_profile={"host_memory_mb": 512},
             admission_decision_id="TDEC-000001", package_trust_record_id="TAUTH-000002",
             host_trust_record_id="TAUTH-000001",
             effective_scope={"data_classification": "internal"},
@@ -3543,7 +3543,7 @@ ADVERTISEMENT_BODY = dict(
     advertisement_id="CADV-000009", capability_host_id="CHOST-0001",
     capability_package_id="CPKG-0001", contract_id="CCON-0001",
     satisfied_contract_versions=("1.0.0",),
-    advertised_resource_profile={"memory_mb": 512},
+    advertised_resource_profile={"host_memory_mb": 512},
     observed_at=WHEN, valid_until=UNTIL, provenance=PROV)
 
 
@@ -5175,7 +5175,7 @@ def seeded_trust(tmp, subject="node/schai", state=TrustState.TRUSTED.value,
     return store, granted
 
 
-PROFILE = {"host_memory_mb": 8192, "host_cpu_cores": 8, "architecture": "x86_64"}
+PROFILE = {"host_memory_mb": 8192, "host_cpu_cores": 8, "architecture": "x86-64"}
 
 
 def capability(store, request_id="req-cap-1", **overrides):
@@ -5967,7 +5967,7 @@ try:
              ("fabric_node_trust_record_id", "TREC-999999"),
              ("verified_resource_profile", {"host_memory_mb": 4096,
                                             "host_cpu_cores": 8,
-                                            "architecture": "x86_64"}),
+                                            "architecture": "x86-64"}),
              ("verification_reference", "/approved/evidence/host-reobserved.txt"),
              ("location_class", "third-party-hosted"),
              ("data_classification", "confidential"),
@@ -6599,7 +6599,10 @@ RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
                     "store.py", "trust_adapter.py", "validator.py",
                     # One module per increment: C5's, C6's, C8's, then the
                     # interface the twelve operations are reached through.
-                    "eligibility.py", "selection.py", "inspection.py", "cli.py"}
+                    "eligibility.py", "selection.py", "inspection.py", "cli.py",
+                    # The one resource-semantics primitive both admission and
+                    # eligibility consume, so the two planes cannot drift.
+                    "resources.py"}
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
       "the fabric package holds the released modules and C5, and nothing else")
@@ -6676,7 +6679,8 @@ class DomainTrust:
 # Exact containment, never interpretation: the package may require only
 # dimensions the operator verified, at the values the operator verified.
 INSTANCE_PACKAGE = dict(BASE_PACKAGE,
-                        resource_requirements={"architecture": "x86_64"})
+                        resource_requirements={"host_memory_mb": 512,
+                                               "architecture": "x86-64"})
 # The operator's own bound, in the released Trust scope vocabulary. Every
 # dimension is named: every released dimension must survive composition
 # non-empty, and one the composition leaves empty bounds nothing.
@@ -6977,7 +6981,7 @@ try:
             ("capability_host_id", "CHOST-9999"),
             ("contract_id", "CCON-9999"),
             ("satisfied_contract_versions", ("1.0.0", "2.0.0")),
-            ("verified_resource_profile", {"architecture": "x86_64"}),
+            ("verified_resource_profile", {"architecture": "x86-64"}),
             ("admission_decision_id", "TDEC-000002"),
             ("package_trust_record_id", "TREC-999999"),
             ("host_trust_record_id", "TREC-999998"),
@@ -7044,12 +7048,16 @@ try:
         alt_pkg = declare_package(store, **dict(
             INSTANCE_PACKAGE, request_id="i7-pkg-alt", capability_id=cap.record_id,
             contract_id=con.record_id, package_version="2.0.0"))
-        # A package the verified host cannot satisfy. 512 is numerically below
-        # the host's 8192, and that is not containment, which is the point.
+        # A package the verified host genuinely cannot satisfy: it asks for more
+        # memory than the machine was verified to have. This fixture used to ask
+        # for LESS (512 against 8192) and was refused only because comparison
+        # was exact equality -- which is the defect capacity semantics fixes, so
+        # the case has to be restated to still mean what its name says.
         heavy_pkg = declare_package(store, **dict(
             INSTANCE_PACKAGE, request_id="i7-pkg-heavy", capability_id=cap.record_id,
             contract_id=con.record_id, package_version="3.0.0",
-            resource_requirements={"host_memory_mb": 512}))
+            resource_requirements={"host_memory_mb": 65536,
+                                   "architecture": "x86-64"}))
         second_host = admit_subject(store, trust_store, **dict(
             BASE_SUBJECT, request_id="i7-host2",
             fabric_node_trust_record_id=host_trust.record.record_id))
@@ -11578,7 +11586,7 @@ with TemporaryDirectory() as tmp:
         capability_id=capability_id, contract_id=contract_id,
         satisfied_contract_versions=["1.0.0"], package_version="1.0.0",
         artifact_reference="oci://registry.invalid/summarise",
-        resource_requirements={"architecture": "x86_64"},
+        resource_requirements={"host_memory_mb": 512, "architecture": "x86-64"},
         trust_domain="capability-package", provenance=dict(PROV))))
     check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
           "operation 3 declares a package through the interface")
