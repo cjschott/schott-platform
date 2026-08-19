@@ -105,15 +105,15 @@ skipped_note() {
 # The ENG-0005 execution suites are all always-on, so each one added raises
 # both totals.
 #
-# The quick total had drifted six steps below what quick mode actually runs
-# and was corrected here from measurement rather than from arithmetic. Full mode
-# was already correct. Both are now read off a real run, which is the only way
-# this number stays true.
+# Both totals are read off a real run rather than computed, which is the only
+# way this number stays true. The Generation-10 installer suite added one step
+# to each mode, and each was re-measured rather than incremented on the
+# assumption that it runs in both.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=67
+  TOTAL_STEPS=68
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=78
+  TOTAL_STEPS=79
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -439,6 +439,12 @@ run "Capability execution launch CLI" \
 # Fixture-only; installs nothing here, runs the verb it installs never.
 run "Capability execution generation-9 installer" \
   bash tests/test-capability-execution-generation9-installer.sh
+
+# The Generation-10 installation ceremony: four REPLACE operations, so the
+# transaction spans a genuinely mixed window that rename(2) cannot close on its
+# own. Fixture-only; installs nothing here.
+run "Capability execution generation-10 installer" \
+  bash tests/test-capability-execution-generation10-installer.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
