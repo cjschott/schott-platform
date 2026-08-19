@@ -156,7 +156,7 @@ def _invocation_body(identity: str, *, invocation_id: str, request_id: Any,
         "payload_digest": payload_digest,
         "binding_digest": binding_digest,
         "effect_class": evidence.effect_class,
-        "artifact_digest": staged.artifact_sha256 if staged is not None else None,
+        "artifact_digest": staged.package_tree_sha256 if staged is not None else None,
         "staged_path": staged.staged_path if staged is not None else None,
         "requested_at": requested_at,
         "kind": INVOCATION_KIND,
@@ -247,7 +247,7 @@ def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
                 STATUS_PREPARED, None, invocation_record_id=record_id,
                 invocation_id=identity, binding_digest=binding_digest,
                 payload_digest=payload_digest,
-                artifact_digest=staged.artifact_sha256,
+                artifact_digest=staged.package_tree_sha256,
                 staged_path=staged.staged_path)
 
         result_id = store.allocate_id(RESULT_KIND)

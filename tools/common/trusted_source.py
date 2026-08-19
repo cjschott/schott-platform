@@ -34,9 +34,10 @@ Nothing here writes. It creates no file and no directory, changes no mode and
 no owner, renames nothing, truncates nothing, and removes nothing. It opens
 for reading, or it refuses.
 
-**Two different questions.** ``open_trusted_regular_file`` answers *this
-directory is trusted — give me a file out of it safely*, and ownership is the
-anchor. ``walk_tree`` answers the opposite one: *this directory is not trusted
+**Two different questions.** ``open_trusted_regular_file`` and
+``open_trusted_directory`` answer *this directory is trusted — give me a file,
+or a subdirectory, out of it safely*, and ownership is the anchor in both.
+``walk_tree`` answers the opposite one: *this directory is not trusted
 at all — enumerate it without the enumeration becoming the attack.* There is no
 expected uid there and no mode requirement, because the writer owns the tree;
 requiring it to be owned by someone else would be a claim about a directory the
@@ -182,6 +183,53 @@ def open_trusted_regular_file(approved_root: Path | str, name: Any, *,
         os.close(current)
 
     return opened
+
+
+def open_trusted_directory(approved_root: Path | str, name: Any, *,
+                           expected_uid: Any) -> int:
+    """An open descriptor for one directory beneath a trusted root.
+
+    The same walk as `open_trusted_regular_file`, ending one component later:
+    every component *including the last* is opened with `O_NOFOLLOW` and
+    `O_DIRECTORY` and then interrogated through its descriptor, so a final
+    component that is a symlink, a regular file, or a device is refused rather
+    than resolved. The caller owns the descriptor and must close it.
+
+    What this does **not** promise is anything about the tree beneath the
+    directory. That is `walk_tree`'s question, and the two are deliberately
+    separate: this establishes that the root of the tree is the trusted
+    operator's, and the walk establishes that its contents can be read without
+    the reading becoming the attack.
+    """
+    uid = _require_uid(expected_uid)
+    parts = _relative_parts(name)
+
+    root = Path(approved_root)
+    if not root.is_absolute():
+        root = root.resolve(strict=False)
+
+    try:
+        current = os.open(root, _DIRECTORY_FLAGS)
+    except OSError as error:
+        raise TrustedSourceError(
+            "the approved root could not be opened as a directory") from error
+
+    try:
+        _check_directory(current, uid, "the approved root")
+        for component in parts:
+            try:
+                nested = os.open(component, _DIRECTORY_FLAGS, dir_fd=current)
+            except OSError as error:
+                raise TrustedSourceError(
+                    f"path component '{component}' is not a usable directory") from error
+            os.close(current)
+            current = nested
+            _check_directory(current, uid, f"path component '{component}'")
+    except BaseException:
+        os.close(current)
+        raise
+
+    return current
 
 
 # --- bounded traversal of an untrusted tree ---------------------------------

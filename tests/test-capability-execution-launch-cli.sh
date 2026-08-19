@@ -98,6 +98,9 @@ from tools.capability.execution.worker import CONTAINER_INTERPRETER
 from tools.capability.store import CapabilityStore
 from tools.capability.evidence import record_invocation
 from tools.capability.invocation_identity import bind, payload_digest
+from tools.capability.execution.package_contract import inspect_package
+from tools.capability.package_resolution import (
+    MANIFEST_SCHEMA_VERSION, resolve_and_stage_package)
 from tools.provisioning.authority_bootstrap import (
     provision_control_state, initialise_genesis)
 from tools.provisioning.authority_admission import (
@@ -196,17 +199,41 @@ class Evidence:
         self.capability_package_id = PACKAGE_ID
         self.contract_id = 'CCON-000001'; self.capability_id = 'CCAP-000001'
         self.effect_class = 'read-only'
-
-class Staged:
-    def __init__(self, path, digest):
-        self.supported = True; self.reason = None
-        self.artifact_sha256 = digest; self.staged_path = path
+        self.artifact_reference = 'tree:pkg'
+        self.manifest_reference = 'file:manifest.json'
 
 def package_tree(name, files=None):
-    base = fresh(name)
+    '''A staged package tree from the REAL resolver, never a fabricated object.
+
+    The ceremony opens the recorded staged_path with O_DIRECTORY, so a fixture
+    that constructed the staged object itself would be asserting a shape the
+    resolver never has to produce. Modes are set rather than inherited: the
+    trusted-source contract refuses a group-writable approved root.'''
+    approved = fresh(name)
+    os.chmod(approved, 0o755)
+    tree = os.path.join(approved, 'pkg')
+    os.makedirs(tree, 0o755)
+    os.chmod(tree, 0o755)
     for relative, body in (PACKAGE_FILES if files is None else files).items():
-        write(os.path.join(base, relative), body)
-    return base
+        write(os.path.join(tree, relative), body)
+    handle = os.open(tree, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        commitment = 'sha256:' + inspect_package(handle).digest
+    finally:
+        os.close(handle)
+    write(os.path.join(approved, 'manifest.json'), serialise({
+        'schema_version': MANIFEST_SCHEMA_VERSION,
+        'capability_package_id': PACKAGE_ID, 'contract_id': 'CCON-000001',
+        'capability_id': 'CCAP-000001', 'artifact_reference': 'tree:pkg',
+        'package_tree_sha256': commitment}))
+    staging = fresh(name + '-staging')
+    os.chmod(staging, 0o700)
+    staged = resolve_and_stage_package(
+        evidence=Evidence(), approved_artifact_root=approved,
+        trusted_source_uid=os.getuid(), staging_root=staging,
+        coordinator_uid=os.getuid())
+    assert staged.supported, staged.reason
+    return staged
 
 def payload_root(name, body=None):
     '''An approved payload directory, owner-writable only.
@@ -225,7 +252,7 @@ def scenario(name, payload=None):
     runtime = runtime_root(name + '-runtime')
     store = CapabilityStore(runtime, expected_uid=os.getuid(),
                             expected_gid=os.getgid())
-    tree = package_tree(name + '-pkg')
+    staged = package_tree(name + '-pkg')
     body = PAYLOAD if payload is None else payload
     decision = record_invocation(
         store, invocation_id='request-' + name,
@@ -233,7 +260,7 @@ def scenario(name, payload=None):
                             selection_id=SELECTION, instance_id=INSTANCE,
                             capability_package_id=PACKAGE_ID, actor=ACTOR),
         payload_digest=payload_digest(body), evidence=Evidence(),
-        staged=Staged(tree, hashlib.sha256(b'x').hexdigest()), actor=ACTOR,
+        staged=staged, actor=ACTOR,
         request_id='REQ-1',
         requested_at=datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc))
     assert decision.status == 'prepared', decision

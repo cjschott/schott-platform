@@ -21,6 +21,13 @@ the bytes validated here can be changed through a name this module never saw.
 descriptor and never resolves a package pathname, so replacing the tree's name
 after it was opened changes nothing about what was validated.
 
+**Nothing structural is omitted from the identity.** A directory holding no
+regular file anywhere beneath it is refused, and so is a member name that is
+not valid UTF-8. Neither is a content rule; both exist because the commitment
+is computed over file paths, so an empty directory would be structure the
+identity cannot see and an undecodable name would be structure it cannot
+express. Two trees that differ on disk must not agree on who they are.
+
 Governed by ``docs/superpowers/specs/2026-08-11-first-adapter-design.md`` §8.
 """
 
@@ -79,12 +86,34 @@ class PackageEntry:
 
 
 @dataclasses.dataclass(frozen=True)
-class PackageBinding:
+class PackageInspection:
     """A validated package tree and the identity derived from it.
 
     ``digest`` covers the whole manifest — every path, size, and content digest
     in sorted order — so a package that gained, lost, or altered a file cannot
     present the same identity.
+
+    The commitment names no directory of its own, which is exactly why an
+    empty one is refused above: within the accepted domain every directory is
+    witnessed by the paths of the files beneath it, so the set of committed
+    paths determines the tree's shape. That is the property the identity rests
+    on, and it is held by the refusal rather than by the hash.
+    """
+
+    entries: tuple[PackageEntry, ...]
+    entry_count: int
+    aggregate_bytes: int
+    digest: str
+
+
+@dataclasses.dataclass(frozen=True)
+class PackageBinding:
+    """An inspected package tree whose governed entrypoint also resolved.
+
+    A separate type rather than an inspection carrying an optional entrypoint:
+    the entrypoint is the difference between *these bytes are a package* and
+    *this package is the one the profile commits to running*, and a field that
+    may be absent would let the second be assumed from the first.
     """
 
     entries: tuple[PackageEntry, ...]
@@ -159,11 +188,38 @@ def _check_content(relative: str, body: bytes) -> None:
                 f"{relative!r} begins with forbidden binary content")
 
 
+def _require_utf8_name(name: str, prefix: str) -> None:
+    """A member name that survives the commitment's own encoding, or refuse.
+
+    ``scandir`` hands back undecodable bytes as surrogates, and the commitment
+    encodes each path as UTF-8. Without this the surrogate reaches ``encode``
+    and raises ``UnicodeEncodeError`` — a ``ValueError``, so the coordinator
+    surface renders it as a denial, but *not* a ``PackageError``, so the
+    worker's snapshot refusal path does not catch it and it escapes as a crash.
+    A name the identity cannot express is refused where every other unusable
+    member is refused.
+    """
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ForbiddenContent(
+            f"{(prefix + name)!r} is not a UTF-8 member name") from None
+
+
 def _walk(dir_fd: int, prefix: str, budget: _Budget,
-          entries: list[PackageEntry]) -> None:
+          entries: list[PackageEntry]) -> int:
+    """Validate one package level, returning the regular files beneath it.
+
+    The count is what lets an empty directory be refused. An empty directory
+    contributes nothing to the commitment, so a tree holding one and a tree
+    without it present the *same* identity while differing on disk — omitted
+    structure, which is precisely what a tree identity may not have.
+    """
     with os.scandir(dir_fd) as listing:
         found = sorted(listing, key=lambda e: e.name)
+    produced = 0
     for entry in found:
+        _require_utf8_name(entry.name, prefix)
         relative = f"{prefix}{entry.name}"
         budget.count(relative)
         if entry.is_symlink():
@@ -171,9 +227,15 @@ def _walk(dir_fd: int, prefix: str, budget: _Budget,
         if entry.is_dir(follow_symlinks=False):
             child = os.open(entry.name, _DIR_FLAGS, dir_fd=dir_fd)
             try:
-                _walk(child, f"{relative}/", budget, entries)
+                beneath = _walk(child, f"{relative}/", budget, entries)
             finally:
                 os.close(child)
+            if beneath == 0:
+                raise ForbiddenContent(
+                    f"{relative!r} holds no regular file: a directory the "
+                    "commitment cannot witness would let two different trees "
+                    "share one identity")
+            produced += beneath
             continue
         if not entry.is_file(follow_symlinks=False):
             raise ForbiddenContent(
@@ -183,6 +245,8 @@ def _walk(dir_fd: int, prefix: str, budget: _Budget,
         entries.append(PackageEntry(
             relative_path=relative, size=len(body),
             digest=hashlib.sha256(body).hexdigest()))
+        produced += 1
+    return produced
 
 
 def _validate_entrypoint(entrypoint: str, entries: tuple[PackageEntry, ...]) -> str:
@@ -201,19 +265,12 @@ def _validate_entrypoint(entrypoint: str, entries: tuple[PackageEntry, ...]) -> 
     return entrypoint
 
 
-def validate_package(descriptor: int, *, entrypoint: str) -> PackageBinding:
-    """Validate the package tree on ``descriptor`` and bind its identity.
+def _commitment(ordered: tuple[PackageEntry, ...]) -> str:
+    """The tree identity: every path, size, and content digest, in order.
 
-    ``descriptor`` is an already-open directory descriptor: obtaining it safely
-    is the caller's authority, and this module never learns a pathname it could
-    reopen.
+    Each field is NUL-terminated and a pathname may not contain NUL, so the
+    framing is unambiguous and no two distinct manifests serialise alike.
     """
-    budget = _Budget()
-    entries: list[PackageEntry] = []
-    _walk(descriptor, "", budget, entries)
-    ordered = tuple(sorted(entries, key=lambda e: e.relative_path))
-    resolved = _validate_entrypoint(entrypoint, ordered)
-
     manifest = hashlib.sha256()
     for entry in ordered:
         manifest.update(entry.relative_path.encode("utf-8"))
@@ -222,11 +279,43 @@ def validate_package(descriptor: int, *, entrypoint: str) -> PackageBinding:
         manifest.update(b"\0")
         manifest.update(entry.digest.encode("ascii"))
         manifest.update(b"\0")
+    return manifest.hexdigest()
 
-    return PackageBinding(
+
+def inspect_package(descriptor: int) -> PackageInspection:
+    """Validate the package tree on ``descriptor`` and commit to its identity.
+
+    ``descriptor`` is an already-open directory descriptor: obtaining it safely
+    is the caller's authority, and this module never learns a pathname it could
+    reopen.
+
+    Separate from `validate_package` because the two callers hold different
+    authority. Staging knows which bytes it is committing to and has no say in
+    which of them runs; the launch bridge carries a governed entrypoint and
+    must prove the tree contains it. Making staging supply an entrypoint would
+    be asking it to decide something it was never given.
+    """
+    budget = _Budget()
+    entries: list[PackageEntry] = []
+    if _walk(descriptor, "", budget, entries) == 0:
+        raise ForbiddenContent("the package holds no regular file")
+    ordered = tuple(sorted(entries, key=lambda e: e.relative_path))
+    return PackageInspection(
         entries=ordered,
         entry_count=len(ordered),
         aggregate_bytes=budget.aggregate,
+        digest=_commitment(ordered),
+    )
+
+
+def validate_package(descriptor: int, *, entrypoint: str) -> PackageBinding:
+    """Inspect the package tree on ``descriptor`` and resolve its entrypoint."""
+    inspected = inspect_package(descriptor)
+    resolved = _validate_entrypoint(entrypoint, inspected.entries)
+    return PackageBinding(
+        entries=inspected.entries,
+        entry_count=inspected.entry_count,
+        aggregate_bytes=inspected.aggregate_bytes,
         entrypoint=resolved,
-        digest=manifest.hexdigest(),
+        digest=inspected.digest,
     )

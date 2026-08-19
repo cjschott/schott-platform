@@ -351,9 +351,9 @@ fi
 # language of development rather than of drift.
 root="${WORK}/g8-declared"; build_fixture "${root}"
 if run_preflight "${root}" --verify-source \
-   && grep -q "generation-9 development" "${root}/last-run.log" \
+   && grep -q "generation-10 development" "${root}/last-run.log" \
    && ! grep -q "checkout and installed runtime disagree" "${root}/last-run.log"; then
-  pass "the declared generation-9 delta is classified as development, not drift"
+  pass "the declared generation-10 delta is classified as development, not drift"
 else
   fail "the declared delta was not classified: $(tail -12 "${root}/last-run.log")"
 fi
@@ -406,22 +406,22 @@ fi
 # against the same tree must produce the same answer.
 root="${WORK}/g8-repeat"; build_fixture "${root}"
 run_preflight "${root}" --verify-source >/dev/null 2>&1 || true
-first="$(grep -c "generation-9 development" "${root}/last-run.log" || true)"
+first="$(grep -c "generation-10 development" "${root}/last-run.log" || true)"
 run_preflight "${root}" --verify-source >/dev/null 2>&1 || true
-second="$(grep -c "generation-9 development" "${root}/last-run.log" || true)"
+second="$(grep -c "generation-10 development" "${root}/last-run.log" || true)"
 if [[ "${first}" == "${second}" && "${first}" != "0" ]]; then
-  pass "the generation-9 classification is deterministic across runs"
+  pass "the generation-10 classification is deterministic across runs"
 else
   fail "the classification varied between runs: ${first} then ${second}"
 fi
 
-# The development declaration is not an installation claim. Generation 7 stays
+# The development declaration is not an installation claim. Generation 9 stays
 # the accepted live generation, and nothing here may say otherwise.
-if grep -q "generation 8 remains the accepted installed generation" \
+if grep -q "generation 9 remains the accepted installed generation" \
      "${root}/last-run.log"; then
-  pass "the declaration states generation 8 is still the live accepted one"
+  pass "the declaration states generation 9 is still the live accepted one"
 else
-  fail "the declaration does not preserve generation 8 as live: $(tail -8 "${root}/last-run.log")"
+  fail "the declaration does not preserve generation 9 as live: $(tail -8 "${root}/last-run.log")"
 fi
 
 # ===========================================================================

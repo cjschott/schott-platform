@@ -61,8 +61,8 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 # installed surface is the unit, so a change anywhere in it advances the whole
 # generation.
 #
-# WHAT THIS DECLARATION IS, AND IS NOT. Generation 8 is the accepted, installed,
-# live generation. Generation 9 exists only in this checkout: it is not
+# WHAT THIS DECLARATION IS, AND IS NOT. Generation 9 is the accepted, installed,
+# live generation. Generation 10 exists only in this checkout: it is not
 # installed, not live-accepted, and nothing here installs it. This block says
 # exactly which installed-runtime objects the checkout is legitimately ahead on,
 # so that "a new generation is in development" and "an installed object quietly
@@ -91,6 +91,16 @@ GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|CREATE|ABSENT|ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f"
 "tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745|c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305"
+# Generation 10. The package pipeline becomes tree-native: generation 9 staged
+# the package as a regular file while the launch bridge opened the staged path
+# with O_DIRECTORY, so the two ends of that contract could not meet. Note that
+# cli.py is NOT here -- the launch bridge was already correct, and confirming
+# that it needed no change is part of the evidence that the resolver was the
+# outlier rather than its consumers.
+"tools/common/trusted_source.py|REPLACE|e0f32e1f5372dbdb24ebf22e35cfa7d3a52af570f87a3160f634dae2fffea4f8|d1e8ac5933834deb7b7aa07a847312ac10d8c4e3f0c0d2d93400c6eafe04865f"
+"tools/capability/execution/package_contract.py|REPLACE|812dc878cb7b7082b42086a9adce714a152617e718536c039ed759b12d3e511a|79a9f7d4befb490833c5c5b764a03c02696ab3555e8081a89af92f5f79a4dc13"
+"tools/capability/package_resolution.py|REPLACE|678bcabd341f8a76fa7000cfe0f66174b443c4ca5b2782846bed7baf94681f6c|0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b"
+"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e|394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
@@ -314,7 +324,7 @@ require_image_material() {
   ok "the image definition is reviewed, names no base, and pins no floating tag"
 }
 
-# Whether one observed difference is exactly a declared generation-8 REPLACE.
+# Whether one observed difference is exactly a declared generation REPLACE.
 #
 # Both ends are checked. The installed copy must be the baseline the delta says
 # it moves from, and the checkout must be the bytes it says it moves to -- so an
@@ -376,7 +386,7 @@ require_operator_source() {
     [[ "${installed}" == "${checkout}" ]] && continue
     if generation_declares "${file}" "${installed}" "${checkout}"; then
       declared=$((declared + 1)); satisfied+=("${file}")
-      note "generation-9 development: ${file} is ahead of the installed generation by declaration"
+      note "generation-10 development: ${file} is ahead of the installed generation by declaration"
     else
       bad "checkout and installed runtime disagree at ${file}"; drift=$((drift + 1))
     fi
@@ -419,8 +429,8 @@ require_operator_source() {
     if (( declared == 0 )); then
       ok "the checkout's runtime half is byte-identical to the installed root-owned runtime (${checked} objects)"
     else
-      ok "the checkout is the declared generation-9 candidate: ${declared} declared object(s) ahead, ${checked} installed object(s) compared, no undeclared difference"
-      note "generation 8 remains the accepted installed generation; generation 9 is not installed and is not live-accepted"
+      ok "the checkout is the declared generation-10 candidate: ${declared} declared object(s) ahead, ${checked} installed object(s) compared, no undeclared difference"
+      note "generation 9 remains the accepted installed generation; generation 10 is not installed and is not live-accepted"
     fi
   fi
 

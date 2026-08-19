@@ -2098,45 +2098,48 @@ check(_released.parameters["require_single_link"].default is False
       "the released trusted-source defaults are unchanged")
 
 # ===========================================================================
-# A4 — executable package resolution, integrity, and content-addressed staging
+# A4 — governed package TREE resolution, integrity, and content-addressed staging
 # ===========================================================================
-# Turning a governed package into verified bytes, or refusing. The source path
-# is discovery input; the staged object is what a future adapter may receive,
-# and the two are connected by exactly one descriptor.
+# Turning a governed package into a verified immutable tree, or refusing. The
+# source path is discovery input; the staged tree is what S5 opens with
+# O_DIRECTORY and revalidates through the same primitive that committed it.
 #
-# Nothing here executes, imports, or loads an artefact. It is read and hashed.
+# Generation 9 staged one regular file here while every consumer downstream
+# required a directory, so the two ends of this contract could never meet. The
+# cases below run the real resolver and assert the real shape.
+#
+# Nothing here executes, imports, or loads a package. It is read and hashed.
 
 import hashlib as _hashlib2  # noqa: E402
 import json as _json  # noqa: E402
+import shutil  # noqa: E402
 
+from tools.capability.execution.package_contract import (  # noqa: E402
+    MAXIMUM_AGGREGATE_BYTES, MAXIMUM_FILE_BYTES, ForbiddenContent,
+    inspect_package, validate_package)
 from tools.capability.package_resolution import (  # noqa: E402
-    ARTIFACT_MAXIMUM_BYTES, MANIFEST_MAXIMUM_BYTES, MANIFEST_SCHEMA_VERSION,
-    REASON_ARTIFACT_OVERSIZE, REASON_ARTIFACT_UNREADABLE, REASON_GRAMMAR,
-    REASON_MANIFEST_ABSENT, REASON_MANIFEST_IDENTITY, REASON_MANIFEST_MALFORMED,
-    REASON_MANIFEST_SCHEMA, REASON_MANIFEST_UNREADABLE, REASON_STAGED_COLLISION,
+    MANIFEST_MAXIMUM_BYTES, MANIFEST_SCHEMA_VERSION, PACKAGE_MAXIMUM_DEPTH,
+    REASON_GRAMMAR, REASON_MANIFEST_ABSENT, REASON_MANIFEST_IDENTITY,
+    REASON_MANIFEST_MALFORMED, REASON_MANIFEST_SCHEMA,
+    REASON_MANIFEST_UNREADABLE, REASON_STAGED_COLLISION,
     REASON_STAGED_UNUSABLE, REASON_STAGING_ROOT, REASON_SUBSTITUTION,
-    resolve_and_stage_package, _bounded_digest_and_copy)
+    REASON_TREE_UNGOVERNED, REASON_TREE_UNREADABLE, StagedPackage,
+    resolve_and_stage_package)
 from tools.capability.fabric_evidence import EvidenceVerdict  # noqa: E402
 
-_BYTES = b"the artifact bytes\n"
-_DIGEST = "sha256:" + _hashlib2.sha256(_BYTES).hexdigest()
+_MEMBERS = {"main.py": b"def run():\n    return {}\n",
+            "lib/helper.py": b"VALUE = 1\n"}
+_TREE_REFERENCE = "tree:nested/pkg"
+_MANIFEST_REFERENCE = "file:nested/package.manifest.json"
 
 
-def _manifest(**overrides):
-    body = {
-        "schema_version": 1,
-        "capability_package_id": "CPKG-0001",
-        "contract_id": "CCON-0001",
-        "capability_id": "CAPDEF-0001",
-        "artifact_reference": "file:nested/artifact.bin",
-        "artifact_sha256": _DIGEST,
-    }
-    for key, value in overrides.items():
-        if value is _REMOVE:
-            body.pop(key, None)
-        else:
-            body[key] = value
-    return body
+def _commit(tree):
+    """The commitment of a tree, through the same primitive the runtime uses."""
+    handle = os.open(tree, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    try:
+        return "sha256:" + inspect_package(handle).digest
+    finally:
+        os.close(handle)
 
 
 class _Remove:
@@ -2146,35 +2149,73 @@ class _Remove:
 _REMOVE = _Remove()
 
 
+def _manifest(digest, **overrides):
+    body = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "capability_package_id": "CPKG-0001",
+        "contract_id": "CCON-0001",
+        "capability_id": "CAPDEF-0001",
+        "artifact_reference": _TREE_REFERENCE,
+        "package_tree_sha256": digest,
+    }
+    for key, value in overrides.items():
+        if value is _REMOVE:
+            body.pop(key, None)
+        else:
+            body[key] = value
+    return body
+
+
 def _evidence(**overrides):
     fields = dict(supported=True, reason=None, selection_id="CSEL-000001",
                   instance_id="CINST-000001", capability_package_id="CPKG-0001",
                   contract_id="CCON-0001", capability_id="CAPDEF-0001",
                   effect_class="read-only",
-                  artifact_reference="file:nested/artifact.bin",
-                  manifest_reference="file:nested/artifact.manifest.json")
+                  artifact_reference=_TREE_REFERENCE,
+                  manifest_reference=_MANIFEST_REFERENCE)
     fields.update(overrides)
     return EvidenceVerdict(**fields)
 
 
-def _source(tmp, *, content=_BYTES, manifest=None, manifest_text=None):
+def _source(tmp, *, members=None, manifest=None, manifest_text=None,
+            manifest_overrides=None):
+    """An approved artefact root holding one governed package tree.
+
+    Modes are set explicitly rather than inherited: the trusted-source contract
+    refuses a group-writable component, and this suite runs under whatever
+    umask the operator has.
+    """
     approved = Path(tmp) / "approved"
     approved.mkdir(mode=0o755, exist_ok=True)
+    approved.chmod(0o755)
     nested = approved / "nested"
     nested.mkdir(mode=0o755, exist_ok=True)
-    artifact = nested / "artifact.bin"
-    artifact.write_bytes(content)
-    artifact.chmod(0o644)
-    body = _json.dumps(_manifest() if manifest is None else manifest)
-    (nested / "artifact.manifest.json").write_text(
-        body if manifest_text is None else manifest_text, encoding="utf-8")
-    (nested / "artifact.manifest.json").chmod(0o644)
-    return approved, artifact
+    nested.chmod(0o755)
+    tree = nested / "pkg"
+    tree.mkdir(mode=0o755, exist_ok=True)
+    tree.chmod(0o755)
+    for relative, body in (_MEMBERS if members is None else members).items():
+        member = tree / relative
+        member.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        member.parent.chmod(0o755)
+        member.write_bytes(body)
+        member.chmod(0o644)
+
+    document = manifest
+    if document is None:
+        document = _manifest(_commit(tree), **(manifest_overrides or {}))
+    body = _json.dumps(document)
+    manifest_path = nested / "package.manifest.json"
+    manifest_path.write_text(body if manifest_text is None else manifest_text,
+                             encoding="utf-8")
+    manifest_path.chmod(0o644)
+    return approved, tree
 
 
-def _staging(tmp):
-    staging = Path(tmp) / "staging"
+def _staging(tmp, name="staging"):
+    staging = Path(tmp) / name
     staging.mkdir(mode=0o700, exist_ok=True)
+    staging.chmod(0o700)
     return staging
 
 
@@ -2188,34 +2229,78 @@ def _stage(tmp, *, evidence=None, approved=None, staging=None, **overrides):
     return resolve_and_stage_package(**asked)
 
 
-# --- the valid case ---------------------------------------------------------
+def _staged_trees(staging):
+    return sorted(staging.glob("tree-sha256-*"))
+
+
+def _open_tree(staged):
+    """Reopen a published 0500 tree so the fixture can dismantle it.
+
+    The staged tree is deliberately not removable while it holds its finished
+    modes, which is the property being tested. A fixture that wants to break it
+    has to say so.
+    """
+    for path in sorted(staged.rglob("*"), reverse=True):
+        if path.is_dir():
+            path.chmod(0o700)
+    staged.chmod(0o700)
+
+
+# --- the valid case, and the S4 to S5 contract it must satisfy --------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
+    expected = _commit(tree)
     result = _stage(tmp, approved=approved, staging=staging)
-    check(result.supported, f"a conforming package stages ({result.reason})")
+    check(result.supported, f"a conforming package tree stages ({result.reason})")
     check(result.reason is None, "a supported result names no refusal")
-    check(result.artifact_sha256 == _DIGEST, "the verified digest is returned")
+    check(isinstance(result, StagedPackage), "the contract type is StagedPackage")
+    check(result.package_tree_sha256 == expected, "the tree commitment is returned")
     check(result.capability_package_id == "CPKG-0001", "the package identity is returned")
     check(result.manifest_version == MANIFEST_SCHEMA_VERSION,
           "the validated manifest version is returned")
 
     staged = Path(result.staged_path)
-    check(staged.is_file(), "the staged artefact exists")
-    check(staged.read_bytes() == _BYTES, "the staged bytes are the source bytes")
-    check(staged.parent.name == "sha256-" + _DIGEST.split(":")[1],
-          f"the staged identity derives from the verified digest ({staged.parent.name})")
-    check(staged.name == "artifact", "the staged object has a fixed name")
-    check(stat.S_IMODE(staged.lstat().st_mode) == 0o400,
-          f"the staged artefact is 0400 ({oct(stat.S_IMODE(staged.lstat().st_mode))})")
-    check(stat.S_IMODE(staged.parent.lstat().st_mode) == 0o700,
-          f"the staged directory is 0700 ({oct(stat.S_IMODE(staged.parent.lstat().st_mode))})")
-    check(staged.lstat().st_uid == UID, "the staged artefact is coordinator-owned")
-    check(staged.lstat().st_nlink == 1, "the staged artefact carries a single link")
-    check(not stat.S_IMODE(staged.lstat().st_mode) & 0o111,
-          "the staged artefact is not executable")
-    check(not stat.S_IMODE(staged.lstat().st_mode) & 0o066,
-          "the staged artefact is not group- or world-accessible for writing")
+    check(staged.is_dir() and not staged.is_symlink(),
+          "the staged package is a directory")
+    check(staged.name == "tree-sha256-" + expected.split(":")[1],
+          f"the staged identity derives from the commitment ({staged.name})")
+    check((staged / "main.py").read_bytes() == _MEMBERS["main.py"],
+          "a staged member holds the source bytes")
+    check((staged / "lib" / "helper.py").read_bytes() == _MEMBERS["lib/helper.py"],
+          "a nested staged member holds the source bytes")
+
+    # This is the contract Generation 9 could not satisfy: the pathname S4
+    # recorded, opened exactly the way S5 opens it, and validated by exactly the
+    # primitive that produced the commitment. No fabricated object anywhere.
+    _s5 = os.open(result.staged_path,
+                  os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY)
+    try:
+        check(True, "S5 opens the real staged path with O_DIRECTORY")
+        _binding = validate_package(_s5, entrypoint="main.py")
+        check("sha256:" + _binding.digest == result.package_tree_sha256,
+              "the S5 binding digest equals the S4 commitment")
+        check(_binding.entrypoint == "main.py",
+              "the real staged tree satisfies the governed entrypoint")
+    finally:
+        os.close(_s5)
+
+    check(stat.S_IMODE(staged.lstat().st_mode) == 0o500,
+          f"the staged tree is 0500 ({oct(stat.S_IMODE(staged.lstat().st_mode))})")
+    check(stat.S_IMODE((staged / "lib").lstat().st_mode) == 0o500,
+          "a staged subdirectory is 0500")
+    check(stat.S_IMODE((staged / "main.py").lstat().st_mode) == 0o400,
+          "a staged member is 0400")
+    check(staged.lstat().st_uid == UID, "the staged tree is coordinator-owned")
+    check((staged / "main.py").lstat().st_uid == UID,
+          "a staged member is coordinator-owned")
+    check((staged / "main.py").lstat().st_nlink == 1,
+          "a staged member carries a single link")
+    for member in (staged, staged / "lib", staged / "main.py"):
+        mode = stat.S_IMODE(member.lstat().st_mode)
+        check(not mode & 0o022, f"{member.name} is not writable beyond its owner")
+    check(not stat.S_IMODE((staged / "main.py").lstat().st_mode) & 0o111,
+          "a staged member is not executable")
 
     # The result carries preparation facts, and nothing that runs anything.
     for absent in ("command", "argv", "environment", "shell", "process", "pid",
@@ -2235,34 +2320,38 @@ with TemporaryDirectory() as tmp:
     source_before = inventory_of(approved)
     again = _stage(tmp, approved=approved, staging=staging)
     check(again.supported and again.staged_path == result.staged_path,
-          "identical content converges on the same staged identity")
+          "an identical tree converges on the same staged identity")
     check(inventory_of(approved) == source_before,
           "staging writes nothing on the source side")
-    check(len(list(staging.glob("sha256-*"))) == 1,
-          "identical content produces exactly one staged object")
+    check(len(_staged_trees(staging)) == 1,
+          "an identical tree produces exactly one staged tree")
+    check(not [n for n in staging.iterdir() if n.name.startswith(".staging-")],
+          "an accepted repeat builds no second copy")
 
 # --- artefact reference grammar --------------------------------------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
     for reference, description in (
-            ("nested/artifact.bin", "a bare relative path"),
-            ("/etc/hostname", "an absolute path"),
-            ("file:/absolute/path", "an absolute path behind the scheme"),
-            ("file://host/path", "an authority form"),
+            ("nested/pkg", "a bare relative path"),
+            ("/etc", "an absolute path"),
+            ("tree:/absolute/path", "an absolute path behind the scheme"),
+            ("tree://host/path", "an authority form"),
+            ("file:nested/pkg", "the version-1 file scheme"),
             ("oci://registry.invalid/x", "an oci reference"),
             ("http://example.invalid/x", "an http reference"),
             ("https://example.invalid/x", "an https reference"),
             ("docker://x", "a docker reference"),
             ("podman://x", "a podman reference"),
-            ("file:../outside/x", "a traversing reference"),
-            ("file:nested/../../outside/x", "a traversal through a child"),
+            ("tar:nested/pkg.tar", "an archive reference"),
+            ("tree:../outside/x", "a traversing reference"),
+            ("tree:nested/../../outside/x", "a traversal through a child"),
             ("$(echo pwned)", "shell-like text"),
-            ("file:", "an empty relative path"),
+            ("tree:", "an empty relative path"),
             ("", "an empty reference"),
             ("   ", "a whitespace-only reference"),
-            ("FILE:nested/artifact.bin", "an uppercase scheme"),
-            ("file:nested/\x00artifact.bin", "a reference carrying a null byte")):
+            ("TREE:nested/pkg", "an uppercase scheme"),
+            ("tree:nested/\x00pkg", "a reference carrying a null byte")):
         outcome = _stage(tmp, approved=approved, staging=staging,
                          evidence=_evidence(artifact_reference=reference))
         check(not outcome.supported and outcome.reason == REASON_GRAMMAR,
@@ -2272,14 +2361,181 @@ with TemporaryDirectory() as tmp:
                      evidence=_evidence(manifest_reference=None))
     check(not outcome.supported and outcome.reason == REASON_MANIFEST_ABSENT,
           f"a package with no manifest reference refuses ({outcome.reason})")
-    outcome = _stage(tmp, approved=approved, staging=staging,
-                     evidence=_evidence(manifest_reference="oci://x"))
-    check(not outcome.supported and outcome.reason == REASON_GRAMMAR,
-          f"a manifest reference outside the grammar refuses ({outcome.reason})")
+    for reference, description in (("oci://x", "outside the grammar"),
+                                   ("tree:nested/package.manifest.json",
+                                    "using the tree scheme")):
+        outcome = _stage(tmp, approved=approved, staging=staging,
+                         evidence=_evidence(manifest_reference=reference))
+        check(not outcome.supported and outcome.reason == REASON_GRAMMAR,
+              f"a manifest reference {description} refuses ({outcome.reason})")
+
+# --- the package must be a real directory ----------------------------------
+with TemporaryDirectory() as tmp:
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    # Exactly the Generation-9 shape: a regular file where the package is.
+    shutil.rmtree(tree)
+    tree.write_bytes(b"def run():\n    return {}\n")
+    tree.chmod(0o644)
+    outcome = _stage(tmp, approved=approved, staging=staging)
+    check(not outcome.supported and outcome.reason == REASON_TREE_UNREADABLE,
+          f"a regular-file package refuses ({outcome.reason})")
+    check(not _staged_trees(staging), "a regular-file package stages nothing")
+
+with TemporaryDirectory() as tmp:
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    elsewhere = Path(tmp) / "elsewhere"
+    shutil.move(str(tree), str(elsewhere))
+    tree.symlink_to(elsewhere)
+    outcome = _stage(tmp, approved=approved, staging=staging)
+    check(not outcome.supported and outcome.reason == REASON_TREE_UNREADABLE,
+          f"a symlinked source root refuses ({outcome.reason})")
+
+# --- what may not be inside a package tree ---------------------------------
+for mutate, description in (
+        (lambda a, t: (t / "link.py").symlink_to("/etc/hostname"),
+         "a descendant symlink"),
+        (lambda a, t: (t / "lib" / "up.py").symlink_to("../main.py"),
+         "a symlink to another member"),
+        (lambda a, t: os.mkfifo(t / "pipe"), "a FIFO"),
+        (lambda a, t: os.link(t / "main.py", t / "alias.py"),
+         "a hard-linked member"),
+        (lambda a, t: os.link(t / "main.py", a / "nested" / "outside.py"),
+         "a member aliased outside the tree"),
+        (lambda a, t: t.chmod(0o775), "a group-writable package root"),
+        (lambda a, t: t.chmod(0o757), "a world-writable package root")):
+    with TemporaryDirectory() as tmp:
+        approved, tree = _source(tmp)
+        staging = _staging(tmp)
+        mutate(approved, tree)
+        outcome = _stage(tmp, approved=approved, staging=staging)
+        check(not outcome.supported and outcome.reason == REASON_TREE_UNREADABLE,
+              f"{description} refuses ({outcome.reason})")
+        check(not _staged_trees(staging), f"{description} stages nothing")
+
+# A writable ancestor is refused too, and refused earlier: the manifest lives
+# beneath the same directory, so it is the first object the trusted-source
+# contract cannot vouch for. Which refusal arrives first is not the point --
+# that neither the manifest nor the tree is read from a directory somebody else
+# can swap is.
+for mode, description in ((0o775, "a group-writable parent of the tree"),
+                          (0o757, "a world-writable parent of the tree")):
+    with TemporaryDirectory() as tmp:
+        approved, tree = _source(tmp)
+        staging = _staging(tmp)
+        (approved / "nested").chmod(mode)
+        outcome = _stage(tmp, approved=approved, staging=staging)
+        check(not outcome.supported and outcome.reason == REASON_MANIFEST_UNREADABLE,
+              f"{description} refuses ({outcome.reason})")
+        check(not _staged_trees(staging), f"{description} stages nothing")
+
+# --- an empty directory is refused, not silently omitted -------------------
+#
+# The commitment is computed over file paths, so an empty directory would be
+# structure the identity cannot see. Two trees differing only by one would
+# otherwise present the same identity.
+with TemporaryDirectory() as tmp:
+    plain = Path(tmp) / "plain"
+    plain.mkdir(mode=0o755)
+    (plain / "main.py").write_bytes(_MEMBERS["main.py"])
+    (plain / "main.py").chmod(0o644)
+    with_empty = Path(tmp) / "with-empty"
+    with_empty.mkdir(mode=0o755)
+    (with_empty / "main.py").write_bytes(_MEMBERS["main.py"])
+    (with_empty / "main.py").chmod(0o644)
+    (with_empty / "empty").mkdir(mode=0o755)
+    refused = False
+    try:
+        _commit(with_empty)
+    except ForbiddenContent:
+        refused = True
+    check(refused, "a package holding an empty directory refuses")
+    nested_empty = Path(tmp) / "nested-empty"
+    nested_empty.mkdir(mode=0o755)
+    (nested_empty / "main.py").write_bytes(_MEMBERS["main.py"])
+    (nested_empty / "main.py").chmod(0o644)
+    (nested_empty / "x" / "y" / "z").mkdir(mode=0o755, parents=True)
+    refused = False
+    try:
+        _commit(nested_empty)
+    except ForbiddenContent:
+        refused = True
+    check(refused, "a package holding a nested empty directory refuses")
+
+with TemporaryDirectory() as tmp:
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    (tree / "empty").mkdir(mode=0o755)
+    outcome = _stage(tmp, approved=approved, staging=staging)
+    check(not outcome.supported and outcome.reason == REASON_TREE_UNGOVERNED,
+          f"a source tree with an empty directory refuses at S4 ({outcome.reason})")
+    check(not _staged_trees(staging), "an ungoverned tree stages nothing")
+
+# --- a member name the identity cannot express -----------------------------
+with TemporaryDirectory() as tmp:
+    base = Path(tmp) / "surrogate"
+    base.mkdir(mode=0o755)
+    (base / "main.py").write_bytes(_MEMBERS["main.py"])
+    (base / "main.py").chmod(0o644)
+    with open(os.path.join(os.fsencode(base), b"bad\xff.py"), "wb") as _bad:
+        _bad.write(b"y = 1\n")
+    os.chmod(os.path.join(os.fsencode(base), b"bad\xff.py"), 0o644)
+    refusal = None
+    try:
+        _commit(base)
+    except ForbiddenContent as error:
+        refusal = "governed"
+    except UnicodeEncodeError:
+        refusal = "crash"
+    check(refusal == "governed",
+          f"a non-UTF-8 member name refuses as a PackageError ({refusal})")
+
+# --- tree identity ----------------------------------------------------------
+with TemporaryDirectory() as tmp:
+    def _tree_of(name, members):
+        base = Path(tmp) / name
+        base.mkdir(mode=0o755)
+        for relative, body in members.items():
+            member = base / relative
+            member.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            member.write_bytes(body)
+            member.chmod(0o644)
+        return base
+
+    baseline = _commit(_tree_of("t1", _MEMBERS))
+    check(baseline == _commit(_tree_of("t2", _MEMBERS)),
+          "identical trees produce identical commitments")
+    check(_commit(_tree_of("t3", {**_MEMBERS, "main.py": b"changed\n"})) != baseline,
+          "a content change changes the commitment")
+    check(_commit(_tree_of("t4", {"other.py": _MEMBERS["main.py"],
+                                  "lib/helper.py": _MEMBERS["lib/helper.py"]})) != baseline,
+          "a pathname change changes the commitment")
+    check(_commit(_tree_of("t5", {"main.py": _MEMBERS["main.py"],
+                                  "helper.py": _MEMBERS["lib/helper.py"]})) != baseline,
+          "moving a member between directories changes the commitment")
+    check(_commit(_tree_of("t6", {**_MEMBERS, "extra.py": b"E\n"})) != baseline,
+          "an added member changes the commitment")
+    check(_commit(_tree_of("t7", {"main.py": _MEMBERS["main.py"]})) != baseline,
+          "a removed member changes the commitment")
+    # A path and a size that could be re-split differently must not collide.
+    check(_commit(_tree_of("t8", {"a": b"bc", "d": b"e"}))
+          != _commit(_tree_of("t9", {"a": b"b", "cd": b"e"})),
+          "the commitment framing is unambiguous across path and size")
+    # Traversal order cannot affect the commitment: the members are the same
+    # whichever order the filesystem happened to hand them back.
+    shuffled = _tree_of("t10", {})
+    for relative in reversed(list(_MEMBERS)):
+        member = shuffled / relative
+        member.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        member.write_bytes(_MEMBERS[relative])
+        member.chmod(0o644)
+    check(_commit(shuffled) == baseline,
+          "creation order cannot affect the commitment")
 
 # --- trusted-source policy wiring ------------------------------------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
     outcome = _stage(tmp, approved=approved, staging=staging, trusted_source_uid=UID + 1)
     check(not outcome.supported and outcome.reason == REASON_MANIFEST_UNREADABLE,
@@ -2292,10 +2548,14 @@ with TemporaryDirectory() as tmp:
               f"{description} trusted source uid refuses rather than defaulting")
 
 _resolution_source = (root / "tools" / "capability" / "package_resolution.py").read_text(encoding="utf-8")
-check(_resolution_source.count("require_single_link=True") >= 2,
-      "both source files are opened requiring a single link")
-check("open_trusted_regular_file" in _resolution_source,
-      "the reviewed trusted-source primitive is used")
+for primitive, description in (
+        ("open_trusted_regular_file", "the manifest"),
+        ("open_trusted_directory", "the package tree root"),
+        ("walk_tree", "the package tree contents")):
+    check(primitive in _resolution_source,
+          f"a reviewed trusted-source primitive reads {description}")
+check("require_single_link=True" in _resolution_source,
+      "the manifest is opened requiring a single link")
 for forbidden, description in (("os.getuid", "the running process"),
                                ("os.geteuid", "the effective process"),
                                ("getpass", "the login user"),
@@ -2304,52 +2564,35 @@ for forbidden, description in (("os.getuid", "the running process"),
     check(forbidden not in _resolution_source,
           f"the trusted uid is never taken from {description}")
 
-# Every source-side open goes through the reviewed primitive. The module does
-# open one path of its own -- the published staged object, to re-verify it --
-# and that is coordinator-controlled, which is the whole distinction.
-# Three occurrences and no more: the parameter, and the two primitive calls.
-# A fourth would be the module doing something with the source root itself.
+# The approved root reaches exactly three places: the parameter, and the two
+# reviewed primitives that resolve beneath it. A fourth would be the module
+# doing something with the source root itself.
 check(_resolution_source.count("approved_artifact_root") == 3,
       "the approved artefact root appears only as the parameter and its two "
       f"primitive calls ({_resolution_source.count('approved_artifact_root')})")
 for call in ("open_trusted_regular_file(\n            approved_artifact_root, manifest_relative",
-             "open_trusted_regular_file(\n            approved_artifact_root, artifact_relative"):
+             "open_trusted_directory(approved_artifact_root, tree_relative"):
     check(call in _resolution_source,
-          "both source files are opened through the reviewed primitive")
-check(_resolution_source.count("os.open(") == 1,
-      f"the module opens exactly one path of its own, the staged object "
-      f"({_resolution_source.count('os.open(')})")
-check("os.open(final" in _resolution_source,
-      "the one direct open is of the coordinator-controlled staged object")
-
-# --- source ownership, mode, type, and link policy -------------------------
-for mutate, description in (
-        (lambda a, t: (a / "nested").chmod(0o775), "a group-writable source directory"),
-        (lambda a, t: (a / "nested").chmod(0o757), "a world-writable source directory"),
-        (lambda a, t: t.chmod(0o664), "a group-writable artefact"),
-        (lambda a, t: t.chmod(0o646), "a world-writable artefact"),
-        (lambda a, t: (a / "nested" / "artifact.manifest.json").chmod(0o664),
-         "a group-writable manifest"),
-        (lambda a, t: os.link(t, a / "nested" / "alias.bin"), "an aliased artefact"),
-        (lambda a, t: os.link(a / "nested" / "artifact.manifest.json",
-                              a / "nested" / "alias.json"), "an aliased manifest"),
-        (lambda a, t: (t.unlink(), t.symlink_to(a / "nested" / "other.bin")),
-         "a symlinked artefact")):
-    with TemporaryDirectory() as tmp:
-        approved, artifact = _source(tmp)
-        staging = _staging(tmp)
-        (approved / "nested" / "other.bin").write_bytes(_BYTES)
-        mutate(approved, artifact)
-        outcome = _stage(tmp, approved=approved, staging=staging)
-        check(not outcome.supported, f"{description} refuses ({outcome.reason})")
+          "both source objects are opened through a reviewed primitive")
+# Every direct open this module performs is on coordinator-owned material: the
+# staging tree it built, or the staged tree it published. None takes a source
+# pathname, which is what keeps the source reachable only through the primitives.
+for _line in _resolution_source.splitlines():
+    if "os.open(" in _line:
+        check(("staging" in _line or "final" in _line or "path" in _line
+               or "name" in _line or "parent" in _line),
+              f"a direct open names coordinator material ({_line.strip()})")
+check("tarfile" not in _resolution_source and "zipfile" not in _resolution_source
+      and "shutil" not in _resolution_source,
+      "no archive or extraction layer exists between S4 and S5")
 
 # --- manifest schema, field by field ---------------------------------------
 with TemporaryDirectory() as tmp:
-    staging = _staging(tmp)
     for overrides, expected, description in (
             ({"schema_version": _REMOVE}, REASON_MANIFEST_SCHEMA, "a missing schema_version"),
-            ({"schema_version": 2}, REASON_MANIFEST_SCHEMA, "a future schema_version"),
-            ({"schema_version": "1"}, REASON_MANIFEST_SCHEMA, "a string schema_version"),
+            ({"schema_version": 1}, REASON_MANIFEST_SCHEMA, "the version-1 schema"),
+            ({"schema_version": 3}, REASON_MANIFEST_SCHEMA, "a future schema_version"),
+            ({"schema_version": "2"}, REASON_MANIFEST_SCHEMA, "a string schema_version"),
             ({"schema_version": True}, REASON_MANIFEST_SCHEMA, "a boolean schema_version"),
             ({"capability_package_id": _REMOVE}, REASON_MANIFEST_SCHEMA, "a missing package identity"),
             ({"capability_package_id": 1}, REASON_MANIFEST_SCHEMA, "a non-string package identity"),
@@ -2359,23 +2602,35 @@ with TemporaryDirectory() as tmp:
             ({"capability_id": _REMOVE}, REASON_MANIFEST_SCHEMA, "a missing capability identity"),
             ({"capability_id": "CAPDEF-0009"}, REASON_MANIFEST_IDENTITY, "a mismatched capability identity"),
             ({"artifact_reference": _REMOVE}, REASON_MANIFEST_SCHEMA, "a missing artefact reference"),
-            ({"artifact_reference": "file:nested/other.bin"}, REASON_MANIFEST_IDENTITY,
-             "a manifest naming another artefact"),
+            ({"artifact_reference": "tree:nested/other"}, REASON_MANIFEST_IDENTITY,
+             "a manifest naming another tree"),
+            ({"artifact_reference": "file:nested/pkg"}, REASON_MANIFEST_SCHEMA,
+             "a manifest using the version-1 file scheme"),
             ({"artifact_reference": "oci://x"}, REASON_MANIFEST_SCHEMA,
              "a manifest reference outside the grammar"),
-            ({"artifact_sha256": _REMOVE}, REASON_MANIFEST_SCHEMA, "a missing digest"),
-            ({"artifact_sha256": _DIGEST.upper()}, REASON_MANIFEST_SCHEMA, "an uppercase digest"),
-            ({"artifact_sha256": "sha512:" + "a" * 128}, REASON_MANIFEST_SCHEMA, "another algorithm"),
-            ({"artifact_sha256": "sha256:" + "a" * 63}, REASON_MANIFEST_SCHEMA, "a short digest"),
-            ({"artifact_sha256": " " + _DIGEST}, REASON_MANIFEST_SCHEMA, "a digest with whitespace"),
-            ({"artifact_sha256": "sha256:" + "g" * 64}, REASON_MANIFEST_SCHEMA, "a non-hex digest"),
+            ({"package_tree_sha256": _REMOVE}, REASON_MANIFEST_SCHEMA, "a missing commitment"),
+            ({"package_tree_sha256": "sha256:" + "A" * 64}, REASON_MANIFEST_SCHEMA, "an uppercase commitment"),
+            ({"package_tree_sha256": "sha512:" + "a" * 128}, REASON_MANIFEST_SCHEMA, "another algorithm"),
+            ({"package_tree_sha256": "sha256:" + "a" * 63}, REASON_MANIFEST_SCHEMA, "a short commitment"),
+            ({"package_tree_sha256": " sha256:" + "a" * 64}, REASON_MANIFEST_SCHEMA, "a commitment with whitespace"),
+            ({"package_tree_sha256": "sha256:" + "g" * 64}, REASON_MANIFEST_SCHEMA, "a non-hex commitment"),
             ({"unexpected": "field"}, REASON_MANIFEST_SCHEMA, "an unknown seventh field")):
         with TemporaryDirectory() as inner:
-            approved, artifact = _source(inner, manifest=_manifest(**overrides))
-            (approved / "nested" / "other.bin").write_bytes(b"other\n")
+            approved, tree = _source(inner, manifest_overrides=overrides)
             outcome = _stage(inner, approved=approved, staging=_staging(inner))
             check(not outcome.supported and outcome.reason == expected,
                   f"{description} refuses as {expected} ({outcome.reason})")
+
+    # The version-1 field name is not merely renamed: a manifest carrying it is
+    # a version-1 manifest, and it refuses rather than being read charitably.
+    with TemporaryDirectory() as inner:
+        approved, tree = _source(inner)
+        legacy = _manifest(_commit(tree))
+        legacy["artifact_sha256"] = legacy.pop("package_tree_sha256")
+        approved, tree = _source(inner, manifest=legacy)
+        outcome = _stage(inner, approved=approved, staging=_staging(inner))
+        check(not outcome.supported and outcome.reason == REASON_MANIFEST_SCHEMA,
+              f"the version-1 digest field name refuses ({outcome.reason})")
 
     for text, description in (("{not json", "malformed JSON"),
                               ("[1, 2]", "a JSON array"),
@@ -2383,51 +2638,76 @@ with TemporaryDirectory() as tmp:
                               ("null", "JSON null"),
                               ("", "an empty manifest")):
         with TemporaryDirectory() as inner:
-            approved, artifact = _source(inner, manifest_text=text)
+            approved, tree = _source(inner, manifest_text=text)
             outcome = _stage(inner, approved=approved, staging=_staging(inner))
             check(not outcome.supported and outcome.reason == REASON_MANIFEST_MALFORMED,
                   f"{description} refuses as {REASON_MANIFEST_MALFORMED} ({outcome.reason})")
 
-# --- digest verification ----------------------------------------------------
-for content, description in ((b"", "an empty artefact"),
-                             (b"\x00\x01\x02\xff", "binary bytes"),
-                             (b"x" * 200000, "a multi-chunk artefact")):
+# --- commitment verification ------------------------------------------------
+for members, description in (
+        ({"main.py": b""}, "a package with an empty member"),
+        ({"main.py": b"\x00\x01\x02\xff"}, "binary member bytes"),
+        ({"main.py": b"x" * 200000}, "a multi-chunk member"),
+        ({"main.py": b"m\n", "a/b/c/d/e.py": b"deep\n"}, "a deeply nested package")):
     with TemporaryDirectory() as tmp:
-        digest = "sha256:" + _hashlib2.sha256(content).hexdigest()
-        approved, artifact = _source(tmp, content=content,
-                                     manifest=_manifest(artifact_sha256=digest))
+        approved, tree = _source(tmp, members=members)
         outcome = _stage(tmp, approved=approved, staging=_staging(tmp))
-        check(outcome.supported and outcome.artifact_sha256 == digest,
-              f"{description} verifies against its known digest ({outcome.reason})")
-        check(Path(outcome.staged_path).read_bytes() == content,
-              f"{description} stages byte-for-byte")
+        check(outcome.supported, f"{description} verifies against its commitment ({outcome.reason})")
+        for relative, body in members.items():
+            check((Path(outcome.staged_path) / relative).read_bytes() == body,
+                  f"{description} stages {relative} byte-for-byte")
 
-for content, description in ((_BYTES[:-1], "a truncated artefact"),
-                             (_BYTES + b"x", "an appended artefact"),
-                             (b"T" + _BYTES[1:], "a one-byte mutation")):
+for mutate, description in (
+        (lambda t: (t / "main.py").write_bytes(_MEMBERS["main.py"][:-1]),
+         "a truncated member"),
+        (lambda t: (t / "main.py").write_bytes(_MEMBERS["main.py"] + b"x"),
+         "an appended member"),
+        (lambda t: (t / "extra.py").write_bytes(b"added\n"),
+         "an added member"),
+        (lambda t: ((t / "lib" / "helper.py").rename(t / "lib" / "renamed.py")),
+         "a renamed member")):
     with TemporaryDirectory() as tmp:
-        approved, artifact = _source(tmp, content=content)
-        outcome = _stage(tmp, approved=approved, staging=_staging(tmp))
+        approved, tree = _source(tmp)
+        staging = _staging(tmp)
+        mutate(tree)
+        for stray in tree.rglob("*"):
+            if stray.is_file():
+                stray.chmod(0o644)
+        outcome = _stage(tmp, approved=approved, staging=staging)
         check(not outcome.supported and outcome.reason == REASON_SUBSTITUTION,
               f"{description} refuses as {REASON_SUBSTITUTION} ({outcome.reason})")
-        check(not list(_staging(tmp).glob("sha256-*")),
-              f"{description} stages nothing")
+        check(not _staged_trees(staging), f"{description} stages nothing")
+
+# Removing the only member of a subdirectory refuses one step earlier, as an
+# ungoverned tree rather than a substituted one: the emptied directory is
+# refused before any commitment is compared. Both are closed refusals, and the
+# earlier one is the more specific answer.
+with TemporaryDirectory() as tmp:
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    (tree / "lib" / "helper.py").unlink()
+    outcome = _stage(tmp, approved=approved, staging=staging)
+    check(not outcome.supported and outcome.reason == REASON_TREE_UNGOVERNED,
+          f"a removed member emptying its directory refuses ({outcome.reason})")
+    check(not _staged_trees(staging), "a removed member stages nothing")
 
 # --- bounds -----------------------------------------------------------------
 check(MANIFEST_MAXIMUM_BYTES == 65536, f"the manifest bound is 65536 ({MANIFEST_MAXIMUM_BYTES})")
-check(ARTIFACT_MAXIMUM_BYTES == 268435456, f"the artefact bound is 268435456 ({ARTIFACT_MAXIMUM_BYTES})")
+check(MAXIMUM_FILE_BYTES == 16 * 1024 * 1024,
+      f"the per-member bound is the package contract's ({MAXIMUM_FILE_BYTES})")
+check(MAXIMUM_AGGREGATE_BYTES == 64 * 1024 * 1024,
+      f"the aggregate bound is the package contract's ({MAXIMUM_AGGREGATE_BYTES})")
+check(PACKAGE_MAXIMUM_DEPTH == 32, f"the tree depth bound is 32 ({PACKAGE_MAXIMUM_DEPTH})")
 
 with TemporaryDirectory() as tmp:
-    # A valid manifest padded to exactly the bound, and one byte beyond it.
     for size, supported, description in ((MANIFEST_MAXIMUM_BYTES, True, "a manifest at the bound"),
                                          (MANIFEST_MAXIMUM_BYTES + 1, False, "a manifest one byte over")):
         with TemporaryDirectory() as inner:
-            base = _json.dumps(_manifest(), separators=(",", ":"))
-            padding = size - len(base) - len('{"":,}') - 1
-            text = '{"' + " " * 0 + base[1:-1] + "}"
-            text = base[:-1] + "," + '"x"' + ":" + '"' + "p" * max(padding - 6, 0) + '"' + "}"
-            text = text + " " * max(0, size - len(text))
-            approved, artifact = _source(inner, manifest_text=text[:size])
+            approved, tree = _source(inner)
+            base = _json.dumps(_manifest(_commit(tree)), separators=(",", ":"))
+            text = base[:-1] + ',"x":"' + "p" * max(size - len(base) - 8, 0) + '"}'
+            text = (text + " " * max(0, size - len(text)))[:size]
+            approved, tree = _source(inner, manifest_text=text)
             outcome = _stage(inner, approved=approved, staging=_staging(inner))
             # Padding makes the schema closed-invalid; what is proven here is
             # which refusal the size produces, not that padding is legal.
@@ -2439,33 +2719,32 @@ with TemporaryDirectory() as tmp:
                       f"{description} refuses before it is read ({outcome.reason})")
 
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
-    # A sparse file: the size bound refuses on the descriptor's own report,
-    # before a quarter of a gigabyte is ever read.
-    os.truncate(artifact, ARTIFACT_MAXIMUM_BYTES + 1)
-    outcome = _stage(tmp, approved=approved, staging=_staging(tmp))
-    check(not outcome.supported and outcome.reason == REASON_ARTIFACT_OVERSIZE,
-          f"an artefact one byte over the bound refuses ({outcome.reason})")
-    check(not list(_staging(tmp).glob("sha256-*")), "an oversized artefact stages nothing")
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    # A sparse member: the bound refuses on the descriptor's own report, before
+    # sixteen mebibytes are ever read.
+    os.truncate(tree / "main.py", MAXIMUM_FILE_BYTES + 1)
+    outcome = _stage(tmp, approved=approved, staging=staging)
+    check(not outcome.supported and outcome.reason == REASON_TREE_UNREADABLE,
+          f"a member one byte over the bound refuses ({outcome.reason})")
+    check(not _staged_trees(staging), "an oversized member stages nothing")
 
-# The bound is enforced while reading, not only from the reported size.
 with TemporaryDirectory() as tmp:
-    probe = Path(tmp) / "probe.bin"
-    probe.write_bytes(b"0123456789A")
-    handle = os.open(probe, os.O_RDONLY)
-    try:
-        refused = False
-        try:
-            _bounded_digest_and_copy(handle, None, 10)
-        except Exception:  # noqa: BLE001
-            refused = True
-        check(refused, "the copy refuses once more than the bound would be consumed")
-    finally:
-        os.close(handle)
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    deep = tree
+    for level in range(PACKAGE_MAXIMUM_DEPTH + 2):
+        deep = deep / f"d{level}"
+    deep.mkdir(mode=0o755, parents=True)
+    (deep / "leaf.py").write_bytes(b"leaf\n")
+    (deep / "leaf.py").chmod(0o644)
+    outcome = _stage(tmp, approved=approved, staging=staging)
+    check(not outcome.supported and outcome.reason == REASON_TREE_UNREADABLE,
+          f"a tree deeper than the bound refuses ({outcome.reason})")
 
 # --- staging root contract --------------------------------------------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     for mutate, description in (
             (lambda s: s.chmod(0o770), "a group-writable staging root"),
             (lambda s: s.chmod(0o707), "a world-writable staging root")):
@@ -2481,7 +2760,7 @@ with TemporaryDirectory() as tmp:
           f"a staging root owned by another uid refuses ({outcome.reason})")
 
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     outside = Path(tmp) / "elsewhere"
     outside.mkdir(mode=0o700)
     linked = Path(tmp) / "staging-link"
@@ -2491,15 +2770,15 @@ with TemporaryDirectory() as tmp:
           f"a symlinked staging root refuses ({outcome.reason})")
 
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     outcome = _stage(tmp, approved=approved, staging=Path(tmp) / "absent")
     check(not outcome.supported and outcome.reason == REASON_STAGING_ROOT,
           f"an absent staging root refuses rather than being created ({outcome.reason})")
     check(not (Path(tmp) / "absent").exists(), "an absent staging root stays absent")
 
-# --- an existing final object ----------------------------------------------
+# --- an existing staged tree ------------------------------------------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
     first = _stage(tmp, approved=approved, staging=staging)
     staged = Path(first.staged_path)
@@ -2507,30 +2786,33 @@ with TemporaryDirectory() as tmp:
 
     reused = _stage(tmp, approved=approved, staging=staging)
     check(reused.supported and Path(reused.staged_path).lstat().st_ino == original.st_ino,
-          "identical bytes reuse the existing staged object rather than republishing")
+          "an identical tree reuses the existing staged tree rather than republishing")
 
-    # Same digest identity, different bytes: fail closed, never repair.
-    staged.chmod(0o600)
-    staged.write_bytes(b"substituted\n")
-    staged.chmod(0o400)
-    before = (staged.lstat().st_ino, staged.read_bytes())
+    # Same commitment pathname, different contents: fail closed, never repair.
+    staged.chmod(0o700)
+    (staged / "added.py").write_bytes(b"substituted\n")
+    (staged / "added.py").chmod(0o400)
+    staged.chmod(0o500)
+    before = sorted(p.name for p in staged.iterdir())
     outcome = _stage(tmp, approved=approved, staging=staging)
     check(not outcome.supported and outcome.reason == REASON_STAGED_COLLISION,
-          f"a staged object whose bytes do not match its digest refuses ({outcome.reason})")
-    check((staged.lstat().st_ino, staged.read_bytes()) == before,
-          "the incoherent staged object is neither replaced nor repaired")
+          f"a staged tree that does not commit to its own name refuses ({outcome.reason})")
+    check(sorted(p.name for p in staged.iterdir()) == before,
+          "the incoherent staged tree is neither replaced nor repaired")
 
 for mutate, description in (
-        (lambda p: p.chmod(0o444), "a staged object with a widened mode"),
-        (lambda p: p.chmod(0o600), "a staged object that became writable"),
-        (lambda p: (p.unlink(), p.symlink_to("/etc/hostname")), "a staged object replaced by a symlink"),
-        (lambda p: (p.unlink(), p.mkdir()), "a staged object replaced by a directory")):
+        (lambda p: p.chmod(0o755), "a staged tree with a widened mode"),
+        (lambda p: p.chmod(0o700), "a staged tree that became writable"),
+        (lambda p: (_open_tree(p), shutil.rmtree(p), p.symlink_to("/etc")),
+         "a staged tree replaced by a symlink"),
+        (lambda p: (_open_tree(p), shutil.rmtree(p), p.write_bytes(b"x"),
+                    p.chmod(0o400)),
+         "a staged tree replaced by a regular file")):
     with TemporaryDirectory() as tmp:
-        approved, artifact = _source(tmp)
+        approved, tree = _source(tmp)
         staging = _staging(tmp)
         first = _stage(tmp, approved=approved, staging=staging)
         staged = Path(first.staged_path)
-        staged.parent.chmod(0o700)
         mutate(staged)
         outcome = _stage(tmp, approved=approved, staging=staging)
         check(not outcome.supported and outcome.reason in
@@ -2539,23 +2821,36 @@ for mutate, description in (
 
 # --- temporary residue ------------------------------------------------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
     first = _stage(tmp, approved=approved, staging=staging)
     staged = Path(first.staged_path)
-    # An interrupted publication's residue: present, and never mistaken for
-    # content or removed by a later run.
-    residue = staging / ".interrupted.tmp"
-    residue.write_bytes(b"partial")
-    residue.chmod(0o400)
-    residue_before = (residue.lstat().st_ino, residue.read_bytes())
+    # An interrupted publication's residue: present, and never mistaken for a
+    # package or removed by a later run.
+    residue = staging / ".staging-interrupted"
+    residue.mkdir(mode=0o700)
+    (residue / "main.py").write_bytes(b"partial")
+    (residue / "main.py").chmod(0o400)
+    residue_before = sorted(p.name for p in residue.iterdir())
     again = _stage(tmp, approved=approved, staging=staging)
     check(again.supported, "residue does not block an otherwise valid staging")
     check(residue.exists(), "residue is left where it was found")
-    check((residue.lstat().st_ino, residue.read_bytes()) == residue_before,
+    check(sorted(p.name for p in residue.iterdir()) == residue_before,
           "residue is neither reused nor rewritten")
     check(Path(again.staged_path) == staged,
-          "residue does not become the staged object")
+          "residue does not become the staged tree")
+
+# A refused staging attempt leaves its partial tree under a name no consumer
+# resolves, rather than under the commitment pathname.
+with TemporaryDirectory() as tmp:
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    (tree / "main.py").write_bytes(b"unexpected\n")
+    (tree / "main.py").chmod(0o644)
+    outcome = _stage(tmp, approved=approved, staging=staging)
+    check(not outcome.supported, f"the substituted tree refuses ({outcome.reason})")
+    check(not _staged_trees(staging),
+          "a refused attempt publishes nothing under a commitment pathname")
 
 # --- no execution, whatever the bytes look like ----------------------------
 with TemporaryDirectory() as tmp:
@@ -2565,55 +2860,78 @@ with TemporaryDirectory() as tmp:
         f"pathlib.Path({str(marker)!r}).write_text('imported')\n"
         "print('executed')\n"
     ).encode("utf-8")
-    digest = "sha256:" + _hashlib2.sha256(hostile).hexdigest()
-    approved, artifact = _source(tmp, content=hostile,
-                                 manifest=_manifest(artifact_sha256=digest))
+    approved, tree = _source(tmp, members={"main.py": hostile})
     outcome = _stage(tmp, approved=approved, staging=_staging(tmp))
-    check(outcome.supported, f"an artefact that would run if imported still stages ({outcome.reason})")
+    check(outcome.supported, f"a package that would run if imported still stages ({outcome.reason})")
     check(not marker.exists(),
-          "the artefact was read and hashed, never imported or executed")
-    check(Path(outcome.staged_path).read_bytes() == hostile,
+          "the package was read and hashed, never imported or executed")
+    check((Path(outcome.staged_path) / "main.py").read_bytes() == hostile,
           "hostile-looking bytes are staged unchanged, as data")
 
 # --- the source-replacement race -------------------------------------------
-# A4 must obtain artefact bytes only from the descriptor the primitive opened.
+# A4 must read the tree only through the descriptor the primitive opened.
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
-    substitute = approved / "nested" / "substitute.bin"
-    substitute.write_bytes(b"SUBSTITUTED BYTES\n")
-    substitute.chmod(0o644)
+    substitute = approved / "nested" / "substitute"
+    substitute.mkdir(mode=0o755)
+    (substitute / "main.py").write_bytes(b"SUBSTITUTED\n")
+    (substitute / "main.py").chmod(0o644)
+    expected = _commit(tree)
 
     import tools.capability.package_resolution as _a4  # noqa: E402
-    _original_open = _a4.open_trusted_regular_file
-    swapped = {"count": 0}
+    _original_open = _a4.open_trusted_directory
 
     def _swapping_open(*args, **kwargs):
         handle = _original_open(*args, **kwargs)
-        # Once the artefact is open, the pathname is replaced. Anything
-        # reopening it would read the substitute; a descriptor cannot.
-        if swapped["count"] == 1:
-            os.replace(substitute, artifact)
-        swapped["count"] += 1
+        # Once the tree is open, the pathname is replaced. Anything re-resolving
+        # it would walk the substitute; a descriptor cannot.
+        os.rename(tree, approved / "nested" / "displaced")
+        os.rename(substitute, tree)
         return handle
 
-    _a4.open_trusted_regular_file = _swapping_open
+    _a4.open_trusted_directory = _swapping_open
     try:
         outcome = _stage(tmp, approved=approved, staging=staging)
     finally:
-        _a4.open_trusted_regular_file = _original_open
+        _a4.open_trusted_directory = _original_open
 
-    check(artifact.read_bytes() == b"SUBSTITUTED BYTES\n",
+    check((tree / "main.py").read_bytes() == b"SUBSTITUTED\n",
           "the fixture really replaced the source pathname mid-operation")
     check(outcome.supported, f"the operation completes from its descriptor ({outcome.reason})")
-    check(outcome.artifact_sha256 == _DIGEST,
-          "the digest is of the bytes that were opened, not the bytes now at the path")
-    check(Path(outcome.staged_path).read_bytes() == _BYTES,
+    check(outcome.package_tree_sha256 == expected,
+          "the commitment is of the tree that was opened, not the one now at the path")
+    check((Path(outcome.staged_path) / "main.py").read_bytes() == _MEMBERS["main.py"],
           "the staged bytes are the verified bytes, not the substituted ones")
 
-# --- concurrent staging of identical content -------------------------------
+# --- mutation of a member while the tree is being read ---------------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
+    staging = _staging(tmp)
+    victim = tree / "lib" / "helper.py"
+
+    import tools.capability.package_resolution as _a4b  # noqa: E402
+    _original_walk = _a4b.walk_tree
+
+    def _mutating_walk(root_fd, **bounds):
+        # The member grows after it was measured and while the walk is in
+        # progress. A copy that raced must not become a commitment.
+        victim.chmod(0o644)
+        victim.write_bytes(b"VALUE = 1\n" + b"g" * 4096)
+        return _original_walk(root_fd, **bounds)
+
+    _a4b.walk_tree = _mutating_walk
+    try:
+        outcome = _stage(tmp, approved=approved, staging=staging)
+    finally:
+        _a4b.walk_tree = _original_walk
+    check(not outcome.supported and outcome.reason == REASON_SUBSTITUTION,
+          f"a tree mutated before it was committed refuses ({outcome.reason})")
+    check(not _staged_trees(staging), "a mutated tree stages nothing")
+
+# --- concurrent staging of an identical tree -------------------------------
+with TemporaryDirectory() as tmp:
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
     CALLERS = 12
     outcomes = []
@@ -2634,21 +2952,21 @@ with TemporaryDirectory() as tmp:
         worker.join(60)
     alive = [w for w in workers if w.is_alive()]
     supported = [o for o in outcomes if getattr(o, "supported", False)]
-    finals = sorted(staging.glob("sha256-*"))
+    finals = _staged_trees(staging)
     check(not alive, f"no concurrent staging caller deadlocked ({len(alive)} alive)")
     check(len(supported) == CALLERS,
           f"every concurrent caller staged successfully ({len(supported)}/{CALLERS})")
     check(len({o.staged_path for o in supported}) == 1,
           "every caller resolved to the same staged identity")
-    check(len(finals) == 1, f"exactly one final staged object exists ({len(finals)})")
-    check(Path(supported[0].staged_path).read_bytes() == _BYTES,
-          "the single final object holds the verified bytes")
-    check(stat.S_IMODE(Path(supported[0].staged_path).lstat().st_mode) == 0o400,
-          "the final object kept its mode under contention")
+    check(len(finals) == 1, f"exactly one final staged tree exists ({len(finals)})")
+    check((Path(supported[0].staged_path) / "main.py").read_bytes() == _MEMBERS["main.py"],
+          "the single final tree holds the verified bytes")
+    check(stat.S_IMODE(Path(supported[0].staged_path).lstat().st_mode) == 0o500,
+          "the final tree kept its mode under contention")
 
 # --- A4 writes only into staging -------------------------------------------
 with TemporaryDirectory() as tmp:
-    approved, artifact = _source(tmp)
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
     capability_store = CapabilityStore(Path(tmp) / "capability",
                                        expected_uid=UID, expected_gid=GID)
@@ -2675,7 +2993,7 @@ with TemporaryDirectory() as tmp:
 #
 # Nothing here executes. A5 records that a preparation was decided.
 
-from tools.capability.package_resolution import StagedArtifact  # noqa: E402
+from tools.capability.package_resolution import StagedPackage  # noqa: E402
 from tools.capability.records import (  # noqa: E402
     INVOCATION_FIELDS, RESULT_FIELDS, RECORD_SCHEMA_VERSION)
 from tools.capability.evidence import (  # noqa: E402
@@ -2760,7 +3078,7 @@ with TemporaryDirectory() as tmp:
     check(written["capability_id"] == "CAPDEF-0001", "the capability is persisted")
     check(written["actor"] == "operator:cschott", "the actor is persisted")
     check(written["effect_class"] == "read-only", "the effect class is persisted")
-    check(written["artifact_digest"] == inputs["staged"].artifact_sha256,
+    check(written["artifact_digest"] == inputs["staged"].package_tree_sha256,
           "the verified artefact digest is persisted")
     check(written["evidence"]["outcome"] == OUTCOME_PREPARED,
           f"the record states its own outcome ({written['evidence']['outcome']})")
@@ -2857,7 +3175,7 @@ with TemporaryDirectory() as tmp:
 for spoil, expected_kind, description in (
         (lambda i: dict(i, evidence=EvidenceVerdict(False, "instance-not-admitted")),
          "instance-not-admitted", "a refused fabric evidence"),
-        (lambda i: dict(i, staged=StagedArtifact(False, "substitution-detected")),
+        (lambda i: dict(i, staged=StagedPackage(False, "substitution-detected")),
          "substitution-detected", "a refused package verification")):
     with TemporaryDirectory() as tmp:
         store = _opened_capability(tmp)
@@ -3105,16 +3423,25 @@ for variant, description in (("exact", "exact reuse"), ("conflicting", "conflict
     check(not anomalies,
           f"concurrent {description}: one authoritative binding every round ({anomalies[:2]})")
 
-# --- neither the fabric nor the staged artefact is touched -----------------
+# --- neither the fabric nor the staged tree is touched ----------------------
 with TemporaryDirectory() as tmp:
     store = _opened_capability(tmp)
     inputs = _prepared_inputs(tmp)
     fabric_root = _chain(tmp)
     fabric_before = _fabric_inventory(fabric_root)
     staged = Path(inputs["staged"].staged_path)
-    staged_before = (staged.lstat().st_ino, staged.lstat().st_mode,
-                     staged.lstat().st_uid, staged.read_bytes())
-    residue = staged.parent.parent / ".staging-residue.tmp"
+
+    def _tree_state(base):
+        state = {}
+        for path in sorted([base, *base.rglob("*")]):
+            info = path.lstat()
+            state[str(path.relative_to(base.parent))] = (
+                info.st_ino, info.st_mode, info.st_uid,
+                path.read_bytes() if path.is_file() else None)
+        return state
+
+    staged_before = _tree_state(staged)
+    residue = staged.parent / ".staging-residue.tmp"
     residue.write_bytes(b"partial")
     residue_before = (residue.lstat().st_ino, residue.read_bytes())
 
@@ -3128,9 +3455,8 @@ with TemporaryDirectory() as tmp:
                                                     actor="operator:cschott")))
     check(_fabric_inventory(fabric_root) == fabric_before,
           "recording a decision leaves the fabric store byte-identical")
-    check((staged.lstat().st_ino, staged.lstat().st_mode, staged.lstat().st_uid,
-           staged.read_bytes()) == staged_before,
-          "the staged artefact is untouched by evidence persistence")
+    check(_tree_state(staged) == staged_before,
+          "the staged package tree is untouched by evidence persistence")
     check((residue.lstat().st_ino, residue.read_bytes()) == residue_before,
           "A4 staging residue is not cleaned by A5")
 
@@ -3218,9 +3544,9 @@ def _invoke_args(tmp, *, approved, staging, fabric_root, payload_root,
 def _world(tmp):
     """A fabric chain, a verified package, a staging root, and a payload."""
     fabric_root = _chain(tmp, **{"capability-package": {
-        "artifact_reference": "file:nested/artifact.bin",
-        "manifest_reference": "file:nested/artifact.manifest.json"}})
-    approved, artifact = _source(tmp)
+        "artifact_reference": _TREE_REFERENCE,
+        "manifest_reference": _MANIFEST_REFERENCE}})
+    approved, tree = _source(tmp)
     staging = _staging(tmp)
     payload_root, _ = _payload_root(tmp)
     capability_root = Path(tmp) / "capability"
@@ -3312,13 +3638,13 @@ with TemporaryDirectory() as tmp:
 
 with TemporaryDirectory() as tmp:
     world = _world(tmp)
-    # A4 refusal: the artefact no longer matches its manifest.
-    artifact = world["approved"] / "nested" / "artifact.bin"
-    artifact.chmod(0o644)
-    artifact.write_bytes(b"substituted\n")
-    artifact.chmod(0o644)
+    # A4 refusal: the package tree no longer matches its manifest.
+    member = world["approved"] / "nested" / "pkg" / "main.py"
+    member.chmod(0o644)
+    member.write_bytes(b"substituted\n")
+    member.chmod(0o644)
     code, out, err = _run(_invoke_args(tmp, **world))
-    check(code == EXIT_DENIED, "a substituted artefact exits 1")
+    check(code == EXIT_DENIED, "a substituted package tree exits 1")
     check(_json.loads(out)["reason"] == "substitution-detected",
           f"the A4 reason is carried through ({_json.loads(out)['reason']})")
 
@@ -3598,15 +3924,13 @@ with TemporaryDirectory() as tmp:
 
 # --- the interface never crosses the boundary ------------------------------
 with TemporaryDirectory() as tmp:
-    # A staged artefact that would leave a marker if anything ran it.
+    # A staged package that would leave a marker if anything ran it.
     marker = Path(tmp) / "marker"
     hostile = (f"import pathlib\npathlib.Path({str(marker)!r}).write_text('ran')\n").encode()
-    digest = "sha256:" + _hashlib2.sha256(hostile).hexdigest()
     fabric_root = _chain(tmp, **{"capability-package": {
-        "artifact_reference": "file:nested/artifact.bin",
-        "manifest_reference": "file:nested/artifact.manifest.json"}})
-    approved, artifact = _source(tmp, content=hostile,
-                                 manifest=_manifest(artifact_sha256=digest))
+        "artifact_reference": _TREE_REFERENCE,
+        "manifest_reference": _MANIFEST_REFERENCE}})
+    approved, tree = _source(tmp, members={"main.py": hostile})
     staging = _staging(tmp)
     payload_root, _ = _payload_root(tmp)
     capability_root = Path(tmp) / "capability"
@@ -3616,9 +3940,9 @@ with TemporaryDirectory() as tmp:
 
     code, out, err = _run(_invoke_args(tmp, **world))
     check(code == EXIT_DENIED and _json.loads(out)["reason"] == REASON_NO_ADAPTER,
-          f"a hostile artefact still ends at the adapter boundary ({_json.loads(out)['reason']})")
+          f"a hostile package still ends at the adapter boundary ({_json.loads(out)['reason']})")
     check(not marker.exists(),
-          "nothing imported, executed, or spawned the staged artefact")
+          "nothing imported, executed, or spawned the staged package")
 
 # --- there is no adapter to find -------------------------------------------
 for module in ("cli", "coordinator", "inspection"):
@@ -3685,7 +4009,7 @@ with TemporaryDirectory() as tmp:
     ccon = fabric.read_record("capability-contract", cinst["contract_id"])
     capdef = fabric.read_record("capability-definition", cinst["capability_id"])
     manifest = _json.loads(
-        (world["approved"] / "nested" / "artifact.manifest.json").read_text(encoding="utf-8"))
+        (world["approved"] / "nested" / "package.manifest.json").read_text(encoding="utf-8"))
     staged = Path(cinv["staged_path"])
 
     # Every link, checked against the record that establishes it.
@@ -3712,19 +4036,18 @@ with TemporaryDirectory() as tmp:
           and manifest["contract_id"] == cinv["contract_id"]
           and manifest["capability_id"] == cinv["capability_id"],
           "the manifest is bound to the governed identities")
-    check(cinv["artifact_digest"] == manifest["artifact_sha256"],
+    check(cinv["artifact_digest"] == manifest["package_tree_sha256"],
           "the verified digest is the one the manifest declared")
-    check(staged.parent.name == "sha256-" + cinv["artifact_digest"].split(":")[1],
-          "the staged identity derives from the verified digest")
-    check("sha256:" + _hashlib2.sha256(staged.read_bytes()).hexdigest()
-          == cinv["artifact_digest"],
-          "the staged bytes hash to the digest the record carries")
+    check(staged.name == "tree-sha256-" + cinv["artifact_digest"].split(":")[1],
+          "the staged identity derives from the verified commitment")
+    check(_commit(staged) == cinv["artifact_digest"],
+          "the staged tree commits to the identity the record carries")
     check(cinv["evidence"]["outcome"] == OUTCOME_PREPARED,
           "the chain terminates in a prepared invocation record")
     check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
           f"and in nothing else ({store.counts()})")
 
-# --- the central closure test: a hostile artefact, four ways ---------------
+# --- the central closure test: a hostile package, four ways ----------------
 with TemporaryDirectory() as tmp:
     markers = {name: Path(tmp) / f"marker-{name}"
                for name in ("import", "exec", "shell", "spawn")}
@@ -3736,12 +4059,10 @@ with TemporaryDirectory() as tmp:
         f"os.spawnl(os.P_NOWAIT, '/bin/true', 'true')\n"
         f"pathlib.Path({str(markers['spawn'])!r}).write_text('spawned')\n"
     ).encode("utf-8")
-    digest = "sha256:" + _hashlib2.sha256(hostile).hexdigest()
     fabric_root = _chain(tmp, **{"capability-package": {
-        "artifact_reference": "file:nested/artifact.bin",
-        "manifest_reference": "file:nested/artifact.manifest.json"}})
-    approved, artifact = _source(tmp, content=hostile,
-                                 manifest=_manifest(artifact_sha256=digest))
+        "artifact_reference": _TREE_REFERENCE,
+        "manifest_reference": _MANIFEST_REFERENCE}})
+    approved, tree = _source(tmp, members={"main.py": hostile})
     world = dict(fabric_root=fabric_root, approved=approved,
                  staging=_staging(tmp), payload_root=_payload_root(tmp)[0],
                  capability_root=Path(tmp) / "capability")
@@ -3755,18 +4076,18 @@ with TemporaryDirectory() as tmp:
           f"a hostile artefact reaches only the adapter boundary ({result['reason']})")
     check(result["status"] == "prepared", "its preparation genuinely succeeded")
     for name, marker in markers.items():
-        check(not marker.exists(), f"nothing {name}ed the staged artefact")
+        check(not marker.exists(), f"nothing {name}ed the staged package")
     check(len(os.listdir("/proc/self/task")) == children_before,
           "no thread or child was spawned by the invocation")
 
     store = _opened_capability(tmp)
     check(store.counts() == {"capability-invocation": 1, "capability-result": 0},
-          "the hostile artefact produced one prepared record and no result")
+          "the hostile package produced one prepared record and no result")
     staged = Path(store.list_records("capability-invocation")[0]["staged_path"])
-    check(staged.read_bytes() == hostile,
+    check((staged / "main.py").read_bytes() == hostile,
           "the hostile bytes are staged unchanged, as data")
-    check(not stat.S_IMODE(staged.lstat().st_mode) & 0o111,
-          "the staged hostile artefact is not executable")
+    check(not stat.S_IMODE((staged / "main.py").lstat().st_mode) & 0o111,
+          "the staged hostile member is not executable")
 
 # --- there is exactly one adapter, and the top level is not it --------------
 # Updated at T18. Track A asserted that no adapter existed anywhere. One now
@@ -3865,7 +4186,7 @@ def _tamper(description, mutate, expected_code, expected_reason=None):
 
 
 def _write_manifest(world, **overrides):
-    path = world["approved"] / "nested" / "artifact.manifest.json"
+    path = world["approved"] / "nested" / "package.manifest.json"
     body = _json.loads(path.read_text(encoding="utf-8"))
     body.update(overrides)
     path.chmod(0o644)
@@ -3912,23 +4233,29 @@ _tamper("a manifest naming another contract",
 _tamper("a manifest naming another capability",
         lambda w, t: _write_manifest(w, capability_id="CAPDEF-0009"),
         EXIT_DENIED, "manifest-identity-mismatch")
-_tamper("a manifest declaring another artefact",
-        lambda w, t: _write_manifest(w, artifact_reference="file:nested/other.bin"),
+_tamper("a manifest declaring another tree",
+        lambda w, t: _write_manifest(w, artifact_reference="tree:nested/other"),
         EXIT_DENIED, "manifest-identity-mismatch")
-_tamper("a manifest digest for different bytes",
-        lambda w, t: _write_manifest(w, artifact_sha256="sha256:" + "0" * 64),
+_tamper("a manifest commitment for a different tree",
+        lambda w, t: _write_manifest(w, package_tree_sha256="sha256:" + "0" * 64),
         EXIT_DENIED, "substitution-detected")
-_tamper("substituted artefact bytes",
-        lambda w, t: ((w["approved"] / "nested" / "artifact.bin").chmod(0o644),
-                      (w["approved"] / "nested" / "artifact.bin").write_bytes(b"other\n")),
+_tamper("substituted member bytes",
+        lambda w, t: ((w["approved"] / "nested" / "pkg" / "main.py").chmod(0o644),
+                      (w["approved"] / "nested" / "pkg" / "main.py").write_bytes(b"other\n")),
         EXIT_DENIED, "substitution-detected")
-_tamper("a group-writable artefact",
-        lambda w, t: (w["approved"] / "nested" / "artifact.bin").chmod(0o664),
-        EXIT_DENIED, "artifact-not-readable")
-_tamper("an aliased artefact",
-        lambda w, t: os.link(w["approved"] / "nested" / "artifact.bin",
-                             w["approved"] / "nested" / "alias.bin"),
-        EXIT_DENIED, "artifact-not-readable")
+_tamper("a group-writable package root",
+        lambda w, t: (w["approved"] / "nested" / "pkg").chmod(0o775),
+        EXIT_DENIED, "package-tree-not-readable")
+_tamper("an aliased member",
+        lambda w, t: os.link(w["approved"] / "nested" / "pkg" / "main.py",
+                             w["approved"] / "nested" / "pkg" / "alias.py"),
+        EXIT_DENIED, "package-tree-not-readable")
+_tamper("a symlink inside the package tree",
+        lambda w, t: (w["approved"] / "nested" / "pkg" / "link.py").symlink_to("/etc/hostname"),
+        EXIT_DENIED, "package-tree-not-readable")
+_tamper("an empty directory inside the package tree",
+        lambda w, t: (w["approved"] / "nested" / "pkg" / "hollow").mkdir(mode=0o755),
+        EXIT_DENIED, "package-tree-not-governed")
 _tamper("a payload carrying a duplicate key",
         lambda w, t: ((w["payload_root"] / "payload.json").chmod(0o644),
                       (w["payload_root"] / "payload.json").write_text('{"a":1,"a":2}')),
@@ -3938,7 +4265,7 @@ _tamper("a payload owned by another uid",
 _tamper("a group-writable payload",
         lambda w, t: (w["payload_root"] / "payload.json").chmod(0o664), EXIT_USAGE)
 
-check(len(_tampers) == 17, f"the tamper matrix covered every case ({len(_tampers)})")
+check(len(_tampers) == 19, f"the tamper matrix covered every case ({len(_tampers)})")
 
 # --- staged-object tampering after publication -----------------------------
 with TemporaryDirectory() as tmp:
@@ -3946,12 +4273,14 @@ with TemporaryDirectory() as tmp:
     _run(_invoke_args(tmp, **world, invocation_id="inv-first"))
     store = _opened_capability(tmp)
     staged = Path(store.list_records("capability-invocation")[0]["staged_path"])
-    staged.chmod(0o600)
-    staged.write_bytes(b"tampered\n")
-    staged.chmod(0o400)
+    staged.chmod(0o700)
+    (staged / "tampered.py").write_bytes(b"tampered\n")
+    (staged / "tampered.py").chmod(0o400)
+    staged.chmod(0o500)
     code, out, err = _run(_invoke_args(tmp, **world, invocation_id="inv-second"))
-    check(code == EXIT_DENIED and _json.loads(out)["reason"] == "staged-digest-collision",
-          f"a tampered staged object refuses ({_json.loads(out)['reason']})")
+    check(code == EXIT_DENIED
+          and _json.loads(out)["reason"] == "staged-commitment-collision",
+          f"a tampered staged tree refuses ({_json.loads(out)['reason']})")
 
 # --- replay, conflict, and a new decision, through the interface -----------
 with TemporaryDirectory() as tmp:
@@ -3959,7 +4288,7 @@ with TemporaryDirectory() as tmp:
     first = _json.loads(_run(_invoke_args(tmp, **world, invocation_id="inv-r"))[1])
     store = _opened_capability(tmp)
     before = inventory(store.root)
-    staged_before = sorted(p.name for p in world["staging"].glob("sha256-*"))
+    staged_before = sorted(p.name for p in world["staging"].glob("tree-sha256-*"))
 
     _saved = [(_a3mod, "verify_selected_evidence", _a3mod.verify_selected_evidence),
               (_a4mod, "resolve_and_stage_package", _a4mod.resolve_and_stage_package)]
@@ -3976,7 +4305,7 @@ with TemporaryDirectory() as tmp:
     check(tripped is None, f"exact replay reruns neither verification nor staging ({tripped})")
     check(replayed["status"] == "consumed", "exact replay is consumed")
     check(inventory(store.root) == before, "exact replay writes nothing")
-    check(sorted(p.name for p in world["staging"].glob("sha256-*")) == staged_before,
+    check(sorted(p.name for p in world["staging"].glob("tree-sha256-*")) == staged_before,
           "exact replay publishes nothing further")
 
     (world["payload_root"] / "payload.json").chmod(0o644)
@@ -4023,8 +4352,9 @@ with TemporaryDirectory() as tmp:
             (store.path_for("capability-invocation",
                             store.list_records("capability-invocation")[0]
                             ["invocation_record_id"]), 0o600, "a record file"),
-            (staged.parent, 0o700, "the staged digest directory"),
-            (staged, 0o400, "the staged artefact")):
+            (staged.parent, 0o700, "the staging root"),
+            (staged, 0o500, "the staged package tree"),
+            (staged / "main.py", 0o400, "a staged member")):
         actual = stat.S_IMODE(Path(target).lstat().st_mode)
         check(actual == expected,
               f"{description} is {oct(expected)} ({oct(actual)})")

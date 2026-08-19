@@ -185,18 +185,118 @@ own `CSEL`.
 
 - The runtime MUST resolve `CPKG.artifact_reference` through an **explicit
   grammar**, and MUST refuse any reference that does not match it.
-- The initial accepted grammar is a single scheme:
+- The accepted grammar is two closed schemes, each naming exactly one object
+  kind:
 
   ```
-  file:<relative-path>
+  tree:<relative-path>     a governed package, which is a directory
+  file:<relative-path>     the executable manifest, which is a regular file
   ```
 
   resolved beneath an operator-supplied **approved artefact directory**, named
   explicitly, with no default and no environment-derived value.
+- A **governed package is an immutable directory tree**, and
+  `artifact_reference` MUST use `tree:`. Generation 9 accepted `file:` here and
+  staged one regular file, while the launch bridge opened the staged path with
+  `O_DIRECTORY` and validated it as a tree — a contract whose two ends could
+  never meet. See §7.1.
+- The two schemes MUST NOT be interchangeable. A `file:` artefact reference
+  refuses, and a `tree:` manifest reference refuses, because a consumer that
+  guessed which kind it had is a consumer that opened the wrong thing.
+- There MUST be no package-shape conversion between resolution and validation:
+  no archive scheme, no extraction step, and no sibling tree assembled from an
+  operator-supplied root.
 - Path resolution MUST use the shared containment primitive
   `tools/common/containment.contained_path`, so traversal, absolute paths
   outside the root, symlink escape, the root itself, and sibling-prefix
   collisions are refused exactly as they are everywhere else.
+
+### 7.1 The Generation-9 package-shape contradiction
+
+**What was true in Generation 9, stated as it was rather than as it should have
+been.** `resolve_and_stage_package()` staged the artefact as a regular file at
+`sha256-<hex>/artifact`, mode `0400`, and recorded that pathname as
+`staged_path`. `command_authorise_launch` then opened exactly that recorded
+pathname with `O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_DIRECTORY` and handed the
+descriptor to `validate_package()`, which walks a tree looking for the governed
+entrypoint. Opening a regular file with `O_DIRECTORY` returns `ENOTDIR`. The
+two ends of the contract could not meet, and no governed invocation had yet
+reached the join.
+
+**Why the suites did not say so.** They asserted opposite shapes and never met
+in the middle. The launch-bridge suite constructed a stand-in staged object
+whose `staged_path` was a directory it had built itself, and separately
+asserted that the bridge module does not import `resolve_and_stage_package` —
+so the real resolver never ran in the case that needed it. The capability
+runtime suite asserted the staged artefact was a `0400` regular file. Each
+suite was internally consistent; a fixture that builds the contract type itself
+can only ever agree with itself.
+
+**The resolution is that the resolver was the outlier, not the consumers.**
+Package validation consumes a directory descriptor, the worker snapshot copies
+a tree, the handoff publishes a tree, and the container receives
+`/kyri/package` as a read-only bind of a tree. One component disagreed, and it
+is the one that changed. Nothing here should be read as though the pipeline had
+always been tree-native.
+
+**The corrected first-governance dependency**, with the join that was broken
+marked:
+
+```
+S0  → S2a → S1 → S2b → S3 → S4 ──▶ S5 → G6.1B
+                                 │
+                        the staged package tree:
+                        S4 records an absolute coordinator-owned DIRECTORY
+                        and its tree commitment; S5 opens that exact
+                        pathname with O_DIRECTORY and revalidates it
+                        through validate_package(). No shape conversion,
+                        no operator-supplied artefact root at S5.
+```
+
+S5 takes the package tree from the prepared invocation's own durable record and
+never from an argument, so the ordering above is a data dependency rather than
+a convention. G6.1B remains verification-only and does not run the entrypoint.
+
+### 7.2 Tree commitment
+
+**One primitive, reused rather than reinvented.** The commitment is the
+`PackageBinding.digest` that `tools/capability/execution/package_contract.py`
+already produced and that the execution profile, the handoff, the worker
+snapshot, and the launch bridge already compare against. Resolution adopts it
+rather than introducing a second tree-hash format, so the identity S4 commits
+to is the identity S5 revalidates and the worker re-derives.
+
+Over the sorted members of the tree, each field NUL-terminated:
+
+```
+SHA-256( for each member, ordered by relative path:
+             relative_path (UTF-8) 0x00
+             size (decimal ASCII)  0x00
+             SHA-256(content) (lowercase hex) 0x00 )
+```
+
+**What it binds:** relative pathname, member size, member content, and the
+order of members. **What it does not bind:** mode, uid, gid, timestamps, and
+directories as objects in their own right.
+
+**Directories are not committed, so structure that a directory alone could
+carry is refused instead.** A directory holding no regular file anywhere
+beneath it contributes nothing to the commitment, so a tree with one and a tree
+without it would present the same identity while differing on disk. Rather than
+change a commitment that four other components already depend on, the accepted
+domain is narrowed: such a directory refuses. Within that domain every
+directory is witnessed by the paths of the files beneath it, so the committed
+path set determines the tree's shape, and the identity is injective over what
+may be staged.
+
+A member name that is not valid UTF-8 refuses for the same reason — the
+commitment encodes paths as UTF-8, and a name it cannot express is structure it
+cannot bind. This also removes a `UnicodeEncodeError` that escaped the worker's
+governed refusal path, since it was a `ValueError` but not a `PackageError`.
+
+Symbolic links, FIFOs, sockets, devices, hard-linked members, mount crossings,
+and members that change while being read are all refused during traversal, so
+none of them needs a representation in the commitment.
 
 ### The approved artefact root is trusted, and that is a claim about deployment
 
@@ -283,7 +383,7 @@ Execution is fail-closed. **No unverifiable artefact executes.**
   execute, and MUST obtain it from the admitted `CPKG` — specifically from
   `manifest_reference`, resolved under the same grammar and containment as the
   artefact.
-- The manifest MUST be **executable manifest schema version 1** (below).
+- The manifest MUST be **executable manifest schema version 2** (below).
 - Verification MUST happen **after** resolution and **immediately before**
   handing the artefact to an adapter.
 - The runtime MUST resist substitution between verification and use by
@@ -303,7 +403,7 @@ Execution is fail-closed. **No unverifiable artefact executes.**
 - MUST NOT infer integrity from successful past execution, from trust standing,
   or from the artefact being where it was expected.
 
-### Executable manifest, schema version 1
+### Executable manifest, schema version 2
 
 **UTF-8 JSON, one top-level object, closed schema — an unknown field refuses.**
 A closed schema because a manifest that tolerates fields nobody reviewed is a
@@ -311,27 +411,42 @@ manifest whose meaning grows without anyone deciding it did.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "capability_package_id": "CPKG-...",
   "contract_id": "CCON-...",
   "capability_id": "CAPDEF-...",
-  "artifact_reference": "file:relative/path",
-  "artifact_sha256": "sha256:<64 lowercase hexadecimal characters>"
+  "artifact_reference": "tree:relative/path",
+  "package_tree_sha256": "sha256:<64 lowercase hexadecimal characters>"
 }
 ```
 
 | Field | Rule |
 |---|---|
-| `schema_version` | JSON integer equal to `1`. A boolean is not an integer here. Any other value refuses |
+| `schema_version` | JSON integer equal to `2`. A boolean is not an integer here. Any other value refuses, **including `1`** |
 | `capability_package_id` | exactly the package identity the Fabric evidence verified |
 | `contract_id` | exactly the contract identity the Fabric evidence verified |
 | `capability_id` | exactly the capability identity the Fabric evidence verified |
-| `artifact_reference` | exactly the `artifact_reference` the verified package carries, and itself satisfying `file:<relative-path>` |
-| `artifact_sha256` | `sha256:` followed by exactly 64 **lowercase** hexadecimal characters. Uppercase refuses, another algorithm refuses, surrounding whitespace refuses |
+| `artifact_reference` | exactly the `artifact_reference` the verified package carries, and itself satisfying `tree:<relative-path>` |
+| `package_tree_sha256` | `sha256:` followed by exactly 64 **lowercase** hexadecimal characters, being the tree commitment of §7.2. Uppercase refuses, another algorithm refuses, surrounding whitespace refuses |
 
 **No optional fields. No signature field, no command, no argv, no environment,
-no adapter, no image, no endpoint, no secret** — schema version 1 describes
+no adapter, no image, no endpoint, no secret** — schema version 2 describes
 which bytes are the package, and nothing about how they run.
+
+**Version 1 is withdrawn rather than accepted alongside.** Its
+`artifact_sha256` meant the SHA-256 of one regular file's bytes;
+`package_tree_sha256` is a commitment over a whole tree. That is a materially
+different claim, and reusing the field name would have been a manifest that
+lies about what it committed to. A version-1 manifest, or a version-2 manifest
+carrying `artifact_sha256`, refuses.
+
+**Backward compatibility is not owed here, and the reason is recorded rather
+than assumed.** At the time of this correction no governed capability package
+record existed anywhere: the Fabric package store was absent, the capability
+runtime store held no invocation, and both capability counters read zero. The
+correction is therefore made before the first governed history rather than
+carried into it. This is a statement about what was observed, not a general
+licence to break schemas.
 
 **The manifest is not an independent root of trust, and MUST NOT be described
 as one.** It is bound to the governed package by identity, and it is protected
@@ -348,22 +463,45 @@ the stronger form is evaluated.
 
 ### Bounds
 
-**MUST** — a manifest requiring more than **65,536 bytes** refuses. An artefact
-requiring more than **268,435,456 bytes** (256 MiB) refuses.
+**MUST** — a manifest requiring more than **65,536 bytes** refuses.
 
-**MUST** — both bounds are enforced **while reading**, never after buffering.
-An oversized artefact MUST NOT be truncated and accepted, and MUST NOT be
-partially staged: refusal leaves no staged object. A larger artefact needs an
-explicit architecture change, not a larger constant chosen under pressure.
+**MUST** — the package tree bounds are the package contract's own, so a tree
+that stages cannot then be refused by validation for its size: **1,024
+entries**, **16,777,216 bytes** (16 MiB) per member, and **67,108,864 bytes**
+(64 MiB) aggregate. A tree deeper than **32** levels refuses.
+
+**MUST** — every bound is enforced **while walking**, never after buffering. An
+oversized package MUST NOT be truncated and accepted, and MUST NOT be partially
+staged: refusal leaves no tree under a commitment pathname. A larger package
+needs an explicit architecture change, not a larger constant chosen under
+pressure.
 
 ### Verified bytes are the only bytes
 
-**MUST** — the artefact is opened **once**, its digest computed from that
-descriptor, and the staged copy written from that **same** descriptor. The
-source pathname MUST NOT be reopened to obtain artefact bytes after the open.
-Staging is content-addressed by the verified digest, published atomically, and
-re-verified after publication. **The source path is discovery input; the staged
-object is what any future adapter may receive.**
+**MUST** — the package tree root is opened **once**, and every member is read
+through descriptors anchored on that open root. The source pathname MUST NOT be
+re-resolved to obtain package bytes after the open.
+
+**MUST** — the commitment is computed over the **staged tree**, not over the
+source. A coordinator may mutate the source while it is being read; that cannot
+be prevented, so the identity is derived from the immutable copy that will
+actually reach execution, and a source that changed underneath the walk
+refuses. This is the discipline the worker snapshot already applies, one plane
+earlier.
+
+**MUST** — staging is content-addressed by the commitment. The tree is built
+under a runtime-chosen temporary name, committed, tightened to its finished
+modes, and installed with **one rename**, which fails rather than replacing an
+existing published tree. A tree already present under the commitment pathname
+is re-inspected in full and either reused unchanged or refused — never
+repaired, never replaced, never chmod'ed back into shape.
+
+**MUST** — the staged tree is coordinator-owned, directories `0500` and members
+`0400`, so it is not modifiable by an unprivileged operator without first
+undoing the modes it was published with.
+
+**The source path is discovery input; the staged tree is what S5 opens and what
+any future adapter may receive.**
 
 ## 9. Adapter contract
 

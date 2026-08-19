@@ -106,13 +106,16 @@ from tools.capability.execution.backing_store import (
     verify_backing_store, ObservedFilesystem)
 from tools.capability.execution.canonical_json import serialise
 from tools.capability.execution.implementation_authority import Admission
-from tools.capability.execution.package_contract import validate_package
+from tools.capability.execution.package_contract import (
+    inspect_package, validate_package)
 from tools.capability.execution.payload import validate_payload
 from tools.capability.execution.types import LifecycleState
 from tools.capability.execution.worker import CONTAINER_INTERPRETER
 from tools.capability.store import CapabilityStore
 from tools.capability.evidence import record_invocation
 from tools.capability.invocation_identity import bind, payload_digest
+from tools.capability.package_resolution import (
+    MANIFEST_SCHEMA_VERSION, resolve_and_stage_package)
 from tools.provisioning.authority_bootstrap import (
     provision_control_state, initialise_genesis)
 from tools.provisioning.authority_admission import (
@@ -231,38 +234,64 @@ class Evidence:
         self.contract_id = 'CCON-000001'
         self.capability_id = 'CCAP-000001'
         self.effect_class = 'read-only'
-
-class Staged:
-    def __init__(self, path, digest):
-        self.supported = True
-        self.reason = None
-        self.artifact_sha256 = digest
-        self.staged_path = path
+        self.artifact_reference = 'tree:pkg'
+        self.manifest_reference = 'file:manifest.json'
 
 def package_tree(name='pkg', files=None):
-    base = fresh(name)
+    '''A staged package tree, produced by the REAL generation-10 resolver.
+
+    Deliberately not a hand-built object. Generation 9's bridge fixture
+    fabricated a Staged whose staged_path was a directory, while the real S4
+    resolver staged a regular file -- so every case here passed against an
+    S4->S5 contract that could not execute once. A fixture that constructs the
+    contract type itself can only ever agree with itself.
+    '''
+    # Modes are set rather than inherited: the trusted-source contract refuses a
+    # group-writable approved root, and this suite runs under whatever umask the
+    # operator has.
+    approved = fresh(name + '-approved')
+    os.chmod(approved, 0o755)
+    tree = os.path.join(approved, 'pkg')
+    os.makedirs(tree, 0o755)
+    os.chmod(tree, 0o755)
     for relative, body in (PACKAGE_FILES if files is None else files).items():
-        write(os.path.join(base, relative), body)
-    return base
+        write(os.path.join(tree, relative), body)
+    handle = os.open(tree, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        commitment = 'sha256:' + inspect_package(handle).digest
+    finally:
+        os.close(handle)
+    write(os.path.join(approved, 'manifest.json'), serialise({
+        'schema_version': MANIFEST_SCHEMA_VERSION,
+        'capability_package_id': PACKAGE_ID, 'contract_id': 'CCON-000001',
+        'capability_id': 'CCAP-000001', 'artifact_reference': 'tree:pkg',
+        'package_tree_sha256': commitment}))
+    staging = fresh(name + '-staging')
+    os.chmod(staging, 0o700)
+    staged = resolve_and_stage_package(
+        evidence=Evidence(), approved_artifact_root=approved,
+        trusted_source_uid=os.getuid(), staging_root=staging,
+        coordinator_uid=os.getuid())
+    assert staged.supported, staged.reason
+    return staged
 
 def capability_store(name='store'):
     base = fresh(name)
     return CapabilityStore(base, expected_uid=os.getuid(),
                            expected_gid=os.getgid())
 
-def prepared(store, tree, invocation_id='request-1', payload=None,
+def prepared(store, staged, invocation_id='request-1', payload=None,
              selection=SELECTION, instance=INSTANCE, package=PACKAGE_ID,
              actor=ACTOR):
     '''One durable execution-prepared invocation, through the real recorder.'''
     body = PAYLOAD if payload is None else payload
-    digest = hashlib.sha256(open(os.path.join(tree, 'main.py'), 'rb').read())
     decision = record_invocation(
         store, invocation_id=invocation_id,
         binding_digest=bind(payload=body, invocation_id=invocation_id,
                             selection_id=selection, instance_id=instance,
                             capability_package_id=package, actor=actor),
         payload_digest=payload_digest(body), evidence=Evidence(),
-        staged=Staged(tree, digest.hexdigest()), actor=actor,
+        staged=staged, actor=actor,
         request_id='REQ-1',
         requested_at=datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc))
     assert decision.status == 'prepared', decision
@@ -290,8 +319,8 @@ def bridge(store, decision, exec_root, hand_root, auth_fd, payload=None,
 def scenario(name):
     '''Everything one case needs, freshly built and independent.'''
     store = capability_store(name + '-store')
-    tree = package_tree(name + '-pkg')
-    decision = prepared(store, tree)
+    staged = package_tree(name + '-pkg')
+    decision = prepared(store, staged)
     return (store, decision, execution_root(name + '-exec'),
             handoff_root(name + '-hand'), authority(name + '-auth'))
 "
