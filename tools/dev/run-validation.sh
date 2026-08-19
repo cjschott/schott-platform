@@ -100,6 +100,15 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
+# The declared model as it stood BEFORE any suite ran. The backstop at the end
+# compares against this rather than against HEAD, because the property being
+# protected is "no suite mutated the model", and comparing to HEAD cannot tell
+# a suite's write from an operator's deliberate, reviewed schema edit. A
+# schema change under review is a normal state for this repository; a test that
+# writes into platform-model is never one.
+MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
+  | sort | sha256sum | cut -d' ' -f1)"
+
 # Counted, not guessed: every check plus the closing summary. A validation tool
 # that miscounts its own steps invites doubt about everything else it reports.
 # The ENG-0005 execution suites are all always-on, so each one added raises
@@ -555,13 +564,26 @@ run "Production path backstop" production_path_check
 # The suites must be read-only with respect to the declared model. This runs
 # last so it observes the state the suites left behind.
 model_mutation_check() {
-  local dirty
-  dirty="$(git status --porcelain platform-model)"
-  if [[ -n "${dirty}" ]]; then
-    printf 'Validation modified platform-model; it must be read-only to tests:\n%s\n' "${dirty}" >&2
+  local after dirty
+  after="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
+    | sort | sha256sum | cut -d' ' -f1)"
+  if [[ "${after}" != "${MODEL_BEFORE}" ]]; then
+    printf 'Validation modified platform-model; it must be read-only to tests.\n' >&2
+    printf 'before=%s after=%s\n' "${MODEL_BEFORE}" "${after}" >&2
+    git status --porcelain platform-model >&2
     return 1
   fi
-  printf '  ok       platform-model unmodified\n'
+  # Uncommitted model changes are reported, never failed on. An operator
+  # reviewing a schema correction should see them named here; a suite that
+  # wrote them would already have failed the comparison above.
+  dirty="$(git status --porcelain platform-model)"
+  if [[ -n "${dirty}" ]]; then
+    printf '  ok       platform-model unmodified by the suites\n'
+    printf '  note     platform-model carries uncommitted changes under review:\n'
+    printf '%s\n' "${dirty}" | sed 's/^/             /'
+  else
+    printf '  ok       platform-model unmodified\n'
+  fi
 }
 run "Platform model mutation backstop" model_mutation_check
 
