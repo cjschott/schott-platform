@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=69
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=81
+  TOTAL_STEPS=82
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -200,6 +200,11 @@ if (( QUICK == 0 )); then
   # admission and eligibility planes consume. Pure functions over mappings: it
   # opens no store, writes no record, and allocates no identifier.
   run "Fabric resource semantics" bash tests/test-fabric-resources.sh
+
+  # The read-only preflight for governed Fabric writes. Fixture-only: every
+  # case works in a temporary root and the suite proves the production store
+  # at /var/lib/kyri/fabric was not touched.
+  run "Fabric write preflight" bash tests/test-fabric-preflight.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds

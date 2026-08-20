@@ -194,6 +194,10 @@ jobs:
       - name: Fabric resource semantics tests
         run: bash tests/test-fabric-resources.sh
 
+      # Read-only preflight for governed Fabric writes. Fixture-only.
+      - name: Fabric write preflight tests
+        run: bash tests/test-fabric-preflight.sh
+
       # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
       # the permanent backstop asserting the package executes nothing. Builds
       # temporary stores only. No network, no Docker, no capability execution.

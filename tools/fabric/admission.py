@@ -33,6 +33,9 @@ creates no route, computes no eligibility, and chooses nothing.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
@@ -62,6 +65,8 @@ INVALID = "invalid"
 NOT_FOUND = "not-found"
 CONFLICT = "conflict"
 UNAVAILABLE = "unavailable"
+# A rehearsal. Leaves no record, holds no lock, and takes no identifier.
+PREFLIGHT = "preflight"
 
 # Controlled refusal categories. A caller acts on these; none is derived from
 # an exception, a path, or a rejected value.
@@ -194,6 +199,31 @@ TRUST_UNAVAILABLE = "trust-unavailable"
 # allocated. It is never returned, never written, and never persisted.
 PROBE_IDS = {kind: f"{prefix}-{0:0{ID_WIDTHS[kind]}d}"
              for kind, prefix in PREFIXES.items()}
+
+# Rehearsal mode. Set for the duration of one call, consulted at exactly the two
+# points where a governed operation stops being reversible: the critical
+# section, and allocation.
+_REHEARSING = contextvars.ContextVar("fabric_rehearsing", default=False)
+
+
+@contextlib.contextmanager
+def rehearsing():
+    """Run governed operations as a rehearsal: validate fully, mutate nothing.
+
+    Everything a write does up to its first irreversible act still happens --
+    field validation, vocabulary checks, reference resolution against the real
+    store, evidence assembly, and the model's own construction rules applied to
+    the real content through the same probe identity `_commit` already uses.
+
+    What does not happen is the critical section, the allocation, and the
+    write. So a rehearsal reads the store and reports what would occur; it
+    reserves nothing, and another caller may take the identifier it predicted.
+    """
+    token = _REHEARSING.set(True)
+    try:
+        yield
+    finally:
+        _REHEARSING.reset(token)
 
 
 @dataclass(frozen=True)
@@ -653,6 +683,19 @@ def _governed(store, *, operation: str, request_id: Any,
         # rendered. It is named as malformed content and never echoed.
         return OperationResult(INVALID, supplied, reason=REASON_CONTENT)
 
+    if _REHEARSING.get():
+        # No critical section: it takes a store-global lock and exists to
+        # serialise allocation and the accepted write, neither of which a
+        # rehearsal performs. Replay is not classified either -- there is
+        # nothing to serialise against, and reporting a replay for an operation
+        # that was never submitted would be an answer about a different act.
+        try:
+            kind, record_id = accept(identifier, digest)
+        except _Refusal as refusal:
+            return OperationResult(refusal.outcome, identifier, digest,
+                                   reason=refusal.reason)
+        return OperationResult(PREFLIGHT, identifier, digest, kind, record_id)
+
     with store.request_critical_section(identifier):
         replay = replay_lookup(store, identifier, digest)
         if replay.status == REPLAY_EXACT:
@@ -700,6 +743,10 @@ def _commit(store, kind: str, evidence: Mapping[str, Any],
     nothing behind. Only then does C1 mint the identity the record will carry.
     """
     _constructed(kind, PROBE_IDS[kind], evidence, build)
+    if _REHEARSING.get():
+        # The record is constructible and every governed check above has run.
+        # Stop here: allocation is the first act that cannot be taken back.
+        return kind, None
     identifier = store.allocate_id(kind)
     record = _constructed(kind, identifier, evidence, build)
     store.write(kind, record)

@@ -35,7 +35,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
-from ..common.immutable_store import (DIR_MODE, FILE_MODE, ImmutableStore,
+from ..common.immutable_store import (DIR_MODE, FILE_MODE, MAX_SEQUENCE,
+                                      ImmutableStore,
                                       StoreError)
 from .errors import FabricError
 from .evidence import validate_record_evidence
@@ -318,15 +319,96 @@ class FabricStore(ImmutableStore):
             raise FabricError(str(error)) from None
         return self._guard_path(destination, f"record '{identifier}'")
 
+    def _next_after(self, kind: str, current: int) -> tuple[int, str]:
+        """The identifier that follows `current`, skipping occupied names.
+
+        The one place the Fabric identifier rule lives. `allocate_id` and
+        `peek_next_id` both call it, so a prediction cannot disagree with what
+        allocation would actually hand out -- which is the whole point of being
+        able to predict one before a permanent governance write.
+
+        Deliberately here rather than on the shared base class: that class is
+        an installed Generation-10 runtime object, and changing it would open a
+        generation. The Fabric plane is not installed, so the rule lives where
+        both of its consumers already are.
+        """
+        prefix = self.id_prefixes[kind]
+        width = self.id_widths.get(kind, 6)
+        # A kind cannot outgrow its own width. Rolling over would reuse a name.
+        kind_maximum = min(10 ** width - 1, MAX_SEQUENCE)
+        candidate = current
+        while True:
+            candidate += 1
+            if candidate > kind_maximum:
+                raise FabricError(
+                    f"{kind} sequence is exhausted; widening the identifier is a "
+                    "deliberate decision, not an automatic rollover")
+            identifier = f"{prefix}-{candidate:0{width}d}"
+            if kind in self.record_dirs and self.path_for(kind, identifier).exists():
+                # Something occupies this name. Skip it rather than reuse or
+                # overwrite a record this store did not create.
+                continue
+            return candidate, identifier
+
+    def _sequence_value(self, kind: str) -> int:
+        """The sequence's current value, creating nothing.
+
+        An absent sequence file reads as zero rather than being created, so
+        asking what comes next never provisions the thing being asked about.
+        """
+        try:
+            raw = (self.root / "sequences" / f"{kind}.seq").read_text(
+                encoding="utf-8").strip()
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            return 0
+        return int(raw) if raw.isdigit() else 0
+
+    def peek_next_id(self, kind: str) -> str:
+        """The identifier `allocate_id` would return, without spending it.
+
+        Reads. Never opens the sequence for writing, never creates it, never
+        takes the lock, and advances nothing: a prediction that consumed the
+        thing it predicted would be an allocation wearing a different name.
+
+        It is a prediction, not a reservation. Between peeking and allocating
+        another caller may take the identifier, which is why the write path
+        allocates for itself rather than being handed this value.
+        """
+        if kind not in self.id_prefixes:
+            raise FabricError(f"unknown record kind '{kind}'")
+        return self._next_after(kind, self._sequence_value(kind))[1]
+
     def allocate_id(self, kind: str) -> str:
+        """Reserve the next identifier, through the same rule `peek` reports.
+
+        The locked read-modify-write is the base class's protocol, restated
+        here only so that the candidate rule above is the single one both
+        allocation and prediction use.
+        """
         if kind not in self.id_prefixes:
             raise FabricError(f"unknown record kind '{kind}'")
         sequences = self._guard_path(self.root / "sequences", "sequence directory")
-        self._guard_path(sequences / f"{kind}.seq", f"sequence file for '{kind}'")
+        sequence_file = self._guard_path(sequences / f"{kind}.seq",
+                                         f"sequence file for '{kind}'")
         try:
-            return super().allocate_id(kind)
+            handle = os.open(sequence_file, os.O_RDWR | os.O_CREAT, FILE_MODE)
+        except OSError as error:
+            raise FabricError(str(error)) from None
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            raw = os.read(handle, 64).decode("utf-8").strip()
+            current = int(raw) if raw.isdigit() else 0
+            candidate, identifier = self._next_after(kind, current)
+            os.lseek(handle, 0, os.SEEK_SET)
+            os.truncate(handle, 0)
+            os.write(handle, f"{candidate}\n".encode("utf-8"))
+            os.fsync(handle)
+            return identifier
         except StoreError as error:
             raise FabricError(str(error)) from None
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            os.close(handle)
 
     def write_atomic(self, destination: Path, payload: Mapping[str, Any]) -> Path:
         guarded = self._guard_path(Path(destination), "record destination")

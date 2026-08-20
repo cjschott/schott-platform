@@ -54,6 +54,19 @@ EXIT_USAGE = 2
 # and is still structured output rather than a traceback.
 ACCEPTING = ("accepted", "exact-replay")
 
+# The record kind each creating write operation allocates. Withdrawals,
+# retirements and refreshes supersede or amend an existing record rather than
+# minting a new kind, so they have no identifier to predict.
+CREATED_KINDS = {
+    "declare-capability": "capability-definition",
+    "declare-contract": "capability-contract",
+    "declare-package": "capability-package",
+    "admit-subject": "capability-host",
+    "register-advertisement": "capability-advertisement",
+    "admit-instance": "capability-instance",
+    "create-route": "capability-route",
+}
+
 # Which §8 write operations exist, and the released function each delegates to.
 # One entry per spelling, so the interface never branches on a governance-
 # relevant flag: choosing between withdrawing and retiring is the operator's
@@ -149,6 +162,8 @@ def _governed(result) -> int:
 
 def command_write(args) -> int:
     """One governed mutation, delegated whole."""
+    if getattr(args, "preflight", False):
+        return command_preflight(args)
     function_name, needs_trust = WRITE_OPERATIONS[args.command]
     body = _decision_body(args.input_file, args.approved_directory)
     store = _fabric_store(args)
@@ -162,6 +177,78 @@ def command_write(args) -> int:
         # something it requires. That is an unusable invocation, not a
         # governed refusal, and the rejected value is never echoed.
         raise _Unusable("the decision body does not match this operation") from None
+
+
+def command_preflight(args) -> int:
+    """Rehearse one governed write, mutating nothing.
+
+    **The production store is only ever read.** It is opened through
+    `open_for_read`, so an absent store is reported as absent rather than built
+    and then described, and no sequence, lock, record, or temporary is created
+    by asking whether the write would succeed.
+
+    **The real operation runs.** Restating the model's rules here would be a
+    second implementation that agrees until it does not, so the body is carried
+    through the same approved-directory reader into the same governed
+    operation, under `admission.rehearsing()`. Every field check, vocabulary
+    check, reference resolution and construction rule therefore runs against
+    the real store; the operation stops at its first irreversible act.
+
+    **The identifier is predicted, not taken.** `peek_next_id` reads the real
+    store's sequence and applies the allocator's own rule, so the answer cannot
+    disagree with what allocation would hand out. It remains a prediction:
+    another caller may take it in between, which is why the write path
+    allocates for itself rather than being handed this value.
+    """
+    function_name, needs_trust = WRITE_OPERATIONS[args.command]
+    if needs_trust:
+        # A rehearsal would have to construct a TrustStore, and that creates
+        # its root. Refusing is the fail-closed answer until a read-only trust
+        # opener exists; half-supporting it would risk the very state the
+        # preflight promises not to touch.
+        raise _Unusable(
+            f"--preflight does not yet support '{args.command}', which reads the "
+            "trust store; only operations that need no trust standing can be "
+            "rehearsed without risking trust state")
+
+    body = _decision_body(args.input_file, args.approved_directory)
+    store = _fabric_store(args, for_read=True)
+
+    kind = CREATED_KINDS.get(args.command)
+    predicted = destination = None
+    if kind is not None:
+        predicted = store.peek_next_id(kind)
+        destination = store.path_for(kind, predicted)
+        if destination.exists():
+            raise _Unusable(
+                f"{predicted} already exists at {destination}; the store and its "
+                "sequence disagree and require operator disposition")
+
+    operation = getattr(admission, function_name)
+    try:
+        with admission.rehearsing():
+            outcome = operation(store, **body)
+    except TypeError:
+        raise _Unusable("the decision body does not match this operation") from None
+
+    would_accept = outcome.outcome == admission.PREFLIGHT
+    _emit({
+        "outcome": "preflight",
+        "operation": args.command,
+        "would_accept": would_accept,
+        "rehearsal_outcome": outcome.outcome,
+        "rehearsal_reason": outcome.reason,
+        "record_kind": kind,
+        "predicted_record_id": predicted,
+        "destination": str(destination) if destination else None,
+        "destination_exists": False if destination else None,
+        "store_root": str(store.root),
+        "store_exists": store.root.exists(),
+        "request_id": outcome.request_id,
+        "request_digest": outcome.request_digest,
+        "mutated": False,
+    })
+    return EXIT_SUCCESS if would_accept else EXIT_DENIED
 
 
 def command_select(args) -> int:
@@ -243,6 +330,13 @@ def build_parser() -> argparse.ArgumentParser:
         sub = with_body(with_store(subparsers.add_parser(name)))
         if needs_trust:
             with_trust(sub)
+        # Rehearse without governing. Every write subcommand takes it, because
+        # a preflight only some operations offer is one an operator has to
+        # remember the exceptions to.
+        sub.add_argument("--preflight", action="store_true",
+                         help="validate everything reachable without mutating: "
+                              "creates no store, allocates no identifier, "
+                              "writes nothing")
         sub.set_defaults(handler=command_write)
 
     choose = with_trust(with_body(with_store(subparsers.add_parser("select"))))
