@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=68
+  TOTAL_STEPS=69
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=80
+  TOTAL_STEPS=81
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -161,6 +161,11 @@ fi
 
 # --- 7-9. remaining suites -------------------------------------------------
 run "Evidence validator behaviour" bash tests/test-evidence-validator.sh
+
+# The declarative Evidence fingerprint and the S0 host-architecture ceremony.
+# Fixture-only: every publication case writes into a temporary root, and the
+# suite asserts platform-model/evidence is unchanged when it finishes.
+run "Evidence fingerprint and S0 ceremony" bash tests/test-evidence-fingerprint.sh
 run "Collector framework" bash tests/test-collector-framework.sh
 
 if (( QUICK == 0 )); then

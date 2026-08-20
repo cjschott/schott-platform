@@ -85,6 +85,10 @@ jobs:
       - name: Evidence validator behaviour tests
         run: bash tests/test-evidence-validator.sh
 
+      # Declarative Evidence fingerprint and the S0 ceremony. Fixture-only.
+      - name: Evidence fingerprint and S0 ceremony tests
+        run: bash tests/test-evidence-fingerprint.sh
+
       # Repository-only: reads manifests and imports plugin modules to confirm
       # they implement the contract. No network access, no SSH, no subprocess,
       # no filesystem write, and no live collection.
