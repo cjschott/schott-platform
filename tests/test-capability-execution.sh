@@ -230,6 +230,11 @@ assert_backstop_coverage() {
                  # the image ID, and refuses every uncertainty rather than
                  # answering that the image is absent.
                  "image_store.py"
+                 # Backstopped by tests/test-capability-execution-result-content.sh,
+                 # which proves it imports nothing but typing, opens and reads
+                 # nothing, normalises nothing, and re-parses no envelope -- it
+                 # judges a mapping another authority already decoded.
+                 "result_content.py"
                  # Backstopped by tests/test-capability-execution-launch-bridge.sh,
                  # which proves it starts no process, elevates nothing, names no
                  # container runtime, reaches no create_argv, loads no module

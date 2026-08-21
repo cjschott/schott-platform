@@ -339,6 +339,12 @@ jobs:
       - name: Capability execution collector tests
         run: bash tests/test-capability-execution-collector.sh
 
+      # The result-content authority a capability contract's
+      # `response_shape.content` references. Judges a decoded mapping only: no
+      # descriptor, no path, no bytes, no clock.
+      - name: Capability execution result content tests
+        run: bash tests/test-capability-execution-result-content.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests

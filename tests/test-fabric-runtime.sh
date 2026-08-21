@@ -205,6 +205,21 @@ EXPECTED_PREFIXES = {
 check(PREFIXES == EXPECTED_PREFIXES, "identifier prefixes match the accepted schemas")
 
 
+# A shape names the authority that enforces it. The fixtures name the real
+# ones, so a shape that stopped being a reference to enforcing code would be
+# visible here rather than merely valid.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
+
 def definition(**overrides):
     fields = dict(
         capability_id="CAPDEF-0001",
@@ -225,9 +240,12 @@ def contract(**overrides):
         contract_version="1.0.0",
         effect_class="content-generating",
         determinism_class="nondeterministic",
-        request_shape={"prompt": "string"},
-        response_shape={"text": "string"},
-        failure_modes=("refused", "unavailable"),
+        request_shape=REQUEST_SHAPE,
+        response_shape=RESPONSE_SHAPE,
+        # A generation interface can decline a call outright, and the adapter
+        # in front of it can fail to serve one. Two governed modes, kept
+        # distinct because they mean different things to a caller.
+        failure_modes=("refused", "adapter-error"),
         resource_requirements={"host_memory_mb": 2048},
         compatible_with=(),
         provenance={"class": "declared", "source": "operator"},
@@ -1341,6 +1359,18 @@ WHEN = datetime(2026, 8, 5, 9, 0, 0, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 8, 6, 9, 0, 0, tzinfo=timezone.utc)
 ORIGIN = {"class": "declared", "source": "operator"}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 
 def fixture_evidence(kind):
     """The evidence every persisted record must carry, written literally.
@@ -1394,8 +1424,8 @@ def accepted_records():
          "contract_id", CapabilityContract(
              contract_id="CCON-0001", capability_id="CAPDEF-0001",
              contract_version="1.0.0", effect_class="read-only",
-             determinism_class="deterministic", request_shape={"text": "string"},
-             response_shape={"summary": "string"}, failure_modes=("unavailable",),
+             determinism_class="deterministic", request_shape=REQUEST_SHAPE,
+             response_shape=RESPONSE_SHAPE, failure_modes=("adapter-error",),
              resource_requirements={"host_memory_mb": 512}, compatible_with=(),
              provenance=ORIGIN,
              evidence=fixture_evidence("capability-contract"))),
@@ -1728,6 +1758,18 @@ STAMP = "2026-08-04T12:00:00+00:00"
 LATER = "2026-08-05T12:00:00+00:00"
 PROV = {"declared_by": "operator", "declared_at": STAMP}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 DIRS = {
     "capability-definition": "capability-definitions",
     "capability-contract": "capability-contracts",
@@ -1756,9 +1798,9 @@ CONTRACT = {
     "contract_version": "1.0.0",
     "effect_class": "read-only",
     "determinism_class": "deterministic",
-    "request_shape": {"text": "string"},
-    "response_shape": {"summary": "string"},
-    "failure_modes": ["unavailable"],
+    "request_shape": REQUEST_SHAPE,
+    "response_shape": RESPONSE_SHAPE,
+    "failure_modes": ["adapter-error"],
     "resource_requirements": {"host_memory_mb": 512},
     "compatible_with": [],
     "provenance": PROV,
@@ -2724,6 +2766,18 @@ STAMP = "2026-08-04T12:00:00+00:00"
 LATER = "2026-08-05T12:00:00+00:00"
 PROV = {"class": "declared", "source": "operator"}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 
 def accepted(kind, evidence):
     """One valid record of a kind, carrying assembled evidence."""
@@ -2735,8 +2789,8 @@ def accepted(kind, evidence):
         "capability-contract": dict(
             contract_id="CCON-0001", capability_id="CAPDEF-0001",
             contract_version="1.0.0", effect_class="read-only",
-            determinism_class="deterministic", request_shape={"text": "string"},
-            response_shape={"summary": "string"}, failure_modes=("unavailable",),
+            determinism_class="deterministic", request_shape=REQUEST_SHAPE,
+            response_shape=RESPONSE_SHAPE, failure_modes=("adapter-error",),
             resource_requirements={"host_memory_mb": 512}, compatible_with=(), provenance=PROV),
         "capability-package": dict(
             capability_package_id="CPKG-0001", capability_id="CAPDEF-0001",
@@ -5080,6 +5134,18 @@ YEAR = STAMP + timedelta(days=365)
 OPERATOR = "operator:cschott"
 PROV = {"class": "declared", "source": "operator"}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 
 def forensic(base):
     entries = {}
@@ -5193,9 +5259,9 @@ def contract(store, capability_id, request_id="req-con-1", **overrides):
                   approving_authority=OPERATOR, recorded_at=STAMP,
                   capability_id=capability_id, contract_version="1.0.0",
                   effect_class="read-only", determinism_class="deterministic",
-                  request_shape={"text": "string"},
-                  response_shape={"summary": "string"},
-                  failure_modes=("unavailable",),
+                  request_shape=REQUEST_SHAPE,
+                  response_shape=RESPONSE_SHAPE,
+                  failure_modes=("adapter-error",),
                   resource_requirements={"host_memory_mb": 512},
                   compatible_with=(), provenance=PROV)
     fields.update(overrides)
@@ -5772,8 +5838,8 @@ BASE_CAPABILITY = dict(
 BASE_CONTRACT = dict(
     actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
     contract_version="1.0.0", effect_class="read-only",
-    determinism_class="deterministic", request_shape={"text": "string"},
-    response_shape={"summary": "string"}, failure_modes=("unavailable",),
+    determinism_class="deterministic", request_shape=REQUEST_SHAPE,
+    response_shape=RESPONSE_SHAPE, failure_modes=("adapter-error",),
     resource_requirements={"host_memory_mb": 512}, compatible_with=(),
     provenance=dict(PROV), description=None)
 
@@ -5915,9 +5981,14 @@ try:
              ("contract_version", "2.0.0"),
              ("effect_class", "computational"),
              ("determinism_class", "nondeterministic"),
-             ("request_shape", {"text": "string", "locale": "string"}),
-             ("response_shape", {"summary": "string", "confidence": "string"}),
-             ("failure_modes", ("unavailable", "timed-out")),
+             # A different version of the same authority is a different
+             # interface, and a governed one, so the conflict is about the
+             # change rather than about the value being unadmittable.
+             ("request_shape", dict(REQUEST_SHAPE, schema_version=2)),
+             ("response_shape", dict(
+                 RESPONSE_SHAPE,
+                 content=dict(RESPONSE_SHAPE["content"], schema_version=2))),
+             ("failure_modes", ("adapter-error", "timeout")),
              ("resource_requirements", {"host_memory_mb": 1024}),
              ("compatible_with", ("0.9.0",)),
              ("provenance", dict(OTHER_PROV)),
@@ -11574,8 +11645,8 @@ with TemporaryDirectory() as tmp:
         actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-con",
         capability_id=capability_id, contract_version="1.0.0",
         effect_class="read-only", determinism_class="deterministic",
-        request_shape={"text": "string"}, response_shape={"summary": "string"},
-        failure_modes=["unavailable"], resource_requirements={"host_memory_mb": 512},
+        request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+        failure_modes=["adapter-error"], resource_requirements={"host_memory_mb": 512},
         compatible_with=[], provenance=dict(PROV))))
     check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
           "operation 2 declares a contract through the interface")
@@ -11775,7 +11846,8 @@ with TemporaryDirectory() as tmp:
                        request_id="cli-missing", recorded_at=STAMP.isoformat(),
                        capability_id="CAPDEF-0009", contract_version="1.0.0",
                        effect_class="read-only", determinism_class="deterministic",
-                       request_shape={}, response_shape={}, failure_modes=[],
+                       request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+                       failure_modes=[],
                        resource_requirements={}, compatible_with=[],
                        provenance=dict(PROV)))])
     body = payload_of(refused[1])
@@ -11925,7 +11997,8 @@ with TemporaryDirectory() as tmp:
                 request_id="cli-fc25", recorded_at=STAMP.isoformat(),
                 capability_id="CAPDEF-0009", contract_version="1.0.0",
                 effect_class="read-only", determinism_class="deterministic",
-                request_shape={}, response_shape={}, failure_modes=[],
+                request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+                failure_modes=[],
                 resource_requirements={}, compatible_with=[], provenance=dict(PROV))
     failed = run(["declare-contract", *store_flags(tmp), "--input-file", "f.json",
                   "--approved-directory", approved(tmp, "f.json", body)])
@@ -12334,6 +12407,521 @@ if [[ -z "${ADMIT_FAILURES}" ]]; then
   fail "fabric governed admission did not report a result"
 else
   FAILURES=$((FAILURES + ADMIT_FAILURES))
+fi
+
+# --- Contract semantics the schema governs and admission must enforce -------
+#
+# Two defects found while deriving the first capability contract. Both let a
+# permanent, immutable CCON record carry a value no authority governs:
+#
+#   * `determinism_class` had a schema enum and an admission `_text` check, so
+#     any non-empty string was written and kept forever;
+#   * nothing compared a contract's `effect_class` with the effect class of the
+#     capability it declares, so two permanent records could disagree about one
+#     capability -- and the runtime reads the contract.
+#
+# Both are refused before allocation, so a refusal spends no identifier.
+SEMANTICS_OUTPUT="$(python3 - <<'SEMPY'
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+sys.path.insert(0, ".")
+
+import yaml
+
+from tools.fabric import admission
+from tools.fabric.errors import FabricError
+from tools.fabric.models import (DETERMINISM_CLASSES, EFFECT_CLASSES,
+                                 FAILURE_MODES, RECORD_MODELS,
+                                 RESPONSE_SHAPE_PARTS, SHAPE_REFERENCE_FIELDS)
+from tools.fabric.store import FabricStore
+
+failures = 0
+
+
+def check(condition, description):
+    global failures
+    if condition:
+        print(f"PASS: {description}")
+    else:
+        failures += 1
+        print(f"FAIL: {description}", file=sys.stderr)
+
+
+STAMP = datetime(2026, 8, 21, 9, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+WHO = "operator:cschott"
+PROV = {"class": "declared", "source": "operator"}
+
+# The real authorities, named as a contract must name them. The request payload
+# is enforced by `payload.py`; a result has two layers and two authorities --
+# `collector.py` decides the envelope is a believable document at all, and
+# `result_content.py` decides what is inside it is a governed result.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
+# --- the vocabularies are the schema's, not this module's -------------------
+schema = yaml.safe_load(
+    Path("platform-model/schemas/capability-contract.schema.yaml").read_text(
+        encoding="utf-8"))
+enums = schema.get("enums") or {}
+check(tuple(enums.get("determinism_class") or ()) == DETERMINISM_CLASSES,
+      "the determinism vocabulary in code is exactly the schema's, in order")
+check(tuple(enums.get("effect_class") or ()) == EFFECT_CLASSES,
+      "the effect-class vocabulary in code is exactly the schema's, in order")
+check(len(set(DETERMINISM_CLASSES)) == 3,
+      "exactly three determinism classes are governed")
+check(tuple(enums.get("failure_mode") or ()) == FAILURE_MODES,
+      "the failure-mode vocabulary in code is exactly the schema's, in order")
+check(len(set(FAILURE_MODES)) == 6, "exactly six failure modes are governed")
+
+# The vocabulary is the observable outcome of a call, not the platform's own
+# reasoning about one. A mode naming a provider, an internal refusal category,
+# or an eligibility judgement would bind a permanent contract to a build.
+check("completed" not in FAILURE_MODES, "success is not a failure mode")
+check("result-missing" in FAILURE_MODES and "serialisation-failure" in FAILURE_MODES,
+      "a missing result and an unrepresentable one stay distinguishable")
+for ungoverned in ("provider-error", "cancelled", "unavailable", "timed-out",
+                   "internal-error"):
+    check(ungoverned not in FAILURE_MODES,
+          f"'{ungoverned}' is not a governed failure mode")
+
+# The shape governance in code is the schema's too, so a contract cannot be
+# admitted against one structure and read back against another.
+check(tuple(schema.get("shape_reference_fields") or ()) == SHAPE_REFERENCE_FIELDS,
+      "the shape-reference fields in code are exactly the schema's, in order")
+check(tuple(schema.get("response_shape_parts") or ()) == RESPONSE_SHAPE_PARTS,
+      "the response-shape parts in code are exactly the schema's, in order")
+check(schema.get("shape_reference_form") == "closed",
+      "the schema declares the reference structure closed")
+check(schema.get("inline_shape_declaration") == "forbidden",
+      "the schema forbids a contract restating a shape it references")
+
+
+def opened(tmp):
+    import os
+    return FabricStore(Path(tmp) / "fabric", expected_uid=os.getuid(),
+                       expected_gid=os.getgid())
+
+
+def seeded(store, effect_class="computational", request_id="sem-cap"):
+    result = admission.declare_capability(
+        store, request_id=request_id, actor=WHO, approving_authority=WHO,
+        recorded_at=STAMP, name="an ability", description="A described ability.",
+        effect_class=effect_class, contract_ids=[], provenance=dict(PROV))
+    assert result.outcome == admission.ACCEPTED, result
+    return result.record_id
+
+
+def body(capability_id, **overrides):
+    fields = dict(
+        request_id="sem-con", actor=WHO, approving_authority=WHO,
+        recorded_at=STAMP, capability_id=capability_id, contract_version="1.0.0",
+        effect_class="computational", determinism_class="deterministic",
+        request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+        failure_modes=(), resource_requirements={}, compatible_with=(),
+        provenance=dict(PROV))
+    fields.update(overrides)
+    return fields
+
+
+def sequence_of(store, kind):
+    """The kind's sequence value, or None when nothing has been allocated."""
+    path = store.root / "sequences" / f"{kind}.seq"
+    return path.read_text(encoding="utf-8").strip() if path.exists() else None
+
+
+# --- every governed determinism class is accepted, and only those -----------
+for governed in DETERMINISM_CLASSES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        result = admission.declare_contract(
+            store, **body(capability, determinism_class=governed))
+        check(result.outcome == admission.ACCEPTED,
+              f"a contract declaring determinism_class '{governed}' is accepted")
+
+REFUSED_DETERMINISM = (
+    ("definitely-not-governed", "a value outside the vocabulary"),
+    ("DETERMINISTIC", "an uppercase spelling"),
+    (" deterministic ", "a whitespace-padded spelling"),
+    ("deterministic\n", "a trailing newline"),
+    ("", "an empty string"),
+    (None, "no value at all"),
+    (7, "a number"),
+    (True, "a boolean"),
+)
+for value, described in REFUSED_DETERMINISM:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, determinism_class=value))
+        check(result.outcome == admission.REFUSED,
+              f"a determinism_class carrying {described} is refused")
+        check(result.reason == admission.REASON_DETERMINISM_CLASS,
+              f"{described} is named unknown-determinism-class")
+        check(result.record_id is None,
+              f"{described} produces no record identity")
+        check(sequence_of(store, "capability-contract") == before,
+              f"{described} is refused before allocation and burns no identifier")
+        check(not list((store.root / "capability-contracts").glob("*.yaml")),
+              f"{described} writes no contract record")
+
+def reconstructed(**overrides):
+    """One stored contract as the model would rebuild it, with one field bent.
+
+    The route a store damaged out of band would take: admission is not
+    involved, so what the model itself refuses is what this measures.
+    """
+    fields = dict(
+        contract_id="CCON-0001", capability_id="CAPDEF-0001",
+        contract_version="1.0.0", effect_class="computational",
+        determinism_class="deterministic", request_shape=dict(REQUEST_SHAPE),
+        response_shape={part: dict(reference)
+                        for part, reference in RESPONSE_SHAPE.items()},
+        failure_modes=(), resource_requirements={}, compatible_with=(),
+        provenance=dict(PROV))
+    fields.update(overrides)
+    return RECORD_MODELS["capability-contract"](**fields)
+
+
+def refuses_reconstruction(described, **overrides):
+    try:
+        reconstructed(**overrides)
+    except FabricError:
+        check(True, f"the model refuses to reconstruct {described}")
+    else:
+        check(False, f"the model refuses to reconstruct {described}")
+
+
+check(reconstructed().contract_id == "CCON-0001",
+      "a governed contract still reconstructs from the model")
+
+# The model refuses to reconstruct one too, so a store damaged out of band
+# cannot present an ungoverned value as a valid record.
+refuses_reconstruction("an ungoverned determinism_class",
+                       determinism_class="definitely-not-governed")
+refuses_reconstruction("an ungoverned failure mode",
+                       failure_modes=("unavailable",))
+refuses_reconstruction("a governed mode beside an ungoverned one",
+                       failure_modes=("refused", "unavailable"))
+refuses_reconstruction("a request shape that restates a schema",
+                       request_shape={"text": "string"})
+refuses_reconstruction("a request shape carrying a fourth key",
+                       request_shape=dict(REQUEST_SHAPE, extra="ignored"))
+refuses_reconstruction("a response shape missing its content authority",
+                       response_shape={"envelope": dict(
+                           RESPONSE_SHAPE["envelope"])})
+
+# --- the shape a frozen record names cannot be changed afterwards -----------
+#
+# A response shape is a mapping of mappings, so freezing only the outer one
+# would leave the record able to change which authority it names through a
+# reference the caller still holds.
+supplied = {part: dict(reference) for part, reference in RESPONSE_SHAPE.items()}
+record = reconstructed(response_shape=supplied)
+supplied["content"]["authority"] = "tools/capability/execution/payload.py"
+check(record.response_shape["content"]["authority"]
+      == "tools/capability/execution/result_content.py",
+      "a frozen contract does not follow the caller's mapping")
+try:
+    record.response_shape["content"]["authority"] = "elsewhere"
+    check(False, "a frozen contract's response shape is immutable all the way down")
+except TypeError:
+    check(True, "a frozen contract's response shape is immutable all the way down")
+
+# --- failure modes are the schema's closed vocabulary ----------------------
+#
+# `failure_modes` is permanent and immutable. Before this, any non-empty string
+# was written and kept forever, so a contract could promise a failure nobody
+# could interpret and no implementation could be held to.
+for governed in FAILURE_MODES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        result = admission.declare_contract(
+            store, **body(capability, failure_modes=(governed,)))
+        check(result.outcome == admission.ACCEPTED,
+              f"a contract declaring failure mode '{governed}' is accepted")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(
+        store, **body(capability, failure_modes=FAILURE_MODES))
+    check(result.outcome == admission.ACCEPTED,
+          "a contract declaring every governed failure mode is accepted")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(
+        store, **body(capability, failure_modes=()))
+    check(result.outcome == admission.ACCEPTED,
+          "a contract declaring no failure mode at all is accepted")
+
+REFUSED_MODES = (
+    (("unavailable",), "a mode outside the vocabulary"),
+    (("timed-out",), "a plausible spelling of a governed mode"),
+    (("completed",), "an outcome that is not a failure"),
+    (("provider-error",), "a mode naming a provider"),
+    (("REFUSED",), "an uppercase spelling"),
+    ((" refused",), "a whitespace-padded spelling"),
+    (("refused", "unavailable"), "one governed mode beside one ungoverned"),
+    ((7,), "a number"),
+    ((True,), "a boolean"),
+    ((None,), "nothing at all"),
+    ((("refused",),), "a nested sequence"),
+)
+for value, described in REFUSED_MODES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, failure_modes=value))
+        check(result.outcome == admission.REFUSED,
+              f"failure modes carrying {described} are refused")
+        check(result.reason == admission.REASON_FAILURE_MODE,
+              f"{described} is named unknown-failure-mode")
+        check(result.record_id is None,
+              f"{described} produces no record identity")
+        check(sequence_of(store, "capability-contract") == before,
+              f"{described} is refused before allocation and burns no identifier")
+        check(not list((store.root / "capability-contracts").glob("*.yaml")),
+              f"{described} writes no contract record")
+
+# A sequence that is not one is malformed content, exactly as it was before the
+# vocabulary existed. The two mistakes keep their two different answers.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(store, **body(capability, failure_modes=7))
+    check(result.reason == admission.REASON_CONTENT,
+          "failure modes that are not a sequence are still malformed content")
+    result = admission.declare_contract(
+        store, **body(capability, failure_modes="refused"))
+    check(result.reason == admission.REASON_CONTENT,
+          "a bare string of failure modes is malformed content, not a mode")
+
+# --- a shape names its enforcing authority and restates nothing -------------
+#
+# A contract that spelled its fields out would be a second, permanent,
+# unexecuted copy of a schema some module already enforces -- and the day the
+# two disagree, the contract wins by being immutable while the code wins by
+# being what runs.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(store, **body(capability))
+    check(result.outcome == admission.ACCEPTED,
+          "a contract referencing its authorities is accepted")
+
+REFUSED_REQUEST_SHAPES = (
+    ({"text": "string"}, "a restated schema"),
+    ({}, "nothing at all"),
+    (dict(REQUEST_SHAPE, extra="ignored"), "a fourth key"),
+    ({"authority": "tools/capability/execution/payload.py",
+      "schema": "kyri-execution-payload"}, "no schema version"),
+    (dict(REQUEST_SHAPE, schema_version=0), "a version of zero"),
+    (dict(REQUEST_SHAPE, schema_version=-1), "a negative version"),
+    (dict(REQUEST_SHAPE, schema_version="1"), "a version written as text"),
+    (dict(REQUEST_SHAPE, schema_version=True), "a boolean version"),
+    (dict(REQUEST_SHAPE, authority=""), "an empty authority"),
+    (dict(REQUEST_SHAPE, authority="   "), "a whitespace authority"),
+    (dict(REQUEST_SHAPE, authority=7), "an authority that is not text"),
+    (dict(REQUEST_SHAPE, schema=""), "an empty schema name"),
+)
+for value, described in REFUSED_REQUEST_SHAPES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, request_shape=value))
+        check(result.outcome == admission.REFUSED,
+              f"a request shape carrying {described} is refused")
+        check(result.reason == admission.REASON_SHAPE_REFERENCE,
+              f"a request shape carrying {described} is named "
+              "shape-not-an-authority-reference")
+        check(sequence_of(store, "capability-contract") == before,
+              f"a request shape carrying {described} burns no identifier")
+        check(not list((store.root / "capability-contracts").glob("*.yaml")),
+              f"a request shape carrying {described} writes no contract record")
+
+REFUSED_RESPONSE_SHAPES = (
+    ({"summary": "string"}, "a restated schema"),
+    ({}, "nothing at all"),
+    ({"envelope": dict(RESPONSE_SHAPE["envelope"])}, "no content authority"),
+    ({"content": dict(RESPONSE_SHAPE["content"])}, "no envelope authority"),
+    (dict(RESPONSE_SHAPE, extra=dict(REQUEST_SHAPE)), "a third part"),
+    (dict(RESPONSE_SHAPE, content={"summary": "string"}),
+     "a content part that restates a schema"),
+    (dict(RESPONSE_SHAPE,
+          envelope=dict(RESPONSE_SHAPE["envelope"], schema_version=0)),
+     "an envelope version of zero"),
+)
+for value, described in REFUSED_RESPONSE_SHAPES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, response_shape=value))
+        check(result.outcome == admission.REFUSED,
+              f"a response shape carrying {described} is refused")
+        check(result.reason == admission.REASON_SHAPE_REFERENCE,
+              f"a response shape carrying {described} is named "
+              "shape-not-an-authority-reference")
+        check(sequence_of(store, "capability-contract") == before,
+              f"a response shape carrying {described} burns no identifier")
+
+# A shape that is not a mapping at all is malformed content, unchanged.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    for field in ("request_shape", "response_shape"):
+        result = admission.declare_contract(store, **body(capability, **{field: 7}))
+        check(result.reason == admission.REASON_CONTENT,
+              f"a {field} that is not a mapping is still malformed content")
+
+# The authorities the fixtures name are real, and they say what they enforce.
+# A reference is a review question, but a reference to nothing at all would
+# make the whole structure decorative.
+from tools.capability.execution import collector, payload, result_content  # noqa: E402
+
+check(payload.PAYLOAD_SCHEMA_VERSION == REQUEST_SHAPE["schema_version"],
+      "the payload authority implements the version the request shape names")
+# The envelope authority is referenced, never modified: `collector.py` is
+# installed runtime, and this hardening changes no production byte. What is
+# checked is that it really does enforce an envelope -- the document's name,
+# its bound, and the one function that can produce a trusted result.
+check(all(hasattr(collector, name) for name in
+          ("RESULT_NAME", "RESULT_MAXIMUM_BYTES", "read_result")),
+      "the envelope authority is the module that enforces the result envelope")
+check(result_content.RESULT_CONTENT_SCHEMA == RESPONSE_SHAPE["content"]["schema"]
+      and result_content.RESULT_CONTENT_SCHEMA_VERSION
+      == RESPONSE_SHAPE["content"]["schema_version"],
+      "the content authority implements the schema the response shape names")
+for reference in (REQUEST_SHAPE, RESPONSE_SHAPE["envelope"],
+                  RESPONSE_SHAPE["content"]):
+    check(Path(reference["authority"]).is_file(),
+          f"the authority {reference['authority']} is a module that exists")
+
+# --- a contract may not declare an effect class its capability does not -----
+for shared in EFFECT_CLASSES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store, effect_class=shared)
+        result = admission.declare_contract(
+            store, **body(capability, effect_class=shared))
+        check(result.outcome == admission.ACCEPTED,
+              f"a contract agreeing with its capability on '{shared}' is accepted")
+
+for declared in EFFECT_CLASSES:
+    for contradicted in EFFECT_CLASSES:
+        if declared == contradicted:
+            continue
+        with TemporaryDirectory() as tmp:
+            store = opened(tmp)
+            capability = seeded(store, effect_class=declared)
+            before = sequence_of(store, "capability-contract")
+            result = admission.declare_contract(
+                store, **body(capability, effect_class=contradicted))
+            check(result.outcome == admission.REFUSED,
+                  f"a '{contradicted}' contract on a '{declared}' capability is refused")
+            check(result.reason == admission.REASON_EFFECT_CLASS_MISMATCH,
+                  f"'{contradicted}' against '{declared}' is named "
+                  "effect-class-not-of-capability")
+            check(sequence_of(store, "capability-contract") == before,
+                  f"'{contradicted}' against '{declared}' burns no identifier")
+
+# An unknown effect class is still its own refusal: the mismatch check must not
+# swallow the vocabulary check, or a typo would be reported as a disagreement.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(
+        store, **body(capability, effect_class="not-a-class"))
+    check(result.reason == admission.REASON_EFFECT_CLASS,
+          "an unknown effect class is refused as unknown, not as a mismatch")
+
+# The capability is read, never written: a refused contract leaves it exactly
+# as it was.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store, effect_class="computational")
+    path = store.path_for("capability-definition", capability)
+    before = path.read_bytes()
+    admission.declare_contract(store, **body(capability, effect_class="read-only"))
+    admission.declare_contract(store, **body(capability,
+                                             determinism_class="not-governed"))
+    check(path.read_bytes() == before,
+          "a refused contract leaves its capability definition byte-identical")
+
+# --- preflight and the real write refuse identically ------------------------
+for described, overrides in (
+        ("an ungoverned determinism_class", {"determinism_class": "not-governed"}),
+        ("a contradicted effect class", {"effect_class": "read-only"}),
+        ("an ungoverned failure mode", {"failure_modes": ("unavailable",)}),
+        ("a restated request shape", {"request_shape": {"text": "string"}}),
+        ("a response shape missing its content authority",
+         {"response_shape": {"envelope": dict(RESPONSE_SHAPE["envelope"])}})):
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store, effect_class="computational")
+        written = admission.declare_contract(store, **body(capability, **overrides))
+        with admission.rehearsing():
+            rehearsed = admission.declare_contract(
+                store, **body(capability, request_id="sem-pre", **overrides))
+        check(rehearsed.outcome == written.outcome
+              and rehearsed.reason == written.reason,
+              f"preflight and the write refuse {described} identically")
+        check(sequence_of(store, "capability-contract") is None,
+              f"neither path allocated an identifier for {described}")
+
+# A rehearsal of a *valid* contract still stops before allocation, and the real
+# write that follows still allocates the first identity.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    with admission.rehearsing():
+        rehearsed = admission.declare_contract(store, **body(capability))
+    check(rehearsed.outcome == admission.PREFLIGHT,
+          "a valid contract rehearses to preflight after the hardening")
+    check(sequence_of(store, "capability-contract") is None,
+          "the rehearsal allocated nothing")
+    accepted = admission.declare_contract(store, **body(capability))
+    check(accepted.outcome == admission.ACCEPTED
+          and accepted.record_id == "CCON-0001",
+          "the real write still takes the first contract identity")
+    replayed = admission.declare_contract(store, **body(capability))
+    check(replayed.outcome == admission.EXACT_REPLAY
+          and replayed.record_id == "CCON-0001",
+          "exact replay of a contract still returns the original identity")
+    check(sequence_of(store, "capability-contract") == "1",
+          "the replay allocated no second identifier")
+
+print(f"__FAILURES__={failures}")
+SEMPY
+)"
+printf '%s\n' "${SEMANTICS_OUTPUT}" | grep -v '^__FAILURES__=' || true
+SEMANTICS_FAILURES="$(printf '%s\n' "${SEMANTICS_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+if [[ -z "${SEMANTICS_FAILURES}" ]]; then
+  fail "fabric contract semantics did not report a result"
+else
+  FAILURES=$((FAILURES + SEMANTICS_FAILURES))
 fi
 
 # --- C4 and C7 reach the filesystem through C1 only -------------------------

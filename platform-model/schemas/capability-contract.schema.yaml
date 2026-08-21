@@ -81,6 +81,61 @@ enums:
     - deterministic
     - bounded-nondeterministic
     - nondeterministic
+  failure_mode:
+    # The observable ways a call through this interface can fail, and the
+    # closed set a contract may declare. Closed because `failure_modes` is
+    # permanent and immutable: a mode spelled freely is a promise no reader can
+    # interpret and no implementation can be held to, and it is kept forever.
+    #
+    # Success is not a failure mode, so `completed` is absent. Nothing here
+    # names a provider, a vendor, an internal refusal category, or an
+    # implementation classification: those are the platform's private
+    # vocabulary and would bind a permanent contract to a build.
+    - refused                  # the call was declined; no work was attempted
+    - adapter-error            # the interface could not be reached or served
+    - timeout                  # a bound elapsed before the call concluded
+    - interrupted              # the call was stopped after it began
+    - serialisation-failure    # a result existed but could not be represented
+    # Its own outcome, never folded into `serialisation-failure`. A missing
+    # result and an unrepresentable one are observably different conditions,
+    # and the difference is what tells an operator whether anything ran.
+    - result-missing           # the call concluded and produced no result
+
+# --- shapes are references, never copies ------------------------------------
+#
+# `request_shape` and `response_shape` name the authority that enforces the
+# shape. They do not restate it. A contract that spelled the fields out would
+# be a second, permanent, unexecuted copy of a schema some module already
+# enforces, and the day the two disagree the contract wins by being immutable
+# while the code wins by being what actually runs.
+#
+# So a shape carries exactly three things: which module enforces it, which
+# schema that module implements, and which version of it. Whether the named
+# authority is correct is a review question, exactly as it is for a package's
+# `artifact_reference`; that the contract claims exactly one is a governed one.
+shape_form: authority-reference
+inline_shape_declaration: forbidden
+
+shape_reference_fields:
+  - authority        # repository path of the module that enforces the shape
+  - schema           # the schema name that module implements
+  - schema_version   # which version of it, as a positive integer
+
+# Closed: a reference carrying a fourth key is refused rather than ignored,
+# because an ignored key in an immutable record is a claim nobody reviewed.
+shape_reference_form: closed
+
+# One request, one enforcing authority.
+request_shape_form: single-reference
+
+# A result has two independently enforced layers, and one authority does not
+# enforce both. The envelope is the transport-level document -- that it exists,
+# that it parses, that it is within bounds. The content is what the capability
+# actually returned. Naming them separately keeps each claim attached to the
+# code that performs it.
+response_shape_parts:
+  - envelope
+  - content
 
 # A side-effecting contract is representable so that a future actuating
 # capability has somewhere to be described. It is not routable: admitting

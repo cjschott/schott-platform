@@ -413,6 +413,34 @@ for value in ("read-only", "computational", "content-generating", "side-effectin
     check(value in effect_classes, f"effect class includes {value}")
 check(len(effect_classes) == 4, "exactly four effect classes are defined")
 
+# A permanent, immutable record may not carry a value no authority governs.
+# `failure_modes` is what a caller is promised about how a call can fail, so a
+# freely spelled mode is a promise nobody can interpret, kept forever.
+failure_modes = (contract.get("enums") or {}).get("failure_mode") or []
+check(failure_modes == ["refused", "adapter-error", "timeout", "interrupted",
+                        "serialisation-failure", "result-missing"],
+      f"the failure-mode vocabulary is closed and exactly as accepted ({failure_modes})")
+check("completed" not in failure_modes, "success is not a failure mode")
+check("result-missing" in failure_modes and "serialisation-failure" in failure_modes,
+      "a missing result and an unrepresentable one are separate outcomes")
+
+# Shapes reference the one authority that enforces them. A contract restating a
+# schema would be a permanent unexecuted copy of one, and the day the two
+# disagree the contract wins by being immutable and the code wins by running.
+check(contract.get("shape_form") == "authority-reference",
+      "a contract shape is a reference to its enforcing authority")
+check(contract.get("inline_shape_declaration") == "forbidden",
+      "a contract may not restate the schema it references")
+check(contract.get("shape_reference_fields")
+      == ["authority", "schema", "schema_version"],
+      "a shape reference names the module, the schema, and the version")
+check(contract.get("shape_reference_form") == "closed",
+      "a shape reference is closed: an extra key is refused, never ignored")
+check(contract.get("request_shape_form") == "single-reference",
+      "one request, one enforcing authority")
+check(contract.get("response_shape_parts") == ["envelope", "content"],
+      "a result names the envelope authority and the content authority apart")
+
 # Compatibility is declared, never inferred. A platform that reads meaning into
 # a version number has guessed, and it will guess wrong during an upgrade.
 check(contract.get("version_compatibility") == "declared-only",

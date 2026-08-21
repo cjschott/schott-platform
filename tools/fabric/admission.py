@@ -47,8 +47,9 @@ from .resources import (REASON_MALFORMED_VALUE, REASON_UNKNOWN_DIMENSION,
                         satisfies, validate_resource_map)
 from .identifiers import ID_FIELDS as ID_FIELD_FOR, PATTERNS, PREFIXES
 from .models import (
-    EFFECT_CLASSES, INSTANCE_LIFECYCLE_STATES, RECORD_MODELS,
-    WORKLOAD_DATA_CLASSIFICATIONS,
+    DETERMINISM_CLASSES, EFFECT_CLASSES, FAILURE_MODES,
+    INSTANCE_LIFECYCLE_STATES, RECORD_MODELS, RESPONSE_SHAPE_PARTS,
+    SHAPE_REFERENCE_FIELDS, WORKLOAD_DATA_CLASSIFICATIONS,
 )
 from .request_identity import (
     REPLAY_CONFLICT, REPLAY_EXACT, compute_request_digest,
@@ -77,6 +78,17 @@ REASON_UNEXPECTED_AUTHORITY = "unexpected-approving-authority"
 REASON_NOT_SUBJECT = "actor-is-not-the-subject"
 REASON_SELF_ADMISSION = "self-admission"
 REASON_EFFECT_CLASS = "unknown-effect-class"
+REASON_DETERMINISM_CLASS = "unknown-determinism-class"
+# A contract may not declare an effect class its capability does not. Named
+# like the other "not-of" relations -- `contract-not-of-capability`,
+# `package-not-of-capability` -- because it is the same kind of fact: two
+# records that must agree about one capability, and do not.
+REASON_EFFECT_CLASS_MISMATCH = "effect-class-not-of-capability"
+REASON_FAILURE_MODE = "unknown-failure-mode"
+# A shape that is a mapping but not a reference to an enforcing authority. Not
+# `malformed-operation-content`: the value is well formed and simply is not the
+# governed thing, which is a different answer to give an operator.
+REASON_SHAPE_REFERENCE = "shape-not-an-authority-reference"
 REASON_TRUST_DOMAIN = "unknown-trust-domain"
 REASON_UNRESOLVED = "unresolved-reference"
 REASON_CONTRACT_OWNER = "contract-not-of-capability"
@@ -304,6 +316,66 @@ def _effect_class(value: Any) -> str:
     if value not in EFFECT_CLASSES:
         _refuse(REFUSED, REASON_EFFECT_CLASS)
     return value
+
+
+def _determinism_class(value: Any) -> str:
+    """One released class, judged exactly as an effect class is.
+
+    The vocabulary lives in `models.DETERMINISM_CLASSES` and is read from there
+    rather than restated, so the value admission accepts and the value the model
+    will reconstruct cannot disagree. Not trimmed and not recased, for the same
+    reason: a class that had to be corrected to be recognised was not declared.
+    """
+    if value not in DETERMINISM_CLASSES:
+        _refuse(REFUSED, REASON_DETERMINISM_CLASS)
+    return value
+
+
+def _failure_modes(value: Any) -> tuple:
+    """Only modes the released vocabulary governs, in the order declared.
+
+    A sequence that is not one is malformed content, exactly as it was before
+    the vocabulary existed; a well-formed sequence naming a mode nobody
+    released is a refusal of its own. The two are different answers because
+    they are different mistakes.
+    """
+    modes = _sequence(value)
+    for mode in modes:
+        if mode not in FAILURE_MODES:
+            _refuse(REFUSED, REASON_FAILURE_MODE)
+    return modes
+
+
+def _shape_reference(value: Any) -> Mapping[str, Any]:
+    """The authority that enforces a shape, and nothing that restates it.
+
+    The governed structure lives in `models`, so the reference admission
+    accepts and the reference the model will reconstruct cannot disagree.
+    Whether the named authority is the right one is a review question -- the
+    same question a package's `artifact_reference` poses. That the contract
+    names exactly one, and duplicates no schema, is governed here.
+    """
+    reference = _mapping(value)
+    if set(reference) != set(SHAPE_REFERENCE_FIELDS):
+        _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    for field in ("authority", "schema"):
+        if not isinstance(reference[field], str) or not reference[field].strip():
+            _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    version = reference["schema_version"]
+    # `bool` is an `int` in Python, so `True` would otherwise pass as version 1.
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    return reference
+
+
+def _response_shape(value: Any) -> Mapping[str, Any]:
+    """Both governed parts, each naming the code that actually checks it."""
+    parts = _mapping(value)
+    if set(parts) != set(RESPONSE_SHAPE_PARTS):
+        _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    for part in RESPONSE_SHAPE_PARTS:
+        _shape_reference(parts[part])
+    return parts
 
 
 def _resolve(store, kind: str, identifier: Any) -> Mapping[str, Any]:
@@ -822,11 +894,22 @@ def declare_contract(store, *, request_id: Any, actor: Any,
     def accept(identifier, digest):
         _text(contract_version, REASON_CONTENT)
         _effect_class(effect_class)
-        _text(determinism_class, REASON_CONTENT)
-        modes = _sequence(failure_modes)
+        _determinism_class(determinism_class)
+        _shape_reference(request_shape)
+        _response_shape(response_shape)
+        modes = _failure_modes(failure_modes)
         compatible = _sequence(compatible_with)
         _resources(resource_requirements)
-        _resolve(store, "capability-definition", capability_id)
+        definition = _resolve(store, "capability-definition", capability_id)
+        # One capability, one effect class. The definition names the ability
+        # and the contract is how it is reached, so a contract declaring a
+        # different class would leave two permanent records disagreeing about
+        # what the capability does -- and the runtime reads the *contract*
+        # (capability-runtime-design §11), so the disagreement would be
+        # resolved silently in favour of whichever record was written second.
+        # Refused before allocation, so nothing is spent proving it.
+        if definition.get("effect_class") != effect_class:
+            _refuse(REFUSED, REASON_EFFECT_CLASS_MISMATCH)
         evidence = _evidence(
             "capability-contract", actor=actor,
             approving_authority=approving_authority, reason_category="declaration",

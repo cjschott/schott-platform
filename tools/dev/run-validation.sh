@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=69
+  TOTAL_STEPS=70
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=82
+  TOTAL_STEPS=83
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -354,6 +354,12 @@ run "Capability execution terminal" \
 # deletes, and executes nothing.
 run "Capability execution collector" \
   bash tests/test-capability-execution-collector.sh
+
+# The result-content authority a capability contract's `response_shape.content`
+# references. It judges a mapping the collector already decoded: no descriptor,
+# no path, no bytes, no clock, and it re-parses no envelope.
+run "Capability execution result content" \
+  bash tests/test-capability-execution-result-content.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,
