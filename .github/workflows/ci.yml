@@ -345,6 +345,11 @@ jobs:
       - name: Capability execution result content tests
         run: bash tests/test-capability-execution-result-content.sh
 
+      # Runtime outcome -> governed contract failure mode, and the closure
+      # invariant over every reachable terminal disposition.
+      - name: Capability execution contract outcome tests
+        run: bash tests/test-capability-execution-contract-outcome.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests

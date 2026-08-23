@@ -188,6 +188,25 @@ for name in ('capability', 'result_schema_version', 'operation',
 print('OK')
 "
 
+# The capability a result names is the one the Fabric governs, spelled exactly
+# as the permanent capability definition spells it. Anything else is a result
+# about a capability that does not exist: CAPDEF-0001 governs the name
+# `kyri-execution-boundary-verification`, and a record naming a near-miss
+# cannot be matched to the definition it claims to be evidence for.
+run_case "the capability is spelled exactly as CAPDEF-0001 governs it" "${PRELUDE}
+assert VERIFICATION_CAPABILITY == 'kyri-execution-boundary-verification', \
+    'the constant is ' + repr(VERIFICATION_CAPABILITY)
+validate_result_content(valid(capability='kyri-execution-boundary-verification'))
+print('OK')
+"
+
+# The unprefixed spelling names no governed capability, so it is refused like
+# any other wrong name rather than tolerated as an abbreviation.
+run_case "the unprefixed spelling is not an accepted abbreviation" "${PRELUDE}
+refuses(valid(capability='execution-boundary-verification'), 'the unprefixed spelling')
+print('OK')
+"
+
 # A result that says it is some other capability's is refused rather than
 # accepted and mislabelled: the point of the record is that it says what was
 # actually proven.

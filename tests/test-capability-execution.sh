@@ -230,6 +230,12 @@ assert_backstop_coverage() {
                  # the image ID, and refuses every uncertainty rather than
                  # answering that the image is absent.
                  "image_store.py"
+                 # Backstopped by tests/test-capability-execution-contract-outcome.sh,
+                 # which proves it imports nothing but typing, reaches no
+                 # lifecycle, collector or adapter, re-reads no exit code, and
+                 # leaves generic provider-error semantics untouched -- it
+                 # translates a formed outcome and forms none.
+                 "contract_outcome.py"
                  # Backstopped by tests/test-capability-execution-result-content.sh,
                  # which proves it imports nothing but typing, opens and reads
                  # nothing, normalises nothing, and re-parses no envelope -- it

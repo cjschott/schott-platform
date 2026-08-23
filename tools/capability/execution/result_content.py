@@ -41,10 +41,17 @@ from typing import Any, Mapping
 RESULT_CONTENT_SCHEMA = "kyri-execution-verification-result"
 RESULT_CONTENT_SCHEMA_VERSION = 1
 
-# The capability this content belongs to. A result claiming to be some other
+# The capability this content belongs to, spelled exactly as the permanent
+# capability definition spells it. A result claiming to be some other
 # capability's is refused rather than accepted and mislabelled: the whole point
 # of the verification record is that it says what was actually proven.
-VERIFICATION_CAPABILITY = "execution-boundary-verification"
+#
+# The `kyri-` prefix is part of the governed name, not decoration. A result
+# naming the unprefixed spelling names no capability the Fabric governs, so it
+# could never be matched to the definition it claims to be evidence for -- and
+# an authority that accepted the near-miss would be certifying results about a
+# capability that does not exist.
+VERIFICATION_CAPABILITY = "kyri-execution-boundary-verification"
 
 # The one operation this release verifies. A closed vocabulary rather than free
 # text, so the field cannot carry a command, a path, or a shell fragment.
