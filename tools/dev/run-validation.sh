@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=72
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=85
+  TOTAL_STEPS=86
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -205,6 +205,14 @@ if (( QUICK == 0 )); then
   # case works in a temporary root and the suite proves the production store
   # at /var/lib/kyri/fabric was not touched.
   run "Fabric write preflight" bash tests/test-fabric-preflight.sh
+
+  # `manifest_reference` from the approved decision body to the staged tree.
+  # The admission surface could not express the field the model, the schema,
+  # the evidence verdict and the resolver all agreed on, so every governed
+  # package was permanently unresolvable. Fixture-only: temporary stores,
+  # artifact roots and staging roots, and it asserts the production package
+  # namespace is still unspent when it finishes.
+  run "Fabric package manifest reference" bash tests/test-fabric-package-manifest.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds

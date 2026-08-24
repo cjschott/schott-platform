@@ -957,11 +957,26 @@ def declare_package(store, *, request_id: Any, actor: Any,
                     contract_id: Any, satisfied_contract_versions: Any,
                     package_version: Any, artifact_reference: Any,
                     resource_requirements: Any, trust_domain: Any, provenance: Any,
-                    description: Any = None) -> OperationResult:
-    """Record a package claiming contract versions. Nothing is read or run."""
+                    description: Any = None,
+                    manifest_reference: Any = None) -> OperationResult:
+    """Record a package claiming contract versions. Nothing is read or run.
+
+    `manifest_reference` is where a package says which integrity evidence
+    resolution must verify it against. Optional here and mandatory at
+    execution, exactly as the design rules it: the record may omit one, and a
+    record that omits one does not execute. Carried, never composed -- nothing
+    in this module builds a reference, infers one from `artifact_reference`, or
+    supplies one a decision body did not.
+    """
     def accept(identifier, digest):
         _text(package_version, REASON_CONTENT)
         _text(artifact_reference, REASON_CONTENT)
+        # Checked only when a body supplied one. An absent manifest is a
+        # package that does not execute -- refusing it here would overrule the
+        # design's optional-record ruling; accepting an empty or non-textual
+        # one would write a permanent reference nothing can resolve.
+        if manifest_reference is not None:
+            _text(manifest_reference, REASON_CONTENT)
         if trust_domain != PACKAGE_TRUST_DOMAIN:
             _refuse(REFUSED, REASON_TRUST_DOMAIN)
         versions = _sequence(satisfied_contract_versions)
@@ -999,7 +1014,9 @@ def declare_package(store, *, request_id: Any, actor: Any,
                            artifact_reference=artifact_reference,
                            resource_requirements=resource_requirements,
                            trust_domain=trust_domain, provenance=provenance,
-                           description=description, evidence=carried))
+                           description=description,
+                           manifest_reference=manifest_reference,
+                           evidence=carried))
 
     return _governed(store, operation="declare-package", request_id=request_id,
                      payload={"actor": actor,
@@ -1014,7 +1031,8 @@ def declare_package(store, *, request_id: Any, actor: Any,
                               "resource_requirements": resource_requirements,
                               "trust_domain": trust_domain,
                               "provenance": provenance,
-                              "description": description},
+                              "description": description,
+                              "manifest_reference": manifest_reference},
                      instants=("recorded_at",),
                      digest_route=LEGACY_DIGEST,
                      preflight=lambda: _human_preflight(

@@ -198,6 +198,11 @@ jobs:
       - name: Fabric write preflight tests
         run: bash tests/test-fabric-preflight.sh
 
+      # `manifest_reference` from the approved decision body to the staged
+      # tree. Fixture-only: temporary stores, artifact roots and staging roots.
+      - name: Fabric package manifest reference tests
+        run: bash tests/test-fabric-package-manifest.sh
+
       # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
       # the permanent backstop asserting the package executes nothing. Builds
       # temporary stores only. No network, no Docker, no capability execution.
