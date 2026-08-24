@@ -62,6 +62,24 @@ fabric_state() {
 }
 FABRIC_BEFORE="$(fabric_state)"
 
+# The live artifact authority as it stands before anything here runs. Its
+# ABSENCE was the right property to assert only until an operator provisioned
+# it; afterwards, absence is not a finding and presence is not one either. What
+# matters is unchanged: this suite is fixture-only and must be incapable of
+# creating, modifying, or removing the live authority. Snapshotted and compared
+# exactly as the Fabric store is, so the assertion holds in both states.
+LIVE_ARTIFACT_ROOT="/var/lib/kyri/artifacts"       # prod-path-reference
+artifact_state() {
+  if [[ -e "${LIVE_ARTIFACT_ROOT}" ]]; then
+    { find "${LIVE_ARTIFACT_ROOT}" -printf '%y %m %n %U:%G %s %p\n' 2>/dev/null | sort
+      find "${LIVE_ARTIFACT_ROOT}" -type f -exec sha256sum {} + 2>/dev/null | sort
+    } | sha256sum | cut -d' ' -f1
+  else
+    printf 'absent'
+  fi
+}
+ARTIFACT_BEFORE="$(artifact_state)"
+
 # ===========================================================================
 # The finding: why a checkout cannot be the artifact authority
 # ===========================================================================
@@ -642,12 +660,18 @@ print('OK')
 
 assert_untouched() {
   local problems=0
-  [[ -e /var/lib/kyri/artifacts ]] && { fail "the live artifact root was created"; problems=1; }
-  [[ -e /var/lib/kyri/fabric/sequences/capability-package.seq ]] \
-    && { fail "capability-package.seq was created"; problems=1; }
-  [[ -n "$(ls -A /var/lib/kyri/fabric/capability-packages 2>/dev/null)" ]] \
-    && { fail "a CPKG record appeared"; problems=1; }
-  (( problems == 0 )) && pass "no live artifact root, no CPKG record, no capability-package.seq"
+  if [[ "$(artifact_state)" != "${ARTIFACT_BEFORE}" ]]; then
+    fail "the live artifact authority moved"; problems=1
+  fi
+  if [[ -e /var/lib/kyri/fabric/sequences/capability-package.seq ]]; then
+    fail "capability-package.seq was created"; problems=1
+  fi
+  if [[ -n "$(ls -A /var/lib/kyri/fabric/capability-packages 2>/dev/null)" ]]; then
+    fail "a CPKG record appeared"; problems=1
+  fi
+  if (( problems == 0 )); then
+    pass "the live artifact authority is unchanged, and there is no CPKG record or sequence"
+  fi
 }
 assert_untouched
 
