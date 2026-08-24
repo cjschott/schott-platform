@@ -102,6 +102,12 @@ REASON_NAIVE_INSTANT = "timestamp-carries-no-offset"
 REASON_SUBJECT_MISMATCH = "trust-subject-mismatch"
 REASON_UNVERIFIED_PROFILE = "resource-profile-not-verified-out-of-band"
 REASON_CONTENT = "malformed-operation-content"
+# The caller's explicit expected next identifier is no longer the next
+# identifier at the protected allocation boundary. It says nothing about a
+# manifest: this module opens no file and parses none, so it could not know
+# what a manifest claims -- and a reason naming one would describe a check
+# nobody here performs.
+REASON_PREDICTED_IDENTITY = "predicted-identity-moved"
 
 # Categories the part-2 operations add. Each names a condition that did not
 # exist before instances and routes did; none replaces or widens one above.
@@ -958,7 +964,8 @@ def declare_package(store, *, request_id: Any, actor: Any,
                     package_version: Any, artifact_reference: Any,
                     resource_requirements: Any, trust_domain: Any, provenance: Any,
                     description: Any = None,
-                    manifest_reference: Any = None) -> OperationResult:
+                    manifest_reference: Any = None,
+                    expected_capability_package_id: Any = None) -> OperationResult:
     """Record a package claiming contract versions. Nothing is read or run.
 
     `manifest_reference` is where a package says which integrity evidence
@@ -967,10 +974,32 @@ def declare_package(store, *, request_id: Any, actor: Any,
     record that omits one does not execute. Carried, never composed -- nothing
     in this module builds a reference, infers one from `artifact_reference`, or
     supplies one a decision body did not.
+
+    `expected_capability_package_id` is an **allocation precondition**, and it
+    is the answer to a race the manifest creates. A manifest names the package
+    it attests, so it can only be written against a *predicted* identifier --
+    and prediction is not reservation. Without this, another caller taking that
+    identifier first left the declaration accepting the next one instead, and a
+    permanent immutable record referenced a manifest for a different package.
+    Staging refused it later, which is far too late: the record is for ever.
+
+    So the caller states which identifier its frozen inputs were built against,
+    and the write happens only if that is still the identifier about to be
+    allocated. What this is not, stated because each was a tempting shortcut:
+    it does not assign the record's identity -- the store remains the sole
+    allocator; it reserves nothing, so an unused expectation blocks no one; and
+    it is never inferred from `manifest_reference`, because this module opens
+    no file and cannot know what a manifest says. A caller that supplies none
+    behaves exactly as before.
     """
     def accept(identifier, digest):
         _text(package_version, REASON_CONTENT)
         _text(artifact_reference, REASON_CONTENT)
+        # Syntax first, and through the released identifier authority rather
+        # than a second grammar: a malformed expectation is malformed content,
+        # not a moved prediction, and the two must not be reported alike.
+        expected = _optional_identifier(expected_capability_package_id,
+                                        "capability-package")
         # Checked only when a body supplied one. An absent manifest is a
         # package that does not execute -- refusing it here would overrule the
         # design's optional-record ruling; accepting an empty or non-textual
@@ -999,24 +1028,50 @@ def declare_package(store, *, request_id: Any, actor: Any,
         if not satisfies(contract.get("resource_requirements"),
                          resource_requirements):
             _refuse(REFUSED, REASON_PACKAGE_WEAKER)
+        # Last, and inside the section that already serialises allocation and
+        # the accepted write. `peek_next_id` reports what `allocate_id` is
+        # about to return -- both apply the store's single candidate rule --
+        # so while this section is held the two cannot disagree, and asking
+        # here refuses *before* the sequence moves. A caller that lost the race
+        # spends no identifier and leaves no gap; nothing is reserved on the
+        # way through, so an expectation that is never used costs nobody the
+        # identifier it named. Asked after every content and reference check,
+        # so a body that is wrong about the contract is told that rather than
+        # being told its prediction moved.
+        if expected is not None and store.peek_next_id("capability-package") != expected:
+            _refuse(REFUSED, REASON_PREDICTED_IDENTITY)
         evidence = _evidence(
             "capability-package", actor=actor,
             approving_authority=approving_authority, reason_category="declaration",
             recorded_at=recorded_at, request_id=identifier, request_digest=digest,
             causal_references=(capability_id, contract_id))
-        return _commit(store, "capability-package", evidence,
-                       lambda allocated, carried: RECORD_MODELS[
-                           "capability-package"](
-                           capability_package_id=allocated,
-                           capability_id=capability_id, contract_id=contract_id,
-                           satisfied_contract_versions=versions,
-                           package_version=package_version,
-                           artifact_reference=artifact_reference,
-                           resource_requirements=resource_requirements,
-                           trust_domain=trust_domain, provenance=provenance,
-                           description=description,
-                           manifest_reference=manifest_reference,
-                           evidence=carried))
+        def build(allocated, carried):
+            # The identifier the record will actually carry, checked against
+            # the expectation the peek above already cleared. Held-section
+            # semantics say these agree, and the check is written anyway
+            # because this is the line where an immutable record acquires its
+            # identity: if the store's prediction and its allocation ever
+            # disagreed, the honest outcome is a refusal and a spent
+            # identifier, not a permanent record contradicting the manifest it
+            # names. `_commit` proves constructibility against a probe identity
+            # first, and the probe is not an allocation, so it is not compared.
+            if (expected is not None
+                    and allocated != PROBE_IDS["capability-package"]
+                    and allocated != expected):
+                _refuse(REFUSED, REASON_PREDICTED_IDENTITY)
+            return RECORD_MODELS["capability-package"](
+                capability_package_id=allocated,
+                capability_id=capability_id, contract_id=contract_id,
+                satisfied_contract_versions=versions,
+                package_version=package_version,
+                artifact_reference=artifact_reference,
+                resource_requirements=resource_requirements,
+                trust_domain=trust_domain, provenance=provenance,
+                description=description,
+                manifest_reference=manifest_reference,
+                evidence=carried)
+
+        return _commit(store, "capability-package", evidence, build)
 
     return _governed(store, operation="declare-package", request_id=request_id,
                      payload={"actor": actor,
@@ -1032,7 +1087,9 @@ def declare_package(store, *, request_id: Any, actor: Any,
                               "trust_domain": trust_domain,
                               "provenance": provenance,
                               "description": description,
-                              "manifest_reference": manifest_reference},
+                              "manifest_reference": manifest_reference,
+                              "expected_capability_package_id":
+                                  expected_capability_package_id},
                      instants=("recorded_at",),
                      digest_route=LEGACY_DIGEST,
                      preflight=lambda: _human_preflight(

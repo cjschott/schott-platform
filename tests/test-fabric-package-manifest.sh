@@ -519,6 +519,317 @@ print('OK')
 "
 
 # ===========================================================================
+# The predicted-identity precondition
+# ===========================================================================
+# Prediction is not reservation, so between the peek and the write another
+# caller may take the identifier the frozen manifest names. Declaration must
+# refuse at the protected allocation boundary rather than write an immutable
+# record that references a manifest for a different package -- a contradiction
+# staging would find, but only after the record exists for ever.
+#
+# The field is a PRECONDITION, not an assignment. It does not name the record,
+# does not reserve anything, and is never inferred from `manifest_reference`:
+# admission opens no file and parses no manifest, so it cannot know what a
+# manifest claims. The store stays the sole allocator.
+
+run_case "declare_package can receive an expected package identity" "${PRELUDE}
+signature = inspect.signature(A.declare_package)
+parameter = signature.parameters.get('expected_capability_package_id')
+assert parameter is not None, sorted(signature.parameters)
+assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, parameter.kind
+assert parameter.default is None, parameter.default
+print('OK')
+"
+
+run_case "a matching expectation is accepted and allocates exactly it" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    reader = FabricStore.open_for_read(store.root, expected_uid=UID,
+                                       expected_gid=GID)
+    predicted = reader.peek_next_id('capability-package')
+    result = A.declare_package(store, **package_body(
+        capability_id, contract_id, manifest_reference=MANIFEST_REFERENCE,
+        expected_capability_package_id=predicted))
+    assert result.outcome == A.ACCEPTED, result.to_dict()
+    assert result.record_id == predicted, (predicted, result.record_id)
+    record = stored(store, result.record_id)
+    assert record['capability_package_id'] == predicted, record
+print('OK')
+"
+
+# The race, driven as two real declarations against one store rather than by
+# editing the sequence: the second caller is what makes the first caller's
+# prediction stale, and that is the condition being tested.
+run_case "a prediction another writer consumed refuses before allocation" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    reader = FabricStore.open_for_read(store.root, expected_uid=UID,
+                                       expected_gid=GID)
+    predicted = reader.peek_next_id('capability-package')
+
+    # Another writer takes it first.
+    stolen = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-other-writer'))
+    assert stolen.outcome == A.ACCEPTED, stolen.to_dict()
+    assert stolen.record_id == predicted, stolen.to_dict()
+
+    sequence = Path(store.root) / 'sequences' / 'capability-package.seq'
+    before = sequence.read_text(encoding='utf-8')
+    ours = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-ours',
+        manifest_reference=MANIFEST_REFERENCE,
+        expected_capability_package_id=predicted))
+
+    assert ours.outcome == A.REFUSED, ours.to_dict()
+    assert ours.reason == 'predicted-identity-moved', ours.reason
+    assert ours.reason == A.REASON_PREDICTED_IDENTITY, ours.reason
+    assert ours.record_id is None, ours.to_dict()
+    # Nothing spent and nothing written: the refusal happens at the boundary,
+    # not after it.
+    assert sequence.read_text(encoding='utf-8') == before, 'the sequence moved'
+    assert reader.peek_next_id('capability-package') == 'CPKG-0002'
+    assert not store.path_for('capability-package', 'CPKG-0002').exists()
+    written = sorted(p.name for p in
+                     store.path_for('capability-package', 'CPKG-0001').parent.iterdir())
+    assert written == ['CPKG-0001.yaml'], written
+print('OK')
+"
+
+# The refusal is about the caller's expectation, never about a manifest:
+# admission cannot inspect one, so it must not name one.
+run_case "the refusal reason names the prediction, not the manifest" "${PRELUDE}
+assert A.REASON_PREDICTED_IDENTITY == 'predicted-identity-moved', \
+    A.REASON_PREDICTED_IDENTITY
+assert 'manifest' not in A.REASON_PREDICTED_IDENTITY
+assert A.REASON_PREDICTED_IDENTITY != PR.REASON_MANIFEST_IDENTITY
+print('OK')
+"
+
+run_case "a malformed expected identity refuses without allocating" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    sequence = Path(store.root) / 'sequences' / 'capability-package.seq'
+    for bad in ('', 'CPKG-1', 'CPKG-00001', 'cpkg-0001', 'CPKG0001',
+                'CCON-0001', 'CAPDEF-0001', ' CPKG-0001', 'CPKG-0001 ',
+                0, 1, True, [], {}):
+        result = A.declare_package(store, **package_body(
+            capability_id, contract_id, request_id='req-bad',
+            expected_capability_package_id=bad))
+        assert result.outcome == A.INVALID, (bad, result.to_dict())
+        assert result.reason == A.REASON_CONTENT, (bad, result.reason)
+        assert not sequence.exists(), 'a malformed expectation spent an identifier'
+    assert store.peek_next_id('capability-package') == 'CPKG-0001'
+print('OK')
+"
+
+run_case "an omitted expectation preserves the existing generic behaviour" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    first = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-one'))
+    second = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-two'))
+    assert first.outcome == A.ACCEPTED and first.record_id == 'CPKG-0001'
+    assert second.outcome == A.ACCEPTED and second.record_id == 'CPKG-0002'
+    record = stored(store, second.record_id)
+    assert 'expected_capability_package_id' not in record, sorted(record)
+print('OK')
+"
+
+# A precondition is not record content. It governed whether the write happened;
+# it is not something the package claims about itself afterwards.
+run_case "the expectation is never written into the record" "${PRELUDE}
+names = {spec.name for spec in dataclass_fields(CapabilityPackage)}
+assert 'expected_capability_package_id' not in names, sorted(names)
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    result = A.declare_package(store, **package_body(
+        capability_id, contract_id,
+        expected_capability_package_id='CPKG-0001'))
+    written = store.path_for('capability-package', result.record_id).read_text(
+        encoding='utf-8')
+assert 'expected_capability_package_id' not in written, written
+print('OK')
+"
+
+run_case "the expectation participates in the request digest" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    without = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-a'))
+    with_one = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-b',
+        expected_capability_package_id='CPKG-0002'))
+    other = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-c',
+        expected_capability_package_id='CPKG-0003'))
+assert with_one.outcome == A.ACCEPTED, with_one.to_dict()
+assert other.outcome == A.ACCEPTED, other.to_dict()
+digests = {without.request_digest, with_one.request_digest, other.request_digest}
+assert len(digests) == 3, digests
+print('OK')
+"
+
+run_case "an identical resubmission is still an exact replay" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    body = package_body(capability_id, contract_id, request_id='req-same',
+                        manifest_reference=MANIFEST_REFERENCE,
+                        expected_capability_package_id='CPKG-0001')
+    first = A.declare_package(store, **body)
+    assert first.outcome == A.ACCEPTED, first.to_dict()
+    assert first.record_id == 'CPKG-0001', first.to_dict()
+    again = A.declare_package(store, **dict(body))
+    assert again.outcome == A.EXACT_REPLAY, again.to_dict()
+    assert again.record_id == first.record_id, again.to_dict()
+    assert again.request_digest == first.request_digest, again.to_dict()
+    assert store.peek_next_id('capability-package') == 'CPKG-0002', \
+        'the replay allocated'
+print('OK')
+"
+
+# The expectation is never silently refreshed. Reusing one request identity
+# with a different expectation is a different request, and says so.
+run_case "the same request identity with a changed expectation conflicts" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    first = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-same',
+        expected_capability_package_id='CPKG-0001'))
+    assert first.outcome == A.ACCEPTED, first.to_dict()
+    changed = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-same',
+        expected_capability_package_id='CPKG-0002'))
+assert changed.outcome == A.CONFLICT, changed.to_dict()
+assert changed.reason == A.REASON_CONFLICT, changed.reason
+print('OK')
+"
+
+# After losing a race the operator re-freezes against the new prediction and
+# submits it as a new request. That is a fresh declaration, not a rewrite.
+run_case "a refreshed expectation under a new request identity is evaluated afresh" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    reader = FabricStore.open_for_read(store.root, expected_uid=UID,
+                                       expected_gid=GID)
+    predicted = reader.peek_next_id('capability-package')
+    A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-other-writer'))
+    lost = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-first-attempt',
+        expected_capability_package_id=predicted))
+    assert lost.outcome == A.REFUSED, lost.to_dict()
+
+    refreshed = reader.peek_next_id('capability-package')
+    assert refreshed != predicted, (predicted, refreshed)
+    retried = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-second-attempt',
+        expected_capability_package_id=refreshed))
+    assert retried.outcome == A.ACCEPTED, retried.to_dict()
+    assert retried.record_id == refreshed, retried.to_dict()
+    assert retried.request_digest != lost.request_digest
+print('OK')
+"
+
+# A rehearsal answers the same question without spending anything, so an
+# operator can see a stale prediction before submitting the real write.
+run_case "a rehearsal reports a stale prediction and allocates nothing" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-other-writer'))
+    reader = FabricStore.open_for_read(store.root, expected_uid=UID,
+                                       expected_gid=GID)
+    sequence = Path(store.root) / 'sequences' / 'capability-package.seq'
+    before = sequence.read_text(encoding='utf-8')
+    with A.rehearsing():
+        stale = A.declare_package(reader, **package_body(
+            capability_id, contract_id, request_id='req-rehearsal',
+            expected_capability_package_id='CPKG-0001'))
+        fresh = A.declare_package(reader, **package_body(
+            capability_id, contract_id, request_id='req-rehearsal',
+            expected_capability_package_id='CPKG-0002'))
+    assert stale.outcome == A.REFUSED, stale.to_dict()
+    assert stale.reason == A.REASON_PREDICTED_IDENTITY, stale.reason
+    assert fresh.outcome == A.PREFLIGHT, fresh.to_dict()
+    assert fresh.record_id is None, fresh.to_dict()
+    assert sequence.read_text(encoding='utf-8') == before, 'the rehearsal allocated'
+print('OK')
+"
+
+# Nothing about the manifest reaches this decision. Admission opens no file,
+# so it cannot read a manifest, and it must not appear to have.
+run_case "admission opens nothing and infers no manifest identity" "${PRELUDE}
+import ast
+source = Path('tools/fabric/admission.py').read_text(encoding='utf-8')
+tree = ast.parse(source)
+opened = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.Call):
+        name = node.func.attr if isinstance(node.func, ast.Attribute) else (
+            node.func.id if isinstance(node.func, ast.Name) else None)
+        if name in ('open', 'fdopen', 'read_text', 'read_bytes', 'loads',
+                    'load', 'listdir', 'scandir', 'glob', 'rglob'):
+            opened.append(name)
+assert not opened, 'admission reads: ' + ', '.join(sorted(set(opened)))
+for module in ('json', 'pathlib', 'os', 'io'):
+    assert not any(
+        (isinstance(n, ast.Import) and any(a.name.split('.')[0] == module
+                                           for a in n.names))
+        or (isinstance(n, ast.ImportFrom) and (n.module or '').split('.')[0] == module)
+        for n in ast.walk(tree)), 'admission imports ' + module
+print('OK')
+"
+
+run_case "the expectation is never derived from the manifest reference" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    # A manifest reference whose spelling names CPKG-0009 changes nothing:
+    # the expectation is what the caller stated, and only that.
+    result = A.declare_package(store, **package_body(
+        capability_id, contract_id,
+        manifest_reference='file:verified/CPKG-0009.manifest.json',
+        expected_capability_package_id='CPKG-0001'))
+    assert result.outcome == A.ACCEPTED, result.to_dict()
+    assert result.record_id == 'CPKG-0001', result.to_dict()
+    record = stored(store, result.record_id)
+    assert record['manifest_reference'] == 'file:verified/CPKG-0009.manifest.json'
+print('OK')
+"
+
+# Nothing is held between the peek and the write. Two peeks with no write in
+# between still report the same identifier, and it is still available.
+run_case "an expectation reserves nothing" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    store = store_at(tmp)
+    capability_id, contract_id = seed(store)
+    with A.rehearsing():
+        rehearsed = A.declare_package(
+            FabricStore.open_for_read(store.root, expected_uid=UID,
+                                      expected_gid=GID),
+            **package_body(capability_id, contract_id,
+                           request_id='req-rehearsal',
+                           expected_capability_package_id='CPKG-0001'))
+    assert rehearsed.outcome == A.PREFLIGHT, rehearsed.to_dict()
+    # A different caller, naming no expectation, still gets CPKG-0001.
+    other = A.declare_package(store, **package_body(
+        capability_id, contract_id, request_id='req-other-writer'))
+assert other.record_id == 'CPKG-0001', other.to_dict()
+print('OK')
+"
+
+# ===========================================================================
 # Manifest location: a sibling, never a member
 # ===========================================================================
 
