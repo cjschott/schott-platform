@@ -26,11 +26,12 @@ set -Eeuo pipefail
 # the repository owner -- never from a working-tree file, and never with root
 # running git inside a directory the coordinator controls.
 #
-# WHAT IT DOES NOT PUBLISH. The executable manifest. Its schema requires
-# `capability_package_id`, that identity is unspent, and a placeholder naming a
-# package nobody declared would be a manifest that lies about what it attests.
-# The manifest is the next ceremony's, authored beside the tree this one
-# publishes.
+# AND ONE EXECUTABLE MANIFEST, from its own pinned commit. The manifest names
+# `CPKG-0001`, so it could not exist until that identity was predicted -- which
+# is why it is reviewed at a different commit than the tree, and why each object
+# names the commit that actually authorised it. It is published BESIDE the tree,
+# never inside it: it carries the tree commitment, so a manifest within the tree
+# would have to contain a digest taken over its own bytes.
 #
 # WHAT IT DOES NOT DO. It declares no capability package, allocates no
 # identifier, creates no sequence, opens no Fabric store, stages nothing through
@@ -38,14 +39,16 @@ set -Eeuo pipefail
 # privileged helper, and contacts no container runtime. It publishes bytes and
 # refuses.
 #
-# NOTHING IS REPAIRED. A published tree that disagrees with the pinned digests
-# is reported, never chmod'ed, chown'ed, or replaced. Silently correcting
-# authority somebody else wrote is how a ceremony becomes an attack.
+# NOTHING IS REPAIRED. A published tree or manifest that disagrees with the
+# pinned digests is reported, never chmod'ed, chown'ed, or replaced. Silently
+# correcting authority somebody else wrote is how a ceremony becomes an attack.
+# Each half is settled independently, so an already-correct tree is never
+# republished, renamed, or rewritten merely because the manifest needs writing.
 #
 # Usage:
 #   install-verification-package.sh --verify            read-only: may it publish?
-#   install-verification-package.sh --install           publish the reviewed tree
-#   install-verification-package.sh --verify-installed  read-only: is it right?
+#   install-verification-package.sh --install           publish tree and manifest
+#   install-verification-package.sh --verify-installed  read-only: are they right?
 #
 # Test-only:
 #   --fixture DIR   operate on a fixture tree instead of the host.
@@ -91,6 +94,24 @@ MATRIX=(
 "packages/${PACKAGE_NAME}/${PACKAGE_VERSION}/main.py|main.py|0444|683e25ed8cb317acd21e92b4706653454035f12320e0701ddabcb09eb688f7fd"
 )
 
+# --- the executable manifest ------------------------------------------------
+#
+# TWO COMMITS, AND THE REASON IS NOT UNTIDINESS. The package tree was reviewed
+# at COMMIT above; the manifest did not exist there, because it names
+# `CPKG-0001` and that identity was not predicted until later. Pretending one
+# commit authorised both would be a pin that never held. So each object names
+# the commit that actually reviewed it, and the question "which Git object
+# authorised these bytes" has exactly one answer per object.
+#
+# MANIFEST_COMMIT contains the manifest source and nothing else. A ceremony
+# cannot pin a commit that also contains the ceremony pinning it, which is why
+# the source landed on its own first.
+MANIFEST_COMMIT="2575c042f214ccfe160fd6d973985a4335781c1e"
+MANIFEST_SOURCE="packages/${PACKAGE_NAME}/${PACKAGE_VERSION}.manifest.json"
+MANIFEST_NAME="${PACKAGE_VERSION}.manifest.json"
+MANIFEST_MODE="0444"
+MANIFEST_SHA256="53d4624b5136fbf6a7f5c3d0c577d86419828e0dd6d12c5a031fdeeb64244d4b"
+
 DIRECTORY_MODE="0755"
 STAGING_MODE="0700"
 
@@ -117,6 +138,11 @@ fi
 PACKAGE_ROOT="${ARTIFACT_ROOT}/${PACKAGE_NAME}"
 PUBLISHED="${PACKAGE_ROOT}/${PACKAGE_VERSION}"
 STAGING="${PACKAGE_ROOT}/.staging-${COMMIT:0:12}"
+# The manifest sits BESIDE the tree, never inside it: it carries the tree
+# commitment, so a manifest within the tree would have to contain a digest
+# taken over its own bytes.
+MANIFEST_PUBLISHED="${PACKAGE_ROOT}/${MANIFEST_NAME}"
+MANIFEST_STAGING="${PACKAGE_ROOT}/.manifest-${MANIFEST_COMMIT:0:12}"
 
 FAILURES=0
 ok()   { printf 'ok       %s\n' "$1"; }
@@ -308,6 +334,87 @@ verify_published() {
   return "${problems}"
 }
 
+# The published manifest, judged on its own inode and against the pinned bytes.
+# It is a trusted-source FILE, so the contract is the one
+# `open_trusted_regular_file` applies: a regular file, the expected owner, not
+# writable beyond that owner, and exactly one link -- a second name for the same
+# bytes lives outside the directory whose permissions were just checked.
+verify_manifest() {
+  local problems=0 observed
+  if [[ -L "${MANIFEST_PUBLISHED}" || ! -f "${MANIFEST_PUBLISHED}" ]]; then
+    bad "${MANIFEST_PUBLISHED} is not a regular file"
+    return 1
+  fi
+  observed="$(stat -c '%U:%G' "${MANIFEST_PUBLISHED}")"
+  [[ "${observed}" == "${EXPECTED_OWNER}:${EXPECTED_GROUP}" ]] \
+    || { bad "${MANIFEST_PUBLISHED} is ${observed}, expected ${EXPECTED_OWNER}:${EXPECTED_GROUP}"; problems=$((problems + 1)); }
+  observed="$(stat -c '%a' "${MANIFEST_PUBLISHED}")"
+  [[ "0${observed}" == "${MANIFEST_MODE}" ]] \
+    || { bad "${MANIFEST_PUBLISHED} is mode ${observed}, expected ${MANIFEST_MODE}"; problems=$((problems + 1)); }
+  [[ "$(stat -c '%h' "${MANIFEST_PUBLISHED}")" == "1" ]] \
+    || { bad "${MANIFEST_PUBLISHED} carries more than one link to its bytes"; problems=$((problems + 1)); }
+  observed="$(digest_of "${MANIFEST_PUBLISHED}")"
+  [[ "${observed}" == "${MANIFEST_SHA256}" ]] \
+    || { bad "${MANIFEST_PUBLISHED} is ${observed:0:12}…, expected ${MANIFEST_SHA256:0:12}…"; problems=$((problems + 1)); }
+  return "${problems}"
+}
+
+# Written beside the tree, never into it, and published by one rename so the
+# visible name is never briefly wrong. The package tree is not read, opened,
+# renamed, or re-verified here: installing a manifest is not a reason to touch
+# an already-published artefact.
+publish_manifest() {
+  git_as_owner cat-file -e "${MANIFEST_COMMIT}^{commit}" 2>/dev/null \
+    || halt "the reviewed manifest commit ${MANIFEST_COMMIT} does not exist in ${REPOSITORY}"
+  git_as_owner merge-base --is-ancestor "${MANIFEST_COMMIT}" HEAD 2>/dev/null \
+    || halt "the reviewed manifest commit ${MANIFEST_COMMIT} is not an ancestor of HEAD"
+  git_as_owner cat-file -e "${MANIFEST_COMMIT}:${MANIFEST_SOURCE}" 2>/dev/null \
+    || halt "the reviewed manifest commit does not carry ${MANIFEST_SOURCE}"
+
+  [[ ! -e "${MANIFEST_STAGING}" && ! -L "${MANIFEST_STAGING}" ]] \
+    || halt "${MANIFEST_STAGING} is interrupted-ceremony residue and is not adopted"
+
+  local previous_umask observed
+  previous_umask="$(umask)"
+  umask 077
+  git_as_owner cat-file blob "${MANIFEST_COMMIT}:${MANIFEST_SOURCE}" > "${MANIFEST_STAGING}"
+  observed="$(digest_of "${MANIFEST_STAGING}")"
+  if [[ "${observed}" != "${MANIFEST_SHA256}" ]]; then
+    rm -f "${MANIFEST_STAGING}"
+    umask "${previous_umask}"
+    halt "${MANIFEST_SOURCE} at ${MANIFEST_COMMIT} is ${observed}, expected ${MANIFEST_SHA256}; nothing was published"
+  fi
+  [[ -n "${FIXTURE}" ]] || chown root:root "${MANIFEST_STAGING}"
+  chmod "${MANIFEST_MODE}" "${MANIFEST_STAGING}"
+  # `-n` refuses rather than replacing, so a manifest that appeared between the
+  # check above and this line is never overwritten.
+  mv -n -T "${MANIFEST_STAGING}" "${MANIFEST_PUBLISHED}"
+  if [[ -e "${MANIFEST_STAGING}" ]]; then
+    umask "${previous_umask}"
+    halt "${MANIFEST_PUBLISHED} appeared during publication; it is not replaced, and ${MANIFEST_STAGING} is left for inspection"
+  fi
+  sync
+  umask "${previous_umask}"
+  ok "published ${MANIFEST_PUBLISHED} from ${MANIFEST_COMMIT:0:12} (${MANIFEST_MODE})"
+}
+
+# Absent -> publish. Present, trusted and byte-identical -> accept, change
+# nothing. Present and different in any respect -> refuse, and leave it exactly
+# as it is: an untrusted manifest is operator-visible evidence, and repairing it
+# would grant the trust the check exists to withhold.
+settle_manifest() {
+  if [[ -e "${MANIFEST_PUBLISHED}" || -L "${MANIFEST_PUBLISHED}" ]]; then
+    local before="${FAILURES}"
+    verify_manifest || true
+    if (( FAILURES == before )); then
+      ok "the manifest is already published and byte-identical; nothing to do"
+      return 0
+    fi
+    halt "$((FAILURES - before)) problem(s): ${MANIFEST_PUBLISHED} exists and is not the reviewed manifest; it is not replaced or repaired"
+  fi
+  publish_manifest
+}
+
 publish() {
   require_commit
   require_trusted_authority
@@ -394,7 +501,7 @@ case "${MODE}" in
     note "${PUBLISHED} already exists; verifying it rather than proposing a publication"
     verify_published || true
     if (( FAILURES == 0 )); then
-      ok "already published and exactly right; --install would publish nothing"
+      ok "the tree is already published and exactly right"
     else
       halt "${FAILURES} problem(s): the published tree is not the reviewed tree, and nothing here repairs it"
     fi
@@ -402,33 +509,54 @@ case "${MODE}" in
     [[ ! -e "${STAGING}" ]] || halt "${STAGING} is interrupted-ceremony residue and is not adopted"
     ok "${PUBLISHED} is absent; --install would publish ${#MATRIX[@]} object(s)"
   fi
+  if [[ -e "${MANIFEST_PUBLISHED}" || -L "${MANIFEST_PUBLISHED}" ]]; then
+    verify_manifest || true
+    if (( FAILURES == 0 )); then
+      ok "the manifest is already published and exactly right"
+    else
+      halt "${FAILURES} problem(s): the published manifest is not the reviewed manifest, and nothing here repairs it"
+    fi
+  else
+    ok "${MANIFEST_PUBLISHED} is absent; --install would publish it from ${MANIFEST_COMMIT:0:12}"
+  fi
   printf '\nREADY\n'
   ;;
 --install)
   printf '── artifact authority: publishing the reviewed package\n\n'
-  if [[ -e "${PUBLISHED}" ]]; then
-    # Idempotent only where the bytes already agree. A published tree that
-    # differs is reported and left exactly as it is.
-    verify_published || true
-    (( FAILURES == 0 )) \
-      && { ok "already published and byte-identical; nothing to do"; printf '\nDONE (no change)\n'; exit 0; }
-    halt "${FAILURES} problem(s): ${PUBLISHED} exists and is not the reviewed tree; it is not replaced"
-  fi
   [[ "$(id -u)" == "0" || -n "${FIXTURE}" ]] \
     || halt "publication writes root-owned authority and must run as root"
-  publish
+  if [[ -e "${PUBLISHED}" ]]; then
+    # Idempotent only where the bytes already agree. A published tree that
+    # differs is reported and left exactly as it is -- and either way the tree
+    # is not republished, renamed, or rewritten just because the manifest step
+    # still has work to do.
+    verify_published || true
+    if (( FAILURES != 0 )); then
+      halt "${FAILURES} problem(s): ${PUBLISHED} exists and is not the reviewed tree; it is not replaced"
+    fi
+    ok "the tree is already published and byte-identical; it is left untouched"
+  else
+    publish
+    FAILURES=0
+    verify_published || true
+    (( FAILURES == 0 )) || halt "${FAILURES} problem(s) in the published tree"
+    ok "the published tree verifies"
+  fi
+  settle_manifest
   FAILURES=0
-  verify_published || true
-  (( FAILURES == 0 )) || halt "${FAILURES} problem(s) in the published tree"
-  ok "the published tree verifies"
+  verify_manifest || true
+  (( FAILURES == 0 )) || halt "${FAILURES} problem(s) in the published manifest"
+  ok "the published manifest verifies"
   printf '\nDONE\n'
   ;;
 --verify-installed)
   printf '── artifact authority: is the published package exactly right?\n\n'
   require_trusted_authority
   verify_published || true
+  verify_manifest || true
   (( FAILURES == 0 )) || halt "${FAILURES} problem(s)"
   ok "${PUBLISHED} is the reviewed tree at ${COMMIT}"
+  ok "${MANIFEST_PUBLISHED} is the reviewed manifest at ${MANIFEST_COMMIT}"
   printf '\nVERIFIED\n'
   ;;
 esac

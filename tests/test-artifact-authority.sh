@@ -79,6 +79,8 @@ artifact_state() {
   fi
 }
 ARTIFACT_BEFORE="$(artifact_state)"
+LIVE_MANIFEST="${LIVE_ARTIFACT_ROOT}/kyri-execution-boundary-verification/1.0.0.manifest.json"
+LIVE_MANIFEST_BEFORE="$(sha256sum "${LIVE_MANIFEST}" 2>/dev/null | cut -d' ' -f1 || printf absent)"
 
 # ===========================================================================
 # The finding: why a checkout cannot be the artifact authority
@@ -113,6 +115,7 @@ PACKAGE_VERSION = '${PACKAGE_VERSION}'
 SOURCE_TREE = '${SOURCE_TREE}'
 REVIEWED_COMMIT = '${REVIEWED_COMMIT}'
 TREE_SHA256 = '${TREE_SHA256}'
+TREE_RELATIVE_LIVE = PACKAGE_NAME + '/' + PACKAGE_VERSION
 UID = os.geteuid()
 SOURCE = Path(CEREMONY).read_text(encoding='utf-8')
 "
@@ -411,7 +414,8 @@ print('OK')
 
 # Publication is idempotent only where the bytes already agree, and it says so
 # rather than republishing.
-if out="$(ceremony "${FIXTURE_OK}" --install)" && grep -q 'DONE (no change)' <<<"${out}"; then
+if out="$(ceremony "${FIXTURE_OK}" --install)" \
+   && grep -q 'the tree is already published and byte-identical' <<<"${out}"; then
   pass "re-running publication over identical bytes changes nothing"
 else
   fail "second --install: ${out}"
@@ -656,6 +660,277 @@ assert 'check_trusted_component \"\${PACKAGE_ROOT}\"' in SOURCE \
 print('OK')
 "
 
+# --- the executable manifest ------------------------------------------------
+#
+# The manifest was authored on the host during S2f, so for one checkpoint the
+# answer to "which reviewed object authorised these bytes" was "none". It now
+# has its own reviewed source and its own pinned commit -- a different commit
+# from the tree's, because the manifest names CPKG-0001 and could not exist
+# until that identity was predicted. Pretending one commit authorised both
+# would be a pin that never held.
+
+MANIFEST_SOURCE="packages/${PACKAGE_NAME}/${PACKAGE_VERSION}.manifest.json"
+MANIFEST_NAME="${PACKAGE_VERSION}.manifest.json"
+LIVE_MANIFEST_SHA256="53d4624b5136fbf6a7f5c3d0c577d86419828e0dd6d12c5a031fdeeb64244d4b"
+
+manifest_of() { printf '%s%s/%s/%s' "$1" "${ARTIFACT_ROOT}" "${PACKAGE_NAME}" "${MANIFEST_NAME}"; }
+
+assert_file "${MANIFEST_SOURCE}"
+
+# The whole point of recording it: the repository can reproduce the accepted
+# bytes exactly, byte-for-byte, newline included.
+assert_source_digest() {
+  local observed
+  observed="$(sha256sum "${ROOT}/${MANIFEST_SOURCE}" | cut -d' ' -f1)"
+  if [[ "${observed}" == "${LIVE_MANIFEST_SHA256}" ]]; then
+    pass "the repository manifest source reproduces the accepted digest exactly"
+  else
+    fail "manifest source is ${observed}, accepted is ${LIVE_MANIFEST_SHA256}"
+  fi
+}
+assert_source_digest
+
+run_case "the manifest source is the governed six fields and nothing else" "${PRELUDE}
+import json
+body = json.loads(Path('${MANIFEST_SOURCE}').read_text(encoding='utf-8'))
+assert set(body) == set(PR.MANIFEST_FIELDS), sorted(body)
+assert body['schema_version'] == PR.MANIFEST_SCHEMA_VERSION
+assert body['capability_package_id'] == 'CPKG-0001'
+assert body['artifact_reference'] == 'tree:' + TREE_RELATIVE_LIVE
+assert body['package_tree_sha256'] == TREE_SHA256
+assert Path('${MANIFEST_SOURCE}').stat().st_size <= PR.MANIFEST_MAXIMUM_BYTES
+print('OK')
+"
+
+# Beside the tree, never inside it: a manifest within the tree would have to
+# carry a digest taken over its own bytes.
+run_case "the manifest source is a sibling of the tree, not a member" "${PRELUDE}
+import os
+source = Path('${MANIFEST_SOURCE}')
+assert source.parent == Path(SOURCE_TREE).parent, source
+assert not str(source).startswith(SOURCE_TREE + '/'), source
+from tools.capability.execution.package_contract import inspect_package
+handle = os.open(SOURCE_TREE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY)
+try:
+    inspected = inspect_package(handle)
+finally:
+    os.close(handle)
+assert [e.relative_path for e in inspected.entries] == ['main.py'], inspected.entries
+assert 'sha256:' + inspected.digest == TREE_SHA256
+print('OK')
+"
+
+run_case "the manifest is pinned to its own reviewed commit, stated separately" "${PRELUDE}
+import re
+manifest_commit = re.search(r'MANIFEST_COMMIT=\"([0-9a-f]{40})\"', SOURCE).group(1)
+tree_commit = re.search(r'^COMMIT=\"([0-9a-f]{40})\"', SOURCE, re.M).group(1)
+assert tree_commit == REVIEWED_COMMIT, tree_commit
+assert manifest_commit != tree_commit, 'both objects claim one commit'
+assert 'MANIFEST_SHA256=\"' + '${LIVE_MANIFEST_SHA256}' + '\"' in SOURCE
+# The manifest exists at its own commit and does NOT exist at the tree's, which
+# is exactly why the two pins cannot be collapsed.
+present = subprocess.run(['git', 'cat-file', '-e', manifest_commit + ':' + '${MANIFEST_SOURCE}'],
+                         capture_output=True)
+absent = subprocess.run(['git', 'cat-file', '-e', tree_commit + ':' + '${MANIFEST_SOURCE}'],
+                        capture_output=True)
+assert present.returncode == 0, 'the manifest is absent at its own pinned commit'
+assert absent.returncode != 0, 'the manifest already existed at the tree commit'
+blob = subprocess.run(['git', 'cat-file', 'blob', manifest_commit + ':' + '${MANIFEST_SOURCE}'],
+                      capture_output=True, check=True).stdout
+import hashlib
+assert hashlib.sha256(blob).hexdigest() == '${LIVE_MANIFEST_SHA256}'
+print('OK')
+"
+
+# --- manifest publication, against fixtures ---------------------------------
+
+FIXTURE_MAN="$(new_fixture)"
+if out="$(ceremony "${FIXTURE_MAN}" --verify)" && grep -q 'would publish it from' <<<"${out}"; then
+  pass "--verify reports an absent manifest as publishable"
+else
+  fail "--verify on an empty fixture: ${out}"
+fi
+
+ceremony "${FIXTURE_MAN}" --install >/dev/null
+assert_manifest_shape() {
+  local m; m="$(manifest_of "${FIXTURE_MAN}")"
+  local problems=0
+  [[ -f "${m}" && ! -L "${m}" ]] || { fail "no manifest published"; return; }
+  [[ "$(sha256sum "${m}" | cut -d' ' -f1)" == "${LIVE_MANIFEST_SHA256}" ]] || problems=1
+  [[ "$(stat -c '%a' "${m}")" == "444" ]] || problems=1
+  [[ "$(stat -c '%h' "${m}")" == "1" ]] || problems=1
+  [[ -z "$(find "${m}" -perm /022)" ]] || problems=1
+  # Published beside the tree, and the tree still holds exactly one member.
+  [[ "$(dirname "${m}")" == "$(dirname "$(published_of "${FIXTURE_MAN}")")" ]] || problems=1
+  [[ "$(find "$(published_of "${FIXTURE_MAN}")" -type f | wc -l)" == "1" ]] || problems=1
+  if (( problems == 0 )); then
+    pass "the published manifest is 0444, single-linked, beside the tree, and byte-exact"
+  else
+    fail "the published manifest has the wrong shape"
+  fi
+}
+assert_manifest_shape
+
+run_case "the published manifest satisfies the trusted-source file contract" "${PRELUDE}
+import json, os
+root = '${FIXTURE_MAN}${ARTIFACT_ROOT}'
+handle = open_trusted_regular_file(
+    root, PACKAGE_NAME + '/' + '${MANIFEST_NAME}', expected_uid=UID,
+    require_single_link=True, maximum_bytes=PR.MANIFEST_MAXIMUM_BYTES,
+    refuse_oversize=True)
+try:
+    body = json.loads(os.read(handle, PR.MANIFEST_MAXIMUM_BYTES + 1).decode('utf-8'))
+finally:
+    os.close(handle)
+
+class Evidence:
+    capability_package_id = 'CPKG-0001'
+    contract_id = 'CCON-0001'
+    capability_id = 'CAPDEF-0001'
+    artifact_reference = 'tree:' + TREE_RELATIVE_LIVE
+    manifest_reference = 'file:' + PACKAGE_NAME + '/' + '${MANIFEST_NAME}'
+
+validated, reason = PR._validated_manifest(body, Evidence())
+assert validated is not None, reason
+print('OK')
+"
+
+# The bytes are the pinned object's. A poisoned working tree must not reach the
+# published manifest -- proven by attack, in a clone whose checkout is edited.
+run_case "ambient working-tree bytes are not manifest authority" "${PRELUDE}
+import re, shutil, subprocess, tempfile
+manifest_commit = re.search(r'MANIFEST_COMMIT=\"([0-9a-f]{40})\"', SOURCE).group(1)
+with tempfile.TemporaryDirectory() as tmp:
+    clone = os.path.join(tmp, 'clone')
+    subprocess.run(['git', 'clone', '--quiet', '--no-hardlinks', '.', clone], check=True)
+    subprocess.run(['git', '-C', clone, 'checkout', '--quiet', '-B',
+                    'arch/eng-0005-execution-transition', 'HEAD'], check=True)
+    poisoned = os.path.join(clone, '${MANIFEST_SOURCE}')
+    Path(poisoned).write_text('{\"poisoned\": true}\n', encoding='utf-8')
+    blob = subprocess.run(['git', '-C', clone, 'cat-file', 'blob',
+                           manifest_commit + ':' + '${MANIFEST_SOURCE}'],
+                          capture_output=True, check=True).stdout
+    import hashlib
+    assert hashlib.sha256(blob).hexdigest() == '${LIVE_MANIFEST_SHA256}', \
+        'the pinned object followed the poisoned working tree'
+    assert Path(poisoned).read_bytes() != blob, 'the poison did not take'
+print('OK')
+"
+
+# Idempotence, and the refusals. Each proves the ceremony changed nothing.
+if out="$(ceremony "${FIXTURE_MAN}" --install)" && grep -q 'already published and byte-identical' <<<"${out}"; then
+  pass "re-running publication over an identical manifest changes nothing"
+else
+  fail "second --install: ${out}"
+fi
+
+MAN_INODE_BEFORE="$(stat -c '%i %Y' "$(manifest_of "${FIXTURE_MAN}")")"
+TREE_INODE_BEFORE="$(stat -c '%i %Y' "$(published_of "${FIXTURE_MAN}")/main.py")"
+ceremony "${FIXTURE_MAN}" --install >/dev/null 2>&1 || true
+problems=0
+[[ "$(stat -c '%i %Y' "$(manifest_of "${FIXTURE_MAN}")")" == "${MAN_INODE_BEFORE}" ]] || problems=1
+[[ "$(stat -c '%i %Y' "$(published_of "${FIXTURE_MAN}")/main.py")" == "${TREE_INODE_BEFORE}" ]] || problems=1
+if (( problems == 0 )); then
+  pass "an idempotent run rewrites neither the manifest nor the package tree"
+else
+  fail "an idempotent run replaced a published object"
+fi
+
+# A manifest installed where the TREE is already correct must still publish,
+# without the tree being republished, renamed, or rewritten.
+FIXTURE_LATE_MAN="$(new_fixture)"
+ceremony "${FIXTURE_LATE_MAN}" --install >/dev/null
+chmod u+w "$(dirname "$(manifest_of "${FIXTURE_LATE_MAN}")")"
+rm -f "$(manifest_of "${FIXTURE_LATE_MAN}")"
+TREE_BEFORE="$(stat -c '%i %Y' "$(published_of "${FIXTURE_LATE_MAN}")/main.py")"
+if out="$(ceremony "${FIXTURE_LATE_MAN}" --install)" \
+   && grep -q 'the tree is already published and byte-identical' <<<"${out}" \
+   && [[ -f "$(manifest_of "${FIXTURE_LATE_MAN}")" ]] \
+   && [[ "$(stat -c '%i %Y' "$(published_of "${FIXTURE_LATE_MAN}")/main.py")" == "${TREE_BEFORE}" ]]; then
+  pass "a missing manifest is published without the existing tree being touched"
+else
+  fail "installing a manifest disturbed the published tree: ${out}"
+fi
+
+poisoned_manifest() {
+  local how="$1" base m
+  base="$(new_fixture)"
+  ceremony "${base}" --install >/dev/null
+  m="$(manifest_of "${base}")"
+  chmod u+w "$(dirname "${m}")"
+  case "${how}" in
+    differing) chmod u+w "${m}"; printf '{"different": true}\n' > "${m}"; chmod 0444 "${m}" ;;
+    writable)  chmod 0666 "${m}" ;;
+    symlink)   rm -f "${m}"; printf '{}\n' > "$(dirname "${m}")/elsewhere.json"
+               ln -s "$(dirname "${m}")/elsewhere.json" "${m}" ;;
+    multilink) rm -f "${m}"; printf '%s' "$(cat "${ROOT}/${MANIFEST_SOURCE}")" > "$(dirname "${m}")/other.json"
+               cp "${ROOT}/${MANIFEST_SOURCE}" "${m}"; ln -f "${m}" "$(dirname "${m}")/alias.json"
+               chmod 0444 "${m}" ;;
+  esac
+  printf '%s' "${base}"
+}
+
+for HOW in differing writable symlink multilink; do
+  FIXTURE_PM="$(poisoned_manifest "${HOW}")"
+  MPATH="$(manifest_of "${FIXTURE_PM}")"
+  STATE_BEFORE="$(stat -c '%a %U %i %h' "${MPATH}" 2>/dev/null || printf 'symlink')"
+  refuses "a ${HOW} manifest refuses --install" "${FIXTURE_PM}" --install "not replaced or repaired"
+  refuses "a ${HOW} manifest refuses --verify-installed" "${FIXTURE_PM}" --verify-installed "problem(s)"
+  STATE_AFTER="$(stat -c '%a %U %i %h' "${MPATH}" 2>/dev/null || printf 'symlink')"
+  if [[ "${STATE_BEFORE}" == "${STATE_AFTER}" ]]; then
+    pass "the ${HOW} manifest was neither repaired nor replaced"
+  else
+    fail "the ${HOW} manifest was modified: ${STATE_BEFORE} -> ${STATE_AFTER}"
+  fi
+done
+
+# --- the operator invocation contract ---------------------------------------
+#
+# Four values carry a trust boundary each and have no default anywhere in the
+# runtime. Before this runbook existed they lived only in a session transcript.
+
+RUNBOOK="provisioning/artifacts/README.md"
+assert_file "${RUNBOOK}"
+
+assert_runbook() {
+  local missing=()
+  local needle
+  for needle in "/var/lib/kyri/artifacts" "--trusted-source-uid" "--approved-artifact-root" \
+                "--expected-uid" "--expected-gid" "/etc/kyri/fabric" \
+                "declare-package --preflight" "geteuid" "2575c042" "49c27fb6"; do
+    grep -qF -- "${needle}" "${ROOT}/${RUNBOOK}" || missing+=("${needle}")
+  done
+  if (( ${#missing[@]} == 0 )); then
+    pass "the runbook records every load-bearing value, both pins, and both invocations"
+  else
+    fail "the runbook omits: ${missing[*]}"
+  fi
+}
+assert_runbook
+
+# The values are documented, never turned into runtime defaults: a default is
+# the runtime deciding for itself whose bytes to trust.
+run_case "no runtime surface defaults these values" "${PRELUDE}
+cli = Path('tools/capability/cli.py').read_text(encoding='utf-8')
+for flag in ('--approved-artifact-root', '--trusted-source-uid', '--coordinator-uid'):
+    line = [row for row in cli.splitlines() if flag in row]
+    assert line, flag
+    assert all('default=' not in row for row in line), flag + ' acquired a default'
+    assert any('required=True' in row for row in line), flag + ' is no longer required'
+fabric = Path('tools/fabric/cli.py').read_text(encoding='utf-8')
+for flag in ('--store-root', '--expected-uid', '--expected-gid'):
+    rows = [row for row in fabric.splitlines() if flag in row and 'add_argument' in row]
+    assert rows, flag
+    assert all('default=' not in row for row in rows), flag + ' acquired a default'
+resolution = Path('tools/capability/package_resolution.py').read_text(encoding='utf-8')
+assert 'geteuid' not in resolution, 'resolution infers a uid from the process'
+assert 'getuid' not in resolution, 'resolution infers a uid from the process'
+trusted = Path('tools/common/trusted_source.py').read_text(encoding='utf-8')
+assert 'geteuid' not in trusted and 'getuid' not in trusted, \
+    'the trusted-source primitive infers a uid from the process'
+print('OK')
+"
+
 # --- what the ceremony must never touch -------------------------------------
 
 assert_untouched() {
@@ -669,8 +944,12 @@ assert_untouched() {
   if [[ -n "$(ls -A /var/lib/kyri/fabric/capability-packages 2>/dev/null)" ]]; then
     fail "a CPKG record appeared"; problems=1
   fi
+  if [[ "$(sha256sum "${LIVE_MANIFEST}" 2>/dev/null | cut -d' ' -f1 || printf absent)" \
+        != "${LIVE_MANIFEST_BEFORE}" ]]; then
+    fail "the live manifest moved"; problems=1
+  fi
   if (( problems == 0 )); then
-    pass "the live artifact authority is unchanged, and there is no CPKG record or sequence"
+    pass "the live artifact authority and manifest are unchanged, and there is no CPKG record or sequence"
   fi
 }
 assert_untouched
