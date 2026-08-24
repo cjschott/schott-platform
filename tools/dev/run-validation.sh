@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=72
+  TOTAL_STEPS=73
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=86
+  TOTAL_STEPS=87
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -142,6 +142,7 @@ syntax_check() {
   # Operator tooling ships beside the runbook it belongs to, so it is syntax
   # checked here rather than being the one shell script nothing reads.
   bash -n provisioning/execution/*.sh
+  bash -n provisioning/artifacts/*.sh
 }
 run "Shell syntax (bash -n)" syntax_check
 
@@ -499,6 +500,13 @@ run "Capability execution generation-9 installer" \
 # own. Fixture-only; installs nothing here.
 run "Capability execution generation-10 installer" \
   bash tests/test-capability-execution-generation10-installer.sh
+
+# The governed artifact authority: git source and runtime artifact authority
+# are two planes, and this is the deterministic materialisation between them
+# from a pinned commit object. Fixture trees only -- it creates no live artifact
+# root, publishes nothing on this host, needs no privilege, opens no Fabric
+# store, stages nothing, and proves the production store did not move.
+run "Governed artifact authority" bash tests/test-artifact-authority.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no

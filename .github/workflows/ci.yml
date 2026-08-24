@@ -37,6 +37,7 @@ jobs:
           bash -n scripts/*.sh
           bash -n tests/*.sh
           bash -n provisioning/execution/*.sh
+          bash -n provisioning/artifacts/*.sh
 
       - name: Static repository assertions
         run: bash tests/test-static.sh
@@ -449,6 +450,12 @@ jobs:
       # The Generation-10 installation ceremony, fixture-only.
       - name: Capability execution generation-10 installer tests
         run: bash tests/test-capability-execution-generation10-installer.sh
+
+      # The governed artifact authority and the pinned-commit materialisation
+      # into it. Fixture trees only: creates no live artifact root, publishes
+      # nothing, needs no privilege, and stages nothing.
+      - name: Governed artifact authority tests
+        run: bash tests/test-artifact-authority.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).

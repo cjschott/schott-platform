@@ -44,13 +44,14 @@ case "${1:-}" in
 esac
 
 # CI lints `scripts/*.sh tests/*.sh`. The dev scripts and the operator
-# installer under provisioning/execution are linted too, because a
-# tool that lints everything except itself is the one place a defect hides.
+# ceremonies under provisioning/ are linted too, because a tool that lints
+# everything except itself is the one place a defect hides.
 collect_targets() {
   local -a found=()
   local path
   for path in "${ROOT}"/scripts/*.sh "${ROOT}"/tests/*.sh "${ROOT}"/tools/dev/*.sh \
-              "${ROOT}"/provisioning/execution/*.sh; do
+              "${ROOT}"/provisioning/execution/*.sh \
+              "${ROOT}"/provisioning/artifacts/*.sh; do
     [[ -f "${path}" ]] && found+=("${path}")
   done
   printf '%s\n' "${found[@]}"
