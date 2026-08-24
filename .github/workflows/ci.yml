@@ -350,6 +350,13 @@ jobs:
       - name: Capability execution contract outcome tests
         run: bash tests/test-capability-execution-contract-outcome.sh
 
+      # The governed boundary-verification package, driven through the released
+      # package, payload, collector, result-content, and contract-outcome
+      # authorities against fixture paths. Creates no container, opens no
+      # governance store, and declares no CPKG record.
+      - name: Capability execution verification package tests
+        run: bash tests/test-capability-execution-verification-package.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests

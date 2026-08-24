@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=71
+  TOTAL_STEPS=72
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=84
+  TOTAL_STEPS=85
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -367,6 +367,15 @@ run "Capability execution result content" \
 # values other authorities formed.
 run "Capability execution contract outcome" \
   bash tests/test-capability-execution-contract-outcome.sh
+
+# The governed boundary-verification package: the tree CAPDEF-0001 and CCON-0001
+# describe and nothing implemented. Driven through the released package,
+# payload, collector, result-content, and contract-outcome authorities against
+# fixture paths in a temporary directory. It reads the package tree and writes
+# nothing into it, creates no container, opens no governance store, and declares
+# no CPKG record.
+run "Capability execution verification package" \
+  bash tests/test-capability-execution-verification-package.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,
