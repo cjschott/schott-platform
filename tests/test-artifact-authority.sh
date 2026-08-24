@@ -141,16 +141,47 @@ print('OK')
 # The ceremony's own contract, read off its source
 # ===========================================================================
 
-run_case "the canonical artifact root is exact and is claimed by nothing else" "${PRELUDE}
+# A real inspection of ACTIVE authority, not a claim. Every path any active
+# provisioning ceremony or runtime module binds as an artifact root must be this
+# one, and this root must not collide with a plane that already owns a subtree.
+# Historical documents are not scanned: they are not authority, and a suite that
+# failed on a superseded prose mention would be unmaintainable.
+run_case "no active authority claims a conflicting artifact root" "${PRELUDE}
+import re
 assert 'ARTIFACT_ROOT=\"' + ARTIFACT_ROOT + '\"' in SOURCE, 'the root moved'
-for other in ('/var/lib/kyri/fabric', '/var/lib/kyri/trust',
-              '/var/lib/kyri/implementation-authority'):
-    assert 'ARTIFACT_ROOT=\"' + other in SOURCE is False or True
-    assert ARTIFACT_ROOT != other
-# The root is beneath the governed data root and beside, never inside, the
-# planes that already own their own subtrees.
-assert ARTIFACT_ROOT.startswith('/var/lib/kyri/')
-assert ARTIFACT_ROOT.count('/') == 4, ARTIFACT_ROOT
+
+# Active authority: provisioning ceremonies, the runtime tree, and the declared
+# model. Tests are excluded -- they assert about authority, they are not it.
+active = []
+for directory in ('provisioning', 'tools', 'platform-model'):
+    for path in sorted(Path(directory).rglob('*')):
+        if path.is_file() and path.suffix in ('.sh', '.py', '.yaml', '.json') \
+                and '__pycache__' not in str(path):
+            active.append(path)
+assert len(active) > 50, len(active)
+
+# Every literal binding of an artifact-root-shaped name, wherever it is made.
+bindings = {}
+pattern = re.compile(
+    r'(?:ARTIFACT_ROOT|artifact_root|approved_artifact_root|APPROVED_ARTIFACT_ROOT)'
+    r'\s*[:=]\s*[\"\']([^\"\']+)[\"\']')
+for path in active:
+    for value in pattern.findall(path.read_text(encoding='utf-8', errors='replace')):
+        if value.startswith('/'):
+            bindings.setdefault(value, []).append(str(path))
+conflicting = {v: p for v, p in bindings.items() if v != ARTIFACT_ROOT}
+assert not conflicting, 'another active authority binds an artifact root: ' + repr(conflicting)
+
+# And the root must not collide with a plane that already owns a subtree.
+governed = set()
+subtree = re.compile(r'(/var/lib/kyri/[A-Za-z0-9_.-]+)')
+for path in active:
+    governed.update(subtree.findall(path.read_text(encoding='utf-8', errors='replace')))
+owners = {claim for claim in governed
+          if claim != ARTIFACT_ROOT
+          and (claim.startswith(ARTIFACT_ROOT + '/') or ARTIFACT_ROOT.startswith(claim + '/'))}
+assert not owners, 'the artifact root overlaps a governed subtree: ' + repr(owners)
+assert ARTIFACT_ROOT.startswith('/var/lib/kyri/') and ARTIFACT_ROOT.count('/') == 4
 print('OK')
 "
 
@@ -414,12 +445,12 @@ refuses "--verify-installed reports a published tree that drifted" \
 FIXTURE_LOOSE="$(new_fixture)"
 chmod 0775 "${FIXTURE_LOOSE}${ANCESTRY}"
 refuses "a group-writable ancestor refuses" \
-  "${FIXTURE_LOOSE}" --install "ancestry is not trusted"
+  "${FIXTURE_LOOSE}" --install "authority is not trusted"
 
 FIXTURE_WORLD="$(new_fixture)"
 chmod 0777 "${FIXTURE_WORLD}${ANCESTRY_PARENT}"
 refuses "a world-writable ancestor refuses" \
-  "${FIXTURE_WORLD}" --install "ancestry is not trusted"
+  "${FIXTURE_WORLD}" --install "authority is not trusted"
 
 # A symlinked component would let publication land outside the authority.
 FIXTURE_LINK="$(new_fixture)"
@@ -427,7 +458,7 @@ mkdir -p "${FIXTURE_LINK}/elsewhere"; chmod 0755 "${FIXTURE_LINK}/elsewhere"
 rm -rf "${FIXTURE_LINK}${ANCESTRY}"
 ln -s "${FIXTURE_LINK}/elsewhere" "${FIXTURE_LINK}${ANCESTRY}"
 refuses "a symlinked ancestor refuses rather than being followed" \
-  "${FIXTURE_LINK}" --install "ancestry is not trusted"
+  "${FIXTURE_LINK}" --install "authority is not trusted"
 if [[ -z "$(ls -A "${FIXTURE_LINK}/elsewhere")" ]]; then
   pass "nothing was written through the symlink"
 else
@@ -459,6 +490,153 @@ if [[ -f "$(published_of "${FIXTURE_FILE}")" ]]; then
 else
   fail "the conflicting object was removed"
 fi
+
+# --- every component, not only the ancestry ---------------------------------
+#
+# The trusted-source primitive walks EVERY component of the resolved path and
+# applies the same rule to each. A ceremony that validated only the ancestors
+# ABOVE its root would publish beneath an intermediate package directory the
+# runtime later refuses -- reporting DONE and VERIFIED for a tree that can never
+# resolve. The provisioning boundary and the resolution boundary have to be the
+# same boundary, so these cases attack the components between them.
+
+# The package parent, poisoned before the ceremony ever runs.
+poisoned_parent() {
+  local mode="$1" base
+  base="$(new_fixture)"
+  mkdir -p "${base}${ARTIFACT_ROOT}/${PACKAGE_NAME}"
+  chmod 0755 "${base}${ARTIFACT_ROOT}"
+  chmod "${mode}" "${base}${ARTIFACT_ROOT}/${PACKAGE_NAME}"
+  printf '%s' "${base}"
+}
+
+parent_state() { stat -c '%a %U %i %h' "$1${ARTIFACT_ROOT}/${PACKAGE_NAME}"; }
+
+for POISON_MODE in 0775 0777; do
+  FIXTURE_PARENT="$(poisoned_parent "${POISON_MODE}")"
+  PARENT_BEFORE="$(parent_state "${FIXTURE_PARENT}")"
+
+  refuses "a ${POISON_MODE} package parent refuses --install" \
+    "${FIXTURE_PARENT}" --install "not trusted"
+
+  # Refused BEFORE anything was created beneath it: no staging tree, no
+  # extracted object, no published version, and the parent itself untouched.
+  problems=0
+  [[ -z "$(ls -A "${FIXTURE_PARENT}${ARTIFACT_ROOT}/${PACKAGE_NAME}")" ]] || problems=1
+  [[ ! -e "$(published_of "${FIXTURE_PARENT}")" ]] || problems=1
+  [[ "$(parent_state "${FIXTURE_PARENT}")" == "${PARENT_BEFORE}" ]] || problems=1
+  if (( problems == 0 )); then
+    pass "the ${POISON_MODE} parent is refused before staging, extraction, or publication"
+  else
+    fail "the ${POISON_MODE} parent was written beneath or modified"
+  fi
+
+  refuses "a ${POISON_MODE} package parent refuses --verify" \
+    "${FIXTURE_PARENT}" --verify "not trusted"
+done
+
+# The inconsistency the correction exists to close: a version tree that is
+# itself perfect, beneath a parent the runtime refuses. --verify-installed must
+# not report VERIFIED where package resolution would refuse.
+FIXTURE_LATE="$(new_fixture)"
+ceremony "${FIXTURE_LATE}" --install >/dev/null
+chmod 0775 "${FIXTURE_LATE}${ARTIFACT_ROOT}/${PACKAGE_NAME}"
+refuses "--verify-installed refuses a published tree under a writable parent" \
+  "${FIXTURE_LATE}" --verify-installed "not trusted"
+
+run_case "the ceremony and the released primitive agree on the same tree" "${PRELUDE}
+import os
+root = '${FIXTURE_LATE}${ARTIFACT_ROOT}'
+try:
+    handle = open_trusted_directory(root, PACKAGE_NAME + '/' + PACKAGE_VERSION,
+                                    expected_uid=UID)
+    os.close(handle)
+    raise AssertionError('the primitive accepted a writable component')
+except TrustedSourceError as error:
+    assert 'writable beyond its owner' in str(error), error
+# And the owner half of the same rule, which the fixture cannot represent as a
+# real foreign uid without privilege: the primitive is the oracle, and the
+# ceremony must carry the same requirement rather than a weaker one.
+try:
+    handle = open_trusted_directory(root, PACKAGE_NAME + '/' + PACKAGE_VERSION,
+                                    expected_uid=UID + 1)
+    os.close(handle)
+    raise AssertionError('the primitive accepted a foreign owner')
+except TrustedSourceError as error:
+    assert 'not owned by the trusted uid' in str(error), error
+print('OK')
+"
+
+# A symlinked package parent would let publication land outside the authority
+# entirely, and a regular file there is an operator condition to report.
+FIXTURE_PLINK="$(new_fixture)"
+mkdir -p "${FIXTURE_PLINK}${ARTIFACT_ROOT}" "${FIXTURE_PLINK}/elsewhere"
+chmod 0755 "${FIXTURE_PLINK}${ARTIFACT_ROOT}" "${FIXTURE_PLINK}/elsewhere"
+ln -s "${FIXTURE_PLINK}/elsewhere" "${FIXTURE_PLINK}${ARTIFACT_ROOT}/${PACKAGE_NAME}"
+refuses "a symlinked package parent refuses rather than being followed" \
+  "${FIXTURE_PLINK}" --install "not trusted"
+if [[ -z "$(ls -A "${FIXTURE_PLINK}/elsewhere")" ]]; then
+  pass "nothing was written through the symlinked package parent"
+else
+  fail "publication wrote through a symlinked package parent"
+fi
+
+FIXTURE_PFILE="$(new_fixture)"
+mkdir -p "${FIXTURE_PFILE}${ARTIFACT_ROOT}"
+chmod 0755 "${FIXTURE_PFILE}${ARTIFACT_ROOT}"
+printf 'not a package directory\n' > "${FIXTURE_PFILE}${ARTIFACT_ROOT}/${PACKAGE_NAME}"
+PFILE_BEFORE="$(sha256sum "${FIXTURE_PFILE}${ARTIFACT_ROOT}/${PACKAGE_NAME}" | cut -d' ' -f1)"
+refuses "a regular file at the package parent refuses" \
+  "${FIXTURE_PFILE}" --install "not trusted"
+if [[ "$(sha256sum "${FIXTURE_PFILE}${ARTIFACT_ROOT}/${PACKAGE_NAME}" | cut -d' ' -f1)" == "${PFILE_BEFORE}" ]]; then
+  pass "the conflicting package parent was neither repaired nor removed"
+else
+  fail "the conflicting package parent was modified"
+fi
+
+# A poisoned ARTIFACT ROOT is the same condition one level up, and the same
+# refusal. Proven separately because the root is the component the ceremony may
+# create, and creating is where an unchecked assumption would hide.
+FIXTURE_ROOTW="$(new_fixture)"
+mkdir -p "${FIXTURE_ROOTW}${ARTIFACT_ROOT}"
+chmod 0777 "${FIXTURE_ROOTW}${ARTIFACT_ROOT}"
+refuses "a world-writable artifact root refuses" \
+  "${FIXTURE_ROOTW}" --install "not trusted"
+
+# Nothing is repaired anywhere: every poisoned fixture above must still carry
+# exactly the mode it was poisoned with.
+assert_no_repair() {
+  local problems=0
+  [[ "$(stat -c '%a' "${FIXTURE_LATE}${ARTIFACT_ROOT}/${PACKAGE_NAME}")" == "775" ]] || problems=1
+  [[ "$(stat -c '%a' "${FIXTURE_ROOTW}${ARTIFACT_ROOT}")" == "777" ]] || problems=1
+  [[ -L "${FIXTURE_PLINK}${ARTIFACT_ROOT}/${PACKAGE_NAME}" ]] || problems=1
+  if (( problems == 0 )); then
+    pass "no refused component was chmod'ed, chown'ed, removed, or renamed"
+  else
+    fail "the ceremony repaired a component it refused"
+  fi
+}
+assert_no_repair
+
+# The component rule is the primitive's rule, stated once and applied to every
+# component -- not a second, weaker interpretation living beside it.
+run_case "component validation compares owner and writability on every component" "${PRELUDE}
+assert 'check_trusted_component()' in SOURCE, 'there is no single component rule'
+component = SOURCE.split('check_trusted_component()')[1].split('\n}')[0]
+assert 'stat -c \'%U\'' in component, 'the component rule does not read the owner'
+assert 'EXPECTED_OWNER' in component, 'the component rule compares no expected owner'
+assert '-perm /022' in component, 'the component rule does not test writability'
+assert '-L ' in component, 'the component rule does not refuse a symlink'
+assert '-d ' in component, 'the component rule does not require a directory'
+# The owner comparison must not be skipped under a fixture: a rule that only
+# runs in production is a rule no test exercises.
+assert 'FIXTURE' not in component, 'the component rule is weakened under a fixture'
+# Applied to the components the ceremony writes beneath, not only the ancestry.
+assert 'check_trusted_component \"\${PACKAGE_ROOT}\"' in SOURCE \
+    or 'PACKAGE_ROOT' in SOURCE.split('require_trusted_authority()')[1].split('\n}')[0], \
+    'the package parent is not validated'
+print('OK')
+"
 
 # --- what the ceremony must never touch -------------------------------------
 

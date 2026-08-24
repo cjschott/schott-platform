@@ -166,28 +166,80 @@ require_commit() {
   ok "reviewed commit ${COMMIT} exists, is an ancestor of HEAD, on ${BRANCH} (read as ${REPO_OWNER})"
 }
 
-# Every ancestor above the artifact root must already be trusted. Checked, never
-# created: this ceremony owns what is beneath the root, and an untrusted ancestry
-# is an operator condition, not something to repair from inside.
-require_trusted_ancestry() {
-  local path="${ARTIFACT_ROOT}" problems=0 owner mode
+# One component of the trusted path, judged by the released primitive's rule.
+#
+# `trusted_source._check_directory` refuses a component that is not a directory,
+# is not owned by the explicitly supplied trusted uid, or is group- or
+# other-writable; opening with `O_NOFOLLOW|O_DIRECTORY` refuses a symlink and a
+# non-directory before that. Those four conditions are this function, stated
+# once and applied to every component.
+#
+# The primitive is not reused directly, and the reason is not convenience. It
+# answers "may I open this whole relative path", so it requires every component
+# to exist -- and during publication the version directory does not yet. A
+# ceremony that has to ask "are the existing components trustworthy, so that I
+# may create beneath them" cannot ask it that way. What is shared is the rule,
+# not the call, and the suite proves the two agree on the same trees rather than
+# leaving the alignment asserted in a comment.
+check_trusted_component() {
+  local path="$1" problems=0 observed
+  if [[ -L "${path}" ]]; then
+    bad "${path} is a symbolic link"
+    return 1
+  fi
+  if [[ ! -d "${path}" ]]; then
+    bad "${path} is not a directory"
+    return 1
+  fi
+  observed="$(stat -c '%U' "${path}")"
+  if [[ "${observed}" != "${EXPECTED_OWNER}" ]]; then
+    bad "${path} is owned by ${observed}, expected ${EXPECTED_OWNER}"
+    problems=$((problems + 1))
+  fi
+  if [[ -n "$(find "${path}" -maxdepth 0 -perm /022)" ]]; then
+    observed="$(stat -c '%a' "${path}")"
+    bad "${path} is writable beyond its owner (${observed})"
+    problems=$((problems + 1))
+  fi
+  return "${problems}"
+}
+
+# Every component the runtime will walk, in the order it walks them: the
+# ancestry above the root, then the root, then the package parent, then the
+# published version when there is one.
+#
+# The earlier revision of this ceremony validated only the ancestry ABOVE the
+# root. That left the intermediate package directory accepted on the strength of
+# being a directory and not a symlink, so a group-writable one was published
+# beneath and reported DONE and VERIFIED -- for a tree `open_trusted_directory`
+# refuses at exactly that component. The provisioning boundary and the
+# resolution boundary have to be one boundary.
+#
+# Existing components are validated and never repaired. An untrusted one is
+# operator-visible evidence; chmod'ing it would erase the evidence and grant
+# the trust the check exists to withhold.
+require_trusted_authority() {
+  local problems=0 path components=()
+
+  path="$(dirname "${ARTIFACT_ROOT}")"
   while [[ "${path}" != "/" && "${path}" != "${FIXTURE}" && -n "${path}" ]]; do
-    if [[ -L "${path}" ]]; then
-      bad "${path} is a symbolic link"; problems=$((problems + 1))
-    elif [[ -e "${path}" ]]; then
-      owner="$(stat -c '%U' "${path}")"
-      mode="$(stat -c '%a' "${path}")"
-      if [[ -z "${FIXTURE}" && "${owner}" != "root" ]]; then
-        bad "${path} is owned by ${owner}, not root"; problems=$((problems + 1))
-      fi
-      if [[ -n "$(find "${path}" -maxdepth 0 -perm /022)" ]]; then
-        bad "${path} is group- or other-writable (${mode})"; problems=$((problems + 1))
-      fi
-    fi
+    components=("${path}" "${components[@]}")
     path="$(dirname "${path}")"
   done
-  (( problems == 0 )) || halt "the artifact root's ancestry is not trusted"
-  ok "every ancestor of ${ARTIFACT_ROOT} is unwritable beyond its owner and is no symlink"
+  components+=("${ARTIFACT_ROOT}" "${PACKAGE_ROOT}" "${PUBLISHED}")
+
+  local checked=0
+  for path in "${components[@]}"; do
+    # Absent is not untrusted: the ceremony creates the root and the package
+    # directory itself, and validates them after it does.
+    [[ -e "${path}" || -L "${path}" ]] || continue
+    check_trusted_component "${path}" || problems=$((problems + $?))
+    checked=$((checked + 1))
+  done
+
+  (( problems == 0 )) \
+    || halt "the artifact authority is not trusted; nothing was created, written, or repaired"
+  ok "${checked} existing component(s) are ${EXPECTED_OWNER}-owned directories, unwritable beyond their owner, and no symlink"
 }
 
 # The tree commitment, through the installed Generation-10 authority rather than
@@ -258,7 +310,7 @@ verify_published() {
 
 publish() {
   require_commit
-  require_trusted_ancestry
+  require_trusted_authority
 
   [[ ! -e "${STAGING}" ]] \
     || halt "${STAGING} already exists; an interrupted ceremony left material that is not adopted"
@@ -269,17 +321,21 @@ publish() {
   local previous_umask; previous_umask="$(umask)"
   umask 077
 
+  # Existing components were validated above and are left exactly as they are.
+  # A component this ceremony creates is read back afterwards rather than
+  # trusted to have come out as requested: `mkdir -m` masks its mode, and a
+  # directory that is not what was asked for must fail here rather than at
+  # resolution.
   local created=()
   local path
   for path in "${ARTIFACT_ROOT}" "${PACKAGE_ROOT}"; do
-    if [[ -e "${path}" ]]; then
-      [[ -d "${path}" && ! -L "${path}" ]] || halt "${path} exists and is not a directory"
-    else
-      mkdir -m "${DIRECTORY_MODE}" "${path}"
-      created+=("${path}")
-      [[ -n "${FIXTURE}" ]] || chown root:root "${path}"
-      chmod "${DIRECTORY_MODE}" "${path}"
-    fi
+    [[ -e "${path}" || -L "${path}" ]] && continue
+    mkdir -m "${DIRECTORY_MODE}" "${path}"
+    created+=("${path}")
+    [[ -n "${FIXTURE}" ]] || chown root:root "${path}"
+    chmod "${DIRECTORY_MODE}" "${path}"
+    check_trusted_component "${path}" \
+      || halt "${path} was created but does not satisfy the trusted-component contract"
   done
 
   mkdir -m "${STAGING_MODE}" "${STAGING}"
@@ -333,7 +389,7 @@ case "${MODE}" in
 --verify)
   printf '── artifact authority: may the reviewed package be published?\n\n'
   require_commit
-  require_trusted_ancestry
+  require_trusted_authority
   if [[ -e "${PUBLISHED}" ]]; then
     note "${PUBLISHED} already exists; verifying it rather than proposing a publication"
     verify_published || true
@@ -369,7 +425,7 @@ case "${MODE}" in
   ;;
 --verify-installed)
   printf '── artifact authority: is the published package exactly right?\n\n'
-  require_trusted_ancestry
+  require_trusted_authority
   verify_published || true
   (( FAILURES == 0 )) || halt "${FAILURES} problem(s)"
   ok "${PUBLISHED} is the reviewed tree at ${COMMIT}"
