@@ -43,6 +43,9 @@ from typing import Any, Mapping
 from ..trust.identifiers import RECORD_ID as TRUST_RECORD_ID
 from .errors import FabricError
 from .evidence import assemble_evidence, validate_record_evidence
+from .evidence_authority import (EVIDENCE_ID, REASON_UNAVAILABLE as
+                                 REASON_EVIDENCE_UNAVAILABLE,
+                                 resolve_evidence, supports_profile)
 from .resources import (REASON_MALFORMED_VALUE, REASON_UNKNOWN_DIMENSION,
                         satisfies, validate_resource_map)
 from .identifiers import ID_FIELDS as ID_FIELD_FOR, PATTERNS, PREFIXES
@@ -485,6 +488,43 @@ def _identifier(value: Any, kind: str, reason: str = REASON_CONTENT) -> str:
 def _optional_identifier(value: Any, kind: str) -> str | None:
     """Absent, or a released identifier. Never something in between."""
     return None if value is None else _identifier(value, kind)
+
+
+def _require_supporting_evidence(reference: Any, node_identity_reference: Any,
+                                profile: Any, evidence_root: Any,
+                                trusted_uid: Any) -> None:
+    """Resolve a governed Evidence reference, or refuse. Reads; never writes.
+
+    **Applied where the reference is a governed identity, and only there.**
+    `verification_reference` is free text by schema, because a fabric may admit
+    machines this platform model does not describe. A reference that matches
+    the governed `EVID-NNNNNN` grammar is claiming to be one of ours, and a
+    claim that cannot be checked is worth less than no claim -- so it is
+    resolved. Anything else stays the opaque operator reference it always was.
+    A grammar check that refused everything else would forbid the non-modelled
+    hosts the schema deliberately permits.
+
+    **Before the trust query, deliberately.** Trust standing is unavailable for
+    a subject nobody has decided yet, and reporting that first would mask a
+    broken evidence claim behind a condition the operator is already expecting.
+
+    **The authority root and trusted uid are supplied, never inferred.** A
+    reference that names governed evidence while the authority to resolve it
+    was not supplied is unavailable, not waived: fail closed is the whole point
+    of resolving it at all.
+    """
+    if not isinstance(reference, str) or not EVIDENCE_ID.fullmatch(reference):
+        return
+    resolved = resolve_evidence(evidence_id=reference, evidence_root=evidence_root,
+                                trusted_source_uid=trusted_uid)
+    if not resolved.supported:
+        _refuse(UNAVAILABLE if resolved.reason == REASON_EVIDENCE_UNAVAILABLE
+                else INVALID, resolved.reason)
+    unsupported = supports_profile(
+        resolved, node_identity_reference=node_identity_reference,
+        verified_resource_profile=profile)
+    if unsupported is not None:
+        _refuse(REFUSED, unsupported)
 
 
 def _trust_identifier(value: Any) -> str:
@@ -1105,8 +1145,18 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
                   verified_resource_profile: Any, verification_reference: Any,
                   location_class: Any, data_classification: Any,
                   availability_intent: Any, provenance: Any,
-                  name: Any = None, description: Any = None) -> OperationResult:
-    """Make a machine a fabric participant. There is no automatic path."""
+                  name: Any = None, description: Any = None,
+                  evidence_root: Any = None,
+                  evidence_trusted_uid: Any = None) -> OperationResult:
+    """Make a machine a fabric participant. There is no automatic path.
+
+    `evidence_root` and `evidence_trusted_uid` are the trust boundary for
+    resolving a governed `verification_reference`. They are supplied
+    explicitly and have no default: a root discovered from the environment and
+    a uid read off the running process are both this plane agreeing with
+    itself. Where the reference names governed evidence and they are absent,
+    admission refuses as unavailable rather than proceeding unverified.
+    """
     def accept(identifier, digest):
         _text(node_identity_reference, REASON_CONTENT)
         # The governed vocabulary the host schema declares, applied where the
@@ -1131,6 +1181,11 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
         # recording how it was obtained cannot be distinguished from one copied
         # off an advertisement, which §6.2 rejects.
         _text(verification_reference, REASON_UNVERIFIED_PROFILE)
+        # Before trust, so a broken evidence claim is reported as itself
+        # rather than behind the trust standing nobody has established yet.
+        _require_supporting_evidence(verification_reference,
+                                     node_identity_reference, profile,
+                                     evidence_root, evidence_trusted_uid)
         # A subject cannot approve its own admission.
         if (actor == node_identity_reference
                 or approving_authority == node_identity_reference):
@@ -1824,7 +1879,8 @@ def refresh_subject(store, trust_store, *, request_id: Any, actor: Any,
                     verified_resource_profile: Any, verification_reference: Any,
                     location_class: Any, data_classification: Any,
                     availability_intent: Any, provenance: Any,
-                    notes: Any = None) -> OperationResult:
+                    notes: Any = None, evidence_root: Any = None,
+                    evidence_trusted_uid: Any = None) -> OperationResult:
     """Re-declare what was verified about a machine, against current trust.
 
     The only way a subject returns to service, and the only way a declaration
@@ -1872,6 +1928,12 @@ def refresh_subject(store, trust_store, *, request_id: Any, actor: Any,
         if unchanged:
             _refuse(REFUSED, REASON_REFRESH_NOTHING)
 
+        # The same evidence rule the admission applies, applied where the
+        # declaration is restated. A profile that may not be claimed at
+        # admission may not be claimed by superseding either.
+        _require_supporting_evidence(verification_reference, node,
+                                     _resources(_mapping(verified_resource_profile)),
+                                     evidence_root, evidence_trusted_uid)
         standing = _verified_standing(trust_store, fabric_node_trust_record_id,
                                       evaluated_at, HOST_TRUST_DOMAIN)
         if standing.subject_id != node:

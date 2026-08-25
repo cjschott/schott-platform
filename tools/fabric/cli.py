@@ -67,6 +67,10 @@ CREATED_KINDS = {
     "create-route": "capability-route",
 }
 
+# The operations that resolve a governed Evidence reference. Both declare a
+# verified resource profile, so both must prove the evidence supports it.
+NEEDS_EVIDENCE = ("admit-subject", "refresh-subject")
+
 # Which §8 write operations exist, and the released function each delegates to.
 # One entry per spelling, so the interface never branches on a governance-
 # relevant flag: choosing between withdrawing and retiring is the operator's
@@ -163,6 +167,19 @@ def _trust_store(args, *, for_read: bool = False) -> TrustStore:
     return TrustStore(args.trust_store_root)
 
 
+def _evidence_authority(args) -> dict:
+    """The Evidence trust boundary, passed through only where it is consumed.
+
+    Supplied explicitly and never defaulted: an operation that resolves a
+    governed Evidence reference without being told which authority to trust
+    would be choosing one, and the resolver refuses rather than guessing.
+    """
+    if args.command not in NEEDS_EVIDENCE:
+        return {}
+    return {"evidence_root": getattr(args, "evidence_root", None),
+            "evidence_trusted_uid": getattr(args, "evidence_trusted_uid", None)}
+
+
 def _governed(result) -> int:
     """Report what the governed layer decided, and exit as it decided."""
     _emit(result.to_dict())
@@ -179,7 +196,8 @@ def command_write(args) -> int:
     operation = getattr(admission, function_name)
     try:
         if needs_trust:
-            return _governed(operation(store, _trust_store(args), **body))
+            return _governed(operation(store, _trust_store(args),
+                                       **_evidence_authority(args), **body))
         return _governed(operation(store, **body))
     except TypeError:
         # The body named something the operation does not take, or omitted
@@ -238,11 +256,13 @@ def command_preflight(args) -> int:
     try:
         with admission.rehearsing():
             if needs_trust:
-                # The same trust query the real write performs, against the
-                # real store, opened so it cannot provision anything. Skipping
-                # it would make the rehearsal answer a different question from
-                # the write, which is the one thing a rehearsal may not do.
-                outcome = operation(store, _trust_store(args, for_read=True), **body)
+                # The same trust query and the same Evidence resolution the
+                # real write performs, against the real stores, opened so they
+                # cannot provision anything. Skipping either would make the
+                # rehearsal answer a different question from the write, which
+                # is the one thing a rehearsal may not do.
+                outcome = operation(store, _trust_store(args, for_read=True),
+                                    **_evidence_authority(args), **body)
             else:
                 outcome = operation(store, **body)
     except TypeError:
@@ -337,6 +357,10 @@ def build_parser() -> argparse.ArgumentParser:
     def with_body(sub):
         # No identity, authority, or decision content is accepted as an
         # argument; the body is a file inside an approved directory.
+        sub.add_argument("--evidence-root", default=None,
+                         help="the trusted deployment Evidence authority root")
+        sub.add_argument("--evidence-trusted-uid", default=None, type=int,
+                         help="the uid the Evidence authority must be owned by")
         sub.add_argument("--input-file", required=True,
                          help="file name inside the approved directory")
         sub.add_argument("--approved-directory", required=True,

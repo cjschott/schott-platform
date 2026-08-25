@@ -38,6 +38,7 @@ jobs:
           bash -n tests/*.sh
           bash -n provisioning/execution/*.sh
           bash -n provisioning/artifacts/*.sh
+          bash -n provisioning/evidence/*.sh
 
       - name: Static repository assertions
         run: bash tests/test-static.sh
@@ -207,6 +208,11 @@ jobs:
       # CHOST admission vocabulary and read-only trust rehearsal. Fixture-only.
       - name: Fabric host admission tests
         run: bash tests/test-fabric-host-admission.sh
+
+      # The trusted deployment Evidence authority and the read-only cross-plane
+      # resolution that binds an EVID to a claimed profile. Fixture-only.
+      - name: Fabric evidence authority tests
+        run: bash tests/test-fabric-evidence-authority.sh
 
       # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
       # the permanent backstop asserting the package executes nothing. Builds

@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=73
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=88
+  TOTAL_STEPS=89
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -143,6 +143,7 @@ syntax_check() {
   # checked here rather than being the one shell script nothing reads.
   bash -n provisioning/execution/*.sh
   bash -n provisioning/artifacts/*.sh
+  bash -n provisioning/evidence/*.sh
 }
 run "Shell syntax (bash -n)" syntax_check
 
@@ -220,6 +221,12 @@ if (( QUICK == 0 )); then
   # real trust store without provisioning it. Fixture-only: temporary Fabric and
   # Trust stores, and it proves both production stores are unchanged.
   run "Fabric host admission" bash tests/test-fabric-host-admission.sh
+
+  # The trusted deployment Evidence authority, the pinned-commit materialisation
+  # into it, and the read-only cross-plane resolution that binds an EVID to the
+  # profile a host claims. Fixture-only: temporary authorities, and it proves
+  # the production Fabric, Trust and Evidence state is unchanged.
+  run "Fabric evidence authority" bash tests/test-fabric-evidence-authority.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds

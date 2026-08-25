@@ -51,7 +51,8 @@ collect_targets() {
   local path
   for path in "${ROOT}"/scripts/*.sh "${ROOT}"/tests/*.sh "${ROOT}"/tools/dev/*.sh \
               "${ROOT}"/provisioning/execution/*.sh \
-              "${ROOT}"/provisioning/artifacts/*.sh; do
+              "${ROOT}"/provisioning/artifacts/*.sh \
+              "${ROOT}"/provisioning/evidence/*.sh; do
     [[ -f "${path}" ]] && found+=("${path}")
   done
   printf '%s\n' "${found[@]}"

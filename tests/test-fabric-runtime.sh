@@ -6688,7 +6688,13 @@ RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
                     "eligibility.py", "selection.py", "inspection.py", "cli.py",
                     # The one resource-semantics primitive both admission and
                     # eligibility consume, so the two planes cannot drift.
-                    "resources.py"}
+                    "resources.py",
+                    # The read-only reader for the deployment Evidence
+                    # authority. It lives here because Fabric admission is its
+                    # only consumer and this package is repository-side: placing
+                    # it in the Capability runtime to reuse code would move
+                    # plane ownership and make it an installed object.
+                    "evidence_authority.py"}
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
       "the fabric package holds the released modules and C5, and nothing else")
