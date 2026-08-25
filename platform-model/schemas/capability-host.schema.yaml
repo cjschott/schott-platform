@@ -166,6 +166,53 @@ enums:
 # A machine is superseded, never edited. Nothing points forward, so the current
 # declaration is the one no other record supersedes; a chain that forks or
 # loops is reported and never repaired.
+# Which identity a host declares itself under, when this platform model already
+# describes the machine.
+#
+# `node_identity_reference` is opaque by design and this schema constrains no
+# form for it: a fabric may admit machines the model does not describe, and an
+# identity supplied by reference is the point. What had no rule was the case
+# where the model DOES describe the machine. A host standing for `HOST-0001`
+# could be declared under any string at all, so nothing downstream could tell
+# that a piece of evidence, a trust record and a host record were about one
+# machine — and the three planes name their subjects in three namespaces that
+# would never meet by accident.
+#
+# The rule is identity equality, not a hostname mapping. `schai` is a label;
+# `HOST-0001` is the identity. Nothing is inferred from a hostname, an
+# endpoint, or a resemblance between strings, which is the same discipline
+# ADR-0012 already applies to `local_node_identity`.
+#
+# ON REINSTALLATION, stated because this narrows a property the note above
+# claims. A hostname survives a reinstall and so does an entity identifier, so
+# neither makes a reinstalled machine a new subject on its own. What does is a
+# model decision: identifiers are unique and immutable and are never reused
+# after retirement, so a machine rebuilt as a genuinely new subject is a
+# retired entity and a new one, and it therefore carries a new node identity
+# and starts a new supersession chain. A rebuild that the model still regards
+# as the same entity supersedes instead. The judgement moves to the plane that
+# owns entity lifecycle rather than being implied by the identity's shape.
+#
+# NOT MECHANICALLY ENFORCED HERE, and deliberately. Checking that an identifier
+# names a real entity means reading the platform model, and Fabric admission
+# opens no file — a property worth more than an early check. The equality below
+# is what makes it verifiable: an Evidence resolver comparing `EVID.target`
+# with `node_identity_reference` proves both sides name one entity without
+# admission having to resolve either.
+platform_model_node_identity:
+  applies_to: capability-host-representing-a-platform-model-host
+  identity: platform-model-host-entity-id
+  comparison: exact-equality
+  inference_from_hostname: not-permitted
+  identifier_prefix: HOST
+  identifier_authority: docs/standards/platform-ontology-standard.md
+  # The same identifier, read by three planes that each name subjects their own
+  # way. Fixing the equalities here is what lets a later resolver check them.
+  equal_to:
+    evidence_target: EVID.target
+    trust_subject: trust-record.subject_identifier
+    selection_context: local_node_identity
+
 supersession_chain_identity: node_identity_reference
 supersession_head_resolution: unique-unsuperseded-record-in-chain
 supersession_forked: refuse

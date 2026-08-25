@@ -176,7 +176,7 @@ def stores(base):
 def subject_body(**overrides):
     body = dict(request_id='req-host', actor=OPERATOR, approving_authority=OPERATOR,
                 recorded_at=STAMP, evaluated_at=STAMP,
-                node_identity_reference='node/schai',
+                node_identity_reference='HOST-0001',
                 fabric_node_trust_record_id='TREC-000001',
                 verified_resource_profile=dict(PROFILE),
                 verification_reference='evidence/host-observed',
@@ -392,7 +392,7 @@ print('OK')
 run_case "the model refuses a host that identifies no verifying evidence" "${HARNESS}
 import dataclasses
 fields_present = dict(
-    capability_host_id='CHOST-0001', node_identity_reference='node/schai',
+    capability_host_id='CHOST-0001', node_identity_reference='HOST-0001',
     fabric_node_trust_record_id='TREC-000001',
     verified_resource_profile=dict(PROFILE), location_class='on-premises',
     data_classification='internal', availability_intent='in-service',
@@ -409,6 +409,129 @@ for empty in (None, '', '   '):
     except Exception:
         continue
     raise AssertionError('accepted verification_reference ' + repr(empty))
+print('OK')
+"
+
+# ===========================================================================
+# Canonical node identity for a Platform Model-backed host
+# ===========================================================================
+#
+# `node_identity_reference` is opaque by design: a fabric may admit machines
+# this platform model does not describe, and the schema constrains no form.
+# What was missing is the case where the machine IS described -- there was no
+# rule saying which identity to use, so a host standing for HOST-0001 could be
+# admitted under any string at all, and nothing downstream could tell that the
+# evidence, the trust record and the host record were about one machine.
+#
+# The rule adopted is identity equality, not a hostname mapping: for a host
+# representing a governed Platform Model Host entity, the node identity IS that
+# entity's identifier. `schai` is a label; `HOST-0001` is the identity.
+
+run_case "the schema states the Platform Model node-identity rule" "${PRELUDE}
+rule = SCHEMA['platform_model_node_identity']
+assert rule['applies_to'] == 'capability-host-representing-a-platform-model-host', rule
+assert rule['identity'] == 'platform-model-host-entity-id', rule
+assert rule['comparison'] == 'exact-equality', rule
+assert rule['inference_from_hostname'] == 'not-permitted', rule
+# The prefix is the ontology standard's, cited rather than restated as a
+# second grammar.
+assert rule['identifier_prefix'] == 'HOST', rule
+assert rule['identifier_authority'] == \
+    'docs/standards/platform-ontology-standard.md', rule
+print('OK')
+"
+
+# The grammar is the ontology standard's own, read from it rather than
+# transcribed. A second HOST pattern would be a second answer to what a host
+# identity is.
+run_case "the canonical identity grammar comes from the ontology standard" "${PRELUDE}
+import re
+standard = Path('docs/standards/platform-ontology-standard.md').read_text(encoding='utf-8')
+row = [l for l in standard.splitlines() if l.startswith('| Host |')]
+assert len(row) == 1, row
+assert '\`HOST\`' in row[0] and '\`HOST-0001\`' in row[0], row[0]
+# Every Host entity the model actually declares agrees with it.
+import pathlib
+ids = []
+for path in sorted(pathlib.Path('platform-model/hosts').glob('*.yaml')):
+    record = load_strict(str(path))
+    if isinstance(record, dict) and record.get('type') == 'host':
+        ids.append(record['id'])
+assert ids, 'no host entities found'
+pattern = re.compile(r'^HOST-[0-9]{4}\$')
+assert all(pattern.fullmatch(i) for i in ids), ids
+assert 'HOST-0001' in ids, ids
+# And the label is not the identity.
+assert not pattern.fullmatch('node/schai')
+assert not pattern.fullmatch('schai')
+print('OK')
+"
+
+run_case "HOST-0001 is the schai host entity, and schai is only its label" "${PRELUDE}
+record = load_strict('platform-model/hosts/schai.yaml')
+assert record['id'] == 'HOST-0001', record['id']
+assert record['type'] == 'host'
+assert record['hostname'] == 'schai' and record['name'] == 'schai'
+# The identity survives a rename; the label does not identify anything.
+assert record['id'] != record['hostname']
+print('OK')
+"
+
+# The two future equalities the rule fixes. Neither is resolved here -- the
+# Evidence resolver is S3-quater-A's -- but both are now stated where a
+# resolver can read them rather than being reconstructed from a transcript.
+run_case "evidence and trust equalities are normatively fixed" "${PRELUDE}
+rule = SCHEMA['platform_model_node_identity']
+equalities = rule['equal_to']
+assert equalities['evidence_target'] == 'EVID.target', equalities
+assert equalities['trust_subject'] == 'trust-record.subject_identifier', equalities
+assert equalities['selection_context'] == 'local_node_identity', equalities
+# The trust domain the equality is scoped to is the one already governed.
+assert SCHEMA['trust_domain'] == 'fabric-node'
+print('OK')
+"
+
+# EVID-000001 already satisfies the evidence half for the intended first host.
+run_case "EVID-000001 targets the canonical identity for schai" "${PRELUDE}
+evidence = load_strict('platform-model/evidence/evid-000001-schai-host-architecture.yaml')
+host = load_strict('platform-model/hosts/schai.yaml')
+assert evidence['target'] == host['id'] == 'HOST-0001', (evidence['target'], host['id'])
+# Which is exactly the equality the rule fixes: EVID.target == the identity a
+# CHOST for this machine must carry.
+assert evidence['facts']['governed_field'] == 'architecture'
+assert evidence['facts']['canonical_value'] == 'x86-64'
+print('OK')
+"
+
+# The Trust plane already accepts this identity; nothing about non-host trust
+# subjects is narrowed by adopting it.
+run_case "trust accepts the canonical identity and stays otherwise unconstrained" "${PRELUDE}
+trust_record = load_strict('platform-model/schemas/trust-record.schema.yaml')
+assert 'subject_identifier' in trust_record['required_fields']
+# No pattern constrains a trust subject: identities are opaque by reference,
+# and adopting HOST-0001 for fabric-node subjects narrows no other domain.
+assert 'subject_identifier' not in (trust_record.get('field_rules') or {}) or \
+    'pattern' not in (trust_record['field_rules'].get('subject_identifier') or {})
+assert 'fabric-node' in str(trust_record), 'fabric-node is not a governed domain'
+from tools.fabric.trust_adapter import _require_subject
+assert _require_subject('HOST-0001') == 'HOST-0001'
+assert _require_subject('anything-else') == 'anything-else'
+print('OK')
+"
+
+# A fixture standing for the real Platform Model-backed host must use the
+# canonical identity. Fixtures that deliberately exercise arbitrary identities
+# are a different case and are left alone.
+run_case "the schai admission harness uses the canonical identity" "${PRELUDE}
+suite = Path('tests/test-fabric-host-admission.sh').read_text(encoding='utf-8')
+bindings = [line.strip() for line in suite.splitlines()
+            if 'node_identity_reference=' in line and 'in line' not in line]
+assert bindings, 'the harness binds no node identity'
+for line in bindings:
+    assert \"node_identity_reference='HOST-0001'\" in line, line
+# The non-normative string may still be NAMED here -- a case above proves it is
+# refused as an identity -- but it may not be the value any fixture declares.
+assert not any('node/schai' in line for line in bindings), bindings
 print('OK')
 "
 
