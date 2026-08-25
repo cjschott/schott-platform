@@ -1,6 +1,6 @@
 """Command line interface for the Trust Plane runtime.
 
-Seven commands. Nothing here deletes, updates, restores, scores, or enrolls,
+Eight commands. Nothing here deletes, updates, restores, scores, or enrolls,
 and no flag could be added to make it: the commands that would do those things
 do not exist.
 
@@ -39,6 +39,10 @@ from .models import (
     TrustVerificationDetails,
 )
 from .root_authority import declare_root_authority, load_root_declaration
+from .root_lineage_backfill import (
+    apply_root_lineage_backfill,
+    plan_root_lineage_backfill,
+)
 from .store import TrustStore
 from . import query as Q
 
@@ -203,6 +207,50 @@ def command_create_decision(args) -> int:
     return EXIT_SUCCESS
 
 
+def command_backfill_root_lineage(args) -> int:
+    """Record how the existing Operator Root was established, once.
+
+    `--preflight` runs every precondition and constructs both records against
+    the same store opened read-only, then stops before allocating the audit
+    identifier. What it reports is what the write would produce.
+    """
+    rehearse = bool(getattr(args, "preflight", False))
+    store = (TrustStore.open_for_read(args.store_root) if rehearse
+             else _open_store(args))
+    payload = _read_input(args.input_file, args.approved_directory)
+    plan = plan_root_lineage_backfill(
+        store,
+        recorded_at=_parse_time(str(payload["recorded_at"]), "recorded_at"),
+        reason=str(payload["reason"]),
+        performed_by=str(payload["performed_by"]),
+        rehearse=rehearse,
+    )
+    destination = store.path_for("lineage", plan.lineage.id)
+    if rehearse:
+        _emit({
+            "outcome": "preflight",
+            "operation": "backfill-root-lineage",
+            "would_accept": True,
+            "mutated": False,
+            "authority_id": plan.lineage.authority_id,
+            "predicted_lineage_record_id": plan.lineage.id,
+            "predicted_audit_id": plan.audit_event.audit_id,
+            "would_write_lineage": plan.writes_lineage,
+            "would_write_audit": plan.writes_audit,
+            "establishment_audit_id": plan.lineage.establishment_audit_id,
+            "evidence_reference_ids": list(plan.lineage.evidence_reference_ids),
+            "established_at": plan.lineage.established_at.isoformat(),
+            "recorded_at": plan.lineage.recorded_at.isoformat(),
+            "audit_fingerprint": plan.audit_event.fingerprint,
+            "destination": str(destination),
+            "destination_exists": destination.exists(),
+            "store_root": str(store.root),
+        })
+        return EXIT_SUCCESS
+    _emit(apply_root_lineage_backfill(store, plan))
+    return EXIT_SUCCESS
+
+
 def command_show_subject(args) -> int:
     store = _open_store(args)
     result = Q.get_current_trust(store, args.subject_id,
@@ -276,6 +324,15 @@ def build_parser() -> argparse.ArgumentParser:
                           help="validate everything reachable without mutating: "
                                "allocates no identifier and writes nothing")
     decision.set_defaults(handler=command_create_decision)
+
+    backfill = with_input(with_store(subparsers.add_parser(
+        "backfill-root-lineage",
+        help="record the root establishment lineage the ceremony omitted; "
+             "refused unless exactly that defect is present")))
+    backfill.add_argument("--preflight", action="store_true",
+                          help="check every precondition and construct both "
+                               "records without allocating or writing anything")
+    backfill.set_defaults(handler=command_backfill_root_lineage)
 
     show = with_store(subparsers.add_parser(
         "show-subject", help="current stored and effective state for a subject"))

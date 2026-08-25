@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=73
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=90
+  TOTAL_STEPS=91
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -197,6 +197,11 @@ if (( QUICK == 0 )); then
   # spending one. Fixture-only: copies of the live Trust store, and read-only
   # opens of it, proving the live store is byte-identical afterwards.
   run "Trust decision preflight" bash tests/test-trust-decision-preflight.sh
+
+  # The one-time root establishment lineage repair ADR-0014 specifies. It
+  # reconstructs the pre-fix ceremony shape in temp directories rather than
+  # copying the live store, and proves it performs no production backfill.
+  run "Trust root lineage backfill" bash tests/test-trust-root-lineage-backfill.sh
   # After the fabric architecture suite: ENG-0004 implements what ADR-0012
   # specifies, so the runtime is validated downstream of the specification. It
   # builds synthetic records in memory and spawns Python, so it sits with the
