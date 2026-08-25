@@ -148,9 +148,18 @@ def _fabric_store(args, *, for_read: bool = False) -> FabricStore:
                        expected_gid=args.expected_gid)
 
 
-def _trust_store(args) -> TrustStore:
+def _trust_store(args, *, for_read: bool = False) -> TrustStore:
+    """The trust store, opened to write or opened to read.
+
+    `for_read` is the difference between a rehearsal and a write. The writing
+    constructor provisions the store's directories, so opening one to answer
+    *would this succeed* would create the very state the rehearsal promises not
+    to touch. `open_for_read` is the released opener that creates nothing.
+    """
     if not getattr(args, "trust_store_root", None):
         raise _Unusable("this operation requires --trust-store-root")
+    if for_read:
+        return TrustStore.open_for_read(args.trust_store_root)
     return TrustStore(args.trust_store_root)
 
 
@@ -199,17 +208,18 @@ def command_preflight(args) -> int:
     disagree with what allocation would hand out. It remains a prediction:
     another caller may take it in between, which is why the write path
     allocates for itself rather than being handed this value.
+
+    **The trust store is read the same way.** An operation that needs trust
+    standing gets the real trust store opened through `open_for_read`, so the
+    real query runs and nothing is provisioned by asking. This surface used to
+    refuse those operations outright, on the correct observation that the
+    writing constructor creates its root and the mistaken conclusion that no
+    read-only opener existed. One does, and it is inherited -- so the governed
+    write that most needs a rehearsal was the one that could not have one.
+    Trust standing is never simulated here and never skipped; the rehearsal
+    asks exactly what the write asks.
     """
     function_name, needs_trust = WRITE_OPERATIONS[args.command]
-    if needs_trust:
-        # A rehearsal would have to construct a TrustStore, and that creates
-        # its root. Refusing is the fail-closed answer until a read-only trust
-        # opener exists; half-supporting it would risk the very state the
-        # preflight promises not to touch.
-        raise _Unusable(
-            f"--preflight does not yet support '{args.command}', which reads the "
-            "trust store; only operations that need no trust standing can be "
-            "rehearsed without risking trust state")
 
     body = _decision_body(args.input_file, args.approved_directory)
     store = _fabric_store(args, for_read=True)
@@ -227,7 +237,14 @@ def command_preflight(args) -> int:
     operation = getattr(admission, function_name)
     try:
         with admission.rehearsing():
-            outcome = operation(store, **body)
+            if needs_trust:
+                # The same trust query the real write performs, against the
+                # real store, opened so it cannot provision anything. Skipping
+                # it would make the rehearsal answer a different question from
+                # the write, which is the one thing a rehearsal may not do.
+                outcome = operation(store, _trust_store(args, for_read=True), **body)
+            else:
+                outcome = operation(store, **body)
     except TypeError:
         raise _Unusable("the decision body does not match this operation") from None
 

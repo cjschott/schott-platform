@@ -1,0 +1,411 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# CHOST admission: the governed vocabulary, and rehearsing it without mutating
+# the Trust store.
+#
+# TWO DEFECTS THIS SUITE EXISTS FOR, BOTH THE SAME SHAPE AS THE PACKAGE ONE.
+#
+# 1. `capability-host.schema.yaml` declares three closed enums --
+#    `location_class`, `availability_intent`, `data_classification` -- and the
+#    released constants for all three already exist in `admission.py` and
+#    `models.py`. `withdraw_subject` and `refresh_subject` enforce them through
+#    `_member_of`. `admit_subject`, the one operation that CREATES a host,
+#    checked only that they were non-empty text. A machine admitted with a
+#    location class nobody governs would be a permanent immutable record that
+#    could never afterwards be refreshed, because refresh applies the rule the
+#    admission skipped.
+#
+# 2. `--preflight` refused every operation that reads the Trust store, on the
+#    stated grounds that constructing a `TrustStore` creates its root and no
+#    read-only opener existed. One does: `ImmutableStore.open_for_read` is
+#    inherited by `TrustStore` and creates nothing. The refusal was correct
+#    about the hazard and wrong about the remedy, so the one governed write
+#    that most needs a rehearsal was the one that could not have one.
+#
+# WHAT IS DELIBERATELY NOT DECIDED HERE. `verification_reference` has no
+# governed namespace, resolution rule, or referent anywhere in committed
+# authority -- it appears in exactly two list entries of the host schema and
+# nowhere else. This suite pins that absence as a finding rather than inventing
+# a grammar for it, exactly as `resource_requirements` was left unresolved
+# until an authority ruled.
+#
+# Fixture-only. Builds throwaway Fabric and Trust stores under a temporary
+# directory, opens the production stores read-only at most, and proves both are
+# byte-identical when it finishes. It declares no host, allocates no
+# identifier, and creates no sequence.
+#
+# Governed by:
+#   platform-model/schemas/capability-host.schema.yaml
+#   docs/decisions/ADR-0012-distributed-capability-fabric.md
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+FAILURES=0
+pass() { printf 'PASS: %s\n' "$1"; }
+fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
+
+FABRIC_ROOT="/var/lib/kyri/fabric"                 # prod-path-reference
+TRUST_ROOT="/var/lib/kyri/trust"                   # prod-path-reference
+production_state() {
+  local path="$1"
+  if [[ -e "${path}" ]]; then
+    { find "${path}" -printf '%y %m %n %U:%G %s %p\n' 2>/dev/null | sort
+      find "${path}" -type f -exec sha256sum {} + 2>/dev/null | sort
+    } | sha256sum | cut -d' ' -f1
+  else
+    printf 'absent'
+  fi
+}
+FABRIC_BEFORE="$(production_state "${FABRIC_ROOT}")"
+TRUST_BEFORE="$(production_state "${TRUST_ROOT}")"
+
+run_case() {
+  local label="$1" script="$2" actual
+  if actual="$(cd "${ROOT}" && python3 -c "${script}" 2>&1)"; then
+    if [[ "${actual}" == "OK" ]]; then
+      pass "${label}"
+    else
+      fail "${label} -- expected OK, got: ${actual}"
+    fi
+  else
+    fail "${label} -- raised: ${actual}"
+  fi
+}
+
+PRELUDE="
+import json, os, subprocess, sys
+from dataclasses import fields as dataclass_fields
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+sys.dont_write_bytecode = True
+
+from tools.common.yaml_strict import load_strict
+from tools.fabric import admission as A
+from tools.fabric.models import CapabilityHost, WORKLOAD_DATA_CLASSIFICATIONS
+from tools.fabric.store import FabricStore
+from tools.trust.store import TrustStore
+
+UID = os.geteuid()
+GID = os.getegid()
+SCHEMA = load_strict('platform-model/schemas/capability-host.schema.yaml')
+ADMISSION = Path('tools/fabric/admission.py').read_text(encoding='utf-8')
+CLI = Path('tools/fabric/cli.py').read_text(encoding='utf-8')
+"
+
+# ===========================================================================
+# R6 -- the vocabulary is governed, and the constants already exist
+# ===========================================================================
+
+run_case "the host schema declares three closed enums" "${PRELUDE}
+enums = SCHEMA['enums']
+assert set(enums) == {'location_class', 'availability_intent', 'data_classification'}, sorted(enums)
+assert enums['location_class'] == ['on-premises', 'operator-controlled-remote',
+                                   'third-party-hosted'], enums['location_class']
+assert enums['availability_intent'] == ['in-service', 'draining', 'withheld'], \
+    enums['availability_intent']
+assert enums['data_classification'] == ['internal'], enums['data_classification']
+print('OK')
+"
+
+# The released constants are the schema's own values. Compared rather than
+# assumed: two transcriptions of one vocabulary are two vocabularies the day
+# they drift.
+run_case "the released constants transcribe the schema exactly" "${PRELUDE}
+enums = SCHEMA['enums']
+assert list(A.LOCATION_CLASSES) == enums['location_class'], A.LOCATION_CLASSES
+assert list(A.AVAILABILITY_INTENTS) == enums['availability_intent'], A.AVAILABILITY_INTENTS
+assert list(WORKLOAD_DATA_CLASSIFICATIONS) == enums['data_classification'], \
+    WORKLOAD_DATA_CLASSIFICATIONS
+print('OK')
+"
+
+# The rule already runs where a host is superseded. It must also run where one
+# is created, or admission writes what refresh can never restate.
+run_case "every host operation applies the same membership rule" "${PRELUDE}
+import ast
+tree = ast.parse(ADMISSION)
+funcs = [(n.lineno, n.end_lineno, n.name) for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef)]
+def owner(line):
+    best = None
+    for start, end, name in funcs:
+        if start <= line <= end and (best is None or start > best[0]):
+            best = (start, name)
+    return best[1] if best else None
+def enclosing(line):
+    # The preflight and accept closures are nested; report the governed
+    # operation that encloses them.
+    inner = owner(line)
+    outer = None
+    for start, end, name in funcs:
+        if start <= line <= end and name not in ('preflight', 'accept', 'build'):
+            if outer is None or start > outer[0]:
+                outer = (start, name)
+    return outer[1] if outer else inner
+checked = {}
+for index, line in enumerate(ADMISSION.splitlines(), 1):
+    if '_member_of(' in line and 'def _member_of' not in line:
+        checked.setdefault(enclosing(index), set())
+        for field in ('location_class', 'availability_intent', 'data_classification'):
+            if field in line:
+                checked[enclosing(index)].add(field)
+for operation in ('admit_subject', 'refresh_subject'):
+    got = checked.get(operation, set())
+    assert got == {'location_class', 'availability_intent', 'data_classification'}, \
+        operation + ' enforces only ' + repr(sorted(got))
+print('OK')
+"
+
+# --- behaviour, against fixture stores ---------------------------------------
+
+HARNESS="${PRELUDE}
+STAMP = datetime(2026, 8, 25, 9, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+OPERATOR = 'operator:cschott'
+PROV = {'class': 'declared', 'source': 'operator'}
+PROFILE = {'host_memory_mb': 8192, 'host_cpu_cores': 4, 'architecture': 'x86-64'}
+
+def stores(base):
+    fabric = FabricStore(Path(base) / 'fabric', expected_uid=UID, expected_gid=GID)
+    trust = TrustStore(Path(base) / 'trust')
+    return fabric, trust
+
+def subject_body(**overrides):
+    body = dict(request_id='req-host', actor=OPERATOR, approving_authority=OPERATOR,
+                recorded_at=STAMP, evaluated_at=STAMP,
+                node_identity_reference='node/schai',
+                fabric_node_trust_record_id='TREC-000001',
+                verified_resource_profile=dict(PROFILE),
+                verification_reference='evidence/host-observed',
+                location_class='on-premises', data_classification='internal',
+                availability_intent='in-service', provenance=dict(PROV),
+                name=None, description=None)
+    body.update(overrides)
+    return body
+
+def host_sequence(fabric):
+    return Path(fabric.root) / 'sequences' / 'capability-host.seq'
+"
+
+# An ungoverned vocabulary value must be refused before allocation. The trust
+# record is absent in these fixtures, so a body that reaches the trust query at
+# all would report a trust reason -- which is exactly how a vocabulary refusal
+# is told apart from one that slipped past.
+run_case "an ungoverned location class is refused before allocation" "${HARNESS}
+with TemporaryDirectory() as tmp:
+    fabric, trust = stores(tmp)
+    for bad in ('banana', 'on premises', 'ON-PREMISES', 'on-premises ', '', 'cloud'):
+        result = A.admit_subject(fabric, trust, **subject_body(location_class=bad))
+        assert result.outcome == A.INVALID, (bad, result.to_dict())
+        assert result.reason == A.REASON_CONTENT, (bad, result.reason)
+    assert not host_sequence(fabric).exists(), 'a refused vocabulary spent an identifier'
+    assert not any(fabric.path_for('capability-host', 'CHOST-0001').parent.iterdir())
+print('OK')
+"
+
+run_case "an ungoverned availability intent is refused before allocation" "${HARNESS}
+with TemporaryDirectory() as tmp:
+    fabric, trust = stores(tmp)
+    for bad in ('online', 'IN-SERVICE', 'in service', '', 'up'):
+        result = A.admit_subject(fabric, trust, **subject_body(availability_intent=bad))
+        assert result.outcome == A.INVALID, (bad, result.to_dict())
+        assert result.reason == A.REASON_UNKNOWN_INTENT, (bad, result.reason)
+    assert not host_sequence(fabric).exists()
+print('OK')
+"
+
+run_case "an ungoverned data classification is refused before allocation" "${HARNESS}
+with TemporaryDirectory() as tmp:
+    fabric, trust = stores(tmp)
+    for bad in ('secret', 'public', 'INTERNAL', 'internal ', '', 'confidential'):
+        result = A.admit_subject(fabric, trust, **subject_body(data_classification=bad))
+        assert result.outcome == A.INVALID, (bad, result.to_dict())
+        assert result.reason == A.REASON_UNKNOWN_CLASSIFICATION, (bad, result.reason)
+    assert not host_sequence(fabric).exists()
+print('OK')
+"
+
+# The governed spellings must still reach the trust query rather than being
+# refused as content: a rule that rejected its own vocabulary would be worse
+# than none.
+run_case "every governed value passes the vocabulary rule" "${HARNESS}
+with TemporaryDirectory() as tmp:
+    fabric, trust = stores(tmp)
+    for field, values in (('location_class', A.LOCATION_CLASSES),
+                          ('availability_intent', A.AVAILABILITY_INTENTS),
+                          ('data_classification', WORKLOAD_DATA_CLASSIFICATIONS)):
+        for value in values:
+            result = A.admit_subject(fabric, trust, **subject_body(**{field: value}))
+            # Refused for the ABSENT trust record, never for the vocabulary.
+            assert result.reason not in (A.REASON_CONTENT, A.REASON_UNKNOWN_INTENT,
+                                         A.REASON_UNKNOWN_CLASSIFICATION), \
+                (field, value, result.to_dict())
+    assert not host_sequence(fabric).exists()
+print('OK')
+"
+
+# A malformed trust identifier is malformed content, checked by syntax before
+# the trust store is consulted -- the same order `refresh_subject` uses.
+run_case "a malformed trust record identity is refused by syntax" "${HARNESS}
+with TemporaryDirectory() as tmp:
+    fabric, trust = stores(tmp)
+    for bad in ('', 'not-an-id', 'TREC-1', 'trec-000001', 'CHOST-0001'):
+        result = A.admit_subject(fabric, trust,
+                                 **subject_body(fabric_node_trust_record_id=bad))
+        assert result.outcome in (A.INVALID, A.REFUSED, A.UNAVAILABLE), (bad, result.to_dict())
+        assert result.record_id is None, (bad, result.to_dict())
+    assert not host_sequence(fabric).exists()
+print('OK')
+"
+
+# ===========================================================================
+# Read-only rehearsal of a trust-reading operation
+# ===========================================================================
+
+run_case "the released read-only trust opener creates nothing" "${PRELUDE}
+with TemporaryDirectory() as tmp:
+    root = Path(tmp) / 'trust-readonly'
+    store = TrustStore.open_for_read(root)
+    assert isinstance(store, TrustStore)
+    assert not root.exists(), 'open_for_read created the trust root'
+    writing = Path(tmp) / 'trust-writing'
+    TrustStore(writing)
+    assert writing.exists(), 'the writing constructor created nothing'
+    created = sorted(p.name for p in writing.iterdir())
+    assert 'decisions' in created and 'sequences' in created, created
+print('OK')
+"
+
+run_case "the preflight surface opens the trust store read-only" "${PRELUDE}
+assert 'TrustStore.open_for_read' in CLI, 'the CLI never opens trust read-only'
+assert 'does not yet support' not in CLI, \\
+    'the CLI still refuses to rehearse trust-reading operations'
+print('OK')
+"
+
+# The whole point: a rehearsal of the real admission, against a real trust
+# store, that leaves both filesystems byte-identical.
+run_case "rehearsing admit-subject mutates neither store" "${HARNESS}
+import hashlib
+def state(path):
+    entries = []
+    for item in sorted(Path(path).rglob('*')):
+        info = item.lstat()
+        entries.append(f'{item} {info.st_mode} {info.st_size}')
+        if item.is_file():
+            entries.append(hashlib.sha256(item.read_bytes()).hexdigest())
+    return hashlib.sha256('\n'.join(entries).encode()).hexdigest()
+
+with TemporaryDirectory() as tmp:
+    fabric, trust = stores(tmp)
+    before_fabric, before_trust = state(fabric.root), state(trust.root)
+    reader = FabricStore.open_for_read(fabric.root, expected_uid=UID, expected_gid=GID)
+    trust_reader = TrustStore.open_for_read(trust.root)
+    with A.rehearsing():
+        outcome = A.admit_subject(reader, trust_reader, **subject_body())
+    # The trust record is absent, so the rehearsal reaches the trust query and
+    # refuses there -- proving the query ran rather than being skipped.
+    assert outcome.outcome in (A.REFUSED, A.UNAVAILABLE), outcome.to_dict()
+    assert outcome.record_id is None, outcome.to_dict()
+    assert state(fabric.root) == before_fabric, 'the rehearsal mutated the fabric store'
+    assert state(trust.root) == before_trust, 'the rehearsal mutated the trust store'
+    assert not host_sequence(fabric).exists()
+print('OK')
+"
+
+# A rehearsal must not answer a question the real write would answer
+# differently. The vocabulary rule runs in both.
+run_case "a rehearsal applies the same vocabulary rule as the write" "${HARNESS}
+with TemporaryDirectory() as tmp:
+    fabric, trust = stores(tmp)
+    reader = FabricStore.open_for_read(fabric.root, expected_uid=UID, expected_gid=GID)
+    trust_reader = TrustStore.open_for_read(trust.root)
+    body = subject_body(location_class='banana')
+    with A.rehearsing():
+        rehearsed = A.admit_subject(reader, trust_reader, **body)
+    written = A.admit_subject(fabric, trust, **body)
+    assert rehearsed.outcome == written.outcome == A.INVALID, (rehearsed.to_dict(), written.to_dict())
+    assert rehearsed.reason == written.reason == A.REASON_CONTENT
+    assert rehearsed.request_digest == written.request_digest, 'the digests disagree'
+print('OK')
+"
+
+# ===========================================================================
+# R7 -- pinned as unresolved, not decided
+# ===========================================================================
+#
+# `verification_reference` appears in committed authority exactly twice, both
+# times as a bare list entry in the host schema. Nothing declares a namespace,
+# a referent, an owning store, or a resolution rule. Admission accepts any
+# non-empty string, and a fixture in the runtime suite uses a bare absolute
+# path that matches no committed grammar. This case exists so the absence is a
+# checked fact rather than an oversight, and so that inventing a grammar has to
+# be a deliberate edit to a test that says why it must not be.
+
+run_case "verification_reference has no governed resolution anywhere" "${PRELUDE}
+import subprocess
+hits = subprocess.run(
+    ['grep', '-rn', 'verification_reference', 'docs/decisions', 'platform-model',
+     'docs/superpowers/specs'], capture_output=True, text=True).stdout.splitlines()
+files = {line.split(':')[0] for line in hits}
+assert files <= {'platform-model/schemas/capability-host.schema.yaml'}, sorted(files)
+assert len(hits) == 2, hits
+schema_fields = SCHEMA['optional_fields'] + SCHEMA['authoritative_fields']
+assert schema_fields.count('verification_reference') == 2, schema_fields
+# No namespace, pattern, type, or referent is declared for it anywhere.
+for key in ('verification_reference_pattern', 'verification_reference_type',
+            'verification_reference_namespace', 'verification_reference_resolution'):
+    assert key not in SCHEMA, key
+# And admission still treats it as free text, which is the honest consequence
+# of having no rule to apply.
+assert '_text(verification_reference, REASON_UNVERIFIED_PROFILE)' in ADMISSION
+print('OK')
+"
+
+# Optional to the schema and to the model, mandatory at admission. Recorded
+# because it is the same class of mismatch the package manifest had, in the
+# opposite direction, and it is a decision an authority still owes.
+run_case "verification_reference is schema-optional but admission-mandatory" "${PRELUDE}
+assert 'verification_reference' in SCHEMA['optional_fields']
+assert 'verification_reference' not in SCHEMA['required_fields']
+spec = {f.name: f for f in dataclass_fields(CapabilityHost)}['verification_reference']
+assert spec.default is None, spec.default
+# Admission refuses a body that omits it, because the text check refuses None.
+assert '_text(verification_reference' in ADMISSION
+print('OK')
+"
+
+# ===========================================================================
+# What this suite did not touch
+# ===========================================================================
+
+assert_untouched() {
+  local problems=0
+  if [[ "$(production_state "${FABRIC_ROOT}")" != "${FABRIC_BEFORE}" ]]; then
+    fail "the production Fabric store moved"; problems=1
+  fi
+  if [[ "$(production_state "${TRUST_ROOT}")" != "${TRUST_BEFORE}" ]]; then
+    fail "the production Trust store moved"; problems=1
+  fi
+  if [[ -e "${FABRIC_ROOT}/sequences/capability-host.seq" ]]; then
+    fail "capability-host.seq was created"; problems=1
+  fi
+  if [[ -n "$(ls -A "${FABRIC_ROOT}/capability-hosts" 2>/dev/null)" ]]; then
+    fail "a CHOST record appeared"; problems=1
+  fi
+  if (( problems == 0 )); then
+    pass "the production Fabric and Trust stores are unchanged; no CHOST, no host sequence"
+  fi
+}
+assert_untouched
+
+printf '\n'
+if (( FAILURES == 0 )); then
+  printf 'All host-admission assertions passed.\n'
+else
+  printf '%d assertion(s) failed.\n' "${FAILURES}" >&2
+  exit 1
+fi

@@ -1109,9 +1109,23 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
     """Make a machine a fabric participant. There is no automatic path."""
     def accept(identifier, digest):
         _text(node_identity_reference, REASON_CONTENT)
-        _text(location_class, REASON_CONTENT)
-        _text(data_classification, REASON_CONTENT)
-        _text(availability_intent, REASON_CONTENT)
+        # The governed vocabulary the host schema declares, applied where the
+        # host is CREATED and not only where it is superseded. `withdraw` and
+        # `refresh` already checked membership; admission checked only that the
+        # values were non-empty text, so a machine could be admitted with a
+        # location class nobody governs -- permanently, since the record is
+        # immutable -- and could then never be refreshed, because refresh
+        # applies the rule admission skipped.
+        _member_of(location_class, LOCATION_CLASSES, REASON_CONTENT)
+        _member_of(data_classification, WORKLOAD_DATA_CLASSIFICATIONS,
+                   REASON_UNKNOWN_CLASSIFICATION)
+        _member_of(availability_intent, AVAILABILITY_INTENTS, REASON_UNKNOWN_INTENT)
+        # Syntax before the store is consulted, so a malformed identity is
+        # named as malformed content. Without it the value reached the trust
+        # adapter, which raises rather than refusing -- and an exception
+        # escaping a governed operation is a traceback where an operator needs
+        # a decision.
+        _trust_identifier(fabric_node_trust_record_id)
         profile = _resources(_mapping(verified_resource_profile))
         # Verified out of band, and provably so. A profile with nothing
         # recording how it was obtained cannot be distinguished from one copied

@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=73
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=87
+  TOTAL_STEPS=88
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -214,6 +214,12 @@ if (( QUICK == 0 )); then
   # artifact roots and staging roots, and it asserts the production package
   # namespace is still unspent when it finishes.
   run "Fabric package manifest reference" bash tests/test-fabric-package-manifest.sh
+
+  # CHOST admission: the governed host vocabulary applied where a host is
+  # CREATED and not only where it is superseded, and a rehearsal that reads the
+  # real trust store without provisioning it. Fixture-only: temporary Fabric and
+  # Trust stores, and it proves both production stores are unchanged.
+  run "Fabric host admission" bash tests/test-fabric-host-admission.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds

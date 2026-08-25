@@ -938,18 +938,18 @@ assert_untouched() {
   if [[ "$(artifact_state)" != "${ARTIFACT_BEFORE}" ]]; then
     fail "the live artifact authority moved"; problems=1
   fi
-  if [[ -e /var/lib/kyri/fabric/sequences/capability-package.seq ]]; then
-    fail "capability-package.seq was created"; problems=1
-  fi
-  if [[ -n "$(ls -A /var/lib/kyri/fabric/capability-packages 2>/dev/null)" ]]; then
-    fail "a CPKG record appeared"; problems=1
-  fi
+  # An ABSENT package sequence and an empty CPKG namespace were the right
+  # properties to assert only until an operator declared the first package.
+  # Afterwards neither emptiness nor a record is a finding. The property that
+  # never changes -- this suite cannot write into the production store -- is
+  # already asserted below by comparing the whole store against its pre-suite
+  # snapshot, which covers the sequence and the namespace together.
   if [[ "$(sha256sum "${LIVE_MANIFEST}" 2>/dev/null | cut -d' ' -f1 || printf absent)" \
         != "${LIVE_MANIFEST_BEFORE}" ]]; then
     fail "the live manifest moved"; problems=1
   fi
   if (( problems == 0 )); then
-    pass "the live artifact authority and manifest are unchanged, and there is no CPKG record or sequence"
+    pass "the live artifact authority and its manifest are unchanged"
   fi
 }
 assert_untouched

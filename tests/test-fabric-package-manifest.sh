@@ -40,6 +40,21 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 FAILURES=0
 
+# The production Fabric store as it stands before anything here runs. This
+# suite must be incapable of moving it, and says so with evidence rather than
+# with a promise.
+PRODUCTION_FABRIC="/var/lib/kyri/fabric"           # prod-path-reference
+production_fabric_state() {
+  if [[ -e "${PRODUCTION_FABRIC}" ]]; then
+    { find "${PRODUCTION_FABRIC}" -printf '%y %m %n %U:%G %s %p\n' 2>/dev/null | sort
+      find "${PRODUCTION_FABRIC}" -type f -exec sha256sum {} + 2>/dev/null | sort
+    } | sha256sum | cut -d' ' -f1
+  else
+    printf 'absent'
+  fi
+}
+PRODUCTION_FABRIC_BEFORE="$(production_fabric_state)"
+
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
@@ -922,18 +937,16 @@ assert_design_authority
 # What this suite did not touch
 # ===========================================================================
 
+# An UNSPENT package namespace was the right property to assert only until an
+# operator declared the first package. Afterwards, emptiness is not a finding
+# and a record is not one either. What must stay true is unchanged: this suite
+# is fixture-only and cannot write into the production store. Snapshotted at
+# the top and compared here, so the assertion holds in both states.
 assert_no_production_write() {
-  local sequences="/var/lib/kyri/fabric/sequences"    # prod-path-reference
-  local packages="/var/lib/kyri/fabric/capability-packages"
-  if [[ -e "${sequences}/capability-package.seq" ]]; then
-    fail "the production capability-package sequence exists"
+  if [[ "$(production_fabric_state)" == "${PRODUCTION_FABRIC_BEFORE}" ]]; then
+    pass "the production Fabric store is byte-identical to the pre-suite snapshot"
   else
-    pass "the production capability-package sequence is still absent"
-  fi
-  if [[ -d "${packages}" ]] && [[ -n "$(ls -A "${packages}" 2>/dev/null)" ]]; then
-    fail "the production package namespace is no longer unspent"
-  else
-    pass "the production package namespace is still unspent"
+    fail "the production Fabric store moved"
   fi
 }
 

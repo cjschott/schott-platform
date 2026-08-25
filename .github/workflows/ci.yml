@@ -204,6 +204,10 @@ jobs:
       - name: Fabric package manifest reference tests
         run: bash tests/test-fabric-package-manifest.sh
 
+      # CHOST admission vocabulary and read-only trust rehearsal. Fixture-only.
+      - name: Fabric host admission tests
+        run: bash tests/test-fabric-host-admission.sh
+
       # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
       # the permanent backstop asserting the package executes nothing. Builds
       # temporary stores only. No network, no Docker, no capability execution.
