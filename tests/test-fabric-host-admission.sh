@@ -353,7 +353,10 @@ hits = subprocess.run(
 files = {line.split(':')[0] for line in hits}
 assert files <= {'platform-model/schemas/capability-host.schema.yaml'}, sorted(files)
 assert len(hits) == 2, hits
-schema_fields = SCHEMA['optional_fields'] + SCHEMA['authoritative_fields']
+# Named twice: once as a field the record must carry, once as a fact that
+# makes one declaration authoritatively different from another. Neither
+# declares what it references.
+schema_fields = SCHEMA['required_fields'] + SCHEMA['authoritative_fields']
 assert schema_fields.count('verification_reference') == 2, schema_fields
 # No namespace, pattern, type, or referent is declared for it anywhere.
 for key in ('verification_reference_pattern', 'verification_reference_type',
@@ -365,16 +368,111 @@ assert '_text(verification_reference, REASON_UNVERIFIED_PROFILE)' in ADMISSION
 print('OK')
 "
 
-# Optional to the schema and to the model, mandatory at admission. Recorded
-# because it is the same class of mismatch the package manifest had, in the
-# opposite direction, and it is a decision an authority still owes.
-run_case "verification_reference is schema-optional but admission-mandatory" "${PRELUDE}
-assert 'verification_reference' in SCHEMA['optional_fields']
-assert 'verification_reference' not in SCHEMA['required_fields']
+# All three layers now agree that it is required. They did not: the schema
+# listed it optional, the model defaulted it to None, and admission refused a
+# body that omitted it. A host cannot claim a verified resource profile without
+# identifying what verified it, and `verified_resource_profile` is itself
+# required -- so there is no such thing as a host for which the reference is
+# meaningfully optional, and the disagreement was between the layers rather
+# than about a real case.
+run_case "schema, model and admission agree the reference is required" "${PRELUDE}
+assert 'verification_reference' in SCHEMA['required_fields'], SCHEMA['required_fields']
+assert 'verification_reference' not in SCHEMA['optional_fields'], SCHEMA['optional_fields']
+# The condition the ruling is stated over is universally true here.
+assert 'verified_resource_profile' in SCHEMA['required_fields']
 spec = {f.name: f for f in dataclass_fields(CapabilityHost)}['verification_reference']
-assert spec.default is None, spec.default
-# Admission refuses a body that omits it, because the text check refuses None.
+import dataclasses
+assert spec.default is dataclasses.MISSING, spec.default
+assert '_require_text(self.verification_reference' in \\
+    Path('tools/fabric/models.py').read_text(encoding='utf-8')
 assert '_text(verification_reference' in ADMISSION
+print('OK')
+"
+
+run_case "the model refuses a host that identifies no verifying evidence" "${HARNESS}
+import dataclasses
+fields_present = dict(
+    capability_host_id='CHOST-0001', node_identity_reference='node/schai',
+    fabric_node_trust_record_id='TREC-000001',
+    verified_resource_profile=dict(PROFILE), location_class='on-premises',
+    data_classification='internal', availability_intent='in-service',
+    provenance=dict(PROV))
+try:
+    CapabilityHost(**fields_present)
+except TypeError:
+    pass
+else:
+    raise AssertionError('a host without verification_reference was constructible')
+for empty in (None, '', '   '):
+    try:
+        CapabilityHost(**fields_present, verification_reference=empty)
+    except Exception:
+        continue
+    raise AssertionError('accepted verification_reference ' + repr(empty))
+print('OK')
+"
+
+# ===========================================================================
+# The evidence-coverage finding
+# ===========================================================================
+#
+# The proposed R7 ruling is that `verification_reference` names a Platform
+# Evidence record supporting the verified resource profile. The Evidence plane
+# does support that shape -- it has a governed identity grammar, immutability,
+# and an enforced content fingerprint. What it does not yet have is an evidence
+# record that proves the profile a host would claim.
+#
+# EVID-000001 declares ONE governed field. These cases pin exactly what is and
+# is not proven, so that "the evidence exists" can never be mistaken for "the
+# evidence supports the claim", and so a later record that does prove more is
+# detected rather than assumed.
+
+run_case "the evidence plane has a governed identity grammar and fingerprint" "${PRELUDE}
+evidence_schema = load_strict('platform-model/schemas/evidence.schema.yaml')
+assert evidence_schema['id_pattern'] == '^EVID-[0-9]{6}\$', evidence_schema['id_pattern']
+for field in ('id', 'target', 'facts', 'content_fingerprint', 'collector', 'status'):
+    assert field in evidence_schema['required_fields'], field
+import re
+from tools.observation.models import EVIDENCE_ID
+assert EVIDENCE_ID.pattern == '^EVID-[0-9]{6}\$', EVIDENCE_ID.pattern
+print('OK')
+"
+
+run_case "EVID-000001 proves exactly one governed field" "${PRELUDE}
+record = load_strict('platform-model/evidence/evid-000001-schai-host-architecture.yaml')
+assert record['id'] == 'EVID-000001', record['id']
+assert record['kind'] == 'Evidence' and record['type'] == 'evidence'
+assert record['status'] == 'success'
+facts = record['facts']
+# Singular, and deliberately so: one governed field, three raw sources for it.
+assert facts['governed_field'] == 'architecture', facts['governed_field']
+assert facts['canonical_value'] == 'x86-64', facts['canonical_value']
+assert {o['source'] for o in facts['observations']} == {
+    'uname_m', 'lscpu_architecture', 'dpkg_architecture'}, facts['observations']
+# Nothing in it speaks to memory or CPU.
+blob = str(record)
+for absent in ('host_memory_mb', 'host_cpu_cores', 'accelerator'):
+    assert absent not in blob, 'EVID-000001 unexpectedly mentions ' + absent
+print('OK')
+"
+
+# The binding table, as a check rather than as prose. A profile dimension is
+# proven only where a governed evidence record says so; being on the same
+# machine as a proven dimension proves nothing about it.
+run_case "the profile vocabulary is not covered by the evidence that exists" "${PRELUDE}
+import pathlib
+vocabulary = set(SCHEMA['resource_profile_vocabulary'])
+proven = set()
+for path in sorted(pathlib.Path('platform-model/evidence').glob('*.yaml')):
+    record = load_strict(str(path))
+    field = (record.get('facts') or {}).get('governed_field')
+    if field and record.get('status') == 'success':
+        proven.add(field)
+assert proven == {'architecture'}, sorted(proven)
+unproven = vocabulary - proven
+assert 'host_memory_mb' in unproven and 'host_cpu_cores' in unproven, sorted(unproven)
+# Stated as the blocker it is: a host profile may claim only proven dimensions.
+assert len(unproven) == 5, sorted(unproven)
 print('OK')
 "
 

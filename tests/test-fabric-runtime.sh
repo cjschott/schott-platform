@@ -276,6 +276,10 @@ def host(**overrides):
         node_identity_reference="secret-source://approved/node-identity",
         fabric_node_trust_record_id="TREC-000001",
         verified_resource_profile={"host_memory_mb": 65536, "accelerator_class": "discrete-gpu"},
+        # Required since the optionality between schema, model and admission
+        # was reconciled: a host claiming a verified profile must name what
+        # verified it.
+        verification_reference="/approved/evidence/host-observed.txt",
         location_class="on-premises",
         data_classification="internal",
         availability_intent="in-service",
@@ -1443,6 +1447,10 @@ def accepted_records():
              capability_host_id="CHOST-0001", node_identity_reference="node/schai",
              fabric_node_trust_record_id="TAUTH-000001",
              verified_resource_profile={"host_memory_mb": 8192},
+             # Required since the optionality between schema, model and
+             # admission was reconciled: a host claiming a verified profile
+             # must name what verified it.
+             verification_reference="EVID-000001",
              location_class="on-premises", data_classification="internal",
              availability_intent="available", provenance=ORIGIN,
              evidence=fixture_evidence("capability-host"))),
@@ -1821,6 +1829,9 @@ HOST = {
     "node_identity_reference": "node/schai",
     "fabric_node_trust_record_id": "TAUTH-000001",
     "verified_resource_profile": {"host_memory_mb": 8192},
+    # Required since the optionality between schema, model and admission was
+    # reconciled: a host claiming a verified profile must name what verified it.
+    "verification_reference": "/approved/evidence/host-observed.txt",
     "location_class": "on-premises",
     "data_classification": "internal",
     "availability_intent": "available",
@@ -2801,7 +2812,11 @@ def accepted(kind, evidence):
         "capability-host": dict(
             capability_host_id="CHOST-0001", node_identity_reference="node/schai",
             fabric_node_trust_record_id="TAUTH-000001",
-            verified_resource_profile={"host_memory_mb": 8192}, location_class="on-premises",
+            verified_resource_profile={"host_memory_mb": 8192},
+            # Required since the optionality between schema, model and
+            # admission was reconciled.
+            verification_reference="/approved/evidence/host-observed.txt",
+            location_class="on-premises",
             data_classification="internal", availability_intent="available",
             provenance=PROV),
         "capability-advertisement": dict(

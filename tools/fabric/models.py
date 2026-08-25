@@ -465,10 +465,16 @@ class CapabilityHost(FabricRecord):
     # accepted source declares an ordering, so nothing here is above anything.
     data_classification: str
     availability_intent: str
+    # Which governed evidence supports `verified_resource_profile`. Required
+    # for the same reason the profile is: a machine that claims a verified
+    # profile without naming what verified it cannot be told apart from one
+    # that copied the claim off an advertisement. Admission always refused a
+    # host without it; the model said otherwise, and the schema agreed with the
+    # model. What it must reference is not yet governed -- presence is.
+    verification_reference: str
     provenance: Mapping[str, Any]
     name: str | None = None
     description: str | None = None
-    verification_reference: str | None = None
     supersedes: str | None = None
     superseded_by: str | None = None
     notes: str | None = None
@@ -485,6 +491,7 @@ class CapabilityHost(FabricRecord):
         _require_text(self.location_class, "location_class")
         _require_text(self.data_classification, "data_classification")
         _require_text(self.availability_intent, "availability_intent")
+        _require_text(self.verification_reference, "verification_reference")
         self._freeze("verified_resource_profile", "provenance")
         self._freeze_evidence()
 

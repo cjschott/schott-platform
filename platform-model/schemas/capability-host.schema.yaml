@@ -59,12 +59,23 @@ required_fields:
   # Declared by an operator: in service, or deliberately withheld. This is how
   # a node is removed from service on purpose rather than by failing.
   - availability_intent
+  # Which governed evidence supports the verified profile above. Required,
+  # because `verified_resource_profile` is: a host that claims a verified
+  # profile without identifying what verified it is making the claim §6.2
+  # rejects, and admission has always refused one. It was listed optional here
+  # while being mandatory in practice, which is a disagreement between layers
+  # rather than a case anybody could be in.
+  #
+  # WHAT IT REFERENCES IS NOT YET GOVERNED. No namespace, referent, or
+  # resolution rule is declared for it anywhere, so it is required to be
+  # PRESENT and is not yet required to RESOLVE. Ruling that is open work; until
+  # it closes, admission checks presence only and says so.
+  - verification_reference
   - provenance
 
 optional_fields:
   - name
   - description
-  - verification_reference
   - supersedes
   - superseded_by
   - notes
