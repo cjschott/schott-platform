@@ -185,6 +185,10 @@ jobs:
       - name: Trust runtime tests
         run: bash tests/test-trust-runtime.sh
 
+      # Trust Evidence identity integrity and read-only decision rehearsal.
+      - name: Trust decision preflight tests
+        run: bash tests/test-trust-decision-preflight.sh
+
       # Builds synthetic fabric records in memory and destroys nothing because
       # it writes nothing. No network, no SSH, no subprocess from library code,
       # no Docker, no secrets file of any kind, and no store of any kind.

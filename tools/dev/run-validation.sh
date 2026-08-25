@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=73
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=89
+  TOTAL_STEPS=90
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -192,6 +192,11 @@ if (( QUICK == 0 )); then
   # synthetic stores in temp directories and spawns the CLI, so it sits with
   # the other subprocess-driving suites rather than in the quick path.
   run "Trust runtime" bash tests/test-trust-runtime.sh
+
+  # Trust Evidence identity integrity, and rehearsing a decision without
+  # spending one. Fixture-only: copies of the live Trust store, and read-only
+  # opens of it, proving the live store is byte-identical afterwards.
+  run "Trust decision preflight" bash tests/test-trust-decision-preflight.sh
   # After the fabric architecture suite: ENG-0004 implements what ADR-0012
   # specifies, so the runtime is validated downstream of the specification. It
   # builds synthetic records in memory and spawns Python, so it sits with the

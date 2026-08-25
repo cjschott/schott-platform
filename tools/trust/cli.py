@@ -23,6 +23,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from datetime import datetime
@@ -31,7 +32,7 @@ from typing import Any
 
 from ..common.containment import contained_path
 from .errors import TrustError
-from .evaluator import create_decision
+from .evaluator import create_decision, rehearsing
 from .models import (
     TrustEvidenceReference,
     TrustScope,
@@ -98,7 +99,16 @@ def command_validate_store(args) -> int:
 
 
 def command_create_decision(args) -> int:
-    store = _open_store(args)
+    """One immutable trust decision, or a rehearsal of one.
+
+    `--preflight` runs the same evaluation against the same store opened
+    read-only and stops at the allocation boundary. It is not a second
+    algorithm: every authority, evidence, scope, transition and lineage rule
+    runs, and what it reports is what the write would decide.
+    """
+    rehearse = bool(getattr(args, "preflight", False))
+    store = (TrustStore.open_for_read(args.store_root) if rehearse
+             else _open_store(args))
     payload = _read_input(args.input_file, args.approved_directory)
 
     details = payload.get("verification_details") or {}
@@ -106,7 +116,8 @@ def command_create_decision(args) -> int:
     scope = None
     if isinstance(scope_input, dict):
         scope = TrustScope(
-            scope_id=store.allocate_id("scope"),
+            scope_id=(store.peek_next_id("scope") if rehearse
+                      else store.allocate_id("scope")),
             subject_type=str(scope_input.get("subject_type", payload.get("subject_type"))),
             permitted_capabilities=tuple(scope_input.get("permitted_capabilities") or ()),
             permitted_operations=tuple(scope_input.get("permitted_operations") or ()),
@@ -119,9 +130,12 @@ def command_create_decision(args) -> int:
             if scope_input.get("validity_end") else None,
         )
 
+    # The identity an operator cites is carried, not replaced. It used to be a
+    # placeholder the store overwrote, so a body naming one piece of evidence
+    # produced a record citing another and neither looked wrong on its own.
     references = tuple(
         TrustEvidenceReference(
-            evidence_id="TEVID-000000",  # replaced by the store on write
+            evidence_id=str(item["evidence_id"]),
             kind=str(item.get("kind", "attestation")),
             reference=str(item["reference"]),
             recorded_at=_parse_time(item["recorded_at"], "recorded_at"),
@@ -129,7 +143,9 @@ def command_create_decision(args) -> int:
         for item in (payload.get("evidence_references") or [])
     )
 
-    outcome = create_decision(
+    runner = rehearsing() if rehearse else contextlib.nullcontext()
+    with runner:
+      outcome = create_decision(
         store,
         subject_id=str(payload["subject_id"]),
         subject_type=str(payload["subject_type"]),
@@ -156,6 +172,33 @@ def command_create_decision(args) -> int:
         approval_source=str(payload.get("approval_source", "named-operator")),
         provenance=payload.get("provenance") or {},
     )
+    if rehearse:
+        _emit({
+            "outcome": "preflight",
+            "operation": "create-decision",
+            "would_accept": True,
+            "mutated": False,
+            "predicted_record_id": outcome.record.record_id,
+            "predicted_decision_id": outcome.decision.decision_id,
+            "predicted_lineage_id": outcome.lineage.lineage_id,
+            "predicted_audit_id": outcome.audit_event.audit_id,
+            "predicted_evidence_ids": [reference.evidence_id for reference
+                                       in outcome.decision.evidence_references],
+            "predicted_scope_id": scope.scope_id if scope else None,
+            "subject_id": outcome.record.subject_id,
+            "subject_type": outcome.record.subject_type,
+            "state": outcome.record.state,
+            # The Trust plane identifies a decision by its own fingerprint;
+            # there is no separate request identity to digest.
+            "decision_fingerprint": outcome.decision.decision_fingerprint,
+            "record_fingerprint": outcome.record.fingerprint,
+            "subject_fingerprint": outcome.record.subject_fingerprint,
+            "destination": str(store.path_for("record", outcome.record.record_id)),
+            "destination_exists":
+                store.path_for("record", outcome.record.record_id).exists(),
+            "store_root": str(store.root),
+        })
+        return EXIT_SUCCESS
     _emit(outcome.to_dict())
     return EXIT_SUCCESS
 
@@ -229,6 +272,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     decision = with_input(with_store(subparsers.add_parser(
         "create-decision", help="record one immutable trust decision")))
+    decision.add_argument("--preflight", action="store_true",
+                          help="validate everything reachable without mutating: "
+                               "allocates no identifier and writes nothing")
     decision.set_defaults(handler=command_create_decision)
 
     show = with_store(subparsers.add_parser(

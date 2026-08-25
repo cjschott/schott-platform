@@ -3868,9 +3868,9 @@ def forensic(base):
     return entries
 
 
-def evidence():
+def evidence(store):
     return (TrustEvidenceReference(
-        evidence_id="TEVID-000001", kind="fingerprint",
+        evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
         reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),)
 
 
@@ -3929,7 +3929,7 @@ def seeded(tmp):
         return create_decision(
             store, subject_id=subject, subject_type="host", requested_state=state,
             actor_authority_id=authority.authority_id, decided_at=decided_at,
-            reason=reason, evidence_references=evidence(),
+            reason=reason, evidence_references=evidence(store),
             verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
             verification_details=details(), scope=scope(), expiration=expiration,
             lineage_id=lineage_id, revokes_record_id=revokes_record_id)
@@ -5237,7 +5237,7 @@ def seeded_trust(tmp, subject="node/schai", state=TrustState.TRUSTED.value,
         requested_state=state, actor_authority_id=authority.authority_id,
         decided_at=STAMP, reason="granted for the fabric admission regression",
         evidence_references=(TrustEvidenceReference(
-            evidence_id="TEVID-000001", kind="fingerprint",
+            evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
             reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=TrustVerificationDetails(
@@ -6857,7 +6857,7 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
             requested_state=state, actor_authority_id=authority.authority_id,
             decided_at=STAMP, reason="granted for the fabric admission regression",
             evidence_references=(TrustEvidenceReference(
-                evidence_id="TEVID-000001", kind="fingerprint",
+                evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
                 reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
             verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
             verification_details=TrustVerificationDetails(
@@ -8400,7 +8400,7 @@ try:
                                 trust_store.all_records("authority")][0]["authority_id"],
             decided_at=STAMP, reason="renewed for the fabric refresh regression",
             evidence_references=(TrustEvidenceReference(
-                evidence_id="TEVID-000001", kind="fingerprint",
+                evidence_id=trust_store.peek_next_id("evidence"), kind="fingerprint",
                 reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
             verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
             verification_details=TrustVerificationDetails(
