@@ -391,7 +391,7 @@ if [[ -f "${ROOT}/.github/workflows/ci.yml" && -f "${ROOT}/${VALIDATION}" ]]; th
   while read -r suite; do
     [[ -z "${suite}" ]] && continue
     grep -q "${suite}" "${ROOT}/${VALIDATION}" || missing_locally+="${suite} "
-  done < <(grep -oE 'tests/test-[a-z-]+\.sh' "${ROOT}/.github/workflows/ci.yml" | sort -u)
+  done < <(grep -oE 'tests/test-[a-z0-9-]+\.sh' "${ROOT}/.github/workflows/ci.yml" | sort -u)
   if [[ -z "${missing_locally}" ]]; then
     pass "every CI test suite also runs in local validation"
   else
@@ -402,7 +402,7 @@ if [[ -f "${ROOT}/.github/workflows/ci.yml" && -f "${ROOT}/${VALIDATION}" ]]; th
   while read -r suite; do
     [[ -z "${suite}" ]] && continue
     grep -q "${suite}" "${ROOT}/.github/workflows/ci.yml" || missing_in_ci+="${suite} "
-  done < <(grep -oE 'tests/test-[a-z-]+\.sh' "${ROOT}/${VALIDATION}" | sort -u)
+  done < <(grep -oE 'tests/test-[a-z0-9-]+\.sh' "${ROOT}/${VALIDATION}" | sort -u)
   if [[ -z "${missing_in_ci}" ]]; then
     pass "every locally validated suite also runs in CI"
   else

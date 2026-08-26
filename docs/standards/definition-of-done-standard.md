@@ -127,6 +127,13 @@ The change is discoverable by someone reading history.
 The change was validated locally before review, with the same checks CI runs.
 
 - `tools/dev/run-validation.sh` passes in full, not only `--quick`.
+- A ceremony or report checkpoint runs the full validator whenever repository
+  `HEAD` has moved since the last full validation. A checkpoint that changes
+  only host-side authority and no repository file does not repeat it, provided
+  the authority validators and invariants that checkpoint owns all pass — a
+  redundant source validation over an unchanged tree reports on nothing that
+  moved, and the checkpoints that skipped it are how two stale-bound suite
+  failures reached a later reviewer instead of the one who caused them.
 - The toolchain matches `tools/dev/versions.env`, or every divergence is stated.
 - No suite was skipped. A `SKIP` in a validation log is a finding, not a pass.
 - Nothing was installed on the host without explicit approval.

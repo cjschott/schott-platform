@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=73
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=92
+  TOTAL_STEPS=93
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -245,6 +245,14 @@ if (( QUICK == 0 )); then
   # touching it. Fixture-only: temporary Fabric and Trust stores, and it
   # proves both production stores are unchanged.
   run "Fabric G11-A integrity" bash tests/test-fabric-g11-integrity.sh
+
+  # G11-B. The installed Capability Runtime must satisfy its Fabric dependency
+  # from the installed surface rather than from a repository checkout that
+  # happens to be present. Builds a disposable installation root and proves the
+  # imports resolve with the repository off sys.path. Fixture-only: it installs
+  # nothing and proves the installed runtime and production Fabric are
+  # unchanged. Skips cleanly on a host with no installed runtime.
+  run "Fabric installed dependency closure" bash tests/test-fabric-runtime-install-closure.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds

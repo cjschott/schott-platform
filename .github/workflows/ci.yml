@@ -224,6 +224,19 @@ jobs:
       - name: Fabric evidence authority tests
         run: bash tests/test-fabric-evidence-authority.sh
 
+      # G11-A: an instance is bound to the advertisement that admitted it, the
+      # admitted host must be a permitted target of the composed scope, and a
+      # renewal states which claim it replaces without touching it.
+      # Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric G11-A integrity tests
+        run: bash tests/test-fabric-g11-integrity.sh
+
+      # G11-B: the installed Capability Runtime must satisfy its Fabric
+      # dependency from the installed surface, not from a checkout. Builds a
+      # disposable installation root; skips cleanly where none is installed.
+      - name: Fabric installed dependency closure tests
+        run: bash tests/test-fabric-runtime-install-closure.sh
+
       # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
       # the permanent backstop asserting the package executes nothing. Builds
       # temporary stores only. No network, no Docker, no capability execution.
