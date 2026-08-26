@@ -52,10 +52,17 @@ MANIFEST_DIGEST="$(read_pin MANIFEST_DIGEST)"
 # runtime half of the reviewed package to equal the root-owned installed
 # library, and source may legitimately lead it (G6.1 adds two runtime modules
 # and installs neither).
+# The paths the packaged manifest is derived from, named once. The ancestor
+# walk below is bounded to commits that touched them: a bound counted over
+# every commit is spent by documentation that cannot change the manifest, and
+# the pinned ancestor drifts out of range for reasons that have nothing to do
+# with the package.
+MANIFEST_PATHS=(tools/__init__.py tools/capability tools/common tools/provisioning)
+
 manifest_at() {
   local commit="$1" file
   git -C "${REPOSITORY}" ls-tree -r --name-only "${commit}" \
-      -- tools/__init__.py tools/capability tools/common tools/provisioning \
+      -- "${MANIFEST_PATHS[@]}" \
     | grep '\.py$' | grep -v '__pycache__' | LC_ALL=C sort \
     | while IFS= read -r file; do
         printf '%s  %s\n' \
@@ -68,9 +75,10 @@ while IFS= read -r candidate; do
   if [[ "$(manifest_at "${candidate}")" == "${MANIFEST_DIGEST}" ]]; then
     COMMIT="${candidate}"; break
   fi
-done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD)
+done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD \
+           -- "${MANIFEST_PATHS[@]}")
 [[ -n "${COMMIT}" ]] || {
-  printf 'no ancestor within 40 commits carries the pinned operator package\n' >&2
+  printf 'no ancestor within 40 packaged-tree commits carries the pinned operator package\n' >&2
   exit 1; }
 [[ -n "${BUILD_CONTEXT_ABS}" && -n "${STAGING_ABS}" ]] || {
   printf 'the ceremony pins no build-context paths\n' >&2; exit 1; }
