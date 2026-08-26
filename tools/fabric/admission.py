@@ -119,12 +119,45 @@ REASON_ADVERT_SUBJECT = "advertisement-not-of-subject"
 REASON_ADVERT_CONTRACT = "advertisement-not-of-contract"
 REASON_ADVERT_PACKAGE = "advertisement-not-of-package"
 REASON_ADVERT_STALE = "advertisement-not-fresh"
+# Renewal. A new advertisement may replace an earlier one, and the earlier one
+# is never touched: supersession is a forward statement by the successor, read
+# backwards. Each way a renewal can fail to be a renewal gets its own name,
+# because "same host, same package, same contract" are three different
+# operator mistakes and a single reason would send all three to the same wrong
+# place. Changing the package or the contract is not a renewal at all -- it is
+# a claim about a different binding, and it needs its own first advertisement.
+# There is deliberately no `renewal-changes-contract`. A renewal must name the
+# same package, a package names exactly one contract, and the equality of the
+# body's contract with the package's is already enforced before any renewal
+# rule runs -- so a contract change is refused as `contract-not-of-package`
+# and a separate reason could never be produced. A token nothing can emit is
+# vocabulary that documents a check the code does not make.
+#
+# There is deliberately no `renewal-supersedes-itself` either. A new record's
+# identity is minted by the store after every check here has passed, so a
+# claim cannot name itself as its predecessor -- there is nothing to name yet.
+# A self-loop can only exist in a store that was damaged into holding one, and
+# that is a cycle, which the chain traversal already refuses as
+# `advertisement-chain-cyclic`.
+REASON_RENEWAL_HOST = "renewal-of-another-host"
+REASON_RENEWAL_PACKAGE = "renewal-changes-package"
+REASON_RENEWAL_NOT_HEAD = "renewal-predecessor-not-current"
+REASON_ADVERT_FORKED = "advertisement-chain-forked"
+REASON_ADVERT_CYCLIC = "advertisement-chain-cyclic"
+REASON_ADVERT_INCOHERENT = "advertisement-chain-incoherent"
 REASON_ADMISSION_EXPIRED = "admission-window-expired"
 REASON_EMPTY_SCOPE = "empty-effective-scope"
 # Separate from an empty intersection on purpose: nothing overlapped at all is
 # a different fact from an overlap that does not cover this binding, and an
 # operator reading one as the other looks in the wrong place.
 REASON_CAPABILITY_SCOPE = "capability-not-permitted-by-scope"
+# The same distinction, one dimension over. A composed scope may authorise
+# several machines and still not authorise this one, which is a different fact
+# from authorising none -- and the machine is named by its Platform Model node
+# identity, because that is the identity the trust grant's targets are written
+# in. The fabric host record is a different namespace and is never compared to
+# it.
+REASON_TARGET_SCOPE = "target-not-permitted-by-scope"
 # "Exceeds" would assert a ranking of classifications that no accepted source
 # declares. Membership is the whole of the comparison.
 REASON_CLASSIFICATION = "data-classification-not-permitted-by-host"
@@ -1246,6 +1279,28 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
                      accept=accept)
 
 
+def advertisement_head(store, advertisement_id: str) -> str:
+    """The current advertisement in one supersession chain. Reads; never writes.
+
+    **The head is the record nothing supersedes.** Advertisements are immutable
+    and append-only, so nothing points forward: a renewal states which claim it
+    replaces, and the chain is read backwards from that. `superseded_by` is
+    never written here, and is never written by any released operation for any
+    record kind -- deriving the forward link is the released convention, and a
+    mutable backlink on an immutable record would be a second answer that can
+    disagree with the first.
+
+    This is the same traversal hosts and instances already use, with
+    advertisement-shaped refusals, rather than a second chain algorithm that
+    agrees until it does not. A fork, a cycle, or a successor whose predecessor
+    is missing is refused rather than resolved -- picking a head nobody wrote
+    is the guess this declines to make.
+    """
+    links = _successors(store, "capability-advertisement", "advertisement_id",
+                        REASON_ADVERT_FORKED, REASON_ADVERT_INCOHERENT)
+    return _head_of(links, advertisement_id, REASON_ADVERT_CYCLIC)
+
+
 # --- 6.3 Register an advertisement ------------------------------------------
 
 def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: Any,
@@ -1253,6 +1308,7 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                            contract_id: Any, satisfied_contract_versions: Any,
                            advertised_resource_profile: Any, observed_at: Any,
                            valid_until: Any, provenance: Any,
+                           supersedes: Any = None,
                            approving_authority: Any = None) -> OperationResult:
     """The subject's own claim. It grants nothing, including to itself.
 
@@ -1293,6 +1349,10 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
         # a single byte of it changing.
         if not observed_at <= recorded_at < valid_until:
             _refuse(REFUSED, REASON_WINDOW)
+        # Syntax only here. Whether the predecessor exists, is this host's, and
+        # is still current are reference questions, asked after replay has been
+        # classified.
+        _optional_identifier(supersedes, "capability-advertisement")
 
     def accept(identifier, digest):
         claim = _resources(_mapping(advertised_resource_profile))
@@ -1327,12 +1387,51 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
         if not satisfies(claim, host.get("verified_resource_profile") or {}):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
 
+        # --- renewal, if this claim replaces an earlier one -----------------
+        #
+        # Every rule above has already run, so a renewal is held to exactly
+        # what a first advertisement is held to and then to more. What "more"
+        # means is that the predecessor must be the same claim about the same
+        # thing: a change of host, package or contract is not this binding
+        # renewed, it is a different binding, and it needs its own first
+        # advertisement rather than a link to someone else's history.
+        #
+        # The prior record is read and never written. Supersession is stated
+        # forward by the successor and read backwards; nothing here gives the
+        # predecessor a `superseded_by`, because an immutable record that
+        # acquires a field later was not immutable.
+        if supersedes is not None:
+            prior = _resolve(store, "capability-advertisement", supersedes)
+            if prior.get("capability_host_id") != capability_host_id:
+                _refuse(REFUSED, REASON_RENEWAL_HOST)
+            if prior.get("capability_package_id") != capability_package_id:
+                _refuse(REFUSED, REASON_RENEWAL_PACKAGE)
+            # The contract needs no separate rule: the package above is
+            # unchanged, a package names one contract, and the body's contract
+            # was already required to be that one. A renewal naming a
+            # different contract is refused as `contract-not-of-package`
+            # before it reaches here.
+            # Only the current claim may be renewed. Renewing a superseded one
+            # would fork the chain, and a fork is two answers to "what does
+            # this host hold now" -- reported here rather than resolved later.
+            if advertisement_head(store, supersedes) != supersedes:
+                _refuse(REFUSED, REASON_RENEWAL_NOT_HEAD)
+
+        # `supersession` is the released category for exactly this, and every
+        # other record kind that replaces a predecessor already declares it.
+        # The evidence layer enforces the pairing symmetrically -- a record
+        # naming a predecessor must declare the category, and one declaring
+        # the category must name a predecessor -- so a renewal cannot be filed
+        # as an ordinary registration, and the predecessor must appear among
+        # the causal references rather than only in the record body.
         evidence = _evidence(
             "capability-advertisement", actor=actor, approving_authority=None,
-            reason_category="advertisement-registration", recorded_at=recorded_at,
+            reason_category="supersession" if supersedes is not None
+            else "advertisement-registration", recorded_at=recorded_at,
             request_id=identifier, request_digest=digest,
             causal_references=(capability_host_id, capability_package_id,
-                               contract_id))
+                               contract_id) + ((supersedes,) if supersedes
+                                               is not None else ()))
         return _commit(store, "capability-advertisement", evidence,
                        lambda allocated, carried: RECORD_MODELS[
                            "capability-advertisement"](
@@ -1343,7 +1442,8 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                            satisfied_contract_versions=versions,
                            advertised_resource_profile=claim,
                            observed_at=observed_at, valid_until=valid_until,
-                           provenance=provenance, evidence=carried))
+                           provenance=provenance, supersedes=supersedes,
+                           evidence=carried))
 
     # `approving_authority` is part of what was asked for even though the only
     # acceptable value is none: supplying one is a different request, refused
@@ -1361,6 +1461,11 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                               "observed_at": observed_at,
                               "valid_until": valid_until,
                               "provenance": provenance,
+                              # A renewal is a different request from a first
+                              # claim with the same content, so the
+                              # predecessor is part of the identity rather
+                              # than a detail settled afterwards.
+                              "supersedes": supersedes,
                               "approving_authority": approving_authority},
                      instants=("recorded_at", "observed_at", "valid_until"),
                      digest_route=LEGACY_DIGEST,
@@ -1547,6 +1652,16 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         effective = _effective_scope(package_standing.scope, host_standing.scope, bound)
         if capability_id not in effective["permitted_capabilities"]:
             _refuse(REFUSED, REASON_CAPABILITY_SCOPE)
+        # And the machine, by the same rule and for the same reason. A
+        # non-empty target dimension proves some machine is authorised; it
+        # proves nothing about *this* one, and with a single host in the
+        # fabric the two are indistinguishable. The comparison is against the
+        # node identity the host record declares, because that is the identity
+        # a trust grant's `permitted_targets` is written in -- `CHOST-0001`
+        # and `HOST-0001` are different namespaces and equating them would be
+        # inventing a mapping no accepted source declares.
+        if node not in effective["permitted_targets"]:
+            _refuse(REFUSED, REASON_TARGET_SCOPE)
         # Then the classification the machine is declared to handle, compared
         # by membership only.
         declared_class = host.get("data_classification")

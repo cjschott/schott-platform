@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=73
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=91
+  TOTAL_STEPS=92
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -237,6 +237,14 @@ if (( QUICK == 0 )); then
   # profile a host claims. Fixture-only: temporary authorities, and it proves
   # the production Fabric, Trust and Evidence state is unchanged.
   run "Fabric evidence authority" bash tests/test-fabric-evidence-authority.sh
+
+  # G11-A. The three instance-admission and advertisement-supersession
+  # invariants: an instance is permanently bound to the advertisement that
+  # admitted it, the machine being admitted must be a permitted target of the
+  # composed scope, and a renewal states which claim it replaces without
+  # touching it. Fixture-only: temporary Fabric and Trust stores, and it
+  # proves both production stores are unchanged.
+  run "Fabric G11-A integrity" bash tests/test-fabric-g11-integrity.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds
