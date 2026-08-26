@@ -1279,6 +1279,20 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
         _aware(valid_until)
         if valid_until <= observed_at:
             _refuse(REFUSED, REASON_WINDOW)
+        # **The window must cover the moment the claim is recorded.** A
+        # well-formed window is not enough: one that closed before the request
+        # carrying it, or that opens after it, describes a claim that was never
+        # true at the only instant this record can speak for. Registering it
+        # would spend an immutable identity on a record that no evaluation
+        # could ever find fresh, and an append-only store cannot take it back.
+        #
+        # Judged against `recorded_at` -- the governed request's own instant --
+        # and never against a clock. Reading the current time here would make
+        # the verdict depend on when the request was replayed rather than on
+        # what it says, so a body accepted once could be refused later without
+        # a single byte of it changing.
+        if not observed_at <= recorded_at < valid_until:
+            _refuse(REFUSED, REASON_WINDOW)
 
     def accept(identifier, digest):
         claim = _resources(_mapping(advertised_resource_profile))

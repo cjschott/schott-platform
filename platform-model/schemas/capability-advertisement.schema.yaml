@@ -63,6 +63,17 @@ required_fields:
   # Advertised, not verified. The name carries the distinction because the
   # distinction is the entire point of this record.
   - advertised_resource_profile
+  # The validity window, and it must cover the moment the claim is recorded:
+  # observed_at <= recorded_at < valid_until. A window that is merely
+  # well-formed is not enough. One that closed before the request carrying it,
+  # or that opens after it, describes a claim that was never true at the only
+  # instant the record can speak for, and registering it would spend a
+  # permanent identity on something no evaluation could ever find fresh.
+  #
+  # Judged against the governed request's own recorded_at, never against a
+  # clock, so the verdict is a property of the request rather than of when it
+  # was replayed. Staleness *after* registration is a different question,
+  # asked at evaluation time against the instant being evaluated.
   - observed_at
   - valid_until
   - provenance

@@ -5687,12 +5687,26 @@ with TemporaryDirectory() as tmp:
         ({"valid_until": STAMP - timedelta(hours=1)}, "a reversed validity window"),
         ({"observed_at": STAMP.replace(tzinfo=None)}, "a naive observation instant"),
         ({"valid_until": LATER.replace(tzinfo=None)}, "a naive validity boundary"),
+        # The window must cover the moment the claim is being registered.
+        # `recorded_at` is the governed request's own instant, so the verdict
+        # is a property of the request rather than of when it was replayed.
+        ({"observed_at": STAMP - timedelta(hours=2),
+          "valid_until": STAMP - timedelta(hours=1)},
+         "a window that closed before the request was recorded"),
+        ({"observed_at": STAMP - timedelta(hours=1), "valid_until": STAMP},
+         "a window that ends exactly when the request is recorded"),
+        ({"observed_at": STAMP + timedelta(hours=1),
+          "valid_until": STAMP + timedelta(hours=2)},
+         "an observation instant after the request was recorded"),
     )
-    for overrides, description in ADVERTISEMENT_REFUSALS:
+    # One request identity per case. Sharing a single one is safe only while
+    # every case refuses: the moment one is accepted, the rest collide with it
+    # and report a request-identity conflict instead of the defect under test.
+    for index, (overrides, description) in enumerate(ADVERTISEMENT_REFUSALS):
         before = forensic(fabric_root)
         result = advertisement(store, host.record_id, pkg.record_id,
                                overrides.pop("contract_id", con.record_id),
-                               request_id="req-adv-bad", **overrides)
+                               request_id=f"req-adv-bad-{index}", **overrides)
         check(result.record_id is None,
               f"an advertisement carrying {description} is refused")
         check(forensic(fabric_root) == before,
@@ -5705,6 +5719,36 @@ with TemporaryDirectory() as tmp:
                                  other_con.record_id, request_id="req-inc")
     check(inconsistent.record_id is None,
           "an advertisement whose contract is not the package's contract is refused")
+
+    # A window that covers the recording instant is accepted, at both the
+    # inclusive start and a strictly-interior position.
+    ADVERTISEMENT_FRESH = (
+        ("start", {"observed_at": STAMP, "valid_until": LATER},
+         "an observation instant equal to the recording instant"),
+        ("inside", {"observed_at": STAMP - timedelta(hours=1),
+                    "valid_until": LATER},
+         "a window recorded strictly inside it"),
+    )
+    for slug, overrides, description in ADVERTISEMENT_FRESH:
+        fresh = advertisement(store, host.record_id, pkg.record_id,
+                              con.record_id, request_id=f"req-adv-fresh-{slug}",
+                              **overrides)
+        check(fresh.outcome == ACCEPTED,
+              f"an advertisement with {description} is accepted")
+
+    # The verdict comes from the three governed instants and nothing else, so
+    # the same request replayed under a different request identity — and at a
+    # different wall-clock moment — decides the same way. A check reading the
+    # system clock could not promise this.
+    stale_body = {"observed_at": STAMP - timedelta(hours=2),
+                  "valid_until": STAMP - timedelta(hours=1)}
+    first = advertisement(store, host.record_id, pkg.record_id, con.record_id,
+                          request_id="req-adv-det-1", **stale_body)
+    second = advertisement(store, host.record_id, pkg.record_id, con.record_id,
+                           request_id="req-adv-det-2", **stale_body)
+    check(first.record_id is None and second.record_id is None
+          and first.reason == second.reason,
+          "the freshness verdict depends only on the governed instants")
 
     accepted_adv = advertisement(store, host.record_id, pkg.record_id,
                                  con.record_id, request_id="req-adv-ok")
@@ -6084,7 +6128,10 @@ try:
                  capability_host_id=adm.record_id,
                  capability_package_id=pkg.record_id, contract_id=con.record_id),
             (("actor", "CHOST-9999"),
-             ("recorded_at", LATER),
+             # Inside the base window on purpose: a `recorded_at` at or past
+             # `valid_until` is refused on structure before the request is
+             # identified, which would prove a refusal rather than a conflict.
+             ("recorded_at", STAMP + timedelta(hours=1)),
              ("capability_host_id", "CHOST-9999"),
              ("capability_package_id", "CPKG-9999"),
              ("contract_id", "CCON-9999"),
@@ -6632,7 +6679,10 @@ try:
                   capability_host_id=adm.record_id,
                   capability_package_id=pkg.record_id, contract_id=con.record_id),
              (("actor", "CHOST-9999"),
-              ("recorded_at", LATER),
+              # Still inside the base window: a structurally valid change has
+              # to remain structurally valid, and `recorded_at` at or past
+              # `valid_until` is refused rather than identified.
+              ("recorded_at", STAMP + timedelta(hours=1)),
               ("observed_at", STAMP - timedelta(hours=1)),
               ("valid_until", LATER + timedelta(hours=1)))),
         )
@@ -7173,15 +7223,21 @@ try:
             capability_host_id=second_host.record_id,
             capability_package_id=pkg.record_id, contract_id=con.record_id,
             observed_at=STAMP, valid_until=YEAR))
+        # Both windows are registered from inside themselves -- a claim made
+        # while it was live -- and only go stale, or become not-yet-valid,
+        # relative to the instant the admission is evaluated at. Registration
+        # refuses a window that never covered its own request, so a claim that
+        # was dead on arrival cannot be the fixture for a claim that lapsed.
         stale_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-stale", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-            contract_id=con.record_id, observed_at=STAMP - timedelta(days=3),
+            contract_id=con.record_id, recorded_at=STAMP - timedelta(days=3),
+            observed_at=STAMP - timedelta(days=3),
             valid_until=STAMP - timedelta(days=2)))
         future_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-future", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-            contract_id=con.record_id, observed_at=YEAR,
+            contract_id=con.record_id, recorded_at=YEAR, observed_at=YEAR,
             valid_until=YEAR + timedelta(days=1)))
         check(all(result.outcome == ACCEPTED for result in (
                   other_cap, other_con, other_pkg, alt_pkg, heavy_pkg, second_host,
@@ -7819,10 +7875,13 @@ try:
         # A host disappearing, returning, and advertising afresh.
         check(forensic(fabric_root) == settled,
               "host disappearance changes no authoritative record")
+        # The host returns and speaks at YEAR, so that is when it records the
+        # claim as well: a return that published a window it could not yet
+        # have observed would be describing a future it has not reached.
         revived = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-revive", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-            contract_id=con.record_id, observed_at=YEAR,
+            contract_id=con.record_id, recorded_at=YEAR, observed_at=YEAR,
             valid_until=YEAR + timedelta(days=1)))
         check(revived.outcome == ACCEPTED,
               "a returning host may publish a fresh advertisement")
@@ -8704,8 +8763,11 @@ try:
         check(replayed.outcome == EXACT_REPLAY
               and replayed.record_id == accepted_claim.record_id,
               "a byte-identical claim on the current declaration replays exactly")
+        # A different claim that is still structurally valid: moving the
+        # observation *earlier* keeps it inside the recorded window, so what
+        # this proves is the identity conflict rather than a refusal.
         conflicting = register_advertisement(store, **dict(
-            current, request_id="i7-adv-head", observed_at=STAMP + timedelta(hours=1)))
+            current, request_id="i7-adv-head", observed_at=STAMP - timedelta(hours=1)))
         check(conflicting.outcome == CONFLICT
               and conflicting.reason == CONFLICT_REASON,
               "a changed claim under one request identity conflicts")
