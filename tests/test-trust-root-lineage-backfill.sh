@@ -61,6 +61,8 @@ live_state() {
 }
 TRUST_BEFORE="$(live_state "${LIVE_TRUST}")"
 FABRIC_BEFORE="$(live_state "${LIVE_FABRIC}")"
+LINEAGES_BEFORE="$(find "${LIVE_TRUST}/lineages" -type f 2>/dev/null | wc -l)"
+AUDIT_BEFORE="$(find "${LIVE_TRUST}/audit" -type f 2>/dev/null | wc -l)"
 
 run_case() {
   local label="$1" script="$2" actual
@@ -713,10 +715,18 @@ else
   fail "the live Fabric store changed: ${FABRIC_BEFORE} -> ${FABRIC_AFTER}"
 fi
 
-if [[ -e "${LIVE_TRUST}/lineages/TLIN-000001-v0001.yaml" ]]; then
-  fail "this suite performed the production backfill; it must not"
+# This asserted that TLIN-000001-v0001 did not exist in production, which read
+# as "this suite wrote nothing" only while the backfill was still unperformed.
+# The operator approved and applied it on 2026-08-25, so absence now means the
+# repair has not happened rather than that this suite behaved -- and asserting
+# it would report an approved ceremony as a test failure. What this suite must
+# prove is that IT wrote nothing, which is the count either side of the run.
+LINEAGES_AFTER="$(find "${LIVE_TRUST}/lineages" -type f 2>/dev/null | wc -l)"
+AUDIT_AFTER="$(find "${LIVE_TRUST}/audit" -type f 2>/dev/null | wc -l)"
+if [[ "${LINEAGES_AFTER}" == "${LINEAGES_BEFORE}" && "${AUDIT_AFTER}" == "${AUDIT_BEFORE}" ]]; then
+  pass "this suite added no production lineage and no production audit event"
 else
-  pass "no production root establishment lineage was written by this suite"
+  fail "this suite changed production record counts: lineages ${LINEAGES_BEFORE} -> ${LINEAGES_AFTER}, audit ${AUDIT_BEFORE} -> ${AUDIT_AFTER}"
 fi
 
 printf '\n'

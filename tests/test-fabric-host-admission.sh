@@ -23,12 +23,14 @@ set -Eeuo pipefail
 #    about the hazard and wrong about the remedy, so the one governed write
 #    that most needs a rehearsal was the one that could not have one.
 #
-# WHAT IS DELIBERATELY NOT DECIDED HERE. `verification_reference` has no
-# governed namespace, resolution rule, or referent anywhere in committed
-# authority -- it appears in exactly two list entries of the host schema and
-# nowhere else. This suite pins that absence as a finding rather than inventing
-# a grammar for it, exactly as `resource_requirements` was left unresolved
-# until an authority ruled.
+# WHAT R7 SETTLED, AFTER THIS SUITE PINNED IT AS OPEN. When this suite was
+# written, `verification_reference` had no governed namespace, resolution rule,
+# or referent, and the absence was recorded as a finding rather than closed by
+# inventing a grammar. An authority then ruled: a value matching the governed
+# `EVID-NNNNNN` grammar names Platform Evidence and is resolved through the
+# trusted deployment Evidence authority, while any other value stays the opaque
+# operator reference it always was. The case below now pins the rule that was
+# ruled, and guards the schema against reverting to describing presence alone.
 #
 # Fixture-only. Builds throwaway Fabric and Trust stores under a temporary
 # directory, opens the production stores read-only at most, and proves both are
@@ -334,37 +336,69 @@ print('OK')
 "
 
 # ===========================================================================
-# R7 -- pinned as unresolved, not decided
+# R7 -- resolved for governed references, opaque for everything else
 # ===========================================================================
 #
-# `verification_reference` appears in committed authority exactly twice, both
-# times as a bare list entry in the host schema. Nothing declares a namespace,
-# a referent, an owning store, or a resolution rule. Admission accepts any
-# non-empty string, and a fixture in the runtime suite uses a bare absolute
-# path that matches no committed grammar. This case exists so the absence is a
-# checked fact rather than an oversight, and so that inventing a grammar has to
-# be a deliberate edit to a test that says why it must not be.
+# `verification_reference` is still named exactly twice in the host schema:
+# once as a field the record must carry, once as a fact that makes one
+# declaration authoritatively different from another. What changed is that the
+# schema now says what a GOVERNED value references and what admission does with
+# it, instead of saying that nothing does.
+#
+# The regression this case exists to catch is the schema drifting back to
+# describing presence alone while admission resolves. That disagreement is
+# worse than either position on its own: it reads as permission to supply a
+# reference naming nothing.
 
-run_case "verification_reference has no governed resolution anywhere" "${PRELUDE}
-import subprocess
-hits = subprocess.run(
-    ['grep', '-rn', 'verification_reference', 'docs/decisions', 'platform-model',
-     'docs/superpowers/specs'], capture_output=True, text=True).stdout.splitlines()
-files = {line.split(':')[0] for line in hits}
-assert files <= {'platform-model/schemas/capability-host.schema.yaml'}, sorted(files)
-assert len(hits) == 2, hits
-# Named twice: once as a field the record must carry, once as a fact that
-# makes one declaration authoritatively different from another. Neither
-# declares what it references.
+run_case "the schema describes resolution, not presence alone" "${PRELUDE}
+schema_text = Path('platform-model/schemas/capability-host.schema.yaml').read_text(
+    encoding='utf-8')
+# The claim that went stale, in the forms it took. None may return.
+for stale in ('checks presence only',
+              'is not yet required to RESOLVE',
+              'WHAT IT REFERENCES IS NOT YET GOVERNED'):
+    assert stale not in schema_text, stale
+# What it must say instead: the governed grammar, the explicit authority, the
+# target binding, and the profile support rule.
+for required in ('EVID-NNNNNN', 'Evidence authority', 'node_identity_reference',
+                 'verified_resource_profile'):
+    assert required in schema_text, required
+# Still two list entries, and still no invented machine-readable grammar key:
+# the rule is prose here and code in admission, which is where it is enforced.
 schema_fields = SCHEMA['required_fields'] + SCHEMA['authoritative_fields']
 assert schema_fields.count('verification_reference') == 2, schema_fields
-# No namespace, pattern, type, or referent is declared for it anywhere.
 for key in ('verification_reference_pattern', 'verification_reference_type',
             'verification_reference_namespace', 'verification_reference_resolution'):
     assert key not in SCHEMA, key
-# And admission still treats it as free text, which is the honest consequence
-# of having no rule to apply.
+print('OK')
+"
+
+# The schema is descriptive; admission is what enforces. This pins the two
+# halves the prose promises, so the prose cannot become true of nothing.
+run_case "admission resolves a governed reference and leaves any other opaque" "${PRELUDE}
+import ast
+# Presence is still checked, for every reference including opaque ones.
 assert '_text(verification_reference, REASON_UNVERIFIED_PROFILE)' in ADMISSION
+# And a governed reference is resolved -- called, not merely defined, and from
+# both paths that record a profile: admission and refresh.
+tree = ast.parse(ADMISSION)
+callers = sorted(
+    function.name for function in tree.body
+    if isinstance(function, ast.FunctionDef)
+    and any(isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == '_require_supporting_evidence'
+            for call in ast.walk(function)))
+assert callers == ['admit_subject', 'refresh_subject'], callers
+# The grammar gate: resolution engages only for the governed identity, which is
+# what keeps a non-modelled host admissible.
+body = [node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == '_require_supporting_evidence']
+assert len(body) == 1, body
+source = ast.unparse(body[0])
+assert 'EVIDENCE_ID.fullmatch(reference)' in source, source
+assert 'return' in source, source
+assert 'resolve_evidence(' in source and 'supports_profile(' in source, source
 print('OK')
 "
 

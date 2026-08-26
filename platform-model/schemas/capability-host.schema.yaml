@@ -66,10 +66,26 @@ required_fields:
   # while being mandatory in practice, which is a disagreement between layers
   # rather than a case anybody could be in.
   #
-  # WHAT IT REFERENCES IS NOT YET GOVERNED. No namespace, referent, or
-  # resolution rule is declared for it anywhere, so it is required to be
-  # PRESENT and is not yet required to RESOLVE. Ruling that is open work; until
-  # it closes, admission checks presence only and says so.
+  # A GOVERNED REFERENCE IS RESOLVED, NOT MERELY PRESENT. A value matching the
+  # governed `EVID-NNNNNN` grammar names Platform Evidence, and admission
+  # resolves it through the trusted deployment Evidence authority it is handed
+  # explicitly — never one discovered from the environment. It validates the
+  # record, requires a success status, requires the record's target to equal
+  # `node_identity_reference`, and requires the resource dimension and value
+  # that record governs to support the claimed `verified_resource_profile`. An
+  # unsupported dimension, a mismatched value, a target naming a different
+  # machine, or an authority that was not supplied is a refusal.
+  #
+  # ANY OTHER VALUE STAYS OPAQUE, and deliberately. A fabric may admit machines
+  # this platform model does not describe, so a reference outside the governed
+  # grammar is required to be present and is not resolved. Refusing everything
+  # else would forbid the non-modelled hosts this schema permits.
+  #
+  # ONE RECORD GOVERNS ONE DIMENSION, so a profile claiming two dimensions
+  # cannot be supported by one Evidence record. Richer profiles need a
+  # reference per governed field, which this record cannot yet express: the
+  # field is a single value. That is a real limit, and it is reported as a
+  # refusal rather than worked around.
   - verification_reference
   - provenance
 

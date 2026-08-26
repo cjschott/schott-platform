@@ -470,7 +470,10 @@ class CapabilityHost(FabricRecord):
     # profile without naming what verified it cannot be told apart from one
     # that copied the claim off an advertisement. Admission always refused a
     # host without it; the model said otherwise, and the schema agreed with the
-    # model. What it must reference is not yet governed -- presence is.
+    # model. A value matching the governed `EVID-NNNNNN` grammar is resolved
+    # through the trusted Evidence authority and must support the claimed
+    # profile; any other value is required to be present and stays opaque,
+    # because a fabric may admit machines the platform model does not describe.
     verification_reference: str
     provenance: Mapping[str, Any]
     name: str | None = None
