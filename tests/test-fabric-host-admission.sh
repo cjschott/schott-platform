@@ -62,6 +62,12 @@ production_state() {
 }
 FABRIC_BEFORE="$(production_state "${FABRIC_ROOT}")"
 TRUST_BEFORE="$(production_state "${TRUST_ROOT}")"
+# What this suite must not do is *create* a host or its sequence. It may not
+# assert that production holds none: a governed CHOST has been admitted since
+# this suite was written, and an emptiness check would report that accepted
+# record as this suite's own leakage.
+HOST_SEQ_BEFORE="$([[ -e "${FABRIC_ROOT}/sequences/capability-host.seq" ]] && echo present || echo absent)"
+HOST_COUNT_BEFORE="$(find "${FABRIC_ROOT}/capability-hosts" -maxdepth 1 -type f 2>/dev/null | wc -l)"
 
 run_case() {
   local label="$1" script="$2" actual
@@ -645,10 +651,13 @@ assert_untouched() {
   if [[ "$(production_state "${TRUST_ROOT}")" != "${TRUST_BEFORE}" ]]; then
     fail "the production Trust store moved"; problems=1
   fi
-  if [[ -e "${FABRIC_ROOT}/sequences/capability-host.seq" ]]; then
+  local host_seq_after host_count_after
+  host_seq_after="$([[ -e "${FABRIC_ROOT}/sequences/capability-host.seq" ]] && echo present || echo absent)"
+  host_count_after="$(find "${FABRIC_ROOT}/capability-hosts" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+  if [[ "${host_seq_after}" != "${HOST_SEQ_BEFORE}" ]]; then
     fail "capability-host.seq was created"; problems=1
   fi
-  if [[ -n "$(ls -A "${FABRIC_ROOT}/capability-hosts" 2>/dev/null)" ]]; then
+  if [[ "${host_count_after}" != "${HOST_COUNT_BEFORE}" ]]; then
     fail "a CHOST record appeared"; problems=1
   fi
   if (( problems == 0 )); then
