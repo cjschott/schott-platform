@@ -568,7 +568,13 @@ class CapabilityInstance(FabricRecord):
     # from an elapsed expiry, or from a route no longer naming it would be
     # answering a lifecycle question with a guess.
     lifecycle_state: str
-    advertisement_id: str | None = None
+    # The advertisement this binding was admitted against, and never a
+    # different one. Admission already refused a body without it, but the
+    # model said optional -- so a record nobody could have admitted was still
+    # constructible, storable and reloadable, and every eligibility answer
+    # about it would have rested on a claim it never named. Required here so
+    # the model is the authority on what a valid instance is.
+    advertisement_id: str
     endpoint_reference: str | None = None
     supersedes: str | None = None
     superseded_by: str | None = None
@@ -588,6 +594,8 @@ class CapabilityInstance(FabricRecord):
             self.capability_package_id, "capability-package", "capability_package_id")
         _require_identifier(self.capability_host_id, "capability-host", "capability_host_id")
         _require_identifier(self.contract_id, "capability-contract", "contract_id")
+        _require_identifier(self.advertisement_id, "capability-advertisement",
+                            "advertisement_id")
         _require_text(self.admission_decision_id, "admission_decision_id")
         _require_text(self.package_trust_record_id, "package_trust_record_id")
         _require_text(self.host_trust_record_id, "host_trust_record_id")

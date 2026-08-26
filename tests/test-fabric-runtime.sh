@@ -322,6 +322,10 @@ def instance(**overrides):
         admitted_until=LATER,
         provenance={"class": "declared", "source": "operator"},
         lifecycle_state="admitted",
+        # An instance is permanently bound to the advertisement it was admitted
+        # against. Admission always required one; the model now says so too, so
+        # a fixture that omitted it was describing a record nobody could admit.
+        advertisement_id="CADV-000001",
     )
     fields.update(overrides)
     return CapabilityInstance(**fields)
@@ -3888,7 +3892,7 @@ def scope():
         permitted_capabilities=("coding-workload",),
         permitted_operations=("linux.hostname",),
         permitted_data_classifications=("internal",),
-        permitted_targets=("schmgmt.home.arpa",),
+        permitted_targets=("node/schai",),
         validity_start=STAMP, validity_end=YEAR)
 
 
@@ -5250,7 +5254,7 @@ def seeded_trust(tmp, subject="node/schai", state=TrustState.TRUSTED.value,
             permitted_capabilities=("coding-workload",),
             permitted_operations=("linux.hostname",),
             permitted_data_classifications=("internal",),
-            permitted_targets=("schmgmt.home.arpa",),
+            permitted_targets=("node/schai",),
             validity_start=STAMP, validity_end=YEAR),
         expiration=expiration)
     return store, granted
@@ -6833,12 +6837,12 @@ INSTANCE_PACKAGE = dict(BASE_PACKAGE,
 SCOPE = {"permitted_capabilities": ["CAPDEF-0001"],
          "permitted_operations": ["linux.hostname"],
          "permitted_data_classifications": ["internal"],
-         "permitted_targets": ["schmgmt.home.arpa"]}
+         "permitted_targets": ["node/schai"]}
 # What the intersection of both grants and that bound comes to.
 EFFECTIVE = {"permitted_capabilities": ("CAPDEF-0001",),
              "permitted_operations": ("linux.hostname",),
              "permitted_data_classifications": ("internal",),
-             "permitted_targets": ("schmgmt.home.arpa",)}
+             "permitted_targets": ("node/schai",)}
 BASE_INSTANCE = dict(
     actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
     evaluated_at=LATER, satisfied_contract_versions=("1.0.0",),
@@ -6920,7 +6924,11 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
                 permitted_capabilities=tuple(capabilities),
                 permitted_operations=("linux.hostname",),
                 permitted_data_classifications=("internal",),
-                permitted_targets=("schmgmt.home.arpa",),
+                # Every machine this world admits, because a grant that named
+                # only one of them would authorise work on one and refuse it
+                # on the other -- which is the target rule doing its job, not
+                # the selection behaviour these matrices are about.
+                permitted_targets=(node,) + tuple(nodes),
                 validity_start=STAMP, validity_end=YEAR),
             expiration=expiration)
 
@@ -8472,7 +8480,7 @@ try:
                 permitted_capabilities=("CAPDEF-0001",),
                 permitted_operations=("linux.hostname",),
                 permitted_data_classifications=("internal",),
-                permitted_targets=("schmgmt.home.arpa",),
+                permitted_targets=("node/schai",),
                 validity_start=STAMP, validity_end=YEAR),
             supersedes=host_trust.decision.decision_id,
             lineage_id=host_trust.lineage.lineage_id)
@@ -10734,6 +10742,11 @@ def c6_world(tmp, *, locality="any-trusted", second_host=False,
             capability_id=cap.record_id, capability_package_id=pkg.record_id,
             capability_host_id=host_id, contract_id=con.record_id,
             advertisement_id=advert.record_id,
+            # This world admits onto two machines, so the operator's bound has
+            # to name both. Bounding it to one would refuse the second binding
+            # on the target rule before any selection question was reached.
+            admission_scope=dict(SCOPE,
+                                 permitted_targets=[LOCAL_NODE, REMOTE_NODE]),
             package_trust_record_id=package_trust.record.record_id,
             host_trust_record_id=NODE_TRUST[
                 LOCAL_NODE if index == 0 else REMOTE_NODE]))
