@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=73
+  TOTAL_STEPS=74
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=93
+  TOTAL_STEPS=94
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -539,6 +539,13 @@ run "Capability execution generation-9 installer" \
 # own. Fixture-only; installs nothing here.
 run "Capability execution generation-10 installer" \
   bash tests/test-capability-execution-generation10-installer.sh
+
+# The Generation-11 installation ceremony: nine CREATE operations and a new
+# package directory, 48 -> 57. Its delta is an import closure rather than a
+# source diff, so the ceremony recomputes the closure from the reviewed commit
+# on every run. Fixture-only; installs nothing here.
+run "Capability execution generation-11 installer" \
+  bash tests/test-capability-execution-generation11-installer.sh
 
 # The governed artifact authority: git source and runtime artifact authority
 # are two planes, and this is the deterministic materialisation between them

@@ -484,6 +484,10 @@ jobs:
       - name: Capability execution generation-10 installer tests
         run: bash tests/test-capability-execution-generation10-installer.sh
 
+      # The Generation-11 installation ceremony, fixture-only.
+      - name: Capability execution generation-11 installer tests
+        run: bash tests/test-capability-execution-generation11-installer.sh
+
       # The governed artifact authority and the pinned-commit materialisation
       # into it. Fixture trees only: creates no live artifact root, publishes
       # nothing, needs no privilege, and stages nothing.
