@@ -280,6 +280,18 @@ def rehearsing():
         _REHEARSING.reset(token)
 
 
+def is_rehearsing() -> bool:
+    """Whether the caller is inside `rehearsing()`.
+
+    Exported so every governed operation reads **one** rehearsal state. C6
+    selection lives in its own module and would otherwise need a context
+    variable of its own -- two states that agree until one is entered without
+    the other, and then a rehearsal that writes. There is one flag, and this is
+    how a module outside `admission` asks about it.
+    """
+    return _REHEARSING.get()
+
+
 @dataclass(frozen=True)
 class OperationResult:
     """What one governed operation did. Immutable, and never persisted."""

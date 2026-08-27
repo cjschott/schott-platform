@@ -289,13 +289,59 @@ def command_preflight(args) -> int:
 
 
 def command_select(args) -> int:
-    """Operation 10. The `CSEL` is the governed component's to write."""
+    """Operation 10. The `CSEL` is the governed component's to write.
+
+    `--preflight` runs the same governed selection against the same stores
+    opened read-only and stops at the allocation boundary. The route is
+    resolved, every candidate the route declares is judged by the same
+    eligibility path, and the same declared-order rule picks the same winner --
+    what differs is that nothing is allocated and nothing is written.
+    """
+    rehearse = bool(getattr(args, "preflight", False))
     body = _decision_body(args.input_file, args.approved_directory)
-    store = _fabric_store(args)
+    store = _fabric_store(args, for_read=rehearse)
+
+    kind = "capability-selection"
+    predicted = destination = None
+    if rehearse:
+        predicted = store.peek_next_id(kind)
+        destination = store.path_for(kind, predicted)
+        if destination.exists():
+            raise _Unusable(
+                f"{predicted} already exists at {destination}; the store and its "
+                "sequence disagree and require operator disposition")
+
     try:
-        return _governed(select_candidate(store, _trust_store(args), **body))
+        if not rehearse:
+            return _governed(select_candidate(store, _trust_store(args), **body))
+        with admission.rehearsing():
+            outcome = select_candidate(
+                store, _trust_store(args, for_read=True), **body)
     except TypeError:
         raise _Unusable("the decision body does not match this operation") from None
+
+    would_accept = outcome.outcome == admission.PREFLIGHT
+    _emit({
+        "outcome": "preflight",
+        "operation": args.command,
+        "would_accept": would_accept,
+        "rehearsal_outcome": outcome.outcome,
+        "rehearsal_reason": outcome.reason,
+        "record_kind": kind,
+        "predicted_record_id": predicted,
+        # The decision itself, which is the whole reason to rehearse a
+        # selection: an operator wants to know which binding would serve
+        # before a `CSEL` identity is spent on finding out.
+        "selected_instance_id": outcome.selected_instance_id,
+        "destination": str(destination) if destination else None,
+        "destination_exists": False if destination else None,
+        "store_root": str(store.root),
+        "store_exists": store.root.exists(),
+        "request_id": outcome.request_id,
+        "request_digest": outcome.request_digest,
+        "mutated": False,
+    })
+    return EXIT_SUCCESS if would_accept else EXIT_DENIED
 
 
 def command_compute_eligibility(args) -> int:
@@ -381,6 +427,10 @@ def build_parser() -> argparse.ArgumentParser:
         sub.set_defaults(handler=command_write)
 
     choose = with_trust(with_body(with_store(subparsers.add_parser("select"))))
+    choose.add_argument("--preflight", action="store_true",
+                        help="resolve the route and judge every candidate "
+                             "without mutating: allocates no identifier and "
+                             "writes nothing")
     choose.set_defaults(handler=command_select)
 
     eligible = with_trust(with_store(subparsers.add_parser("compute-eligibility")))

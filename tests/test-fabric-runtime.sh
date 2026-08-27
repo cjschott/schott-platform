@@ -10790,6 +10790,157 @@ def excluded_of(record):
                  for entry in (record.get("excluded_candidates") or ()))
 
 
+# --- G11-C. The rehearsal boundary ------------------------------------------
+#
+# The same governed selection, run twice over one authority: once as a
+# rehearsal and once for real. What the rehearsal predicts is what the write
+# does, and what the rehearsal touches is nothing.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+
+    before = forensic(fabric_root)
+    sequences_before = sequences_of(fabric_root)
+    with admission_module.rehearsing():
+        rehearsed, error = chosen(store, trust_store, asked,
+                                  request_id="c6-preflight")
+    check(error is None, f"a rehearsed selection raises nothing ({error})")
+    check(rehearsed.outcome == admission_module.PREFLIGHT,
+          "a rehearsed selection reports the preflight outcome")
+    check(rehearsed.record_id is None,
+          "a rehearsed selection names no record")
+    check(rehearsed.selected_instance_id == instances[0],
+          "a rehearsed selection names the candidate declared order chooses")
+    check(forensic(fabric_root) == before,
+          "a rehearsed selection leaves the fabric byte-identical")
+    check(sequences_of(fabric_root) == sequences_before,
+          "a rehearsed selection advances no sequence")
+    check("capability-selection" not in sequences_before
+          or sequences_of(fabric_root) == sequences_before,
+          "a rehearsed selection creates no selection sequence")
+    check(store.counts().get("capability-selection", 0) == 0,
+          "a rehearsed selection writes no selection record")
+
+    # The identity the store would hand out, read without spending it.
+    predicted = store.peek_next_id("capability-selection")
+    check(forensic(fabric_root) == before,
+          "predicting the selection identity mutates nothing")
+
+    # A second rehearsal over an unchanged authority answers identically.
+    with admission_module.rehearsing():
+        again, _ = chosen(store, trust_store, asked, request_id="c6-preflight")
+    check(again.request_digest == rehearsed.request_digest
+          and again.selected_instance_id == rehearsed.selected_instance_id,
+          "a repeated rehearsal over an unchanged authority answers identically")
+    check(forensic(fabric_root) == before,
+          "a repeated rehearsal still mutates nothing")
+
+    # And now the write, under the same request identity and the same body.
+    committed, error = chosen(store, trust_store, asked,
+                              request_id="c6-preflight")
+    check(error is None, f"the committed selection raises nothing ({error})")
+    check(committed.outcome == ACCEPTED, "the committed selection is accepted")
+    check(committed.record_id == predicted,
+          "the committed selection takes the identity the rehearsal predicted")
+    check(committed.selected_instance_id == rehearsed.selected_instance_id,
+          "the committed selection chooses the candidate the rehearsal named")
+    check(committed.request_digest == rehearsed.request_digest,
+          "the rehearsal and the write share one request digest")
+    stored = written(store, committed.record_id)
+    check(stored.get("selected_instance_id") == rehearsed.selected_instance_id,
+          "the durable record names the rehearsed candidate")
+
+    # A rehearsal after the write reports what a second write would decide, and
+    # still writes nothing -- replay is not classified during a rehearsal.
+    after_write = forensic(fabric_root)
+    with admission_module.rehearsing():
+        post, _ = chosen(store, trust_store, asked, request_id="c6-preflight")
+    check(post.outcome == admission_module.PREFLIGHT,
+          "a rehearsal after the write is still a preflight, not a replay")
+    check(forensic(fabric_root) == after_write,
+          "a rehearsal after the write leaves the record byte-identical")
+
+# A rehearsal reports a refusal as a refusal, not as an acceptance.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    before = forensic(fabric_root)
+    with admission_module.rehearsing():
+        removed, _ = chosen(store, trust_store, asked, request_id="c6-pf-none",
+                            health_removals=(instances[0],))
+    check(removed.outcome == admission_module.PREFLIGHT
+          and removed.selected_instance_id is None,
+          "a rehearsal whose only candidate is removed selects nothing")
+    check(forensic(fabric_root) == before,
+          "a rehearsal that selects nothing still writes nothing")
+
+    with admission_module.rehearsing():
+        unrouted_pf, _ = chosen(store, trust_store,
+                                dict(asked, capability_id="CAPDEF-0009"),
+                                request_id="c6-pf-unrouted")
+    check(unrouted_pf.outcome == admission_module.PREFLIGHT
+          and unrouted_pf.selected_instance_id is None,
+          "a rehearsal with no route resolves to no candidate")
+    check(forensic(fabric_root) == before,
+          "a rehearsal with no route writes nothing")
+
+# The same rehearsal reached the way an operator reaches it, through the
+# released interface. The API cases above prove the semantics; this proves the
+# command surfaces them and mutates nothing on the way.
+with TemporaryDirectory() as tmp:
+    import json as _json
+    import subprocess as _subprocess
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    # `c6_world` already established this directory for the trust declaration.
+    approved = Path(tmp) / "approved"
+    approved.mkdir(exist_ok=True)
+    approved.joinpath("select.json").write_text(_json.dumps({
+        "request_id": "c6-cli-preflight", "actor": "core",
+        "recorded_at": STAMP.isoformat(), "evaluated_at": LATER.isoformat(),
+        "capability_id": asked["capability_id"],
+        "contract_id": asked["contract_id"],
+        "accepted_contract_versions": list(asked["accepted_contract_versions"]),
+        "data_classification": asked["data_classification"],
+        "locality": asked["locality"],
+        "local_node_identity": LOCAL_NODE,
+        "provenance": dict(PROV),
+    }), encoding="utf-8")
+
+    before = forensic(fabric_root)
+    completed = _subprocess.run(
+        [sys.executable, "-m", "tools.fabric.cli", "select", "--preflight",
+         "--store-root", str(fabric_root),
+         "--expected-uid", str(UID), "--expected-gid", str(GID),
+         "--input-file", "select.json", "--approved-directory", str(approved),
+         "--trust-store-root", str(Path(tmp) / "trust")],
+        capture_output=True, text=True, cwd=".")
+    check(completed.returncode == 0,
+          f"the select preflight command exits zero ({completed.stderr.strip()[:120]})")
+    check("Traceback" not in completed.stderr,
+          "a governed selection rehearsal raises no traceback")
+    try:
+        payload = _json.loads(completed.stdout)
+    except ValueError:
+        payload = {}
+    check(payload.get("outcome") == "preflight"
+          and payload.get("would_accept") is True
+          and payload.get("mutated") is False,
+          "the command reports a non-mutating preflight")
+    check(payload.get("predicted_record_id") == store.peek_next_id(
+              "capability-selection"),
+          "the command predicts the identity the store would allocate")
+    check(payload.get("selected_instance_id") == instances[0],
+          "the command names the candidate declared order chooses")
+    check(payload.get("destination_exists") is False,
+          "the command reports the destination as absent")
+    check(isinstance(payload.get("request_digest"), str)
+          and payload.get("request_id") == "c6-cli-preflight",
+          "the command reports the governed request identity and digest")
+    check(forensic(fabric_root) == before,
+          "the select preflight command leaves the fabric byte-identical")
+
+
 # --- A. A request class no route governs ------------------------------------
 with TemporaryDirectory() as tmp:
     fabric_root = Path(tmp) / "fabric"
