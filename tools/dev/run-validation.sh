@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=74
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=96
+  TOTAL_STEPS=97
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -263,6 +263,14 @@ if (( QUICK == 0 )); then
   # create_route can produce, and the four-digit route identifier. Fixture-only;
   # it proves both production stores are unchanged.
   run "Fabric route preflight" bash tests/test-fabric-route-preflight.sh
+
+  # G11-N. register-advertisement had never been rehearsed by anything, and it
+  # is the next write operation due in production for the CADV renewal. The
+  # released preflight is correct in both shapes -- a first advertisement and a
+  # successor -- so this suite adds coverage rather than a correction, and pins
+  # that no post-commit guard exists to reintroduce the R15 shape. Fixture-only.
+  run "Fabric advertisement preflight" \
+    bash tests/test-fabric-advertisement-preflight.sh
 
   # G11-B. The installed Capability Runtime must satisfy its Fabric dependency
   # from the installed surface rather than from a repository checkout that

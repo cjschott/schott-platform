@@ -242,6 +242,11 @@ jobs:
       - name: Fabric route preflight tests
         run: bash tests/test-fabric-route-preflight.sh
 
+      # G11-N: register-advertisement must be rehearsable in both shapes before
+      # the CADV renewal ceremony. Fixture-only.
+      - name: Fabric advertisement preflight tests
+        run: bash tests/test-fabric-advertisement-preflight.sh
+
       # G11-B: the installed Capability Runtime must satisfy its Fabric
       # dependency from the installed surface, not from a checkout. Builds a
       # disposable installation root; skips cleanly where none is installed.
