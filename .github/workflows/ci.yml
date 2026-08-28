@@ -237,6 +237,11 @@ jobs:
       - name: Fabric instance admission integrity tests
         run: bash tests/test-fabric-instance-admission-integrity.sh
 
+      # G11-K: create-route must be rehearsable before the first production
+      # route is written. Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric route preflight tests
+        run: bash tests/test-fabric-route-preflight.sh
+
       # G11-B: the installed Capability Runtime must satisfy its Fabric
       # dependency from the installed surface, not from a checkout. Builds a
       # disposable installation root; skips cleanly where none is installed.

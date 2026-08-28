@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=74
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=95
+  TOTAL_STEPS=96
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -255,6 +255,14 @@ if (( QUICK == 0 )); then
   # proves both production stores are unchanged.
   run "Fabric instance admission integrity" \
     bash tests/test-fabric-instance-admission-integrity.sh
+
+  # G11-K. create-route had never been rehearsed by anything, and it was the
+  # next write operation due in production. The released preflight turned out to
+  # be correct, so this suite adds coverage rather than a correction: the CLI
+  # preflight end to end, preflight/write equivalence, every refusal
+  # create_route can produce, and the four-digit route identifier. Fixture-only;
+  # it proves both production stores are unchanged.
+  run "Fabric route preflight" bash tests/test-fabric-route-preflight.sh
 
   # G11-B. The installed Capability Runtime must satisfy its Fabric dependency
   # from the installed surface rather than from a repository checkout that
