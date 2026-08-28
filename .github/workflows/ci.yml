@@ -231,6 +231,12 @@ jobs:
       - name: Fabric G11-A integrity tests
         run: bash tests/test-fabric-g11-integrity.sh
 
+      # G11-H: a first instance admission must be rehearsable, and admission
+      # must consume the current advertisement rather than merely a fresh one.
+      # Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric instance admission integrity tests
+        run: bash tests/test-fabric-instance-admission-integrity.sh
+
       # G11-B: the installed Capability Runtime must satisfy its Fabric
       # dependency from the installed surface, not from a checkout. Builds a
       # disposable installation root; skips cleanly where none is installed.

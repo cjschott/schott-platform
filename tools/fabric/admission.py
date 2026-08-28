@@ -119,6 +119,14 @@ REASON_ADVERT_SUBJECT = "advertisement-not-of-subject"
 REASON_ADVERT_CONTRACT = "advertisement-not-of-contract"
 REASON_ADVERT_PACKAGE = "advertisement-not-of-package"
 REASON_ADVERT_STALE = "advertisement-not-fresh"
+# Separate from staleness on purpose, and named after the host's counterpart in
+# the same operation rather than after the renewal rule that guards the other
+# end of the chain. Freshness is temporal and supersession is lineage: an
+# advertisement can be well inside its window and still not be what this host
+# currently claims. Reporting the second as the first would send an operator to
+# renew a claim that does not need renewing, when what they must do is consume
+# the head.
+REASON_ADVERT_SUPERSEDED = "advertisement-record-superseded"
 # Renewal. A new advertisement may replace an earlier one, and the earlier one
 # is never touched: supersession is a forward statement by the successor, read
 # backwards. Each way a renewal can fail to be a renewal gets its own name,
@@ -1580,6 +1588,23 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
             _refuse(REFUSED, REASON_ADVERT_CONTRACT)
         if advertisement.get("capability_package_id") != capability_package_id:
             _refuse(REFUSED, REASON_ADVERT_PACKAGE)
+        # And it must be what the host claims *now*. Freshness and currentness
+        # are independent: a superseded advertisement can still be well inside
+        # its window, and admitting against it would bind this instance to a
+        # claim the host has already replaced -- so an eligibility answer about
+        # the binding would rest on a claim that is no longer the host's.
+        #
+        # Read through the same governed traversal the renewal rule uses, so a
+        # forked, cyclic or unreadable advertisement chain fails closed here
+        # exactly as it does there, rather than through a second lineage walk
+        # that could disagree with the first.
+        #
+        # Ordered before the clocks deliberately. An advertisement that is both
+        # superseded and expired is reported as superseded, because that is the
+        # actionable fact: the operator consumes the head, which is fresh, and
+        # renewing the record they named would not help.
+        if advertisement_head(store, advertisement_id) != advertisement_id:
+            _refuse(REFUSED, REASON_ADVERT_SUPERSEDED)
 
         # 5. Declared versions only: set membership, twice, with no arithmetic.
         declared = tuple(package.get("satisfied_contract_versions") or ())
@@ -1716,7 +1741,17 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
                                       notes=notes, evidence=carried))
         # C1 allocates from a sequence that never reuses a value, so a fresh
         # identity cannot be the identity it supersedes.
-        if allocated == supersedes or (prior_root is not None and allocated == prior_root):
+        #
+        # Guarded on an identity having actually been allocated. A rehearsal
+        # stops before allocation and `_commit` reports that as `None`; for a
+        # first admission `supersedes` is `None` too, and comparing the two
+        # absences refused every preflight of the one operation that most needs
+        # one. The check belongs to the committed write, where both operands are
+        # real identities -- there is nothing for it to say about an identity
+        # that was deliberately not minted.
+        if allocated is not None and (
+                allocated == supersedes
+                or (prior_root is not None and allocated == prior_root)):
             _refuse(REFUSED, REASON_SUPERSEDES_CAPABILITY)
         return kind, allocated
 

@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=74
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=94
+  TOTAL_STEPS=95
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -245,6 +245,16 @@ if (( QUICK == 0 )); then
   # touching it. Fixture-only: temporary Fabric and Trust stores, and it
   # proves both production stores are unchanged.
   run "Fabric G11-A integrity" bash tests/test-fabric-g11-integrity.sh
+
+  # G11-H. Instance admission must be rehearsable and must consume the current
+  # advertisement, not merely a fresh one. The first defect made every preflight
+  # of a FIRST admission refuse; the second let a superseded-but-fresh claim be
+  # admitted. Both were invisible because no suite preflighted an instance
+  # admission and every admission fixture used an advertisement that was fresh
+  # and current at once. Fixture-only: temporary Fabric and Trust stores, and it
+  # proves both production stores are unchanged.
+  run "Fabric instance admission integrity" \
+    bash tests/test-fabric-instance-admission-integrity.sh
 
   # G11-B. The installed Capability Runtime must satisfy its Fabric dependency
   # from the installed surface rather than from a repository checkout that
