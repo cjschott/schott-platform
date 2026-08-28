@@ -1419,10 +1419,26 @@ else
   fail "a production path changed while this suite ran"
 fi
 
+# Whether Generation 11 is installed is a fact about the host at a moment, not
+# an invariant of this suite. Asserting the pre-install state bound the suite to
+# the day it was written: it passed until the operator installed Generation 11
+# and failed from then on, while nothing about the suite or the ceremony had
+# changed. What is invariant is that THIS SUITE installs nothing -- proven
+# directly above by the production snapshot -- and that if a Fabric package is
+# installed, it is exactly the reviewed closure and nothing more.
 if [[ ! -e /usr/lib/kyri/python/tools/fabric ]]; then
-  pass "production carries no installed Fabric package: Generation 11 is not installed"
+  pass "production carries no installed Fabric package: Generation 11 is not installed here"
 else
-  fail "production carries an installed Fabric package"
+  installed_fabric="$(find /usr/lib/kyri/python/tools/fabric -type f -name '*.py' | wc -l)"
+  smuggled=""
+  for excluded in admission.py cli.py eligibility.py selection.py trust_adapter.py; do
+    [[ -e "/usr/lib/kyri/python/tools/fabric/${excluded}" ]] && smuggled+=" ${excluded}"
+  done
+  if [[ "${installed_fabric}" -eq "${#ROWS[@]}" && -z "${smuggled}" ]]; then
+    pass "production carries the installed Generation-11 closure: exactly ${#ROWS[@]} reviewed objects, no write-plane module"
+  else
+    fail "the installed Fabric package is ${installed_fabric} objects and carries:${smuggled:- nothing undeclared}"
+  fi
 fi
 
 printf '\n'
