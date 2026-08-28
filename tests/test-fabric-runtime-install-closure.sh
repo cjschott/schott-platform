@@ -105,12 +105,24 @@ build_root() {
   # Generation 10, exactly as installed.
   ( cd "${INSTALLED_ROOT}" && find . -name '*.py' -not -path '*__pycache__*' -print0 ) \
     | ( cd "${INSTALLED_ROOT}" && xargs -0 -I{} cp --parents {} "${root}/" )
+  # Installed objects arrive 0444, and since Generation 11 was installed that
+  # copy already carries tools/fabric -- so the overlay below writes over
+  # read-only files instead of creating them. Make the fixture writable rather
+  # than copying onto a mode nobody chose here.
+  chmod -R u+w "${root}"
   # Generation 11, exactly as declared.
   for row in "${GENERATION_11_MATRIX[@]}"; do
     local src target
     src="$(generation_11_field "${row}" 0)"
-    [[ "${src}" == "${skip}" ]] && continue
     target="${root}/${src}"
+    if [[ "${src}" == "${skip}" ]]; then
+      # A skipped module must be REMOVED, not merely left un-overlaid. Before
+      # Generation 11 was installed, declining to copy it was enough because
+      # nothing else supplied it; now the installed copy above does, and a
+      # control that left the module in place would assert nothing at all.
+      rm -f "${target}"
+      continue
+    fi
     mkdir -p "$(dirname "${target}")"
     cp "${REPOSITORY}/${src}" "${target}"
   done
