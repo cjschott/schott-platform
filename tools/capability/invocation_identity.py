@@ -56,7 +56,7 @@ DISTINCT = "invocation_identity_distinct"
 # The fields that place a payload. Ordered for the reader; the canonical form
 # sorts them itself, so this order carries no weight.
 BINDING_FIELDS = ("invocation_id", "selection_id", "instance_id",
-                  "capability_package_id", "actor")
+                  "capability_package_id", "operation", "actor")
 
 
 def _safe_text(value: Any, name: str) -> str:
@@ -131,12 +131,17 @@ def payload_digest(payload: Any) -> str:
 
 
 def bind(*, payload: Any, invocation_id: Any, selection_id: Any,
-         instance_id: Any, capability_package_id: Any, actor: Any) -> str:
+         instance_id: Any, capability_package_id: Any, operation: Any,
+         actor: Any) -> str:
     """One digest over the payload and the decision it belongs to.
 
     The binding is canonicalised as a named mapping, so a field's value cannot
     be mistaken for another field's: moving text across the boundary changes
     the canonical bytes rather than sliding past unnoticed.
+
+    The operation is covered because it is caller-controlled authority. A
+    binding that omitted it could be checked as one action and presented as
+    another, and the digest would agree with both.
     """
     supplied = {
         "invocation_id": validate_invocation_id(invocation_id),
@@ -144,6 +149,7 @@ def bind(*, payload: Any, invocation_id: Any, selection_id: Any,
         "instance_id": _safe_text(instance_id, "instance_id"),
         "capability_package_id": _safe_text(capability_package_id,
                                             "capability_package_id"),
+        "operation": _safe_text(operation, "operation"),
         "actor": _safe_text(actor, "actor"),
         "payload": _checked(payload, ""),
     }

@@ -28,7 +28,7 @@ RESULT_KIND = "capability-result"
 INVOCATION_FIELDS = (
     "invocation_record_id", "invocation_id", "request_id", "selection_id",
     "instance_id", "capability_package_id", "contract_id", "capability_id",
-    "actor", "payload_digest", "binding_digest", "effect_class",
+    "operation", "actor", "payload_digest", "binding_digest", "effect_class",
     "artifact_digest", "staged_path", "requested_at", "kind", "schema_version",
     "evidence",
 )

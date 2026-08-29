@@ -189,7 +189,8 @@ def command_invoke(args) -> int:
         trusted_source_uid=args.trusted_source_uid,
         staging_root=args.staging_root, coordinator_uid=args.coordinator_uid,
         selection_id=args.selection_id, instance_id=args.instance_id,
-        capability_package_id=args.package_id, invocation_id=args.invocation_id,
+        capability_package_id=args.package_id, operation=args.operation,
+        invocation_id=args.invocation_id,
         payload=payload, actor=args.actor, request_id=args.request_id,
         requested_at=requested_at)
     _emit({
@@ -431,6 +432,9 @@ def build_parser() -> argparse.ArgumentParser:
     invoke.add_argument("--selection-id", required=True)
     invoke.add_argument("--instance-id", required=True)
     invoke.add_argument("--package-id", required=True)
+    # Required, and never defaulted. A selection names a binding; it does not
+    # name an action, so the action is named here or the invocation is refused.
+    invoke.add_argument("--operation", required=True)
     invoke.add_argument("--actor", required=True)
     invoke.add_argument("--request-id", required=True)
     invoke.add_argument("--requested-at", required=True)

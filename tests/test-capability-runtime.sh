@@ -686,7 +686,7 @@ from tools.capability.invocation_identity import (  # noqa: E402
 
 BINDING = dict(invocation_id="inv-alpha", selection_id="CSEL-000001",
                instance_id="CINST-000001", capability_package_id="CPKG-0001",
-               actor="operator:cschott")
+               operation="execute", actor="operator:cschott")
 
 
 def refuses_capability(action, message):
@@ -845,9 +845,9 @@ check(bind(payload={"text": "summarise", "extra": None}, **BINDING) != base,
       "adding a payload key changes the binding")
 
 # Domain separation: moving text between fields must not collide.
-left = bind(payload={}, invocation_id="ab", selection_id="c",
+left = bind(payload={}, operation="execute", invocation_id="ab", selection_id="c",
             instance_id="d", capability_package_id="e", actor="f")
-right = bind(payload={}, invocation_id="a", selection_id="bc",
+right = bind(payload={}, operation="execute", invocation_id="a", selection_id="bc",
              instance_id="d", capability_package_id="e", actor="f")
 check(left != right,
       "text moved between binding fields does not collide")
@@ -999,13 +999,28 @@ def _chain(tmp, **overrides):
             "instance_id": "CINST-000001", "capability_id": "CAPDEF-0001",
             "capability_package_id": "CPKG-0001", "contract_id": "CCON-0001",
             "capability_host_id": "CHOST-0001", "lifecycle_state": "admitted",
+            "effective_scope": {
+                "permitted_capabilities": ["CAPDEF-0001"],
+                "permitted_operations": ["execute"],
+                "permitted_data_classifications": ["internal"],
+                "permitted_targets": ["HOST-0001"]},
             "admitted_at": _OPENED.isoformat(), "admitted_until": _EXPIRES.isoformat(),
             "admission_decision_id": "CINST-000000", "kind": "capability-instance"},
+        "capability-host": {
+            "capability_host_id": "CHOST-0001",
+            "node_identity_reference": "HOST-0001",
+            "location_class": "on-premises", "data_classification": "internal",
+            "availability_intent": "in-service", "kind": "capability-host"},
         "capability-selection": {
             "selection_id": "CSEL-000001", "selected_instance_id": "CINST-000001",
             "selection_reason": "first-eligible-in-declared-order",
             "selected_at": _NOW.isoformat(), "route_id": "CROUTE-0001",
-            "route_version": 1, "kind": "capability-selection"},
+            "route_version": 1,
+            "request_class": {
+                "capability_id": "CAPDEF-0001", "contract_id": "CCON-0001",
+                "accepted_contract_versions": ["1.0.0"],
+                "data_classification": "internal", "locality": "local-only"},
+            "kind": "capability-selection"},
     }
     for kind, changes in overrides.items():
         if changes is None:
@@ -1017,6 +1032,7 @@ def _chain(tmp, **overrides):
             {"capability-definition": "capability_id",
              "capability-contract": "contract_id",
              "capability-package": "capability_package_id",
+             "capability-host": "capability_host_id",
              "capability-instance": "instance_id",
              "capability-selection": "selection_id"}[kind]]
         store.write_atomic(store.path_for(kind, identity), record)
@@ -1025,7 +1041,8 @@ def _chain(tmp, **overrides):
 
 def _verify(fabric_root, **overrides):
     asked = dict(selection_id="CSEL-000001", instance_id="CINST-000001",
-                 capability_package_id="CPKG-0001", evaluated_at=_NOW)
+                 capability_package_id="CPKG-0001", operation="execute",
+                 evaluated_at=_NOW)
     asked.update(overrides)
     return verify_selected_evidence(fabric_root, expected_uid=UID,
                                     expected_gid=GID, **asked)
@@ -2172,7 +2189,8 @@ def _evidence(**overrides):
                   contract_id="CCON-0001", capability_id="CAPDEF-0001",
                   effect_class="read-only",
                   artifact_reference=_TREE_REFERENCE,
-                  manifest_reference=_MANIFEST_REFERENCE)
+                  manifest_reference=_MANIFEST_REFERENCE,
+                  operation="execute", target_node_identity="HOST-0001")
     fields.update(overrides)
     return EvidenceVerdict(**fields)
 
@@ -3015,7 +3033,7 @@ def _prepared_inputs(tmp, *, invocation_id="inv-alpha", payload=None,
     binding = dict(invocation_id=invocation_id, selection_id=evidence.selection_id,
                    instance_id=evidence.instance_id,
                    capability_package_id=evidence.capability_package_id,
-                   actor=actor)
+                   operation=evidence.operation, actor=actor)
     binding.update(binding_overrides)
     return dict(
         invocation_id=invocation_id,
@@ -3452,6 +3470,7 @@ with TemporaryDirectory() as tmp:
                                                     selection_id="CSEL-000001",
                                                     instance_id="CINST-000001",
                                                     capability_package_id="CPKG-0001",
+                                                    operation="execute",
                                                     actor="operator:cschott")))
     check(_fabric_inventory(fabric_root) == fabric_before,
           "recording a decision leaves the fabric store byte-identical")
@@ -3529,6 +3548,7 @@ def _invoke_args(tmp, *, approved, staging, fabric_root, payload_root,
         "--selection-id": "CSEL-000001",
         "--instance-id": "CINST-000001",
         "--package-id": "CPKG-0001",
+        "--operation": "execute",
         "--actor": "operator:cschott",
         "--request-id": "req-alpha",
         "--requested-at": _WHEN.isoformat(),
@@ -3852,6 +3872,7 @@ def _cinv(identity, *, invocation_id="inv-a", outcome=OUTCOME_PREPARED):
         "request_id": "req-1", "selection_id": "CSEL-000001",
         "instance_id": "CINST-000001", "capability_package_id": "CPKG-0001",
         "contract_id": "CCON-0001", "capability_id": "CAPDEF-0001",
+        "operation": "execute",
         "actor": "operator:cschott", "payload_digest": payload_digest({"a": 1}),
         "binding_digest": payload_digest({"b": 2}), "effect_class": "read-only",
         "artifact_digest": payload_digest({"c": 3}), "staged_path": "/staging/x",
@@ -3974,7 +3995,8 @@ with TemporaryDirectory() as tmp:
         fabric_expected_gid=GID, approved_artifact_root=world["approved"],
         trusted_source_uid=UID, staging_root=world["staging"], coordinator_uid=UID,
         selection_id="CSEL-000001", instance_id="CINST-000001",
-        capability_package_id="CPKG-0001", invocation_id="inv-equal",
+        capability_package_id="CPKG-0001", operation="execute",
+        invocation_id="inv-equal",
         payload={"text": "summarise"}, actor="operator:cschott",
         request_id="req-alpha", requested_at=_WHEN)
     for field in ("status", "reason", "payload_digest", "binding_digest",
@@ -4017,7 +4039,8 @@ with TemporaryDirectory() as tmp:
     check(cinv["binding_digest"] == bind(
         payload={"text": "summarise"}, invocation_id="inv-chain",
         selection_id="CSEL-000001", instance_id="CINST-000001",
-        capability_package_id="CPKG-0001", actor="operator:cschott"),
+        capability_package_id="CPKG-0001", operation="execute",
+        actor="operator:cschott"),
         "the binding digest covers the payload and the claim")
     check(cinv["payload_digest"] == payload_digest({"text": "summarise"}),
           "the payload digest is of the canonical logical payload")

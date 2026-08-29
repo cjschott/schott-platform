@@ -90,7 +90,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|CREATE|ABSENT|ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745|c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305|8c172c37bbd6a684d84adf3f67357d39d1dd035df190161e44298eb7d099a6ca"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -100,7 +100,17 @@ GENERATION_DELTA=(
 "tools/common/trusted_source.py|REPLACE|e0f32e1f5372dbdb24ebf22e35cfa7d3a52af570f87a3160f634dae2fffea4f8|d1e8ac5933834deb7b7aa07a847312ac10d8c4e3f0c0d2d93400c6eafe04865f"
 "tools/capability/execution/package_contract.py|REPLACE|812dc878cb7b7082b42086a9adce714a152617e718536c039ed759b12d3e511a|79a9f7d4befb490833c5c5b764a03c02696ab3555e8081a89af92f5f79a4dc13"
 "tools/capability/package_resolution.py|REPLACE|678bcabd341f8a76fa7000cfe0f66174b443c4ca5b2782846bed7baf94681f6c|0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b"
-"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e|394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7"
+"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e,394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7|d2429646966462508fb27e4c6b96d1a0f698cf93fa841d66f0640bd344232426"
+# Generation 12, ENG-0005 G11-X. Per-invocation operation authority: the
+# invocation boundary now names the action being requested and checks it,
+# with the capability, the classification, and the node identity, against
+# the admitted binding's effective_scope. The operation joins the binding
+# digest and the durable record, so what was authorised cannot be changed
+# without changing its evidence.
+"tools/capability/fabric_evidence.py|REPLACE|e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742,e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742|ddd44e1dc8544e477ed6c3541c1cb1c9c7e04743935b8959ee4828ca282b861b"
+"tools/capability/invocation_identity.py|REPLACE|617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2,617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2|3a01471a43c1f0b27aac987c77941446368e17ba293cfaf0451191a587c5def8"
+"tools/capability/records.py|REPLACE|563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31,563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31|a6744501a1f58eafb926f128fec1eadcc2ccced9ebb601718c8cc55a4b1da38e"
+"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924|799c741666071dfeee48f334f2d0e64743f782a46368db4e779e2350d0fc60e1"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
@@ -336,7 +346,13 @@ generation_declares() {
   for row in "${GENERATION_DELTA[@]}"; do
     [[ "$(field "${row}" 0)" == "${file}" ]] || continue
     [[ "$(field "${row}" 1)" == "REPLACE" ]] || return 1
-    [[ "${installed}" == "$(field "${row}" 2)" ]] || return 1
+    # A row may name several installed baselines, comma-separated: a checkout
+    # can be ahead of one host by one hop and another by two. Only the
+    # installed side widens. The checkout must still be the declared bytes,
+    # so nothing unreviewed becomes admissible by naming another baseline.
+    local baselines
+    baselines=",$(field "${row}" 2),"
+    [[ "${baselines}" == *",${installed},"* ]] || return 1
     [[ "${checkout}" == "$(field "${row}" 3)" ]] || return 1
     return 0
   done

@@ -121,6 +121,8 @@ ACTOR = 'operator'
 SELECTION = 'CSEL-000001'
 INSTANCE = 'CINS-000001'
 PACKAGE_ID = 'CPKG-000001'
+# The action the invocation asked for, carried through the durable record.
+OPERATION = 'execute'
 
 def write(path, data, mode=0o644):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -201,6 +203,8 @@ class Evidence:
         self.effect_class = 'read-only'
         self.artifact_reference = 'tree:pkg'
         self.manifest_reference = 'file:manifest.json'
+        self.operation = OPERATION
+        self.target_node_identity = 'HOST-0001'
 
 def package_tree(name, files=None):
     '''A staged package tree from the REAL resolver, never a fabricated object.
@@ -258,7 +262,8 @@ def scenario(name, payload=None):
         store, invocation_id='request-' + name,
         binding_digest=bind(payload=body, invocation_id='request-' + name,
                             selection_id=SELECTION, instance_id=INSTANCE,
-                            capability_package_id=PACKAGE_ID, actor=ACTOR),
+                            capability_package_id=PACKAGE_ID,
+                            operation=OPERATION, actor=ACTOR),
         payload_digest=payload_digest(body), evidence=Evidence(),
         staged=staged, actor=ACTOR,
         request_id='REQ-1',

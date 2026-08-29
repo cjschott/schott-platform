@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=74
+  TOTAL_STEPS=75
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=97
+  TOTAL_STEPS=98
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -311,6 +311,8 @@ run "Trust migration" bash tests/test-trust-migration.sh
 # there is no engine to exercise. Builds no store, spawns no subprocess,
 # contacts nothing — it runs in quick mode as well.
 run "Capability fabric" bash tests/test-capability-fabric.sh
+run "Invocation operation authority" \
+  bash tests/test-capability-invocation-operation-authority.sh
 
 # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
 # carrying the purity or authority backstop for the modules that increment
