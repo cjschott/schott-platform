@@ -273,6 +273,8 @@ jobs:
         run: bash tests/test-capability-invocation-operation-authority.sh
       - name: Invoke current eligibility
         run: bash tests/test-capability-invoke-current-eligibility.sh
+      - name: Generation-12 packaging
+        run: bash tests/test-capability-execution-generation12-packaging.sh
 
       # Architecture only: ADR-0013, six immutable schemas, ontology, and
       # documentation. Asserts the specification is complete and that no health
