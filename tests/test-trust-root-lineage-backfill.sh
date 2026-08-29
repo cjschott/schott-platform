@@ -59,10 +59,22 @@ live_state() {
     printf 'absent'
   fi
 }
-TRUST_BEFORE="$(live_state "${LIVE_TRUST}")"
-FABRIC_BEFORE="$(live_state "${LIVE_FABRIC}")"
-LINEAGES_BEFORE="$(find "${LIVE_TRUST}/lineages" -type f 2>/dev/null | wc -l)"
-AUDIT_BEFORE="$(find "${LIVE_TRUST}/audit" -type f 2>/dev/null | wc -l)"
+# Every case in this suite is fixture-only; the live store appears solely in the
+# no-mutation proof below. On a runner there is no /var/lib/kyri, and `find` on
+# an absent directory exits non-zero -- which under `set -Eeuo pipefail` killed
+# this suite before it printed a single line. The guard is presence, not
+# opt-out: on the production host the proof runs exactly as before.
+LIVE_PRESENT=no
+[[ -d "${LIVE_TRUST}" && -d "${LIVE_FABRIC}" ]] && LIVE_PRESENT=yes
+
+count_live() { find "$1" -type f 2>/dev/null | wc -l || true; }
+
+if [[ "${LIVE_PRESENT}" == "yes" ]]; then
+  TRUST_BEFORE="$(live_state "${LIVE_TRUST}")"
+  FABRIC_BEFORE="$(live_state "${LIVE_FABRIC}")"
+  LINEAGES_BEFORE="$(count_live "${LIVE_TRUST}/lineages")"
+  AUDIT_BEFORE="$(count_live "${LIVE_TRUST}/audit")"
+fi
 
 run_case() {
   local label="$1" script="$2" actual
@@ -702,6 +714,9 @@ say(written == {"lineage", "audit"}, f"{sorted(written)}")
 
 # --- 10. The live store is untouched ----------------------------------------
 
+if [[ "${LIVE_PRESENT}" != "yes" ]]; then
+  printf 'SKIP: no live Trust or Fabric store; there is nothing this suite could have touched\n'
+else
 TRUST_AFTER="$(live_state "${LIVE_TRUST}")"
 FABRIC_AFTER="$(live_state "${LIVE_FABRIC}")"
 if [[ "${TRUST_AFTER}" == "${TRUST_BEFORE}" ]]; then
@@ -721,12 +736,13 @@ fi
 # repair has not happened rather than that this suite behaved -- and asserting
 # it would report an approved ceremony as a test failure. What this suite must
 # prove is that IT wrote nothing, which is the count either side of the run.
-LINEAGES_AFTER="$(find "${LIVE_TRUST}/lineages" -type f 2>/dev/null | wc -l)"
-AUDIT_AFTER="$(find "${LIVE_TRUST}/audit" -type f 2>/dev/null | wc -l)"
+LINEAGES_AFTER="$(count_live "${LIVE_TRUST}/lineages")"
+AUDIT_AFTER="$(count_live "${LIVE_TRUST}/audit")"
 if [[ "${LINEAGES_AFTER}" == "${LINEAGES_BEFORE}" && "${AUDIT_AFTER}" == "${AUDIT_BEFORE}" ]]; then
   pass "this suite added no production lineage and no production audit event"
 else
   fail "this suite changed production record counts: lineages ${LINEAGES_BEFORE} -> ${LINEAGES_AFTER}, audit ${AUDIT_BEFORE} -> ${AUDIT_AFTER}"
+fi
 fi
 
 printf '\n'
