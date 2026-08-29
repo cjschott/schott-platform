@@ -1426,18 +1426,50 @@ fi
 # changed. What is invariant is that THIS SUITE installs nothing -- proven
 # directly above by the production snapshot -- and that if a Fabric package is
 # installed, it is exactly the reviewed closure and nothing more.
+#
+# That correction was made when Generation 11 went in, and it did not go far
+# enough: it still assumed Generation 11 would be the last word on what the
+# installed Fabric package may hold. Generation 12 declares three read-path
+# modules there -- eligibility, trust_adapter, resources -- so a fixed
+# "anything beyond the nine is smuggled" list fails the moment a later
+# generation legitimately adds one, which is what happened.
+#
+# What is actually invariant, and what this assertion is for, is that the
+# WRITE and DECISION plane is never installed. Read-path additions are read
+# from whichever later generation declares them, rather than being listed here
+# again and going stale again.
 if [[ ! -e /usr/lib/kyri/python/tools/fabric ]]; then
   pass "production carries no installed Fabric package: Generation 11 is not installed here"
 else
   installed_fabric="$(find /usr/lib/kyri/python/tools/fabric -type f -name '*.py' | wc -l)"
+  # Fabric modules a later reviewed generation declares as its own CREATE rows.
+  mapfile -t later_fabric < <(
+    sed -n 's/^"\(tools\/fabric\/[a-z_]*\.py\)|.*|CREATE|.*$/\1/p' \
+      "${REPOSITORY}/provisioning/execution/install-generation-12.sh" \
+    | sed 's#^tools/fabric/##')
+  expected_fabric=$(( ${#ROWS[@]} + ${#later_fabric[@]} ))
   smuggled=""
-  for excluded in admission.py cli.py eligibility.py selection.py trust_adapter.py; do
+  # The write plane. No generation installs these, and if one ever does, this
+  # is the assertion that must fail.
+  for excluded in admission.py cli.py selection.py; do
     [[ -e "/usr/lib/kyri/python/tools/fabric/${excluded}" ]] && smuggled+=" ${excluded}"
   done
-  if [[ "${installed_fabric}" -eq "${#ROWS[@]}" && -z "${smuggled}" ]]; then
-    pass "production carries the installed Generation-11 closure: exactly ${#ROWS[@]} reviewed objects, no write-plane module"
+  # And nothing may appear that neither Generation 11 nor a later generation
+  # declared.
+  while IFS= read -r present; do
+    declared=no
+    for row in "${ROWS[@]}"; do
+      [[ "$(basename "$(field "${row}" 0)")" == "${present}" ]] && declared=yes
+    done
+    for later in "${later_fabric[@]}"; do
+      [[ "${later}" == "${present}" ]] && declared=yes
+    done
+    [[ "${declared}" == "no" ]] && smuggled+=" ${present}"
+  done < <(find /usr/lib/kyri/python/tools/fabric -type f -name '*.py' -printf '%f\n')
+  if [[ "${installed_fabric}" -eq "${expected_fabric}" && -z "${smuggled}" ]]; then
+    pass "production carries the reviewed Fabric closure: ${#ROWS[@]} Generation-11 objects plus ${#later_fabric[@]} later-generation read-path modules, no write-plane module"
   else
-    fail "the installed Fabric package is ${installed_fabric} objects and carries:${smuggled:- nothing undeclared}"
+    fail "the installed Fabric package is ${installed_fabric} objects (expected ${expected_fabric}) and carries:${smuggled:- nothing undeclared}"
   fi
 fi
 

@@ -232,15 +232,31 @@ fi
 # against a real store proves the closure is complete: a missing transitive
 # dependency would surface here rather than at import.
 
+#
+# The call this makes is the current one. G11-X made the operation explicit
+# per invocation with no default, and G11-Y made the boundary read the Trust
+# plane at invoke time, so `operation` and `trust_root` are both required
+# keyword arguments now. This suite called the pre-G11-X signature and, once
+# Generation 12 was installed, the runtime refused it -- correctly. The fix is
+# to supply the authority a real invocation supplies, not to relax the call.
+#
+# Supplying trust_root also widens what this proves: the Trust reader is part
+# of the dependency graph the Capability boundary now closes over, so
+# tools.trust must resolve from the installed surface too.
+
 out="$(isolated "${GEN11_ROOT}" "
 import os, tempfile, pathlib
 from datetime import datetime, timedelta, timezone
 from tools.capability.fabric_evidence import verify_selected_evidence
 from tools.fabric.inspection import STATUS_REPORTED, inspect_records
 from tools.fabric.store import FabricStore
+from tools.trust.store import TrustStore
 
-root = pathlib.Path(tempfile.mkdtemp()) / 'fabric'
+base = pathlib.Path(tempfile.mkdtemp())
+root = base / 'fabric'
 FabricStore(root, expected_uid=os.geteuid(), expected_gid=os.getegid())
+trust_root = base / 'trust'
+TrustStore(trust_root)
 
 # C8 read-only inspection: the exact call the Capability Runtime reaches for.
 report = inspect_records(str(root), expected_uid=os.geteuid(),
@@ -253,15 +269,56 @@ print('STATUS', report.status == STATUS_REPORTED)
 verdict = verify_selected_evidence(
     str(root), expected_uid=os.geteuid(), expected_gid=os.getegid(),
     selection_id='CSEL-000001', instance_id='CINST-000001',
-    capability_package_id='CPKG-0001',
+    capability_package_id='CPKG-0001', operation='execute',
+    trust_root=str(trust_root),
     evaluated_at=datetime(2026, 8, 26, 9, 0, tzinfo=timezone(timedelta(hours=-5))))
 print('VERIFY_RAN', verdict is not None)
-print('VERDICT', type(verdict).__name__)
+print('VERDICT', type(verdict).__name__, verdict.supported, verdict.reason)
+
+# The operation is per-invocation authority and has no default: omitting it is
+# a TypeError from the installed runtime, not a silently-assumed 'execute'.
+try:
+    verify_selected_evidence(
+        str(root), expected_uid=os.geteuid(), expected_gid=os.getegid(),
+        selection_id='CSEL-000001', instance_id='CINST-000001',
+        capability_package_id='CPKG-0001', trust_root=str(trust_root),
+        evaluated_at=datetime(2026, 8, 26, 9, 0, tzinfo=timezone(timedelta(hours=-5))))
+    print('NO_DEFAULT False')
+except TypeError as error:
+    print('NO_DEFAULT', 'operation' in str(error))
+
+# An operation that names nothing is refused rather than guessed at.
+refused = verify_selected_evidence(
+    str(root), expected_uid=os.geteuid(), expected_gid=os.getegid(),
+    selection_id='CSEL-000001', instance_id='CINST-000001',
+    capability_package_id='CPKG-0001', operation='  ',
+    trust_root=str(trust_root),
+    evaluated_at=datetime(2026, 8, 26, 9, 0, tzinfo=timezone(timedelta(hours=-5))))
+print('UNUSABLE_REFUSED', not refused.supported, refused.reason)
+
+import sys
+print('TRUST_LOADED', sorted(
+    n for n in sys.modules if n.startswith('tools.trust')))
 ")"
 if [[ "${out}" == *"STATUS True"* && "${out}" == *"VERIFY_RAN True"* ]]; then
   pass "the Capability to Fabric path executes from the installed surface alone"
 else
   fail "the dependency path did not execute: ${out}"
+fi
+if [[ "${out}" == *"NO_DEFAULT True"* ]]; then
+  pass "the installed boundary requires an explicit operation, with no default"
+else
+  fail "the installed boundary did not require an explicit operation: ${out}"
+fi
+if [[ "${out}" == *"UNUSABLE_REFUSED True operation-not-supplied"* ]]; then
+  pass "an operation naming nothing is refused rather than inferred"
+else
+  fail "an unusable operation was not refused as expected: ${out}"
+fi
+if [[ "${out}" == *"tools.trust.store"* ]]; then
+  pass "the Trust reader the invocation boundary now depends on resolves from the installed surface"
+else
+  fail "the Trust reader did not resolve from the installed surface: ${out}"
 fi
 
 # --- CONTROL: remove one required module -------------------------------------

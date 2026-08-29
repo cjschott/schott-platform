@@ -102,6 +102,30 @@ installed = sorted(
     for p in Path(LIBRARY_ROOT).rglob("*.py")
     if "__pycache__" not in p.parts)
 
+# Until G11-Z2 the live host WAS Generation 11, so this suite read the
+# installed tree and called it the Generation-11 surface. Generation 12 is
+# installed now and that shorthand is false: the live tree is the target, not
+# the baseline. The Generation-11 surface is therefore derived from the
+# generation being installed -- what is installed now, less the pathnames this
+# generation creates -- which is exactly what the predecessor held.
+#
+# That derivation is only sound while the live host is the generation this
+# suite pins, so that is asserted first. On Generation 13 this fails saying so,
+# rather than reporting a mystifying object count.
+def digest_of(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+at_target = sum(1 for row in MATRIX
+                if (Path(LIBRARY_ROOT) / row[0]).is_file()
+                and digest_of(Path(LIBRARY_ROOT) / row[0]) == row[5])
+check(at_target == len(MATRIX),
+      f"the live host is the Generation 12 this suite pins "
+      f"({at_target}/{len(MATRIX)} declared rows at their target digests)")
+
+created_here = {row[0] for row in MATRIX if row[3] == "CREATE"}
+gen11_surface = sorted(set(installed) - created_here)
+
 print("=" * 74)
 print("PART 1 — the Generation-11 surface no longer closes the graph")
 print("=" * 74)
@@ -110,10 +134,10 @@ with tempfile.TemporaryDirectory() as tmp:
     tree = materialise(COMMIT, Path(tmp) / "src")
     closure = runtime_closure.compute(str(tree), ROOTS)
     reachable = set(closure["files"])
-    missing_from_gen11 = sorted(reachable - set(installed))
+    missing_from_gen11 = sorted(reachable - set(gen11_surface))
 
     check(bool(missing_from_gen11),
-          f"the installed Generation-11 surface is missing reachable modules "
+          f"the Generation-11 surface is missing reachable modules "
           f"({len(missing_from_gen11)})")
     # The families that made Generation 11 stale, named so the reason survives.
     for expected in ("tools/fabric/eligibility.py", "tools/fabric/trust_adapter.py",
@@ -121,8 +145,12 @@ with tempfile.TemporaryDirectory() as tmp:
                      "tools/trust/query.py", "tools/trust/scope.py"):
         check(expected in missing_from_gen11,
               f"Generation 11 does not install the now-reachable {expected}")
-    check(len(installed) == BASELINE_N,
-          f"the installed baseline is {BASELINE_N} objects (got {len(installed)})")
+    check(len(gen11_surface) == BASELINE_N,
+          f"the Generation-11 surface is {BASELINE_N} objects "
+          f"(got {len(gen11_surface)})")
+    check(len(installed) == TARGET_N,
+          f"the live installed runtime is the Generation-12 {TARGET_N} objects "
+          f"(got {len(installed)})")
     check(closure["external"] == ["yaml"],
           f"the runtime reaches exactly one third-party dependency "
           f"({closure['external']})")
