@@ -190,7 +190,7 @@ def command_invoke(args) -> int:
         staging_root=args.staging_root, coordinator_uid=args.coordinator_uid,
         selection_id=args.selection_id, instance_id=args.instance_id,
         capability_package_id=args.package_id, operation=args.operation,
-        invocation_id=args.invocation_id,
+        trust_root=args.trust_store_root, invocation_id=args.invocation_id,
         payload=payload, actor=args.actor, request_id=args.request_id,
         requested_at=requested_at)
     _emit({
@@ -435,6 +435,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Required, and never defaulted. A selection names a binding; it does not
     # name an action, so the action is named here or the invocation is refused.
     invoke.add_argument("--operation", required=True)
+    # Current eligibility is a question for C5, and C5 asks C3. The store is
+    # named explicitly for the same reason every other root is.
+    invoke.add_argument("--trust-store-root", required=True)
     invoke.add_argument("--actor", required=True)
     invoke.add_argument("--request-id", required=True)
     invoke.add_argument("--requested-at", required=True)

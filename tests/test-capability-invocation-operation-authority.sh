@@ -37,8 +37,15 @@ sys.dont_write_bytecode = True
 
 import os
 
+import yaml
+
 from tools.capability.fabric_evidence import verify_selected_evidence
 from tools.fabric.store import FabricStore
+from tools.trust.evaluator import create_decision
+from tools.trust.models import (
+    TrustEvidenceReference, TrustScope, TrustVerificationDetails, VerificationMethod)
+from tools.trust.root_authority import declare_root_authority, load_root_declaration
+from tools.trust.store import TrustStore
 
 UID, GID = os.geteuid(), os.getegid()
 NOW = datetime(2026, 8, 28, 12, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
@@ -61,12 +68,70 @@ SCOPE = {
     "permitted_data_classifications": ["internal"],
     "permitted_targets": [NODE],
 }
+YEAR = OPENED + timedelta(days=365)
+
+
+def trust_world(root):
+    """A real Trust store, built through the released ceremony.
+
+    G11-Y made the boundary revalidate current eligibility, and eligibility
+    asks C3 about standing. Hand-writing trust records here would be inventing
+    the very evidence the check exists to consult, so the ceremony is run.
+    """
+    store = TrustStore(root / "trust")
+    approved = root / "approved"
+    approved.mkdir()
+    approved.joinpath("root.yaml").write_text(yaml.safe_dump({
+        "display_name": "Operator Root Authority",
+        "external_identity_reference": "secret-source://approved/operator-root",
+        "verification_method": VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+        "verification_details": {
+            "subject_property": "operator-root-identity",
+            "observed_value_reference": "/approved/evidence/root-observed.txt",
+            "comparison_source": "in-person-verification-record",
+            "performed_by": "operator-role-reference",
+            "performed_at": OPENED.isoformat()},
+        "evidence_references": [{"evidence_id": "TEVID-000001",
+                                 "kind": "attestation",
+                                 "reference": "/approved/evidence/root.txt",
+                                 "recorded_at": OPENED.isoformat()}],
+        "created_at": OPENED.isoformat(),
+        "provenance": {"class": "declared", "source": "operator-out-of-band"}}))
+    authority = declare_root_authority(store, load_root_declaration(
+        "root.yaml", approved_directory=str(approved)))
+    granted = {}
+    for subject, subject_type in ((NODE, "fabric-node"),
+                                  ("CPKG-0001", "capability-package")):
+        decision = create_decision(
+            store, subject_id=subject, subject_type=subject_type,
+            requested_state="trusted", actor_authority_id=authority.authority_id,
+            decided_at=OPENED, reason="Granted for the G11-X scope fixture.",
+            evidence_references=(TrustEvidenceReference(
+                evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
+                reference="/approved/evidence/fingerprint.txt",
+                recorded_at=OPENED),),
+            verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
+            verification_details=TrustVerificationDetails(
+                subject_property="ssh-host-key-fingerprint",
+                observed_value_reference="/approved/evidence/observed.txt",
+                comparison_source="printed-console-readout",
+                performed_by="operator-role-reference", performed_at=OPENED),
+            scope=TrustScope(
+                scope_id=store.allocate_id("scope"), subject_type=subject_type,
+                permitted_capabilities=("CAPDEF-0001",),
+                permitted_operations=("execute",),
+                permitted_data_classifications=("internal",),
+                permitted_targets=(NODE,),
+                validity_start=OPENED, validity_end=YEAR))
+        granted[subject_type] = decision.record.record_id
+    return granted
 
 IDENTITY_FIELD = {
     "capability-definition": "capability_id",
     "capability-contract": "contract_id",
     "capability-package": "capability_package_id",
     "capability-host": "capability_host_id",
+    "capability-advertisement": "advertisement_id",
     "capability-instance": "instance_id",
     "capability-selection": "selection_id",
 }
@@ -81,6 +146,7 @@ def chain(tmp, **overrides):
     """
     fabric_root = Path(tmp) / "fabric"
     store = FabricStore(fabric_root, expected_uid=UID, expected_gid=GID)
+    granted = trust_world(Path(tmp))
     records = {
         "capability-definition": {
             "capability_id": "CAPDEF-0001", "name": "boundary-probe",
@@ -93,21 +159,41 @@ def chain(tmp, **overrides):
         "capability-package": {
             "capability_package_id": "CPKG-0001", "capability_id": "CAPDEF-0001",
             "contract_id": "CCON-0001", "package_version": "1.0.0",
+            "satisfied_contract_versions": ["1.0.0"], "resource_requirements": {},
             "artifact_reference": "tree:boundary-probe/1.0.0",
             "manifest_reference": "file:boundary.manifest.json",
             "kind": "capability-package"},
+        "capability-advertisement": {
+            "advertisement_id": "CADV-000001", "capability_host_id": "CHOST-0001",
+            "capability_package_id": "CPKG-0001", "contract_id": "CCON-0001",
+            "satisfied_contract_versions": ["1.0.0"],
+            "advertised_resource_profile": {"architecture": "x86-64"},
+            "observed_at": OPENED.isoformat(), "valid_until": EXPIRES.isoformat(),
+            "kind": "capability-advertisement"},
         "capability-host": {
             "capability_host_id": "CHOST-0001",
             "node_identity_reference": NODE,
+            "verified_resource_profile": {"architecture": "x86-64"},
             "location_class": "on-premises", "data_classification": "internal",
             "availability_intent": "in-service", "kind": "capability-host"},
         "capability-instance": {
             "instance_id": "CINST-000002", "capability_id": "CAPDEF-0001",
             "capability_package_id": "CPKG-0001", "contract_id": "CCON-0001",
             "capability_host_id": "CHOST-0001", "lifecycle_state": "admitted",
+            "advertisement_id": "CADV-000001",
+            "satisfied_contract_versions": ["1.0.0"],
+            "verified_resource_profile": {"architecture": "x86-64"},
+            "package_trust_record_id": granted["capability-package"],
+            "host_trust_record_id": granted["fabric-node"],
             "effective_scope": dict(SCOPE),
             "admitted_at": OPENED.isoformat(), "admitted_until": EXPIRES.isoformat(),
-            "admission_decision_id": "eng-0005-probe", "kind": "capability-instance"},
+            "admission_decision_id": "eng-0005-probe",
+            # ELIG-7 asks who approved the admission, not merely that one is
+            # named: an admission nobody approved is not a human decision.
+            "evidence": {"actor": "primary-platform-operator",
+                         "approving_authority": "primary-platform-operator",
+                         "reason_category": "instance-admission"},
+            "kind": "capability-instance"},
         "capability-selection": {
             "selection_id": "CSEL-000001", "selected_instance_id": "CINST-000002",
             "selection_reason": "first eligible candidate in declared order",
@@ -133,6 +219,7 @@ def chain(tmp, **overrides):
 def verify(fabric_root, **overrides):
     asked = dict(selection_id="CSEL-000001", instance_id="CINST-000002",
                  capability_package_id="CPKG-0001", operation="execute",
+                 trust_root=str(Path(fabric_root).parent / "trust"),
                  evaluated_at=NOW)
     asked.update(overrides)
     return verify_selected_evidence(fabric_root, expected_uid=UID,

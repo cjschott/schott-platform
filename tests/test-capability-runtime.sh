@@ -64,12 +64,20 @@ FORBIDDEN_IMPORTS = {
 # allocates. An allow-list rather than a blacklist, so a new Fabric module
 # is forbidden by default instead of forbidden only once someone remembers
 # to name it.
-ALLOWED_FABRIC_IMPORTS = {"tools.fabric.inspection", "..fabric.inspection"}
+# C8 inspection has always been readable. C5 eligibility joined it at ENG-0005
+# G11-Y: the invocation boundary must revalidate the selected binding's CURRENT
+# eligibility, and the engine that answers that question writes nothing,
+# allocates nothing, and takes no lock. It was banned by association with the
+# mutation surfaces around it, not because it is one.
+ALLOWED_FABRIC_IMPORTS = {"tools.fabric.inspection", "..fabric.inspection",
+                          "tools.fabric.eligibility", "..fabric.eligibility"}
 # Named individually because each is a different way the same line gets
-# crossed. These are the released decision and mutation surfaces.
+# crossed. These are the released decision and mutation surfaces. `selection`
+# stays here: asking whether a binding is still eligible is not choosing one,
+# and a runtime that could re-select would be a second selection system.
 FORBIDDEN_FABRIC_SYMBOLS = (
-    "admission", "selection", "eligibility", "trust_adapter",
-    "select_candidate", "evaluate_eligibility", "admit_instance",
+    "admission", "selection", "trust_adapter",
+    "select_candidate", "admit_instance",
     "admit_subject", "declare_capability", "declare_contract",
     "declare_package", "register_advertisement", "create_route",
     "withdraw_subject", "refresh_subject", "withdraw_instance",
@@ -122,7 +130,16 @@ WRITE_OWNING_MODULES = {"store.py", "package_resolution.py", "evidence.py",
                         # and every Podman surface.
                         "admin.py"}
 # Authority planes this package may never reach, by import or by symbol.
-FORBIDDEN_PLANES = ("tools.trust", "..trust", "TrustStore", "TrustGateway",
+# The Trust plane may be READ and must never be DECIDED. Eligibility asks C3
+# about standing and quarantine, so a runtime that could not reach Trust at all
+# could not ask whether a revoked subject may still serve. The read-only store
+# module is therefore allowed by name, and every decision surface stays banned.
+ALLOWED_TRUST_IMPORTS = {"tools.trust.store", "..trust.store"}
+FORBIDDEN_TRUST_SYMBOLS = (
+    "create_decision", "declare_root_authority", "evaluate_subject",
+    "evaluate_scope", "evaluate_activity", "TrustGateway", "verify_trust_record",
+)
+FORBIDDEN_PLANES = ("TrustGateway",
                     "trust_adapter", "tools.health", "..health",
                     "scheduler", "placement", "clustering", "failover",
                     "liveness", "readiness", "heartbeat", "adaptive_routing")
@@ -175,10 +192,18 @@ for path in sorted(package.rglob("*.py")):
                               or spelled.startswith("tools.fabric"))
             if reaches_fabric and spelled not in ALLOWED_FABRIC_IMPORTS:
                 findings.append(f"{name}:{node.lineno} imports from {spelled}")
+            reaches_trust = (spelled.startswith("..trust")
+                             or spelled.startswith("tools.trust"))
+            if reaches_trust and spelled not in ALLOWED_TRUST_IMPORTS:
+                findings.append(f"{name}:{node.lineno} imports from {spelled}")
             for alias in node.names:
                 if alias.name in FORBIDDEN_FABRIC_SYMBOLS:
                     findings.append(
                         f"{name}:{node.lineno} imports the decision surface {alias.name}")
+                if alias.name in FORBIDDEN_TRUST_SYMBOLS:
+                    findings.append(
+                        f"{name}:{node.lineno} imports the trust decision "
+                        f"surface {alias.name}")
         elif isinstance(node, ast.Call):
             target = node.func
             if isinstance(target, ast.Attribute) and target.attr in FORBIDDEN_ATTRS:
@@ -976,10 +1001,75 @@ _OPENED = _NOW - _timedelta(days=1)
 _EXPIRES = _NOW + _timedelta(days=30)
 
 
+def _trust_world(root):
+    """A real Trust store for the chain, built through the released ceremony.
+
+    From ENG-0005 G11-Y the invocation boundary revalidates current
+    eligibility, and eligibility asks C3 about standing. Hand-written trust
+    records would be inventing the evidence the check exists to consult.
+    """
+    import yaml as _yaml
+    from tools.trust.evaluator import create_decision as _decide
+    from tools.trust.models import (
+        TrustEvidenceReference as _Ref, TrustScope as _Scope,
+        TrustVerificationDetails as _Details, VerificationMethod as _Method)
+    from tools.trust.root_authority import (
+        declare_root_authority as _declare, load_root_declaration as _load)
+    from tools.trust.store import TrustStore as _TrustStore
+
+    store = _TrustStore(root / "trust")
+    approved = root / "trust-approved"
+    approved.mkdir()
+    approved.joinpath("root.yaml").write_text(_yaml.safe_dump({
+        "display_name": "Operator Root Authority",
+        "external_identity_reference": "secret-source://approved/operator-root",
+        "verification_method": _Method.OUT_OF_BAND_PHYSICAL.value,
+        "verification_details": {
+            "subject_property": "operator-root-identity",
+            "observed_value_reference": "/approved/evidence/root-observed.txt",
+            "comparison_source": "in-person-verification-record",
+            "performed_by": "operator-role-reference",
+            "performed_at": _OPENED.isoformat()},
+        "evidence_references": [{"evidence_id": "TEVID-000001",
+                                 "kind": "attestation",
+                                 "reference": "/approved/evidence/root.txt",
+                                 "recorded_at": _OPENED.isoformat()}],
+        "created_at": _OPENED.isoformat(),
+        "provenance": {"class": "declared", "source": "operator-out-of-band"}}))
+    authority = _declare(store, _load("root.yaml", approved_directory=str(approved)))
+    granted = {}
+    for subject, subject_type in (("node/summariser", "fabric-node"),
+                                  ("CPKG-0001", "capability-package")):
+        decision = _decide(
+            store, subject_id=subject, subject_type=subject_type,
+            requested_state="trusted", actor_authority_id=authority.authority_id,
+            decided_at=_OPENED, reason="Granted for the runtime chain fixture.",
+            evidence_references=(_Ref(
+                evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
+                reference="/approved/evidence/fingerprint.txt",
+                recorded_at=_OPENED),),
+            verification_method=_Method.OUT_OF_BAND_PHYSICAL.value,
+            verification_details=_Details(
+                subject_property="ssh-host-key-fingerprint",
+                observed_value_reference="/approved/evidence/observed.txt",
+                comparison_source="printed-console-readout",
+                performed_by="operator-role-reference", performed_at=_OPENED),
+            scope=_Scope(
+                scope_id=store.allocate_id("scope"), subject_type=subject_type,
+                permitted_capabilities=("CAPDEF-0001",),
+                permitted_operations=("execute",),
+                permitted_data_classifications=("internal",),
+                permitted_targets=("node/summariser",),
+                validity_start=_OPENED, validity_end=_EXPIRES + _timedelta(days=365)))
+        granted[subject_type] = decision.record.record_id
+    return granted
+
+
 def _chain(tmp, **overrides):
     """One authoritative, already-selected Fabric chain, written as records."""
     fabric_root = Path(tmp) / "fabric"
     store = _FabricStore(fabric_root, expected_uid=UID, expected_gid=GID)
+    granted = _trust_world(Path(tmp))
     records = {
         "capability-definition": {
             "capability_id": "CAPDEF-0001", "name": "summarise",
@@ -992,6 +1082,7 @@ def _chain(tmp, **overrides):
         "capability-package": {
             "capability_package_id": "CPKG-0001", "capability_id": "CAPDEF-0001",
             "contract_id": "CCON-0001", "package_version": "1.0.0",
+            "satisfied_contract_versions": ["1.0.0"], "resource_requirements": {},
             "artifact_reference": "file:summarise.py",
             "manifest_reference": "file:summarise.manifest.json",
             "kind": "capability-package"},
@@ -999,18 +1090,36 @@ def _chain(tmp, **overrides):
             "instance_id": "CINST-000001", "capability_id": "CAPDEF-0001",
             "capability_package_id": "CPKG-0001", "contract_id": "CCON-0001",
             "capability_host_id": "CHOST-0001", "lifecycle_state": "admitted",
+            "advertisement_id": "CADV-000001",
+            "satisfied_contract_versions": ["1.0.0"],
+            "verified_resource_profile": {"architecture": "x86-64"},
+            "package_trust_record_id": granted["capability-package"],
+            "host_trust_record_id": granted["fabric-node"],
             "effective_scope": {
                 "permitted_capabilities": ["CAPDEF-0001"],
                 "permitted_operations": ["execute"],
                 "permitted_data_classifications": ["internal"],
-                "permitted_targets": ["HOST-0001"]},
+                "permitted_targets": ["node/summariser"]},
             "admitted_at": _OPENED.isoformat(), "admitted_until": _EXPIRES.isoformat(),
-            "admission_decision_id": "CINST-000000", "kind": "capability-instance"},
+            "admission_decision_id": "CINST-000000",
+            "evidence": {"actor": "operator:cschott",
+                         "approving_authority": "operator:cschott",
+                         "reason_category": "instance-admission"},
+            "kind": "capability-instance"},
         "capability-host": {
             "capability_host_id": "CHOST-0001",
-            "node_identity_reference": "HOST-0001",
+            "node_identity_reference": "node/summariser",
+            "verified_resource_profile": {"architecture": "x86-64"},
             "location_class": "on-premises", "data_classification": "internal",
             "availability_intent": "in-service", "kind": "capability-host"},
+        "capability-advertisement": {
+            "advertisement_id": "CADV-000001", "capability_host_id": "CHOST-0001",
+            "capability_package_id": "CPKG-0001", "contract_id": "CCON-0001",
+            "satisfied_contract_versions": ["1.0.0"],
+            "advertised_resource_profile": {"architecture": "x86-64"},
+            "observed_at": _OPENED.isoformat(),
+            "valid_until": _EXPIRES.isoformat(),
+            "kind": "capability-advertisement"},
         "capability-selection": {
             "selection_id": "CSEL-000001", "selected_instance_id": "CINST-000001",
             "selection_reason": "first-eligible-in-declared-order",
@@ -1033,6 +1142,7 @@ def _chain(tmp, **overrides):
              "capability-contract": "contract_id",
              "capability-package": "capability_package_id",
              "capability-host": "capability_host_id",
+             "capability-advertisement": "advertisement_id",
              "capability-instance": "instance_id",
              "capability-selection": "selection_id"}[kind]]
         store.write_atomic(store.path_for(kind, identity), record)
@@ -1042,6 +1152,7 @@ def _chain(tmp, **overrides):
 def _verify(fabric_root, **overrides):
     asked = dict(selection_id="CSEL-000001", instance_id="CINST-000001",
                  capability_package_id="CPKG-0001", operation="execute",
+                 trust_root=str(Path(fabric_root).parent / "trust"),
                  evaluated_at=_NOW)
     asked.update(overrides)
     return verify_selected_evidence(fabric_root, expected_uid=UID,
@@ -1269,10 +1380,14 @@ with TemporaryDirectory() as tmp:
           "a refused verification does not discover another selection")
 
 # --- the decision surfaces are not merely unused; they are unreachable ------
+# `evaluate_eligibility` and the trust store left this list at ENG-0005 G11-Y,
+# where the reviewer ruled that the invocation boundary must revalidate the
+# selected binding's CURRENT eligibility. Both are reads. Everything that
+# decides, allocates, writes, or locks is still named here, and the two reads
+# the boundary now performs are constrained below rather than merely allowed.
 _evidence_source = (root / "tools" / "capability" / "fabric_evidence.py").read_text(encoding="utf-8")
 for token, description in (
         ("select_candidate", "C6 selection"),
-        ("evaluate_eligibility", "C5 eligibility"),
         ("fabric.admission", "the C4 admission module"),
         ("import admission", "the C4 admission module by name"),
         ("admit_instance", "instance admission"),
@@ -1280,7 +1395,8 @@ for token, description in (
         ("retire_instance", "retirement"),
         ("create_route", "route mutation"),
         ("trust_adapter", "the trust adapter"),
-        ("TrustStore", "the trust store"),
+        ("create_decision", "a trust decision"),
+        ("declare_root_authority", "root authority declaration"),
         ("request_critical_section", "the fabric request lock"),
         ("allocate_id", "identifier allocation"),
         ("write_atomic", "a fabric write"),
@@ -1289,6 +1405,24 @@ for token, description in (
         ("health", "health")):
     check(token not in _evidence_source,
           f"the evidence reader reaches {description} by no mechanism")
+
+# The two reads it does perform are handed to C5 through surfaces that expose
+# reads and nothing else, so asking a question cannot become writing an answer.
+import tools.capability.fabric_evidence as _reader_mod  # noqa: E402
+for _surface, _banned in ((_reader_mod._FabricReader,
+                           ("write", "allocate_id", "request_critical_section",
+                            "write_atomic", "write_record")),
+                          (_reader_mod._TrustReader,
+                           ("write", "allocate_id", "write_record"))):
+    for _name in _banned:
+        check(not hasattr(_surface, _name),
+              f"{_surface.__name__} exposes no {_name}")
+check(sorted(m for m in dir(_reader_mod._FabricReader) if not m.startswith("_"))
+      == ["list_records", "read_record"],
+      "the fabric surface handed to C5 is exactly two reads")
+check(sorted(m for m in dir(_reader_mod._TrustReader) if not m.startswith("_"))
+      == ["all_records", "read"],
+      "the trust surface handed to C5 is exactly two reads")
 
 check("from ..fabric.inspection import" in _evidence_source
       or "from ..fabric import inspection" in _evidence_source,
@@ -3549,6 +3683,7 @@ def _invoke_args(tmp, *, approved, staging, fabric_root, payload_root,
         "--instance-id": "CINST-000001",
         "--package-id": "CPKG-0001",
         "--operation": "execute",
+        "--trust-store-root": str(Path(fabric_root).parent / "trust"),
         "--actor": "operator:cschott",
         "--request-id": "req-alpha",
         "--requested-at": _WHEN.isoformat(),
@@ -3996,6 +4131,7 @@ with TemporaryDirectory() as tmp:
         trusted_source_uid=UID, staging_root=world["staging"], coordinator_uid=UID,
         selection_id="CSEL-000001", instance_id="CINST-000001",
         capability_package_id="CPKG-0001", operation="execute",
+        trust_root=str(Path(world["fabric_root"]).parent / "trust"),
         invocation_id="inv-equal",
         payload={"text": "summarise"}, actor="operator:cschott",
         request_id="req-alpha", requested_at=_WHEN)

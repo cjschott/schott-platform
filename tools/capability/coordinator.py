@@ -36,7 +36,8 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
                        trusted_source_uid: Any, staging_root: Any,
                        coordinator_uid: Any, selection_id: Any,
                        instance_id: Any, capability_package_id: Any,
-                       operation: Any, invocation_id: Any, payload: Any, actor: Any,
+                       operation: Any, trust_root: Any, invocation_id: Any,
+                       payload: Any, actor: Any,
                        request_id: Any, requested_at: datetime,
                        adapter: Any = None, execution_binding: Any = None):
     """Prepare one governed invocation, and execute it only if it may be.
@@ -60,7 +61,8 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
         fabric_root, expected_uid=fabric_expected_uid,
         expected_gid=fabric_expected_gid, selection_id=selection_id,
         instance_id=instance_id, capability_package_id=capability_package_id,
-        operation=operation, evaluated_at=requested_at)
+        operation=operation, trust_root=trust_root,
+        evaluated_at=requested_at)
     staged = None
     if evidence.supported:
         staged = resolve_and_stage_package(

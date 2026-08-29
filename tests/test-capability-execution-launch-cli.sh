@@ -630,17 +630,40 @@ print('OK')
 
 # tools.fabric is deliberately NOT banned here: `invoke` has always resolved a
 # governed selection through it, so it is a pre-existing dependency of the
-# dispatcher rather than something this verb introduced. tools.trust is banned,
-# because nothing in the Capability Runtime may reach the Trust plane.
+# dispatcher rather than something this verb introduced.
+#
+# tools.trust was banned outright until ENG-0005 G11-Y. It no longer can be.
+# The invocation boundary must revalidate the selected binding's CURRENT
+# eligibility, and eligibility includes trust standing and quarantine -- so a
+# runtime that could not reach the Trust plane at all could not ask whether a
+# revoked or quarantined subject may still serve. What the ban was protecting
+# is unchanged and is now stated precisely: the runtime may ASK about standing
+# and may never DECIDE it. The decision surfaces stay unreachable, and the read
+# path arrives through C5's engine, which is handed objects exposing reads
+# only.
+TRUST_DECISION_MODULES=(
+  tools.trust.evaluator tools.trust.root_authority tools.trust.gateway
+  tools.trust.policy tools.trust.audit tools.trust.cli
+)
 run_case "importing the CLI loads nothing that could execute or decide policy" "${FIXTURE}
 import subprocess
+deciders = '${TRUST_DECISION_MODULES[*]}'.split()
 probe = ('import sys; import tools.capability.cli; '
          'bad = [m for m in sys.modules '
          'if m.split(chr(46))[0] in (chr(115)+\\'ubprocess\\', \\'socket\\', \\'ctypes\\') '
          'or m.endswith(\\'.snapshot\\') or m.endswith(\\'.adapter\\') '
-         'or m.endswith(\\'.worker\\') or m.startswith(\\'tools.trust\\')]; '
+         'or m.endswith(\\'.worker\\')]; '
          'print(sorted(bad))')
 out = subprocess.run([sys.executable, '-c', probe], capture_output=True,
+                     text=True, check=True).stdout.strip()
+assert out == '[]', out
+
+# The Trust plane may be read and must never be decided. Named module by
+# module, so a new decision surface added later is a failure here rather than
+# a quiet widening of what the runtime can reach.
+decide_probe = ('import sys; import tools.capability.cli; '
+                'print(sorted(m for m in sys.modules if m in ' + repr(deciders) + '))')
+out = subprocess.run([sys.executable, '-c', decide_probe], capture_output=True,
                      text=True, check=True).stdout.strip()
 assert out == '[]', out
 print('OK')

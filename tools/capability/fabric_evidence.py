@@ -28,14 +28,15 @@ the classification the selection recorded, and the node identity the host
 declares. Admission proved the envelope against no particular request. This
 proves one particular request is inside it.
 
-**Fabric is consumed through C8's read-only inspection surface and nothing
-else.** Admission, selection, eligibility, and the trust adapter are not
-imported, and they are not reachable from what is: nothing here can mutate a
-record, allocate an identifier, or take the Fabric's request lock. Trust is
-never called — the standing this needs was decided before the binding was
-governed, and rides on the records as evidence. The ENG-0006 plane is never
-consulted either: it does not exist, and a runtime that guessed at
-availability would be scheduling.
+**Fabric records are consumed through C8's read-only inspection surface and
+nothing else.** Admission and selection are not imported, and they are not
+reachable from what is: nothing here can mutate a record, allocate an
+identifier, or take the Fabric's request lock. C5's eligibility engine *is*
+imported, and it is handed two objects that expose reads and nothing else —
+so asking C5 a question cannot become writing through it. Trust is reached
+only inside that engine, for standing this cannot decide for itself. The
+ENG-0006 plane is never consulted: it does not exist, and a runtime that
+guessed at availability would be scheduling.
 
 This module reads. It prepares nothing, resolves no artefact, and **executes
 nothing**.
@@ -47,7 +48,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 
+from ..fabric.eligibility import evaluate_eligibility
 from ..fabric.inspection import (STATUS_REPORTED, inspect_records)
+from ..trust.store import TrustStore
 from .errors import CapabilityError
 
 SELECTION = "capability-selection"
@@ -101,6 +104,13 @@ REASON_CAPABILITY_SCOPE = "capability-not-permitted-by-scope"
 REASON_CLASSIFICATION_SCOPE = "classification-not-permitted-by-scope"
 REASON_TARGET_SCOPE = "target-not-permitted-by-scope"
 REASON_SCOPE = "invalid-effective-scope"
+# One stable reason for "the Fabric no longer considers this binding eligible".
+# The engine's own condition reasons ride alongside it rather than replacing
+# it: an operator needs to know which condition lapsed, and a caller needs one
+# name to handle. Both are closed vocabularies, so neither carries record
+# content out of the boundary.
+REASON_INELIGIBLE = "selected-instance-no-longer-eligible"
+REASON_TRUST_UNREADABLE = "trust-store-unreadable"
 
 
 @dataclass(frozen=True)
@@ -127,10 +137,65 @@ class EvidenceVerdict:
     # rather than leaving a reader to assume it.
     operation: str | None = None
     target_node_identity: str | None = None
+    # The Fabric conditions that were not met, when current eligibility is why
+    # this was refused. Empty on every other outcome.
+    eligibility_reasons: tuple[str, ...] = ()
 
 
-def _refused(reason: str) -> EvidenceVerdict:
-    return EvidenceVerdict(False, reason)
+def _refused(reason: str, eligibility_reasons: tuple[str, ...] = ()) -> EvidenceVerdict:
+    return EvidenceVerdict(False, reason, eligibility_reasons=eligibility_reasons)
+
+
+class _FabricReader:
+    """The two read methods C5 needs, over C8 and nothing else.
+
+    The eligibility engine asks a store for `list_records` and `read_record`.
+    Handing it a real store object would put record writing, identifier
+    allocation, and the request lock inside this module, and the one thing this
+    boundary promises is that it cannot reach any of them. So it is given
+    exactly the two reads, served from the read-only inspection surface this
+    module already uses.
+    """
+
+    def __init__(self, root: Any, expected_uid: Any, expected_gid: Any) -> None:
+        self._root = root
+        self._uid = expected_uid
+        self._gid = expected_gid
+
+    def _report(self, kind: str, identifier: Any = None):
+        return inspect_records(self._root, expected_uid=self._uid,
+                               expected_gid=self._gid, kind=kind,
+                               identifier=identifier)
+
+    def list_records(self, kind: str):
+        report = self._report(kind)
+        if report.status != STATUS_REPORTED:
+            # The engine treats a raise as an unreadable store and says so.
+            raise CapabilityError(f"{kind} is not readable")
+        return list(report.records)
+
+    def read_record(self, kind: str, identifier: Any):
+        report = self._report(kind, identifier)
+        if report.status != STATUS_REPORTED or len(report.records) != 1:
+            raise CapabilityError(f"{kind} {identifier} is not readable")
+        return report.records[0]
+
+
+class _TrustReader:
+    """The two read methods the trust query layer needs, and no others.
+
+    Same reasoning as the Fabric side: standing is a question, not a decision
+    this module gets to write, so the store it holds cannot be written through.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+
+    def read(self, kind: str, identifier: Any):
+        return self._store.read(kind, identifier)
+
+    def all_records(self, kind: str):
+        return self._store.all_records(kind)
 
 
 def _text(record: Mapping[str, Any], field: str) -> str | None:
@@ -217,7 +282,8 @@ def _window_open(instance: Mapping[str, Any], instant: datetime) -> bool:
 def verify_selected_evidence(fabric_root: Any, *, expected_uid: Any,
                              expected_gid: Any, selection_id: Any,
                              instance_id: Any, capability_package_id: Any,
-                             operation: Any, evaluated_at: datetime) -> EvidenceVerdict:
+                             operation: Any, trust_root: Any,
+                             evaluated_at: datetime) -> EvidenceVerdict:
     """Does authoritative Fabric evidence support preparing this exact claim?
 
     A supported verdict means the records agree with the caller about what was
@@ -362,6 +428,39 @@ def verify_selected_evidence(fabric_root: Any, *, expected_uid: Any,
     effect_class = _text(contract, "effect_class")
     if effect_class not in EXECUTABLE_EFFECT_CLASSES:
         return _refused(REASON_EFFECT_CLASS)
+
+    # --- current eligibility, asked of the plane that owns it ----------------
+    #
+    # The `CSEL` is a historical decision: it recorded that this binding was
+    # eligible when it was chosen. Whether it still is depends on facts that
+    # move after a selection is written -- an advertisement lapses, a grant is
+    # revoked, a subject is quarantined, an operator drains a machine. So the
+    # question is put to C5 at the invocation instant rather than re-derived
+    # here, because a second implementation of twelve conditions is a second
+    # answer waiting to disagree with the first.
+    #
+    # The route is deliberately not consulted. A route that has moved on says
+    # the plane would choose differently now; it does not say this binding
+    # stopped being eligible, and re-selecting at invoke would make the
+    # invocation a second selection system.
+    asked_class = {
+        "capability_id": capability_claimed,
+        "contract_id": _text(instance, "contract_id"),
+        "accepted_contract_versions": tuple(
+            asked.get("accepted_contract_versions") or ()),
+        "data_classification": classification,
+    }
+    try:
+        trust_reader = _TrustReader(TrustStore.open_for_read(trust_root))
+    except Exception:  # noqa: BLE001
+        # An unreadable Trust store is not an ineligible binding, and reporting
+        # it as one would blame the record for the operator's plumbing.
+        return _refused(REASON_TRUST_UNREADABLE)
+    verdict = evaluate_eligibility(
+        _FabricReader(fabric_root, expected_uid, expected_gid), trust_reader,
+        instance_id=selected, request=asked_class, evaluated_at=evaluated_at)
+    if not verdict.eligible:
+        return _refused(REASON_INELIGIBLE, tuple(verdict.reasons))
 
     return EvidenceVerdict(
         True, None,
