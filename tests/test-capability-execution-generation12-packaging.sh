@@ -344,15 +344,19 @@ status=$?
 
 if [[ -d "${PRODUCTION_FABRIC}" ]]; then
   ( cd "${PRODUCTION_FABRIC}" && find . -mindepth 1 -printf '%y %m %s %p\n' | sort ) > "${AFTER}"
-  diff -q "${BEFORE}" "${AFTER}" >/dev/null \
-    && printf 'PASS: %s\n' "no production path changed while this suite ran" \
-    || { printf 'FAIL: %s\n' "a production path changed" >&2; status=1; }
+  if diff -q "${BEFORE}" "${AFTER}" >/dev/null; then
+    printf 'PASS: %s\n' "no production path changed while this suite ran"
+  else
+    printf 'FAIL: %s\n' "a production path changed" >&2; status=1
+  fi
 fi
 if [[ -d "${LIBRARY_ROOT}" ]]; then
   ( cd "${LIBRARY_ROOT}" && find . -type f -print0 | sort -z | xargs -0 sha256sum ) > "${INSTALLED_AFTER}"
-  diff -q "${INSTALLED_BEFORE}" "${INSTALLED_AFTER}" >/dev/null \
-    && printf 'PASS: %s\n' "the installed runtime was not modified" \
-    || { printf 'FAIL: %s\n' "the installed runtime changed" >&2; status=1; }
+  if diff -q "${INSTALLED_BEFORE}" "${INSTALLED_AFTER}" >/dev/null; then
+    printf 'PASS: %s\n' "the installed runtime was not modified"
+  else
+    printf 'FAIL: %s\n' "the installed runtime changed" >&2; status=1
+  fi
 fi
 
 exit "${status}"

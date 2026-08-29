@@ -588,7 +588,7 @@ require_closed_closure() {
                         | grep -v '^$' | sort -u))"
   if [[ -n "${missing}" ]]; then
     printf 'STOP: the import closure needs objects this generation does not provide:\n' >&2
-    printf '  %s\n' ${missing} >&2
+    printf '%s\n' "${missing}" | sed 's/^/  /' >&2
     halt "the declared surface does not close the import graph"
   fi
 
@@ -599,7 +599,7 @@ require_closed_closure() {
                       <(printf '%s\n' "${declared}" | grep -v '^$' | sort -u))"
   if [[ -n "${surplus}" ]]; then
     printf 'STOP: the matrix declares objects the import closure does not require:\n' >&2
-    printf '  %s\n' ${surplus} >&2
+    printf '%s\n' "${surplus}" | sed 's/^/  /' >&2
     halt "the declared surface exceeds the import closure"
   fi
 
