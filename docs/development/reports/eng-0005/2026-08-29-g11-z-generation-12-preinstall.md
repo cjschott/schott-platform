@@ -367,6 +367,24 @@ unquoted expansions relying on word splitting. The first commit therefore did no
 satisfy the repository gate. Fixed and committed separately as `e56eb5c`; the
 correct check is the hook, not a looser invocation of the same tool.
 
+### 13.2 Two further repository invariants I broke and had to restore
+
+Recorded because both were caught by the repository rather than by me, and both
+are rules worth knowing.
+
+**Nothing under `provisioning/execution` may carry an execute bit.** I set `+x`
+on the new installer out of habit. A ceremony script is run explicitly with
+`bash` precisely so it cannot be invoked by accident or by something else, and
+`test-capability-execution-provisioning.sh` asserts it. Quick validation stopped
+at step 54 on exactly that. Restored to `0644`, matching the Generation-11
+installer. Committed as `94c068a`.
+
+**The commit policy asked for the report to be committed separately**, and I
+bundled it into that mode-fix commit. It was already pushed, and rewriting the
+branch would not be a fast-forward, so the split was not recoverable. The
+correction below is the report's own commit; the deviation is stated rather than
+tidied away.
+
 ## 14. Quick and full validation
 
 | Mode | Result |
