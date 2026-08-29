@@ -79,8 +79,8 @@ LIBRARY_ROOT="/usr/lib/kyri/python"
 TRANSACTION_ROOT="/root/kyri-gen11-transaction"
 BASELINE_LIBRARY_EVIDENCE="/root/kyri-gen11-library-digests.txt"
 BASELINE_HELPER_EVIDENCE="/root/kyri-gen11-helper-digests.txt"
-GEN11_LIBRARY_EVIDENCE="/root/kyri-gen11-library-digests.txt"
-GEN11_HELPER_EVIDENCE="/root/kyri-gen11-helper-digests.txt"
+GEN12_LIBRARY_EVIDENCE="/root/kyri-gen12-library-digests.txt"
+GEN12_HELPER_EVIDENCE="/root/kyri-gen12-helper-digests.txt"
 
 # Both grants. Neither may exist while this runs, and neither is written by it.
 SUDOERS="/etc/sudoers.d/kyri-exec"
@@ -121,8 +121,8 @@ if [[ -n "${FIXTURE}" ]]; then
   TRANSACTION_ROOT="${FIXTURE}${TRANSACTION_ROOT}"
   BASELINE_LIBRARY_EVIDENCE="${FIXTURE}${BASELINE_LIBRARY_EVIDENCE}"
   BASELINE_HELPER_EVIDENCE="${FIXTURE}${BASELINE_HELPER_EVIDENCE}"
-  GEN11_LIBRARY_EVIDENCE="${FIXTURE}${GEN11_LIBRARY_EVIDENCE}"
-  GEN11_HELPER_EVIDENCE="${FIXTURE}${GEN11_HELPER_EVIDENCE}"
+  GEN12_LIBRARY_EVIDENCE="${FIXTURE}${GEN12_LIBRARY_EVIDENCE}"
+  GEN12_HELPER_EVIDENCE="${FIXTURE}${GEN12_HELPER_EVIDENCE}"
   SUDOERS="${FIXTURE}${SUDOERS}"
   VERIFY_SUDOERS="${FIXTURE}${VERIFY_SUDOERS}"
   AUTHORITY_ROOT="${FIXTURE}${AUTHORITY_ROOT}"
@@ -1085,12 +1085,12 @@ write_evidence() {
     return 0
   fi
   find "${LIBRARY_ROOT}" -type f -name '*.py' -print0 \
-    | sort -z | xargs -0 sha256sum > "${GEN11_LIBRARY_EVIDENCE}.writing"
+    | sort -z | xargs -0 sha256sum > "${GEN12_LIBRARY_EVIDENCE}.writing"
   local row target
   for row in "${MATRIX[@]}"; do
     target="$(field "${row}" 1)"
-    grep -q "${target}\$" "${GEN11_LIBRARY_EVIDENCE}.writing" \
-      || { rm -f "${GEN11_LIBRARY_EVIDENCE}.writing"
+    grep -q "${target}\$" "${GEN12_LIBRARY_EVIDENCE}.writing" \
+      || { rm -f "${GEN12_LIBRARY_EVIDENCE}.writing"
            halt "the Generation-11 evidence does not record ${target}"; }
   done
   {
@@ -1110,14 +1110,14 @@ write_evidence() {
       printf 'excluded %s\n' "${excluded}"
     done
     printf 'library_objects %s\n' "$(find "${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)"
-  } > "${GEN11_HELPER_EVIDENCE}.writing"
-  chmod 0400 "${GEN11_LIBRARY_EVIDENCE}.writing" "${GEN11_HELPER_EVIDENCE}.writing"
-  sync_path "${GEN11_LIBRARY_EVIDENCE}.writing"
-  sync_path "${GEN11_HELPER_EVIDENCE}.writing"
-  mv -f "${GEN11_LIBRARY_EVIDENCE}.writing" "${GEN11_LIBRARY_EVIDENCE}"
-  mv -f "${GEN11_HELPER_EVIDENCE}.writing" "${GEN11_HELPER_EVIDENCE}"
-  sync_path "${GEN11_LIBRARY_EVIDENCE}"
-  sync_path "${GEN11_HELPER_EVIDENCE}"
+  } > "${GEN12_HELPER_EVIDENCE}.writing"
+  chmod 0400 "${GEN12_LIBRARY_EVIDENCE}.writing" "${GEN12_HELPER_EVIDENCE}.writing"
+  sync_path "${GEN12_LIBRARY_EVIDENCE}.writing"
+  sync_path "${GEN12_HELPER_EVIDENCE}.writing"
+  mv -f "${GEN12_LIBRARY_EVIDENCE}.writing" "${GEN12_LIBRARY_EVIDENCE}"
+  mv -f "${GEN12_HELPER_EVIDENCE}.writing" "${GEN12_HELPER_EVIDENCE}"
+  sync_path "${GEN12_LIBRARY_EVIDENCE}"
+  sync_path "${GEN12_HELPER_EVIDENCE}"
   ok "Generation-11 evidence written; Generation-11 evidence preserved"
 }
 
@@ -1380,9 +1380,9 @@ case "${MODE}" in
   state="$(journal_state)"
   [[ "${state}" == "COMMITTED" ]] \
     || bad "the transaction journal is ${state}, expected COMMITTED"
-  [[ -f "${GEN11_LIBRARY_EVIDENCE}" ]] \
+  [[ -f "${GEN12_LIBRARY_EVIDENCE}" ]] \
     || bad "the Generation-11 library evidence is missing"
-  [[ -f "${GEN11_HELPER_EVIDENCE}" ]] \
+  [[ -f "${GEN12_HELPER_EVIDENCE}" ]] \
     || bad "the Generation-11 helper evidence is missing"
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" ]] \
     || bad "the Generation-11 evidence was not preserved"
