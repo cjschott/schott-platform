@@ -315,6 +315,125 @@ check "$([[ "$(gen11_journal_digest "${lone}")" == "${before}" ]] && echo yes ||
   "and it survives byte-identical"
 
 echo
+echo "=========================================================================="
+echo "PART 7 — the operator is told which generation was installed"
+echo "=========================================================================="
+
+# G11-Z2 installed Generation 12 on the production host and the ceremony
+# announced Generation 11 throughout. The transaction was correct; the strings
+# were the predecessor's. An operator who believes the install did not take is
+# an operator reaching for --install or --recover, and that is the same
+# confusion that produced root cause A.
+#
+# These assert both directions: the corrected phrase is present AND the stale
+# phrase is gone. Asserting only presence would pass while the stale line still
+# sits beside it.
+
+REPLACE_N=0; CREATE_N=0
+for row in "${ROWS[@]}"; do
+  case "$(field "${row}" 3)" in
+    REPLACE) REPLACE_N=$((REPLACE_N + 1)) ;;
+    CREATE)  CREATE_N=$((CREATE_N + 1)) ;;
+  esac
+done
+TOTAL_N=${#ROWS[@]}
+
+says()     { grep -qF "$1" "$2" && echo yes || echo no; }
+says_not() { grep -qF "$1" "$2" && echo no || echo yes; }
+
+reporting="${WORK}/reporting"
+build_host "${reporting}"
+retain_gen11_journal "${reporting}"
+
+# --- readiness ------------------------------------------------------------
+run_ceremony "${reporting}" --verify >/dev/null
+verify_log="${reporting}/last-run.log"
+
+check "$(says "${REPLACE_N} REPLACE, ${CREATE_N} CREATE, ${TOTAL_N} changed objects" "${verify_log}")" \
+  "--verify reports the matrix disposition (${REPLACE_N} REPLACE, ${CREATE_N} CREATE, ${TOTAL_N} changed)"
+check "$(says_not "${TOTAL_N} CREATE operation" "${verify_log}")" \
+  "--verify no longer calls all ${TOTAL_N} rows CREATE operations"
+# Describing the host before installation as Generation 11 is correct and must
+# survive the correction: this is the overcorrection guard.
+check "$(says "the host is at Generation 11 and ready for the Generation-12 installation" "${verify_log}")" \
+  "--verify still describes the PRE-INSTALL host as Generation 11"
+
+# --- the transaction ------------------------------------------------------
+status="$(run_ceremony "${reporting}" --install)"
+install_log="${reporting}/last-run.log"
+check "$([[ "${status}" == "0" ]] && echo yes || echo no)" \
+  "--install still succeeds with corrected reporting (exit ${status})"
+
+check "$(says "PREPARE complete: ${TOTAL_N} objects staged" "${install_log}")" \
+  "PREPARE reports ${TOTAL_N} staged"
+check "$(says "${CREATE_N} pathnames reserved" "${install_log}")" \
+  "PREPARE distinguishes the ${CREATE_N} reserved CREATE pathnames"
+check "$(says "${REPLACE_N} predecessors retained" "${install_log}")" \
+  "PREPARE reports the ${REPLACE_N} retained REPLACE predecessors"
+
+check "$(says "COMMIT complete: ${TOTAL_N} objects published and verified (${REPLACE_N} replaced, ${CREATE_N} created)" "${install_log}")" \
+  "COMMIT reports ${TOTAL_N} published as ${REPLACE_N} replaced + ${CREATE_N} created"
+check "$(says_not "${TOTAL_N} objects created and verified" "${install_log}")" \
+  "COMMIT no longer describes all ${TOTAL_N} objects as created"
+
+check "$(says "Generation-12 evidence written; Generation-11 evidence preserved" "${install_log}")" \
+  "evidence output names the written generation and the preserved one separately"
+check "$(says_not "Generation-11 evidence written" "${install_log}")" \
+  "evidence output no longer claims Generation-11 evidence was written"
+
+check "$(says "all ${TOTAL_N} Generation-12 changed objects correspond to the reviewed commit" "${install_log}")" \
+  "the installed-set check names Generation-12, which is what it compares against"
+check "$(says_not "installed Generation-11 objects correspond" "${install_log}")" \
+  "the installed-set check no longer calls the changed objects Generation-11"
+
+check "$(says "every carried-over runtime object is exactly its accepted Generation-11 baseline" "${install_log}")" \
+  "the carry-over check distinctly describes the unchanged predecessor-derived objects"
+
+check "$(says "Generation 12 / installed Fabric dependency closure install: all checks passed" "${install_log}")" \
+  "the --install banner identifies Generation 12"
+check "$(says_not "Generation 11 / installed Fabric dependency closure install" "${install_log}")" \
+  "the --install banner no longer identifies Generation 11"
+
+# --- audit of the installed generation ------------------------------------
+status="$(run_ceremony "${reporting}" --verify-installed)"
+installed_log="${reporting}/last-run.log"
+check "$([[ "${status}" == "0" ]] && echo yes || echo no)" \
+  "--verify-installed still passes with corrected reporting (exit ${status})"
+check "$(says "Generation 12 / installed Fabric dependency closure verify-installed: all checks passed" "${installed_log}")" \
+  "the --verify-installed banner identifies Generation 12"
+check "$(says_not "Generation 11 / installed Fabric dependency closure verify-installed" "${installed_log}")" \
+  "the --verify-installed banner no longer identifies Generation 11"
+
+# --- an already-installed host speaks in target-generation terms ----------
+run_ceremony "${reporting}" --verify >/dev/null
+already_log="${reporting}/last-run.log"
+check "$(says "already at Generation 12" "${already_log}")" \
+  "--verify against an installed host uses target-generation language"
+
+# --- counts are derived from the matrix, not typed in --------------------
+# A future matrix change must not be able to leave the operator output lying.
+check "$(grep -q 'matrix_count_of REPLACE' "${CEREMONY}" && echo yes || echo no)" \
+  "the REPLACE count is derived from the matrix"
+check "$(grep -q 'matrix_count_of CREATE' "${CEREMONY}" && echo yes || echo no)" \
+  "the CREATE count is derived from the matrix"
+check "$(grep -qE '"(6|13|19)"? (REPLACE|CREATE|changed|replaced|created)' "${CEREMONY}" && echo no || echo yes)" \
+  "no disposition count is hard-coded in an operator string"
+
+# --- stale predecessor vocabulary is gone from post-commit paths ---------
+for stale in \
+  "recovery: the complete Generation-11 set is already installed" \
+  "no Generation-11 object was published" \
+  "the Generation-11 evidence does not record" \
+  "Generation 11 remains installed" \
+  "injected failure after staging a Generation-11 object" \
+  "the Generation-11 library evidence is missing" \
+  "the Generation-11 helper evidence is missing"
+do
+  check "$(grep -qF "${stale}" "${CEREMONY}" && echo no || echo yes)" \
+    "stale post-commit string removed: \"${stale}\""
+done
+
+echo
 if [[ -d "${LIBRARY_ROOT}" ]]; then
   ( cd "${LIBRARY_ROOT}" && find . -type f -print0 | sort -z | xargs -0 sha256sum ) > "${INSTALLED_AFTER}"
   if diff -q "${INSTALLED_BEFORE}" "${INSTALLED_AFTER}" >/dev/null; then

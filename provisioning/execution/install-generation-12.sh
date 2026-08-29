@@ -875,7 +875,7 @@ prepare() {
     [[ "$(stat -c '%a' "${prepared}")" == "${mode#0}" ]] \
       || halt "the prepared object for ${target} has the wrong mode"
     sync_path "${prepared}"
-    injected_at staged && halt "injected failure after staging a Generation-11 object"
+    injected_at staged && halt "injected failure after staging a Generation-12 object"
   done
   injected_at prepared && halt "injected failure before the PREPARED journal write"
   journal_write PREPARED
@@ -883,9 +883,10 @@ prepare() {
   # recovery may complete it forward. Unwinding it silently would discard
   # material a recovery is entitled to use.
   PREPARING=0
-  local staged_n created_n
+  local staged_n created_n replaced_n
   staged_n="$(matrix_count)"; created_n="$(matrix_count_of CREATE)"
-  ok "PREPARE complete: ${staged_n} $(plural "${staged_n}" object objects) staged ($(matrix_names)), ${created_n} $(plural "${created_n}" pathname pathnames) reserved, no rollback material required for a CREATE"
+  replaced_n="$(matrix_count_of REPLACE)"
+  ok "PREPARE complete: ${staged_n} $(plural "${staged_n}" object objects) staged ($(matrix_names)), ${created_n} $(plural "${created_n}" pathname pathnames) reserved, ${replaced_n} $(plural "${replaced_n}" predecessor predecessors) retained"
 }
 
 verify_prepared_set() {
@@ -943,8 +944,9 @@ commit_targets() {
 
     # rename(2): atomic for this pathname. A reader sees the pathname absent or
     # sees the complete module, never a partially written one. It is atomic for
-    # ONE pathname and this transaction has nine, which is what the journal
-    # exists to carry -- and why every intermediate state must fail closed.
+    # ONE pathname and this transaction has nineteen, which is what the
+    # journal exists to carry -- and why every intermediate state must fail
+    # closed.
     mv -f "${prepared}" "${target}"
     sync_path "${target}"
 
@@ -991,20 +993,23 @@ commit_targets() {
   # in it may revert the generation.
   journal_write COMMITTED
   injected_at postcommit \
-    && bad "injected failure immediately after COMMITTED; Generation 11 stands"
+    && bad "injected failure immediately after COMMITTED; Generation 12 stands"
   OUTCOME="COMMITTED"
-  local published_n
+  local published_n replaced_n created_n
   published_n="$(matrix_count)"
-  ok "COMMIT complete: ${published_n} $(plural "${published_n}" object objects) created and verified ($(matrix_names))"
+  replaced_n="$(matrix_count_of REPLACE)"; created_n="$(matrix_count_of CREATE)"
+  ok "COMMIT complete: ${published_n} $(plural "${published_n}" object objects) published and verified (${replaced_n} replaced, ${created_n} created) ($(matrix_names))"
   return 0
 }
 
 # --- ROLLBACK --------------------------------------------------------------
 #
-# Reachable only before COMMITTED. Every target in this matrix is a CREATE, so
-# rollback is removal -- fenced by proof that what is being removed is exactly
-# what this transaction published. The REPLACE branch is generic implementation
-# carried from the accepted Generation-11 transaction and is never taken here.
+# Reachable only before COMMITTED. This matrix has both dispositions, so
+# rollback has both directions: a CREATE is undone by removal, a REPLACE by
+# restoring the predecessor prepare() retained. Both are fenced by proof that
+# what is being removed or restored is exactly what this transaction put there.
+# Generation 11's matrix was nine CREATEs, so its REPLACE branch was never
+# taken; this generation has six and takes it.
 rollback() {
   local reason="$1"
   printf '\nROLLING BACK: %s\n' "${reason}" >&2
@@ -1078,7 +1083,7 @@ rollback() {
     ok "ROLLBACK complete: ${rolled_n} $(plural "${rolled_n}" target targets) back at Generation 11 (${removed} restored or removed)${dir_note}"
   else
     journal_write ROLLING_BACK
-    bad "ROLLBACK INCOMPLETE: GEN10=${BASELINE_COUNT} GEN11=${TARGET_COUNT} UNKNOWN=${UNKNOWN_COUNT}"
+    bad "ROLLBACK INCOMPLETE: BASELINE=${BASELINE_COUNT} TARGET=${TARGET_COUNT} UNKNOWN=${UNKNOWN_COUNT}"
     halt "the host is in a mixed state and requires operator disposition; the journal is at ${JOURNAL}"
   fi
 }
@@ -1097,13 +1102,13 @@ recover() {
   local state="$1"
   PACKAGE_DIR_CREATED="$(journal_package_dir_created)"
   classify_all
-  printf '\nRECOVERY from journal state %s: GEN10=%d GEN11=%d UNKNOWN=%d (of %d targets)\n' \
+  printf '\nRECOVERY from journal state %s: BASELINE=%d TARGET=%d UNKNOWN=%d (of %d targets)\n' \
     "${state}" "${BASELINE_COUNT}" "${TARGET_COUNT}" "${UNKNOWN_COUNT}" "${#MATRIX[@]}"
 
   if (( UNKNOWN_COUNT > 0 )); then
     local target
     for target in "${UNKNOWN_TARGETS[@]}"; do
-      bad "UNKNOWN bytes at ${target} (not the Generation-11 object, and not absent)"
+      bad "UNKNOWN bytes at ${target} (neither the Generation-11 baseline nor the Generation-12 target, and not absent)"
     done
     halt "recovery refuses to guess: unknown bytes require operator disposition"
   fi
@@ -1111,13 +1116,13 @@ recover() {
   if (( TARGET_COUNT == ${#MATRIX[@]} )); then
     journal_write COMMITTED
     OUTCOME="COMMITTED"
-    ok "recovery: the complete Generation-11 set is already installed"
+    ok "recovery: the complete Generation-12 set is already installed"
     return 0
   fi
   if (( BASELINE_COUNT == ${#MATRIX[@]} )); then
     journal_write ROLLED_BACK
     OUTCOME="ROLLED_BACK"
-    ok "recovery: no Generation-11 object was published; the host is at Generation 11"
+    ok "recovery: no Generation-12 object was published; the host is at Generation 11"
     return 0
   fi
 
@@ -1147,7 +1152,7 @@ write_evidence() {
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" && -f "${BASELINE_HELPER_EVIDENCE}" ]] \
     || halt "Generation-11 evidence vanished during installation"
   if injected_at evidence; then
-    bad "injected failure while writing Generation-11 evidence; Generation 11 stands"
+    bad "injected failure while writing Generation-12 evidence; Generation 12 stands"
     return 0
   fi
   find "${LIBRARY_ROOT}" -type f -name '*.py' -print0 \
@@ -1157,7 +1162,7 @@ write_evidence() {
     target="$(field "${row}" 1)"
     grep -q "${target}\$" "${GEN12_LIBRARY_EVIDENCE}.writing" \
       || { rm -f "${GEN12_LIBRARY_EVIDENCE}.writing"
-           halt "the Generation-11 evidence does not record ${target}"; }
+           halt "the Generation-12 evidence does not record ${target}"; }
   done
   {
     printf 'commit %s\n' "${COMMIT}"
@@ -1184,13 +1189,13 @@ write_evidence() {
   mv -f "${GEN12_HELPER_EVIDENCE}.writing" "${GEN12_HELPER_EVIDENCE}"
   sync_path "${GEN12_LIBRARY_EVIDENCE}"
   sync_path "${GEN12_HELPER_EVIDENCE}"
-  ok "Generation-11 evidence written; Generation-11 evidence preserved"
+  ok "Generation-12 evidence written; Generation-11 evidence preserved"
 }
 
 cleanup_transaction_artifacts() {
   local row target
   if injected_at cleanup; then
-    bad "injected cleanup failure after COMMITTED; Generation 11 remains installed"
+    bad "injected cleanup failure after COMMITTED; Generation 12 remains installed"
     return 0
   fi
   for row in "${MATRIX[@]}"; do
@@ -1223,9 +1228,9 @@ verify_installed_set() {
   local count
   count="$(find "${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)"
   [[ "${count}" -eq "${EXPECTED_LIBRARY_FILES_TARGET}" ]] \
-    || bad "the installed library holds ${count} objects, expected the Generation-11 ${EXPECTED_LIBRARY_FILES_TARGET}"
+    || bad "the installed library holds ${count} objects, expected the Generation-12 ${EXPECTED_LIBRARY_FILES_TARGET}"
   (( FAILURES == 0 )) \
-    && ok "all $(matrix_count) installed Generation-11 objects correspond to the reviewed commit ${COMMIT}"
+    && ok "all $(matrix_count) Generation-12 changed objects correspond to the reviewed commit ${COMMIT}"
 }
 
 # The mutation and control-plane surfaces must not be installed. Asserted over
@@ -1274,7 +1279,7 @@ verify_unchanged_surface() {
     recorded="$(sed -n "s#^\\([0-9a-f]\\{64\\}\\)  /usr/lib/kyri/python/${relative}\$#\\1#p" \
                   "${BASELINE_LIBRARY_EVIDENCE}" | head -1)"
     if [[ -z "${recorded}" ]]; then
-      bad "installed object ${relative} is not accounted for by the Generation-11 evidence and is not a declared Generation-11 target"
+      bad "installed object ${relative} is not accounted for by the Generation-11 evidence and is not a declared Generation-12 target"
       drift=$((drift + 1)); continue
     fi
     observed="$(digest_of "${file}")"
@@ -1290,7 +1295,7 @@ verify_unchanged_surface() {
   done < <(sed -n 's#^[0-9a-f]\{64\}  /usr/lib/kyri/python/##p' "${BASELINE_LIBRARY_EVIDENCE}")
 
   (( drift == 0 )) \
-    && ok "every Generation-11 runtime object is exactly its accepted baseline, and nothing was removed"
+    && ok "every carried-over runtime object is exactly its accepted Generation-11 baseline, and nothing was removed"
 }
 
 # ===========================================================================
@@ -1383,7 +1388,10 @@ case "${MODE}" in
 
   # The fully-installed case exited above, so only two states remain here.
   if (( BASELINE_COUNT == ${#MATRIX[@]} )); then
-    ok "the host is at Generation 11 and ready for the Generation-12 installation: $(matrix_count) CREATE $(plural "$(matrix_count)" operation operations) ($(matrix_names)), object count ${EXPECTED_LIBRARY_FILES_BASELINE} -> ${EXPECTED_LIBRARY_FILES_TARGET}"
+    # The host really is at Generation 11 here, and saying so is correct. What
+    # was wrong was calling all nineteen rows CREATEs: six of them replace a
+    # predecessor, and an operator sizing up a transaction needs to know which.
+    ok "the host is at Generation 11 and ready for the Generation-12 installation: $(matrix_count_of REPLACE) REPLACE, $(matrix_count_of CREATE) CREATE, $(matrix_count) changed objects ($(matrix_names)), object count ${EXPECTED_LIBRARY_FILES_BASELINE} -> ${EXPECTED_LIBRARY_FILES_TARGET}"
   else
     bad "mixed target state: baseline=${BASELINE_COUNT} target=${TARGET_COUNT} unknown=${UNKNOWN_COUNT}"
   fi
@@ -1461,9 +1469,9 @@ case "${MODE}" in
   [[ "${state}" == "COMMITTED" ]] \
     || bad "the transaction journal is ${state}, expected COMMITTED"
   [[ -f "${GEN12_LIBRARY_EVIDENCE}" ]] \
-    || bad "the Generation-11 library evidence is missing"
+    || bad "the Generation-12 library evidence is missing"
   [[ -f "${GEN12_HELPER_EVIDENCE}" ]] \
-    || bad "the Generation-11 helper evidence is missing"
+    || bad "the Generation-12 helper evidence is missing"
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" ]] \
     || bad "the Generation-11 evidence was not preserved"
   report_transaction_residue
@@ -1482,7 +1490,7 @@ case "${MODE}" in
     cleanup_transaction_artifacts
   elif [[ "${OUTCOME}" == "ROLLED_BACK" ]]; then
     cleanup_transaction_artifacts
-    bad "recovery rolled the transaction back: the host is at Generation 11 and Generation 11 is not installed"
+    bad "recovery rolled the transaction back: the host is at Generation 11 and Generation 12 is not installed"
   else
     halt "recovery reached no terminal outcome; the journal is at ${JOURNAL}"
   fi
@@ -1491,8 +1499,8 @@ esac
 
 printf '\n'
 if (( FAILURES == 0 )); then
-  printf 'Generation 11 / installed Fabric dependency closure %s: all checks passed.\n' "${MODE#--}"
+  printf 'Generation 12 / installed Fabric dependency closure %s: all checks passed.\n' "${MODE#--}"
 else
-  printf 'Generation 11 / installed Fabric dependency closure %s FAILED: %d\n' "${MODE#--}" "${FAILURES}" >&2
+  printf 'Generation 12 / installed Fabric dependency closure %s FAILED: %d\n' "${MODE#--}" "${FAILURES}" >&2
   exit 1
 fi
