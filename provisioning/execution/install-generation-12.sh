@@ -76,7 +76,15 @@ REPOSITORY="/opt/schott-platform"
 REPO_OWNER="cschott"
 
 LIBRARY_ROOT="/usr/lib/kyri/python"
-TRANSACTION_ROOT="/root/kyri-gen11-transaction"
+# This transaction's own namespace. Generation 11's retained journal at
+# /root/kyri-gen11-transaction is predecessor evidence: it records how the
+# host reached the state this transaction starts from, it is never read as this
+# transaction's state, and nothing here writes to or removes it. Deriving this
+# installer from Generation 11 and leaving the predecessor's path in place is
+# exactly what made the first real-host attempt halt with "the journal says
+# COMMITTED but the targets do not agree" -- it was reading a COMMITTED journal
+# that belonged to a transaction that had already finished.
+TRANSACTION_ROOT="/root/kyri-gen12-transaction"
 BASELINE_LIBRARY_EVIDENCE="/root/kyri-gen11-library-digests.txt"
 BASELINE_HELPER_EVIDENCE="/root/kyri-gen11-helper-digests.txt"
 GEN12_LIBRARY_EVIDENCE="/root/kyri-gen12-library-digests.txt"
@@ -309,7 +317,7 @@ is_target() {
 # Test-only failure injection. Impossible without --fixture, so a production run
 # cannot reach any of it.
 injected_at() {
-  [[ -n "${FIXTURE}" && "${KYRI_GEN11_FAIL_AT:-}" == "$1" ]]
+  [[ -n "${FIXTURE}" && "${KYRI_GEN12_FAIL_AT:-}" == "$1" ]]
 }
 digest_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
@@ -416,31 +424,31 @@ journal_package_dir_created() {
 # predecessor state is ABSENT, so "GEN10" here means the pathname is genuinely
 # free -- not a symlink, not a directory, not a file with other bytes.
 classify() {
-  local target="$1" gen10="$2" gen11="$3" observed
-  if [[ "${gen10}" == "ABSENT" ]]; then
-    if [[ ! -e "${target}" && ! -L "${target}" ]]; then printf 'GEN10'; return; fi
+  local target="$1" baseline="$2" wanted="$3" observed
+  if [[ "${baseline}" == "ABSENT" ]]; then
+    if [[ ! -e "${target}" && ! -L "${target}" ]]; then printf 'BASELINE'; return; fi
     if [[ -f "${target}" && ! -L "${target}" ]]; then
       observed="$(digest_of "${target}")"
-      if [[ "${observed}" == "${gen11}" ]]; then printf 'GEN11'; return; fi
+      if [[ "${observed}" == "${wanted}" ]]; then printf 'TARGET'; return; fi
     fi
     printf 'UNKNOWN'; return
   fi
   if [[ -L "${target}" || ! -f "${target}" ]]; then printf 'UNKNOWN'; return; fi
   observed="$(digest_of "${target}")"
-  if   [[ "${observed}" == "${gen11}" ]]; then printf 'GEN11'
-  elif [[ "${observed}" == "${gen10}" ]]; then printf 'GEN10'
+  if   [[ "${observed}" == "${wanted}" ]]; then printf 'TARGET'
+  elif [[ "${observed}" == "${baseline}" ]]; then printf 'BASELINE'
   else printf 'UNKNOWN'; fi
 }
 
 classify_all() {
-  local row target gen10 gen11 state
+  local row target baseline wanted state
   BASELINE_COUNT=0; TARGET_COUNT=0; UNKNOWN_COUNT=0; UNKNOWN_TARGETS=()
   for row in "${MATRIX[@]}"; do
-    target="$(field "${row}" 1)"; gen10="$(field "${row}" 4)"; gen11="$(field "${row}" 5)"
-    state="$(classify "${target}" "${gen10}" "${gen11}")"
+    target="$(field "${row}" 1)"; baseline="$(field "${row}" 4)"; wanted="$(field "${row}" 5)"
+    state="$(classify "${target}" "${baseline}" "${wanted}")"
     case "${state}" in
-      GEN10) BASELINE_COUNT=$((BASELINE_COUNT + 1)) ;;
-      GEN11) TARGET_COUNT=$((TARGET_COUNT + 1)) ;;
+      BASELINE) BASELINE_COUNT=$((BASELINE_COUNT + 1)) ;;
+      TARGET) TARGET_COUNT=$((TARGET_COUNT + 1)) ;;
       *) UNKNOWN_COUNT=$((UNKNOWN_COUNT + 1)); UNKNOWN_TARGETS+=("${target}") ;;
     esac
   done
@@ -478,9 +486,9 @@ require_repository() {
 # of the Generation-11 installed surface, which require_baseline proves
 # over the whole tree; here the source side is pinned.
 require_source_digests() {
-  local row source gen11 blob worktree drift=0
+  local row source wanted blob worktree drift=0
   for row in "${MATRIX[@]}"; do
-    source="$(field "${row}" 0)"; gen11="$(field "${row}" 5)"
+    source="$(field "${row}" 0)"; wanted="$(field "${row}" 5)"
     # Existence first, and separately. A row naming a path the reviewed commit
     # does not carry would otherwise fail inside the command substitution below
     # -- `pipefail` makes the pipeline fail, and an assignment from a failed
@@ -491,10 +499,10 @@ require_source_digests() {
       drift=$((drift + 1)); continue
     fi
     blob="$(git_as_owner cat-file blob "${COMMIT}:${source}" 2>/dev/null | sha256sum | cut -d' ' -f1)"
-    [[ "${blob}" == "${gen11}" ]] \
-      || { bad "${source} at ${COMMIT} is ${blob:-absent}, expected ${gen11}"; drift=$((drift + 1)); }
+    [[ "${blob}" == "${wanted}" ]] \
+      || { bad "${source} at ${COMMIT} is ${blob:-absent}, expected ${wanted}"; drift=$((drift + 1)); }
     worktree="$(digest_of "${REPOSITORY}/${source}")"
-    [[ "${worktree}" == "${gen11}" ]] \
+    [[ "${worktree}" == "${wanted}" ]] \
       || note "${source} in the working tree is ${worktree:-absent}; the ceremony installs the commit object, not this"
   done
   (( drift == 0 )) || halt "the reviewed commit does not carry the pinned Generation-12 surface"
@@ -732,22 +740,42 @@ require_gates_closed() {
 # statement about where the matrix puts things, which is exactly when it needs
 # checking: a row that staged somewhere else would publish by copy, not rename.
 require_same_filesystem() {
-  local row target prepared parent
-  parent="$(dirname "${PACKAGE_DIR}")"
-  [[ -d "${parent}" ]] || halt "${parent} does not exist: the Fabric package has nowhere to go"
+  # Publication is a rename, and rename(2) cannot cross a filesystem. So the
+  # property this proves is that every prepared object sits beside the target it
+  # will replace, on the same device as that target -- one check per row,
+  # against that row's own directory.
+  #
+  # Generation 11 asserted something narrower and, for it, equivalent: that
+  # every target lived in the one package directory it created. All nine of its
+  # objects did. Generation 12's matrix spans tools/capability, tools/fabric and
+  # tools/trust, so carrying that assertion forward refused the first REPLACE
+  # row before it could ever run. The wrong thing was being checked; the right
+  # thing is checked here.
+  local row target prepared directory library_device
+  [[ -d "${LIBRARY_ROOT}" ]] \
+    || halt "${LIBRARY_ROOT} does not exist: there is nowhere to install"
+  library_device="$(stat -c '%d' "${LIBRARY_ROOT}")"
   for row in "${MATRIX[@]}"; do
     target="$(field "${row}" 1)"
     prepared="${target}${PREPARED_SUFFIX}"
-    [[ "$(dirname "${target}")" == "$(dirname "${prepared}")" ]] \
+    directory="$(dirname "${target}")"
+    [[ "${directory}" == "$(dirname "${prepared}")" ]] \
       || halt "${target} does not stage beside itself"
-    [[ "$(dirname "${target}")" == "${PACKAGE_DIR}" ]] \
-      || halt "${target} is not inside the declared Fabric package directory"
+    # A CREATE into a directory this transaction has not made yet is judged by
+    # the nearest existing ancestor: that is the filesystem the directory will
+    # be created on, and therefore the one the rename will happen on.
+    local probe="${directory}"
+    while [[ ! -d "${probe}" && "${probe}" != "/" ]]; do probe="$(dirname "${probe}")"; done
+    [[ -d "${probe}" ]] \
+      || halt "no existing ancestor of ${directory} could be found"
+    [[ "$(stat -c '%d' "${probe}")" == "${library_device}" ]] \
+      || halt "${target} would publish across a filesystem boundary (${probe} is not on the library root's device)"
   done
   if [[ -d "${PACKAGE_DIR}" ]]; then
-    [[ "$(stat -c '%d' "${PACKAGE_DIR}")" == "$(stat -c '%d' "${parent}")" ]] \
+    [[ "$(stat -c '%d' "${PACKAGE_DIR}")" == "${library_device}" ]] \
       || halt "the Trust package directory is not on the same filesystem as the library root"
   fi
-  ok "every target stages beside itself inside ${PACKAGE_DIR#"${LIBRARY_ROOT}"/}, so publication is a rename"
+  ok "every target stages beside itself on the library root's filesystem, so publication is a rename ($(matrix_count) $(plural "$(matrix_count)" object objects) across $(for row in "${MATRIX[@]}"; do dirname "$(field "${row}" 0)"; done | sort -u | wc -l) directories)"
 }
 
 authority_fingerprint() {
@@ -772,7 +800,7 @@ authority_fingerprint() {
 # There is no rollback material to retain, because there is nothing to roll back
 # to: a CREATE's predecessor is an absent pathname, and its rollback is removal.
 prepare() {
-  local row source target mode operation gen11 prepared observed
+  local row source target mode operation wanted prepared observed
   PREPARING=1
 
   # The package directory first: nothing can stage beside a target that has no
@@ -794,7 +822,7 @@ prepare() {
   for row in "${MATRIX[@]}"; do
     source="$(field "${row}" 0)"; target="$(field "${row}" 1)"
     mode="$(field "${row}" 2)"; operation="$(field "${row}" 3)"
-    gen11="$(field "${row}" 5)"
+    wanted="$(field "${row}" 5)"
     prepared="${target}${PREPARED_SUFFIX}"
 
     injected_at stage && halt "injected failure before staging"
@@ -805,12 +833,34 @@ prepare() {
       # target is exactly the substitution this refuses to publish through.
       [[ ! -e "${target}" && ! -L "${target}" ]] \
         || halt "${target} already exists and this transaction did not create it: refusing to overwrite an unknown object"
+    elif [[ "${operation}" == "REPLACE" ]]; then
+      # A REPLACE has predecessor bytes, and they are the only thing a rollback
+      # could restore this host from -- so they are retained beside the target
+      # before anything is staged, and proved to be the declared baseline first.
+      # Generation 11's matrix was nine CREATEs and its prepare refused REPLACE
+      # outright, under a comment claiming it retained the path. It did not.
+      # Generation 12 has six, so the path is implemented here rather than
+      # discovered missing on a host.
+      [[ -f "${target}" && ! -L "${target}" ]] \
+        || halt "${target} is declared REPLACE but is not a regular file"
+      observed="$(digest_of "${target}")"
+      [[ "${observed}" == "$(field "${row}" 4)" ]] \
+        || halt "${target} is ${observed}, not the declared baseline this REPLACE expects"
+      [[ -e "${target}${BACKUP_SUFFIX}" ]] \
+        && halt "${target}${BACKUP_SUFFIX} already exists: a previous transaction did not finish"
+      cp -p "${target}" "${target}${BACKUP_SUFFIX}" \
+        || halt "could not retain the predecessor object for ${target}"
+      sync_path "${target}${BACKUP_SUFFIX}"
+      [[ "$(digest_of "${target}${BACKUP_SUFFIX}")" == "${observed}" ]] \
+        || halt "the retained predecessor for ${target} does not match what was retained from"
     else
-      # Generic capability, unused by this matrix. Retained so a future
-      # Generation-11-shaped matrix cannot silently lose the REPLACE path.
       halt "${target} is declared ${operation}, which this transaction does not implement"
     fi
-    rm -f "${target}${BACKUP_SUFFIX}"
+    # Generation 11 cleared any stale backup here, because it never made one.
+    # Generation 12 does, and it is the only thing a rollback of an already
+    # published REPLACE can restore from -- so it survives until the whole
+    # transaction commits. A backup left by an unfinished transaction is
+    # refused above rather than silently discarded here.
 
     rm -f "${prepared}"
     git_as_owner cat-file blob "${COMMIT}:${source}" > "${prepared}" \
@@ -820,8 +870,8 @@ prepare() {
       chown root:root "${prepared}"
     fi
     observed="$(digest_of "${prepared}")"
-    [[ "${observed}" == "${gen11}" ]] \
-      || halt "the prepared object for ${target} is ${observed}, expected ${gen11}"
+    [[ "${observed}" == "${wanted}" ]] \
+      || halt "the prepared object for ${target} is ${observed}, expected ${wanted}"
     [[ "$(stat -c '%a' "${prepared}")" == "${mode#0}" ]] \
       || halt "the prepared object for ${target} has the wrong mode"
     sync_path "${prepared}"
@@ -839,10 +889,10 @@ prepare() {
 }
 
 verify_prepared_set() {
-  local row target gen11
+  local row target wanted
   for row in "${MATRIX[@]}"; do
-    target="$(field "${row}" 1)"; gen11="$(field "${row}" 5)"
-    [[ "$(digest_of "${target}${PREPARED_SUFFIX}")" == "${gen11}" ]] \
+    target="$(field "${row}" 1)"; wanted="$(field "${row}" 5)"
+    [[ "$(digest_of "${target}${PREPARED_SUFFIX}")" == "${wanted}" ]] \
       || halt "prepared object for ${target} does not verify"
   done
   local n; n="$(matrix_count)"
@@ -857,7 +907,7 @@ verify_prepared_set() {
 # is a property of the Generation-11 model carried forward unchanged, and it is
 # what makes the publication window independent of the checkout.
 commit_targets() {
-  local row target mode gen10 gen11 prepared index=0 observed owner_now
+  local row target mode baseline wanted prepared index=0 observed owner_now
   journal_write COMMITTING
   if injected_at committing; then
     rollback "injected failure immediately after COMMITTING"
@@ -866,10 +916,10 @@ commit_targets() {
   for row in "${MATRIX[@]}"; do
     index=$((index + 1))
     target="$(field "${row}" 1)"; mode="$(field "${row}" 2)"
-    gen10="$(field "${row}" 4)"; gen11="$(field "${row}" 5)"
+    baseline="$(field "${row}" 4)"; wanted="$(field "${row}" 5)"
     prepared="${target}${PREPARED_SUFFIX}"
 
-    if [[ -n "${FIXTURE}" && "${KYRI_GEN11_FAIL_AT:-}" == "${index}" ]]; then
+    if [[ -n "${FIXTURE}" && "${KYRI_GEN12_FAIL_AT:-}" == "${index}" ]]; then
       PROGRESS["${index}"]="INJECTED_FAILURE"
       journal_write COMMITTING
       rollback "injected failure at commit position ${index}"
@@ -878,8 +928,8 @@ commit_targets() {
 
     # Already published by an earlier, interrupted run. Decided from the
     # target's actual bytes, never from the journal.
-    if [[ "$(classify "${target}" "${gen10}" "${gen11}")" == "GEN11" ]]; then
-      PROGRESS["${index}"]="GEN11"
+    if [[ "$(classify "${target}" "${baseline}" "${wanted}")" == "TARGET" ]]; then
+      PROGRESS["${index}"]="TARGET"
       journal_write COMMITTING
       continue
     fi
@@ -906,10 +956,10 @@ commit_targets() {
     fi
 
     observed="$(digest_of "${target}")"
-    if [[ "${observed}" != "${gen11}" ]]; then
+    if [[ "${observed}" != "${wanted}" ]]; then
       PROGRESS["${index}"]="VERIFY_FAILED"
       journal_write COMMITTING
-      rollback "target ${target} is ${observed} after publication, expected ${gen11}"
+      rollback "target ${target} is ${observed} after publication, expected ${wanted}"
       return 1
     fi
     if [[ "$(stat -c '%a' "${target}")" != "${mode#0}" ]]; then
@@ -928,7 +978,7 @@ commit_targets() {
       fi
     fi
 
-    PROGRESS["${index}"]="GEN11"
+    PROGRESS["${index}"]="TARGET"
     journal_write COMMITTING
   done
 
@@ -959,11 +1009,27 @@ rollback() {
   local reason="$1"
   printf '\nROLLING BACK: %s\n' "${reason}" >&2
   journal_write ROLLING_BACK
-  local row target operation gen11 observed removed=0
+  local row target operation wanted observed removed=0
   for row in "${MATRIX[@]}"; do
     target="$(field "${row}" 1)"; operation="$(field "${row}" 3)"
-    gen11="$(field "${row}" 5)"
+    wanted="$(field "${row}" 5)"
 
+    if [[ "${operation}" == "REPLACE" ]]; then
+      # Restore the predecessor prepare retained. If it is absent, this row was
+      # never prepared and the target is still the predecessor: nothing to undo.
+      if [[ -f "${target}${BACKUP_SUFFIX}" && ! -L "${target}${BACKUP_SUFFIX}" ]]; then
+        if [[ "$(digest_of "${target}${BACKUP_SUFFIX}")" != "$(field "${row}" 4)" ]]; then
+          bad "the retained predecessor for ${target} is not the declared baseline; NOT restoring it"
+          continue
+        fi
+        mv -f "${target}${BACKUP_SUFFIX}" "${target}"
+        sync_path "${target}"
+        removed=$((removed + 1))
+      elif [[ "$(digest_of "${target}")" != "$(field "${row}" 4)" ]]; then
+        bad "${target} is neither the declared baseline nor restorable from a retained predecessor"
+      fi
+      continue
+    fi
     [[ "${operation}" == "CREATE" ]] || { bad "${target} is ${operation}; this transaction cannot roll that back"; continue; }
 
     if [[ ! -e "${target}" && ! -L "${target}" ]]; then
@@ -974,8 +1040,8 @@ rollback() {
       continue
     fi
     observed="$(digest_of "${target}")"
-    if [[ "${observed}" != "${gen11}" ]]; then
-      bad "${target} is ${observed}, not the Generation-11 object this transaction installed; NOT removing it"
+    if [[ "${observed}" != "${wanted}" ]]; then
+      bad "${target} is ${observed}, not the object this transaction installed; NOT removing it"
       continue
     fi
     rm -f "${target}"
@@ -1009,7 +1075,7 @@ rollback() {
     OUTCOME="ROLLED_BACK"
     local rolled_n
     rolled_n="$(matrix_count)"
-    ok "ROLLBACK complete: ${rolled_n} $(plural "${rolled_n}" target targets) back at Generation 11 (${removed} removed)${dir_note}"
+    ok "ROLLBACK complete: ${rolled_n} $(plural "${rolled_n}" target targets) back at Generation 11 (${removed} restored or removed)${dir_note}"
   else
     journal_write ROLLING_BACK
     bad "ROLLBACK INCOMPLETE: GEN10=${BASELINE_COUNT} GEN11=${TARGET_COUNT} UNKNOWN=${UNKNOWN_COUNT}"
@@ -1055,11 +1121,11 @@ recover() {
     return 0
   fi
 
-  local row target gen10 gen11 forward=1
+  local row target baseline wanted forward=1
   for row in "${MATRIX[@]}"; do
-    target="$(field "${row}" 1)"; gen10="$(field "${row}" 4)"; gen11="$(field "${row}" 5)"
-    [[ "$(classify "${target}" "${gen10}" "${gen11}")" == "GEN11" ]] && continue
-    [[ "$(digest_of "${target}${PREPARED_SUFFIX}")" == "${gen11}" ]] || { forward=0; break; }
+    target="$(field "${row}" 1)"; baseline="$(field "${row}" 4)"; wanted="$(field "${row}" 5)"
+    [[ "$(classify "${target}" "${baseline}" "${wanted}")" == "TARGET" ]] && continue
+    [[ "$(digest_of "${target}${PREPARED_SUFFIX}")" == "${wanted}" ]] || { forward=0; break; }
   done
 
   if (( forward == 1 )); then
@@ -1136,17 +1202,17 @@ cleanup_transaction_artifacts() {
 
 # --- installed-set verification --------------------------------------------
 verify_installed_set() {
-  local row source target gen11 observed blob mode
+  local row source target wanted observed blob mode
   for row in "${MATRIX[@]}"; do
     source="$(field "${row}" 0)"; target="$(field "${row}" 1)"
-    mode="$(field "${row}" 2)"; gen11="$(field "${row}" 5)"
+    mode="$(field "${row}" 2)"; wanted="$(field "${row}" 5)"
     blob="$(git_as_owner cat-file blob "${COMMIT}:${source}" 2>/dev/null | sha256sum | cut -d' ' -f1)"
-    [[ "${blob}" == "${gen11}" ]] \
-      || bad "${source} at ${COMMIT} is ${blob:-absent}, expected the pinned ${gen11}"
+    [[ "${blob}" == "${wanted}" ]] \
+      || bad "${source} at ${COMMIT} is ${blob:-absent}, expected the pinned ${wanted}"
     [[ -L "${target}" ]] && bad "installed ${target} is a symlink"
     observed="$(digest_of "${target}")"
-    [[ "${observed}" == "${gen11}" ]] \
-      || bad "installed ${target} is ${observed:-absent}, expected ${gen11}"
+    [[ "${observed}" == "${wanted}" ]] \
+      || bad "installed ${target} is ${observed:-absent}, expected ${wanted}"
     [[ "$(stat -c '%a' "${target}" 2>/dev/null)" == "${mode#0}" ]] \
       || bad "installed ${target} has mode $(stat -c '%a' "${target}" 2>/dev/null), expected ${mode#0}"
   done
@@ -1173,12 +1239,26 @@ verify_excluded_absent() {
       present=$((present + 1))
     fi
   done
-  if [[ -e "${LIBRARY_ROOT}/tools/trust" || -L "${LIBRARY_ROOT}/tools/trust" ]]; then
-    bad "the Trust plane is present in the installed runtime"
-    present=$((present + 1))
+  # Generation 11 asserted the whole Trust plane absent, on the reasoning that
+  # the runtime consumed read-only inspection and nothing else. G11-Y made that
+  # false: eligibility asks C3 about standing and quarantine. So the assertion
+  # narrows rather than disappears -- the read path is installed, every module
+  # that DECIDES trust is named in EXCLUDED above and checked there, and any
+  # Trust module that is neither declared nor excluded is refused here.
+  local installed_trust declared
+  if [[ -d "${LIBRARY_ROOT}/tools/trust" ]]; then
+    while IFS= read -r installed_trust; do
+      declared=0
+      for row in "${MATRIX[@]}"; do
+        [[ "$(field "${row}" 0)" == "${installed_trust}" ]] && { declared=1; break; }
+      done
+      (( declared == 1 )) || {
+        bad "the Trust module ${installed_trust} is installed but this generation does not declare it"
+        present=$((present + 1)); }
+    done < <(cd "${LIBRARY_ROOT}" && find tools/trust -type f -name '*.py' | sort)
   fi
   (( present == 0 )) \
-    && ok "the governed write path, the operator input surface and the Trust plane are all absent from the installed runtime"
+    && ok "the governed write path and every Trust decision surface are absent; the installed Trust modules are exactly the declared read path"
 }
 
 # Every object the Generation-11 evidence recorded must still be exactly what
@@ -1316,7 +1396,7 @@ case "${MODE}" in
   require_closed_closure
   require_gates_closed
 
-  TRANSACTION_ID="gen11-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  TRANSACTION_ID="gen12-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir -p "${TRANSACTION_ROOT}"
   chmod 0700 "${TRANSACTION_ROOT}"
   state="$(journal_state)"
