@@ -67,7 +67,13 @@ TRUST_BEFORE="$(production_state "${TRUST_ROOT}")"
 # this suite was written, and an emptiness check would report that accepted
 # record as this suite's own leakage.
 HOST_SEQ_BEFORE="$([[ -e "${FABRIC_ROOT}/sequences/capability-host.seq" ]] && echo present || echo absent)"
-HOST_COUNT_BEFORE="$(find "${FABRIC_ROOT}/capability-hosts" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+# `find` on an absent directory exits non-zero, and under `set -Eeuo pipefail`
+# the pipeline's failure propagates out of the command substitution and kills
+# the suite before it prints anything -- which is what a runner with no
+# /var/lib/kyri saw. `production_state` above already answers "absent"; this
+# needs to as well.
+count_hosts() { find "$1" -maxdepth 1 -type f 2>/dev/null | wc -l || true; }
+HOST_COUNT_BEFORE="$(count_hosts "${FABRIC_ROOT}/capability-hosts")"
 
 run_case() {
   local label="$1" script="$2" actual
@@ -653,7 +659,7 @@ assert_untouched() {
   fi
   local host_seq_after host_count_after
   host_seq_after="$([[ -e "${FABRIC_ROOT}/sequences/capability-host.seq" ]] && echo present || echo absent)"
-  host_count_after="$(find "${FABRIC_ROOT}/capability-hosts" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+  host_count_after="$(count_hosts "${FABRIC_ROOT}/capability-hosts")"
   if [[ "${host_seq_after}" != "${HOST_SEQ_BEFORE}" ]]; then
     fail "capability-host.seq was created"; problems=1
   fi
