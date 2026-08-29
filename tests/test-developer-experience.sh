@@ -440,13 +440,29 @@ for command in 'validate_evidence\.py' 'validate_plugins\.py' \
   fi
 done
 
-# ShellCheck must lint the same files in both places.
+# ShellCheck must lint the same files in both places. Restating the list in the
+# workflow and asking both to be kept in step is what let them drift: the local
+# runner also lints provisioning/, so it could follow a `source` there that CI
+# could not, and CI alone raised SC1091. Calling the one script is the only form
+# that cannot diverge, so it is what is required here; an inlined list is
+# accepted only if it covers everything the runner lints.
 SHELLCHECK_WORKFLOW=".github/workflows/shellcheck.yml"
 if [[ -f "${ROOT}/${SHELLCHECK_WORKFLOW}" ]]; then
-  if grep -q 'tools/dev/\*\.sh' "${ROOT}/${SHELLCHECK_WORKFLOW}"; then
-    pass "CI lints tools/dev/*.sh, matching the local runner"
+  if grep -q 'tools/dev/run-shellcheck\.sh' "${ROOT}/${SHELLCHECK_WORKFLOW}"; then
+    pass "CI runs the local ShellCheck runner, so the file lists cannot diverge"
+  elif grep -q 'shellcheck ' "${ROOT}/${SHELLCHECK_WORKFLOW}"; then
+    missing=""
+    for glob in 'tools/dev/\*\.sh' 'provisioning/execution/\*\.sh' \
+                'provisioning/artifacts/\*\.sh' 'provisioning/evidence/\*\.sh'; do
+      grep -q "${glob}" "${ROOT}/${SHELLCHECK_WORKFLOW}" || missing+=" ${glob}"
+    done
+    if [[ -z "${missing}" ]]; then
+      pass "CI inlines a ShellCheck file list covering everything the local runner lints"
+    else
+      fail "CI's inlined ShellCheck list omits${missing}, so it diverges from the local runner"
+    fi
   else
-    fail "CI must lint tools/dev/*.sh or its file list diverges from the local runner"
+    fail "${SHELLCHECK_WORKFLOW} runs no recognisable ShellCheck command"
   fi
 else
   fail "cannot compare ShellCheck file lists; ${SHELLCHECK_WORKFLOW} is missing"

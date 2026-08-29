@@ -55,6 +55,19 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
 LIVE_TRUST="/var/lib/kyri/trust"                   # prod-path-reference
 LIVE_FABRIC="/var/lib/kyri/fabric"                 # prod-path-reference
+
+# Some assertions below read the LIVE Trust store: what the accepted HOST-0001
+# decision is on record as, and that asking moves nothing. Those are facts about
+# the production host and cannot hold anywhere else. A GitHub runner has no
+# /var/lib/kyri, so they failed there on every push while passing here -- the
+# same shape of mistake as a test that assumes a generation. The fixture
+# assertions, which are the bulk of this suite, run everywhere.
+#
+# The guard is presence, not opt-out: on the production host the store exists
+# and every live assertion still runs. Nothing is skipped where it can be
+# checked.
+LIVE_PRESENT=no
+[[ -d "${LIVE_TRUST}" && -d "${LIVE_FABRIC}" ]] && LIVE_PRESENT=yes
 live_state() {
   if [[ -e "$1" ]]; then
     { find "$1" -printf '%y %m %n %U:%G %s %p\n' 2>/dev/null | sort
@@ -116,6 +129,17 @@ run_case() {
     fi
   else
     fail "${label} -- raised: ${actual}"
+  fi
+}
+
+# A case whose subject is the live production store. Where that store does not
+# exist the fact being asserted does not exist either, so there is nothing to
+# check and nothing to pretend about.
+live_case() {
+  if [[ "${LIVE_PRESENT}" == "yes" ]]; then
+    run_case "$@"
+  else
+    printf 'SKIP: %s (no live Trust store)\n' "$1"
   fi
 }
 
@@ -398,7 +422,7 @@ print('OK')
 # moves nothing.
 # ===========================================================================
 
-run_case "the accepted HOST-0001 decision is on record in the LIVE store as ruled" "${PRELUDE}
+live_case "the accepted HOST-0001 decision is on record in the LIVE store as ruled" "${PRELUDE}
 store = TrustStore.open_for_read(LIVE)
 before = state(LIVE)
 record = store.read('record', 'TREC-000001')
@@ -426,7 +450,7 @@ print('OK')
 # quietly idempotent -- and the refusal must be a written reason, not a
 # traceback, because this is the path an operator reaches by re-running a
 # command they already ran.
-run_case "replaying the accepted HOST-0001 request against the LIVE store is refused" "${PRELUDE}
+live_case "replaying the accepted HOST-0001 request against the LIVE store is refused" "${PRELUDE}
 store = TrustStore.open_for_read(LIVE)
 before = state(LIVE)
 try:
@@ -443,7 +467,7 @@ assert state(LIVE) == before, 'a refused rehearsal against the live store mutate
 print('OK')
 "
 
-run_case "the refused live replay spends no identifier and adds no object" "${PRELUDE}
+live_case "the refused live replay spends no identifier and adds no object" "${PRELUDE}
 store = TrustStore.open_for_read(LIVE)
 sequences = {name: (Path(LIVE)/'sequences'/(name + '.seq')).read_text().strip()
              for name in ('authority', 'lineage', 'evidence', 'audit', 'record',
@@ -463,7 +487,7 @@ assert after_counts == counts, (counts, after_counts)
 print('OK')
 "
 
-run_case "the durable HOST-0001 record verifies through the Fabric adapter" "${PRELUDE}
+live_case "the durable HOST-0001 record verifies through the Fabric adapter" "${PRELUDE}
 from tools.fabric.trust_adapter import verify_trust_record
 store = TrustStore.open_for_read(LIVE)
 before = state(LIVE)
@@ -666,7 +690,11 @@ JSON
   fi
   rm -rf "${tmp}"
 }
-assert_live_replay_refused
+if [[ "${LIVE_PRESENT}" == "yes" ]]; then
+  assert_live_replay_refused
+else
+  printf 'SKIP: the live Trust store is not present; live-replay assertions not run\n'
+fi
 
 # The placeholder that caused the divergence is gone.
 run_case "the CLI carries the operator's cited identity" "${PRELUDE}
@@ -691,7 +719,11 @@ assert_untouched() {
     pass "every live Trust object and sequence is byte-identical; Fabric unchanged"
   fi
 }
-assert_untouched
+if [[ "${LIVE_PRESENT}" == "yes" ]]; then
+  assert_untouched
+else
+  printf 'SKIP: the live Trust store is not present; nothing live could be touched\n'
+fi
 
 printf '\n'
 if (( FAILURES == 0 )); then
