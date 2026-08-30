@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=78
+  TOTAL_STEPS=79
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=101
+  TOTAL_STEPS=102
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -315,6 +315,8 @@ run "Invocation operation authority" \
   bash tests/test-capability-invocation-operation-authority.sh
 run "Invoke current eligibility" \
   bash tests/test-capability-invoke-current-eligibility.sh
+run "Invoke preflight" \
+  bash tests/test-capability-invoke-preflight.sh
 run "Generation-12 packaging" \
   bash tests/test-capability-execution-generation12-packaging.sh
 run "Generation-12 installer" \

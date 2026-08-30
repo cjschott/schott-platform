@@ -4254,9 +4254,14 @@ with TemporaryDirectory() as tmp:
 # useful one: the top-level package still holds no execution surface, and the
 # subpackage holds exactly one module that may execute. A registry, a plugin
 # path, or a second adapter would each fail this.
+# Thirteen at G11-AB. `rehearsal.py` was added to give the invoke path the
+# preflight every other governed write already had: one contextvar and two
+# functions, consulted at the two points where preparation stops being
+# reversible. The count is asserted rather than bounded so that adding a module
+# to this package stays a decision somebody makes on purpose.
 _all_production = sorted((root / "tools" / "capability").glob("*.py"))
-check(len(_all_production) == 12,
-      f"the package holds exactly the twelve Track-A modules ({len(_all_production)})")
+check(len(_all_production) == 13,
+      f"the package holds exactly the thirteen declared modules ({len(_all_production)})")
 
 _execution_modules = sorted((root / "tools" / "capability" / "execution").glob("*.py"))
 _adapters = [p.name for p in _execution_modules
@@ -4311,9 +4316,12 @@ for module in _all_production:
                 _imports.add(alias.name.split(".")[0])
         elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
             _imports.add(node.module.split(".")[0])
-_expected = {"__future__", "argparse", "contextlib", "dataclasses", "datetime",
-             "fcntl", "hashlib", "hmac", "json", "os", "pathlib", "re", "stat",
-             "sys", "tempfile", "typing", "yaml"}
+# `contextvars` joins at G11-AB: rehearsal state has to be per-context so a
+# rehearsal cannot leak into a concurrent write in the same process. Still
+# standard library, and still the whole dependency surface.
+_expected = {"__future__", "argparse", "contextlib", "contextvars", "dataclasses",
+             "datetime", "fcntl", "hashlib", "hmac", "json", "os", "pathlib", "re",
+             "stat", "sys", "tempfile", "typing", "yaml"}
 check(_imports <= _expected,
       f"the package depends only on the standard library and yaml "
       f"({sorted(_imports - _expected)})")

@@ -90,7 +90,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|CREATE|ABSENT|ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305|b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98|b5628bfdfccbedf8fcfd59bef3dab1dfb1906e22bd27092636dd87de78f82ea6"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -99,8 +99,8 @@ GENERATION_DELTA=(
 # outlier rather than its consumers.
 "tools/common/trusted_source.py|REPLACE|e0f32e1f5372dbdb24ebf22e35cfa7d3a52af570f87a3160f634dae2fffea4f8|d1e8ac5933834deb7b7aa07a847312ac10d8c4e3f0c0d2d93400c6eafe04865f"
 "tools/capability/execution/package_contract.py|REPLACE|812dc878cb7b7082b42086a9adce714a152617e718536c039ed759b12d3e511a|79a9f7d4befb490833c5c5b764a03c02696ab3555e8081a89af92f5f79a4dc13"
-"tools/capability/package_resolution.py|REPLACE|678bcabd341f8a76fa7000cfe0f66174b443c4ca5b2782846bed7baf94681f6c|0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b"
-"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e,394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7|d2429646966462508fb27e4c6b96d1a0f698cf93fa841d66f0640bd344232426"
+"tools/capability/package_resolution.py|REPLACE|678bcabd341f8a76fa7000cfe0f66174b443c4ca5b2782846bed7baf94681f6c,0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b|2124005cb97309f7417543f5765a92a5857bf979a6df4798ee2a6b600909bd14"
+"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e,394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7,d2429646966462508fb27e4c6b96d1a0f698cf93fa841d66f0640bd344232426|ba3b3fc7de03aafea3137f196a8ff8c6282cfef018c39e15580ed5a2917e8238"
 # Generation 12, ENG-0005 G11-X. Per-invocation operation authority: the
 # invocation boundary now names the action being requested and checks it,
 # with the capability, the classification, and the node identity, against
@@ -110,7 +110,20 @@ GENERATION_DELTA=(
 "tools/capability/fabric_evidence.py|REPLACE|e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742,e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742|e51d893936ba5e465fa94893a46a3f85c66ad4904a29970f66dc00f63fb67e67"
 "tools/capability/invocation_identity.py|REPLACE|617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2,617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2|3a01471a43c1f0b27aac987c77941446368e17ba293cfaf0451191a587c5def8"
 "tools/capability/records.py|REPLACE|563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31,563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31|a6744501a1f58eafb926f128fec1eadcc2ccced9ebb601718c8cc55a4b1da38e"
-"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924|1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea"
+"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea|d2db378d1d7213448c9dfaf94b1b4079439ac65a5a3df0c334fa2d21cc5c4108"
+# Generation 13 candidate, ENG-0005 G11-AB. `invoke --preflight`: the rehearsal
+# every other governed write in this platform already had. G11-AA proved the
+# cost of its absence -- the only way to learn whether an invocation would be
+# accepted was to spend CINV-000001 finding out, and a refused first attempt
+# consumed CINV-000001 and CRES-000001 permanently. `rehearsal.py` carries the
+# state; `store.py` gains the read-only prediction; `package_resolution.py` and
+# `evidence.py` each stop at the point they stop being reversible; `cli.py` and
+# `coordinator.py` carry the surface and the verdict.
+#
+# Declared here as pending. NOT INSTALLED: this is source and tests only, and
+# the generation that publishes it is a separate governed ceremony.
+"tools/capability/store.py|REPLACE|581901bfc8ce623d60214e796639261fd1ae9afabadbdba6bfab5fb64d4042b6|a476c5ec72f6ea66f33e8291d78cd9f99934710519ddf0acf2f658037e999fe6"
+"tools/capability/rehearsal.py|CREATE|ABSENT|ed8479391aa2a4abc29ab2c9ab287d8f39aa3486549acc9d0fb856486fcd0355"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

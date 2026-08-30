@@ -293,6 +293,11 @@ jobs:
         run: bash tests/test-capability-invocation-operation-authority.sh
       - name: Invoke current eligibility
         run: bash tests/test-capability-invoke-current-eligibility.sh
+
+      # The rehearsal that keeps a first invocation from costing an identity to
+      # discover it would be refused. Fixture-only.
+      - name: Invoke preflight
+        run: bash tests/test-capability-invoke-preflight.sh
       - name: Generation-12 packaging
         run: bash tests/test-capability-execution-generation12-packaging.sh
       - name: Generation-12 installer

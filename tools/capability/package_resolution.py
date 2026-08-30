@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .rehearsal import is_rehearsing
 from ..common.trusted_source import (TraversalReason, TraversalRefused,
                                      TrustedSourceError,
                                      open_trusted_directory,
@@ -405,6 +406,15 @@ def resolve_and_stage_package(*, evidence, approved_artifact_root: Any,
             return _refused(REASON_TREE_UNREADABLE)
     finally:
         os.close(source)
+
+    # A rehearsal has now done every read the write does: the manifest is
+    # validated, the destination is known, and the source tree has been walked
+    # in full with every symlink, size, depth and race refusal applied. The next
+    # statement is the first irreversible one, so this is where it stops. The
+    # commitment reported is the manifest's, which is exactly the identity the
+    # published tree would be required to carry.
+    if is_rehearsing():
+        return _supported(manifest, evidence, expected_digest, final)
 
     # --- build, commit, and publish with one rename -------------------------
     #

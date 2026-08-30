@@ -36,6 +36,10 @@ from typing import Any
 
 from ..common.trusted_source import (TrustedSourceError,
                                      open_trusted_regular_file)
+from . import fabric_evidence
+from .fabric_evidence import verify_selected_evidence
+from .execution import image_store, implementation_authority
+from .rehearsal import rehearsing
 from .coordinator import prepare_invocation
 from .errors import CapabilityError
 from .execution.backing_store import (BackingStoreError, ObservedFilesystem,
@@ -67,6 +71,24 @@ EXIT_USAGE = 2
 # mechanism for a line that legitimately names a production path. These are not
 # defaults -- nothing here creates either path, and no argument can override
 # them; both are read-only inputs this verb refuses to run without.
+# Which refusals belong to which gate, so a rehearsal can report the two apart
+# rather than making an operator infer it from one combined verdict. Named from
+# the boundary's own vocabulary rather than restated as strings here.
+_SCOPE_REASONS = frozenset({
+    fabric_evidence.REASON_OPERATION,
+    fabric_evidence.REASON_OPERATION_ABSENT,
+    fabric_evidence.REASON_CAPABILITY_SCOPE,
+    fabric_evidence.REASON_CLASSIFICATION_SCOPE,
+    fabric_evidence.REASON_TARGET_SCOPE,
+    fabric_evidence.REASON_SCOPE,
+})
+_ELIGIBILITY_REASONS = frozenset({
+    fabric_evidence.REASON_INELIGIBLE,
+    fabric_evidence.REASON_WINDOW,
+    fabric_evidence.REASON_NOT_ADMITTED,
+    fabric_evidence.REASON_SUPERSEDED,
+})
+
 CAPABILITY_RUNTIME_ROOT = "/data/kyri/capability-runtime"
 AUTHORITY_ROOT = "/var/lib/kyri/implementation-authority"   # prod-path-reference
 BACKING_STORE_CONFIG = "/etc/kyri/backing-store.json"       # prod-path-reference
@@ -177,6 +199,8 @@ def _runtime_store(args) -> CapabilityStore:
 
 def command_invoke(args) -> int:
     """One governed invocation, prepared and then stopped."""
+    if getattr(args, "preflight", False):
+        return command_preflight(args)
     payload = _payload(args.approved_payload_root, args.payload_file,
                        args.payload_source_uid)
     requested_at = _instant(args.requested_at, "--requested-at")
@@ -206,6 +230,144 @@ def command_invoke(args) -> int:
     # Every outcome reachable here is a governed negative: a preparation that
     # cannot proceed, a refusal, a replay, or a conflict.
     return EXIT_DENIED
+
+
+def _execution_outlook(evidence) -> dict:
+    """What the execution plane would say, asked read-only.
+
+    Reported as separate fields rather than folded into one verdict, because an
+    operator preparing a first invocation needs to know *which* of these is
+    missing. None of it is required for preparation to succeed -- preparation
+    ends before the adapter -- so none of it makes a rehearsal refuse.
+    """
+    outlook = {
+        "implementation_id": None,
+        "execution_backend": None,
+        "argv_contract": None,
+        "execution_image_id": None,
+        "execution_image_available": False,
+        "adapter_authorised": False,
+        "privileged_helper_required": True,
+    }
+    try:
+        authority = os.open(AUTHORITY_ROOT, _DIR_FLAGS)
+    except OSError:
+        return outlook
+    try:
+        generation = implementation_authority.current_generation(authority)
+        entries = list(generation.entries)
+        if not entries:
+            return outlook
+        cimp = entries[0].cimp
+        admission = implementation_authority.resolve_implementation(
+            authority, cimp, generation=generation)
+        outlook["implementation_id"] = cimp
+        outlook["execution_backend"] = admission.adapter_identity
+        outlook["argv_contract"] = admission.argv_contract_identity
+        outlook["execution_image_id"] = admission.oci_image_id
+    except Exception:  # noqa: BLE001
+        # An unreadable authority is reported as an unknown outlook, not as a
+        # refusal: the preparation this rehearses does not consult it.
+        return outlook
+    finally:
+        os.close(authority)
+
+    try:
+        store = image_store.RootlessImageStore()
+        outlook["execution_image_available"] = bool(
+            store.present(outlook["execution_image_id"]))
+    except Exception:  # noqa: BLE001
+        outlook["execution_image_available"] = False
+
+    # Whether the privilege grant is *installed* is deliberately not reported
+    # here. This surface may not read the elevation namespace, let alone use
+    # it, and an operator asking what an invocation would need does not need
+    # this command to tell them what they themselves installed. The helper
+    # enforces its own authority; a preflight opinion about it would be a
+    # second one.
+    return outlook
+
+
+def command_preflight(args) -> int:
+    """Rehearse one invocation, mutating nothing.
+
+    **The store is only ever read.** It is opened through `open_for_read`, so an
+    absent store is reported as absent rather than built and then described --
+    which matters here, because the writing constructor creates the record
+    directories and the sequence directory before any evidence is looked at.
+
+    **The real preparation runs.** `prepare_invocation` is called under
+    `rehearsing()`, so selected-evidence verification, current Fabric
+    eligibility, the operation and scope gates, manifest validation and the full
+    source-tree traversal all happen against the real stores. A rehearsal with
+    its own copy of those rules would agree with the write until it did not.
+
+    **It stops at the two irreversible acts**: the staging directory and the
+    identifier allocation. So it reserves nothing, and the identifier it reports
+    is a prediction another caller may take in between -- which is why the write
+    path allocates for itself and verifies everything again.
+    """
+    payload = _payload(args.approved_payload_root, args.payload_file,
+                       args.payload_source_uid)
+    requested_at = _instant(args.requested_at, "--requested-at")
+    try:
+        store = CapabilityStore.open_for_read(
+            args.store_root, expected_uid=args.expected_uid,
+            expected_gid=args.expected_gid)
+    except CapabilityError as error:
+        raise _Unusable(
+            f"the capability runtime store is unusable ({error})") from None
+
+    with rehearsing():
+        decision = prepare_invocation(
+            store, fabric_root=args.fabric_root,
+            fabric_expected_uid=args.fabric_expected_uid,
+            fabric_expected_gid=args.fabric_expected_gid,
+            approved_artifact_root=args.approved_artifact_root,
+            trusted_source_uid=args.trusted_source_uid,
+            staging_root=args.staging_root,
+            coordinator_uid=args.coordinator_uid,
+            selection_id=args.selection_id, instance_id=args.instance_id,
+            capability_package_id=args.package_id, operation=args.operation,
+            trust_root=args.trust_store_root, invocation_id=args.invocation_id,
+            payload=payload, actor=args.actor, request_id=args.request_id,
+            requested_at=requested_at)
+
+    would_accept = decision.reason is None
+    evidence = verify_selected_evidence(
+        args.fabric_root, expected_uid=args.fabric_expected_uid,
+        expected_gid=args.fabric_expected_gid, selection_id=args.selection_id,
+        instance_id=args.instance_id,
+        capability_package_id=args.package_id, operation=args.operation,
+        trust_root=args.trust_store_root, evaluated_at=requested_at)
+    outlook = _execution_outlook(evidence)
+
+    _emit({
+        "outcome": "preflight",
+        "would_accept": would_accept,
+        "would_refuse_reason": decision.reason,
+        "predicted_invocation_record_id": decision.invocation_record_id,
+        "invocation_id": decision.invocation_id,
+        "selection_id": args.selection_id,
+        "instance_id": args.instance_id,
+        "capability_package_id": args.package_id,
+        "operation": args.operation,
+        "actor": args.actor,
+        "request_id": args.request_id,
+        "requested_at": requested_at.isoformat(),
+        "binding_digest": decision.binding_digest,
+        "payload_digest": decision.payload_digest,
+        "package_tree_sha256": decision.artifact_digest,
+        "would_stage_at": decision.staged_path,
+        # The two gates named separately, because "would it be accepted" does
+        # not tell an operator which one moved.
+        "current_eligibility": evidence.supported or (
+            evidence.reason not in _ELIGIBILITY_REASONS),
+        "scope_permits_operation": evidence.reason not in _SCOPE_REASONS,
+        "eligibility_reasons": list(evidence.eligibility_reasons),
+        **outlook,
+    })
+    return EXIT_SUCCESS if would_accept else EXIT_DENIED
 
 
 def _observed_filesystem(path: str) -> ObservedFilesystem:
@@ -441,6 +603,11 @@ def build_parser() -> argparse.ArgumentParser:
     invoke.add_argument("--actor", required=True)
     invoke.add_argument("--request-id", required=True)
     invoke.add_argument("--requested-at", required=True)
+    # The rehearsal. Same arguments, same governed path, nothing written -- so
+    # an operator learns whether an invocation would be accepted without
+    # spending the identity that finding out used to cost.
+    invoke.add_argument("--preflight", action="store_true",
+                        help="rehearse this invocation and mutate nothing")
     invoke.set_defaults(handler=command_invoke)
 
     look = with_store(subparsers.add_parser("inspect"))

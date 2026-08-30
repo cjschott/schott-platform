@@ -35,12 +35,15 @@ from datetime import datetime
 from typing import Any, Mapping
 
 from .errors import CapabilityError
+from .rehearsal import is_rehearsing
 from .invocation_identity import (CONFLICT, CONSUMED, compare_binding,
                                   validate_invocation_id)
 from .records import (INVOCATION_FIELDS, INVOCATION_KIND, RECORD_SCHEMA_VERSION,
                       RESULT_FIELDS, RESULT_KIND)
 
 STATUS_PREPARED = "prepared"
+# What a rehearsal returns. Never written to a record: no record is written.
+STATUS_PREFLIGHT = "preflight"
 STATUS_REFUSED = "refused"
 STATUS_CONSUMED = "consumed"
 STATUS_CONFLICT = "conflict"
@@ -204,6 +207,43 @@ def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
         return InvocationDecision(STATUS_REFUSED, REASON_INVOCATION_INPUT)
     if not isinstance(requested_at, datetime) or requested_at.tzinfo is None:
         return InvocationDecision(STATUS_REFUSED, REASON_INVOCATION_INPUT)
+
+    # A rehearsal stops here. Everything above ran -- the identity is validated,
+    # the digests are shaped, the actor and instant are checked -- and the two
+    # conclusions the write would reach are computed below from the same
+    # evidence and the same staging result. What does not happen is the critical
+    # section, the allocation, and the write.
+    #
+    # The prior-record lookup still runs, because "this identity has already
+    # been consumed" is one of the answers a rehearsal owes the operator.
+    if is_rehearsing():
+        prior, problem = _existing(store, identity)
+        if problem is not None:
+            return InvocationDecision(STATUS_PREFLIGHT, problem,
+                                      invocation_id=identity)
+        if prior is not None:
+            verdict = compare_binding(prior["binding_digest"], binding_digest)
+            return InvocationDecision(
+                STATUS_PREFLIGHT,
+                CONSUMED if verdict == CONSUMED else CONFLICT,
+                invocation_record_id=prior["invocation_record_id"],
+                invocation_id=identity,
+                binding_digest=prior["binding_digest"],
+                payload_digest=prior["payload_digest"],
+                artifact_digest=prior.get("artifact_digest"),
+                staged_path=prior.get("staged_path"))
+        refusal = None
+        if not evidence.supported:
+            refusal = evidence.reason
+        elif staged is None or not staged.supported:
+            refusal = staged.reason if staged is not None else REASON_INVOCATION_INPUT
+        return InvocationDecision(
+            STATUS_PREFLIGHT, refusal,
+            invocation_record_id=store.peek_next_id(INVOCATION_KIND),
+            invocation_id=identity, binding_digest=binding_digest,
+            payload_digest=payload_digest,
+            artifact_digest=None if refusal is not None else staged.package_tree_sha256,
+            staged_path=None if refusal is not None else staged.staged_path)
 
     # One section, entered once. Lookup, comparison, allocation, and both
     # writes happen inside it, because a decision published outside the lock

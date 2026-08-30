@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from .evidence import STATUS_PREPARED, record_invocation
+from .evidence import STATUS_PREFLIGHT, STATUS_PREPARED, record_invocation
 from .fabric_evidence import verify_selected_evidence
 from .invocation_identity import bind, payload_digest
 from .package_resolution import resolve_and_stage_package
@@ -81,6 +81,13 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
         store, invocation_id=invocation_id, binding_digest=binding,
         payload_digest=payload_digest(payload), evidence=evidence, staged=staged,
         actor=actor, request_id=request_id, requested_at=requested_at)
+
+    # A rehearsal's verdict is carried back exactly as it was reached. Naming
+    # the missing adapter here would overwrite the reason the rehearsal computed
+    # -- including a refusal it is reporting on purpose -- and the caller needs
+    # that reason, not this module's opinion about what comes after it.
+    if decision.status == STATUS_PREFLIGHT:
+        return decision
 
     if decision.status == STATUS_PREPARED:
         if adapter is not None and execution_binding is not None:

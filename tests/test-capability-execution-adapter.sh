@@ -451,10 +451,34 @@ assert REASON_NO_ADAPTER == 'no_authorised_adapter'
 print('OK')
 "
 
+# Structural since G11-AB, and stronger for it. The textual form banned the
+# word: it could not tell a CLI that *constructs* an adapter from one that
+# reports whether an adapter is authorised, and `invoke --preflight` has to
+# report exactly that. So the claim is now the one that was always meant --
+# the CLI imports no adapter, builds none, and calls nothing that could run
+# one -- checked against the parse tree rather than the characters.
 run_case "the CLI constructs no adapter and reaches no runtime" "${PRELUDE}
+import ast
 from pathlib import Path
+tree = ast.parse(Path('tools/capability/cli.py').read_text(encoding='utf-8'))
+for node in ast.walk(tree):
+    if isinstance(node, ast.ImportFrom) and node.module:
+        assert not node.module.endswith('execution.adapter'), node.module
+        for alias in node.names:
+            assert alias.name not in ('adapter', 'GovernedAdapter'), alias.name
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            assert 'adapter' not in alias.name, alias.name
+    # Nothing that could start a workload: no .execute(, no .create(, no
+    # .start(, and no construction of an adapter by name.
+    if isinstance(node, ast.Call):
+        target = node.func
+        if isinstance(target, ast.Attribute):
+            assert target.attr not in ('execute', 'create', 'start'), target.attr
+        if isinstance(target, ast.Name):
+            assert 'Adapter' not in target.id, target.id
 body = Path('tools/capability/cli.py').read_text(encoding='utf-8')
-for token in ('adapter', 'Adapter', 'podman', 'execution_binding'):
+for token in ('podman', 'Podman', 'subprocess', 'execution_binding'):
     assert token not in body, 'the CLI reaches ' + token
 print('OK')
 "
