@@ -38,6 +38,13 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# The fixture launch record must be owned by the coordinator identity the
+# production code pins, so this suite runs only as that identity.
+# shellcheck source=tests/lib/host-only.sh
+. "${SCRIPT_DIR}/lib/host-only.sh"
+host_only_requires_identity "$(sed -n 's/^COORDINATOR_UID = \([0-9]*\)$/\1/p' \
+  "${ROOT}/provisioning/execution/kyri-exec-transition.py" | head -1)"
+
 VERIFICATION="tools/capability/execution/verification.py"
 IMAGE_STORE="tools/capability/execution/image_store.py"
 VERIFY_POLICY="provisioning/execution/kyri-exec-verify.py"

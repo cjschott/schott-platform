@@ -784,7 +784,13 @@ run_case "this suite runs unprivileged and touches no production root" "${FIXTUR
 assert os.getuid() != 0, 'this suite must not run privileged'
 for grant in ('/etc/sudoers.d/kyri-exec', '/etc/sudoers.d/kyri-exec-verify'):
     assert not os.path.exists(grant), grant + ' exists'
-assert os.listdir('/data/kyri/capability-handoff') == [], 'the live handoff root changed'
+# The live handoff root is a production path. Where it exists this proves the
+# suite left it empty; where there is no production layout at all there is
+# nothing it could have touched, and asserting on an absent directory would
+# fail for a reason that has nothing to do with isolation.
+handoff = '/data/kyri/capability-handoff'
+if os.path.isdir(handoff):
+    assert os.listdir(handoff) == [], 'the live handoff root changed'
 print('OK')
 "
 

@@ -70,3 +70,24 @@ host_only_requires_pinned_checkout() {
   printf 'This checkout is %s, so the ceremony would read a different repository.\n' "${_ho_here}"
   exit 0
 }
+
+# host_only_requires_identity <uid>
+#
+# Some suites build a fixture the production code then authenticates by owner:
+# kyri-exec-transition.py pins COORDINATOR_UID, and a launch record not owned by
+# it is refused. A test cannot fabricate that ownership without being that
+# identity, and the pinned uid is production authority, not a test parameter.
+#
+# On schai this holds because the operator account IS the coordinator identity.
+# That is a coincidence the suites have always relied on silently; stating it
+# here makes it a declared precondition instead.
+host_only_requires_identity() {
+  local _ho_want="$1" _ho_have _ho_suite
+  _ho_suite="$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]} - 1]}")"
+  _ho_have="$(id -u)"
+  [[ "${_ho_have}" == "${_ho_want}" ]] && return 0
+  printf 'HOST_ONLY_SKIP\t%s\t%s\n' "${_ho_suite}" "runs as uid ${_ho_have}, not the coordinator identity ${_ho_want}"
+  printf 'This suite builds a fixture the production code authenticates by owner.\n'
+  printf 'It must run as uid %s; this process is uid %s.\n' "${_ho_want}" "${_ho_have}"
+  exit 0
+}
