@@ -728,7 +728,19 @@ for token in ('podman', 'subprocess', 'os.system'):
     assert token not in body, token
 # Nothing is installed by this suite or by the source itself.
 assert not Path('/usr/libexec/kyri-exec-admin').exists()
-assert not Path('/etc/sudoers.d/kyri-exec').exists()
+# /etc/sudoers.d is 0755 on the deployment host, so absence is observable
+# there -- and that is the machine where the grant could exist at all. Some
+# runners keep it 0750, where a stat raises EACCES rather than answering: the
+# grant is not readable as absent, which is not the same as present, and
+# treating an unreadable directory as a failure would report a distribution
+# default as a policy breach.
+import errno
+try:
+    installed = Path('/etc/sudoers.d/kyri-exec').exists()
+except PermissionError as error:
+    assert error.errno == errno.EACCES, error
+else:
+    assert not installed, 'the sudoers grant is installed'
 print('OK')
 "
 
