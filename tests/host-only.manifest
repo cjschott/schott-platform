@@ -30,6 +30,7 @@ test-capability-execution-generation6-installer.sh	drives the generation-6 insta
 test-capability-execution-generation7-installer.sh	drives the generation-7 installer pinned to /opt/schott-platform
 test-capability-execution-generation8-installer.sh	drives the generation-8 installer pinned to /opt/schott-platform
 test-capability-execution-generation9-installer.sh	drives the generation-9 installer pinned to /opt/schott-platform
+test-capability-execution-launch-cli.sh	builds a backing-store fixture from the observed filesystem UUID, which resolves only on a real block device
 test-capability-execution-profile-transport.sh	builds a launch record the production code authenticates against the pinned COORDINATOR_UID
 test-capability-execution-transition-action.sh	builds a launch record the production code authenticates against the pinned COORDINATOR_UID
 test-fabric-evidence-authority.sh	drives the host-evidence ceremony pinned to /opt/schott-platform

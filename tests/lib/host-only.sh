@@ -91,3 +91,35 @@ host_only_requires_identity() {
   printf 'It must run as uid %s; this process is uid %s.\n' "${_ho_want}" "${_ho_have}"
   exit 0
 }
+
+# host_only_requires_observable_filesystem <path> <repository-root>
+#
+# The backing-store fixture does not invent a filesystem UUID; it asks the
+# production observation helper what filesystem the work root sits on, so the
+# verification path under test is the production one. That helper resolves the
+# UUID through /dev/disk/by-uuid, which answers for a real block device and not
+# for a runner's ephemeral workspace. Where it cannot answer, the fixture cannot
+# be built and the CLI would refuse for a reason that is about the machine
+# rather than the CLI.
+#
+# The decision is delegated to the helper itself rather than guessed at, so this
+# tracks the production code rather than a copy of its reasoning.
+host_only_requires_observable_filesystem() {
+  local _ho_path="$1" _ho_root="$2" _ho_suite _ho_uuid
+  _ho_suite="$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]} - 1]}")"
+  _ho_uuid="$(cd "${_ho_root}" && python3 -c '
+import sys
+sys.path.insert(0, ".")
+from tools.capability.cli import _observed_filesystem
+try:
+    print(_observed_filesystem(sys.argv[1]).filesystem_uuid)
+except Exception:
+    print("")
+' "${_ho_path}" 2>/dev/null)"
+  [[ -n "${_ho_uuid}" ]] && return 0
+  printf 'HOST_ONLY_SKIP\t%s\t%s\n' "${_ho_suite}" "no resolvable filesystem UUID for ${_ho_path}"
+  printf 'The backing-store fixture needs the filesystem UUID of %s, which the\n' "${_ho_path}"
+  printf 'production observation helper resolves through /dev/disk/by-uuid.\n'
+  printf 'This machine does not report one, so the fixture cannot be built.\n'
+  exit 0
+}
