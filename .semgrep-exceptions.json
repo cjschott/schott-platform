@@ -22,10 +22,10 @@
     {
       "rule": "python.lang.security.audit.insecure-file-permissions.insecure-file-permissions",
       "path": "tools/capability/package_resolution.py",
-      "line": 466,
-      "sha256": "0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b",
-      "reviewed_in": "ENG-0005 G11-Z5, ENG-0005 G11-Z6",
-      "justification": "0o700 is owner-only staging-directory mode and is stricter than the rule's 0o644 recommendation; directories require execute permission for traversal. The rule reads the named constant _STAGING_MODE rather than its value, so it cannot see that the mode grants nothing to group or other. The call site is _abandon(), which leaves an unpublished staging tree readable to the operator who owns it and to nobody else."
+      "line": 476,
+      "sha256": "2124005cb97309f7417543f5765a92a5857bf979a6df4798ee2a6b600909bd14",
+      "reviewed_in": "ENG-0005 G11-Z5, ENG-0005 G11-Z6, ENG-0005 G11-AB",
+      "justification": "0o700 is owner-only staging-directory mode and is stricter than the rule's 0o644 recommendation; directories require execute permission for traversal. The rule reads the named constant _STAGING_MODE rather than its value, so it cannot see that the mode grants nothing to group or other. The call site is _abandon(), which leaves an unpublished staging tree readable to the operator who owns it and to nobody else. Re-reviewed at G11-AB: the rehearsal stop added ten lines above it, so the finding moved from line 466 to 476. The call site, the constant and the reasoning are unchanged -- the digest and line are updated because the checker refuses a stale exception, which is the behaviour that surfaced this."
     }
   ]
 }
