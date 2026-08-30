@@ -29,5 +29,18 @@ jobs:
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      # Semgrep reports everything it finds; tools/dev/check-semgrep-findings.py
+      # decides whether what it found is exactly what a reviewer already looked
+      # at and accepted. `--error` cannot express "this one finding, in this one
+      # place, for this one reason", and the alternatives are both too broad:
+      # --exclude-rule silences a rule everywhere, and an inline nosemgrep would
+      # change the digest of a governed installed-runtime object.
+      #
+      # An exception matches only on rule id, path, line and the file's current
+      # sha256 together, so it cannot broaden; and an exception matching nothing
+      # fails too, so a finding that goes away has to be removed deliberately.
       - name: Run Semgrep (default security rules)
-        run: semgrep scan --config auto --error --verbose
+        run: |
+          set -o pipefail
+          semgrep scan --config auto --json --quiet \
+            | python3 tools/dev/check-semgrep-findings.py

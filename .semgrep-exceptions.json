@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Reviewed Semgrep exceptions. Each entry permits EXACTLY ONE finding and",
+    "nothing more. An entry matches only when the rule id, the path, the line",
+    "and the current sha256 of the file all agree, so an exception cannot",
+    "broaden: the same rule firing in another file, another rule firing in this",
+    "file, the finding moving, or the file changing at all are each a failure.",
+    "",
+    "An exception that matches no finding is also a failure. A finding that has",
+    "gone away must be removed from this file deliberately, not left behind to",
+    "cover a future one.",
+    "",
+    "tools/dev/check-semgrep-findings.py enforces all of that.",
+    "",
+    "The runtime source is digest-governed: tools/capability/package_resolution.py",
+    "is an installed Generation-12 object and its digest is authority. Adding an",
+    "inline nosemgrep comment would change that digest and break the chain",
+    "between the checkout and the installed runtime, which is why the exception",
+    "lives here rather than at the call site."
+  ],
+  "exceptions": [
+    {
+      "rule": "python.lang.security.audit.insecure-file-permissions.insecure-file-permissions",
+      "path": "tools/capability/package_resolution.py",
+      "line": 466,
+      "sha256": "0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b",
+      "reviewed_in": "ENG-0005 G11-Z5, ENG-0005 G11-Z6",
+      "justification": "0o700 is owner-only staging-directory mode and is stricter than the rule's 0o644 recommendation; directories require execute permission for traversal. The rule reads the named constant _STAGING_MODE rather than its value, so it cannot see that the mode grants nothing to group or other. The call site is _abandon(), which leaves an unpublished staging tree readable to the operator who owns it and to nobody else."
+    }
+  ]
+}
