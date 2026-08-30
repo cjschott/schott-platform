@@ -540,36 +540,38 @@ check(len(list(w["store"].list_records("capability-route"))) == 1,
 
 
 # ===========================================================================
-# 7. what create_route does NOT check, recorded as observed behaviour
+# 7. the predecessor must be the chain head
 # ===========================================================================
-print("\n--- observed: the predecessor need not be the chain head ---")
+print("\n--- the predecessor must be the chain head ---")
 
-# create_route requires the successor's version to exceed its predecessor's and
-# the request class to match, but never asks whether the predecessor is still
-# the head. Two successors of one predecessor are therefore creatable, and
-# selection's own traversal is what objects. Pinned as observed behaviour so a
-# future change to either side is visible; the G11-K report asks for a ruling.
+# G11-K recorded, as observed behaviour, that create_route never asked whether
+# a named predecessor was still the head -- so two successors of one route were
+# both creatable and selection's own traversal was what objected. G11-AC closed
+# it: the check is `_successors()` and the reason is
+# `supersedes-already-superseded`, which is what admit_instance has always used
+# for the identical invariant on bindings.
+#
+# Kept here as well as in the dedicated suite because this is the file that
+# recorded the gap, and the record of a closed gap should say it closed.
 w = world(second_binding=True)
 root = routed(w)
 branch_a = routed(w, request_id="g11k-branch-a", supersedes=root.record_id,
                   route_version=2)
+check(branch_a.outcome == A.ACCEPTED,
+      "the first successor of a head is accepted")
 branch_b = routed(w, request_id="g11k-branch-b", supersedes=root.record_id,
                   route_version=3)
-check(branch_a.outcome == A.ACCEPTED and branch_b.outcome == A.ACCEPTED,
-      "two successors of one route are both accepted: head-ness is not checked")
+check(branch_b.outcome == A.REFUSED
+      and branch_b.reason == "supersedes-already-superseded",
+      f"a second successor of the same predecessor is refused "
+      f"({branch_b.outcome}/{branch_b.reason})")
+check(len(list(w["store"].list_records("capability-route"))) == 2,
+      "and the fork was refused before it was written")
 
 from tools.fabric import selection as S
-from tools.fabric.errors import FabricError
-forked_reason = None
-try:
-    S._chain_heads(w["store"], "capability-route")
-except FabricError as error:
-    forked_reason = str(error)
-except Exception as error:  # noqa: BLE001
-    forked_reason = f"{type(error).__name__}: {error}"
-check(forked_reason is not None,
-      f"selection refuses to read a forked route chain rather than picking a winner "
-      f"({forked_reason})")
+heads = S._chain_heads(w["store"], "capability-route")
+check(sorted(heads) == [branch_a.record_id],
+      f"selection reads exactly one head ({sorted(heads)})")
 
 
 # ===========================================================================

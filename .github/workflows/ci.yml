@@ -262,6 +262,11 @@ jobs:
       - name: Fabric route preflight tests
         run: bash tests/test-fabric-route-preflight.sh
 
+      # A route may supersede only the current head of its chain, and a class
+      # may have only one current route. Fixture-only.
+      - name: Fabric route head tests
+        run: bash tests/test-fabric-route-head.sh
+
       # G11-N: register-advertisement must be rehearsable in both shapes before
       # the CADV renewal ceremony. Fixture-only.
       - name: Fabric advertisement preflight tests

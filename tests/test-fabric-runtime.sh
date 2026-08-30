@@ -7595,12 +7595,20 @@ try:
               and replayed.outcome == EXACT_REPLAY
               and replayed.record_id == "CROUTE-0001",
               "a byte-identical route request replays the original route")
+        # Routes diverge from every other kind here, since G11-AC. A new request
+        # identity normally means a new record even for identical content -- and
+        # for a route that would be a second current declaration for one request
+        # class, which is the fork selection refuses to resolve. So the request
+        # identity is no longer what decides: the class already has a route, and
+        # a second one is refused whatever identity asks for it. Superseding the
+        # head is how a class gets a new route, and that is exercised below.
         independent, error = call("create_route", store,
                                   **dict(route_base, request_id="i7-route-2"))
         check(error is None and independent is not None
-              and independent.outcome == ACCEPTED
-              and independent.record_id == "CROUTE-0002",
-              "identical route content under a new request identity is a new route")
+              and independent.outcome == REFUSED
+              and independent.reason == "request-class-already-routed",
+              f"a second current route for one request class is refused "
+              f"({independent and independent.outcome}/{independent and independent.reason})")
 
         ROUTE_REFUSALS = (
             ("an unresolved candidate", NOT_FOUND, "unresolved-reference",
@@ -7687,9 +7695,9 @@ try:
             supersedes="CROUTE-0001"))
         check(error is None and superseded is not None
               and superseded.outcome == ACCEPTED
-              and superseded.record_id == "CROUTE-0003",
+              and superseded.record_id == "CROUTE-0002",
               "a superseding route creates a new route record")
-        new_route = record_of(store, "capability-route", "CROUTE-0003")
+        new_route = record_of(store, "capability-route", "CROUTE-0002")
         check(new_route.get("supersedes") == "CROUTE-0001",
               "the superseding route names the route it supersedes")
         check(new_route.get("route_version") == 2,
@@ -7719,7 +7727,7 @@ try:
             ("a version that does not increase", REFUSED, "invalid-route-version",
              {"supersedes": "CROUTE-0001", "route_version": 1}),
             ("a version that decreases", REFUSED, "invalid-route-version",
-             {"supersedes": "CROUTE-0003", "route_version": 1}),
+             {"supersedes": "CROUTE-0002", "route_version": 1}),
         )
         for index, (description, outcome, reason, overrides) in enumerate(
                 SUPERSESSION_REFUSALS):
@@ -11324,20 +11332,37 @@ with TemporaryDirectory() as tmp:
 with TemporaryDirectory() as tmp:
     fabric_root = Path(tmp) / "fabric"
     store, trust_store, asked, instances, hosts, route = c6_world(tmp)
-    rival = admission_module.create_route(store, **dict(
+    # Since G11-AC `create_route` refuses to write a second current route for
+    # one request class, so the fork is forged directly into the store instead.
+    # That is the case the traversal documents and this assertion is about: a
+    # damaged, tampered, or legacy store can hold a state the released write
+    # path can no longer produce, and selection must refuse on what it reads
+    # rather than assume validation ran.
+    refused_rival = admission_module.create_route(store, **dict(
         BASE_ROUTE, request_id="c6-route-rival",
         capability_id=asked["capability_id"], contract_id=asked["contract_id"],
         candidate_instances=(instances[0],), locality=asked["locality"],
         accepted_contract_versions=asked["accepted_contract_versions"]))
-    check(rival.outcome == ACCEPTED,
-          f"a second route for the same class is declarable ({rival.reason})")
+    check(refused_rival.outcome == REFUSED
+          and refused_rival.reason == "request-class-already-routed",
+          f"a second current route for one class is refused by the write path "
+          f"({refused_rival.outcome}/{refused_rival.reason})")
+
+    forged = dict(record_of(store, "capability-route", route.record_id))
+    forged["route_id"] = "CROUTE-0002"
+    # Independent head, not a second successor: two records superseding one
+    # predecessor is a forked chain and reads as `route-chain-unreadable`.
+    # Ambiguity is two routes for one class that supersede nothing, which is
+    # the state this block is about.
+    forged["supersedes"] = None
+    store.write_atomic(store.path_for("capability-route", "CROUTE-0002"), forged)
     before = forensic(fabric_root)
     result, error = chosen(store, trust_store, asked, request_id="c6-ambiguous")
     check(error is None, f"two competing routes evaluate cleanly ({error})")
     check(result.outcome == REFUSED,
           "two unsuperseded routes for one request class are refused")
     check(result.reason == REASON_ROUTE_AMBIGUOUS,
-          "the ambiguity is named rather than resolved by picking one")
+          f"the ambiguity is named rather than resolved by picking one ({result.reason})")
     check(result.record_id is None,
           "an ambiguous route universe writes no decision")
     check(forensic(fabric_root) == before,

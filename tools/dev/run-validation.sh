@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=79
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=102
+  TOTAL_STEPS=103
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -263,6 +263,7 @@ if (( QUICK == 0 )); then
   # create_route can produce, and the four-digit route identifier. Fixture-only;
   # it proves both production stores are unchanged.
   run "Fabric route preflight" bash tests/test-fabric-route-preflight.sh
+  run "Fabric route head" bash tests/test-fabric-route-head.sh
 
   # G11-N. register-advertisement had never been rehearsed by anything, and it
   # is the next write operation due in production for the CADV renewal. The

@@ -209,6 +209,14 @@ REASON_NO_CANDIDATE = "no-declared-candidate"
 REASON_DUPLICATE_CANDIDATE = "duplicate-candidate"
 REASON_CANDIDATE_OWNER = "candidate-not-of-route"
 REASON_ROUTE_VERSION = "invalid-route-version"
+# Route chains get the same vocabulary every other chain has. `_successors`
+# requires a caller to name both, because a traversal that cannot say what an
+# unreadable chain is called cannot refuse on one.
+REASON_ROUTE_FORKED = "route-chain-forked"
+REASON_ROUTE_INCOHERENT = "route-chain-incoherent"
+# A request class already has a current route. Distinct from superseding a
+# stale predecessor: this is the fork made by naming no predecessor at all.
+REASON_CLASS_ROUTED = "request-class-already-routed"
 REASON_SUPERSEDES_SUBJECT = "supersedes-different-subject"
 
 # The trust domain every capability package is decided in, per the accepted
@@ -1850,12 +1858,45 @@ def create_route(store, *, request_id: Any, actor: Any, approving_authority: Any
         if contract.get("capability_id") != capability_id:
             _refuse(REFUSED, REASON_CONTRACT_OWNER)
 
+        # --- the chain this route joins ------------------------------------
+        #
+        # A route declares which bindings serve a request class, and a class may
+        # have exactly one current declaration. Two is not a preference for
+        # selection to resolve -- it refuses, correctly, because picking a
+        # winner nobody chose would be the selector deriving its own authority.
+        # Routes are immutable and nothing merges them, so a fork written here
+        # leaves the class permanently un-routable through the released path.
+        #
+        # `create_route` checked that a named predecessor existed, matched
+        # subject, and carried a lower version. It never checked that the
+        # predecessor was still the head, and it never checked whether the class
+        # already had one. Both omissions produce a fork; `admit_instance`
+        # already closes the equivalent hole for bindings with this same helper
+        # and this same reason, so routes are the outlier rather than a case
+        # needing its own semantics.
+        route_links = _successors(store, "capability-route", "route_id",
+                                  REASON_ROUTE_FORKED, REASON_ROUTE_INCOHERENT)
+        versions = tuple(versions)
+        current_heads = [
+            record for record in store.list_records("capability-route")
+            if record.get("route_id") not in route_links
+            and record.get("capability_id") == capability_id
+            and record.get("contract_id") == contract_id
+            and record.get("data_classification") == data_classification
+            and record.get("locality") == locality
+            and tuple(record.get("accepted_contract_versions") or ()) == versions]
+
         prior_candidates: tuple = ()
         if supersedes is not None:
             prior = _resolve(store, "capability-route", supersedes)
             if (prior.get("capability_id") != capability_id
                     or prior.get("contract_id") != contract_id):
                 _refuse(REFUSED, REASON_SUPERSEDES_SUBJECT)
+            # The predecessor must still be the head: something already
+            # superseding it means this record would fork the chain at that
+            # point rather than extend it.
+            if supersedes in route_links:
+                _refuse(REFUSED, REASON_SUPERSEDES_SUPERSEDED)
             previous = prior.get("route_version")
             if (isinstance(previous, bool) or not isinstance(previous, int)
                     or route_version <= previous):
@@ -1876,6 +1917,14 @@ def create_route(store, *, request_id: Any, actor: Any, approving_authority: Any
                 _refuse(REFUSED, REASON_NOT_BINDING_ROOT)
             if instance.get("lifecycle_state") != "admitted":
                 _refuse(REFUSED, REASON_NOT_BINDING_ROOT)
+
+        # Checked here rather than with the predecessor above so that a route
+        # naming a candidate that does not resolve is still refused as that,
+        # not as a class already routed. The cheaper structural answer is the
+        # more useful one to an operator, and `admit_instance` orders its own
+        # supersession check late for the same reason.
+        if supersedes is None and current_heads:
+            _refuse(REFUSED, REASON_CLASS_ROUTED)
 
         if overlap_starts_at is not None:
             carried = set(candidates) & set(prior_candidates)
