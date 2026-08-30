@@ -1,0 +1,32 @@
+# Suites whose subject is the accepted production host.
+#
+# These are not portable tests. They drive operator ceremonies pinned to
+# /opt/schott-platform, or they read the installed Generation-12 runtime and the
+# governed stores under /var/lib/kyri. On a machine without that layout they
+# cannot prove anything, so they declare their preconditions via
+# tests/lib/host-only.sh and report HOST_ONLY_SKIP instead of failing.
+#
+# On the production host every one of these runs in full. The local validator is
+# the authority for everything listed here, and GitHub CI proves none of it.
+#
+# test-static.sh asserts this list matches the suites that actually source
+# tests/lib/host-only.sh, in both directions, so a suite cannot become host-only
+# without appearing here and cannot be listed here without being one.
+#
+# format: <suite>\t<reason>
+
+test-artifact-authority.sh	drives the artifact-authority ceremony pinned to /opt/schott-platform
+test-capability-execution-g5-authority.sh	drives the G5 ceremony pinned to /opt/schott-platform
+test-capability-execution-g5-build-context.sh	drives the G5 ceremony pinned to /opt/schott-platform
+test-capability-execution-g5-ceremony.sh	drives the G5 ceremony pinned to /opt/schott-platform
+test-capability-execution-g5-preflight.sh	drives the G5 preflight pinned to /opt/schott-platform
+test-capability-execution-generation10-installer.sh	drives the generation-10 installer pinned to /opt/schott-platform
+test-capability-execution-generation11-installer.sh	drives the generation-11 installer pinned to /opt/schott-platform
+test-capability-execution-generation12-installer.sh	drives the generation-12 installer pinned to /opt/schott-platform
+test-capability-execution-generation12-packaging.sh	reads the installed Generation-12 runtime under /usr/lib/kyri/python
+test-capability-execution-generation5-installer.sh	drives the generation-5 installer pinned to /opt/schott-platform
+test-capability-execution-generation6-installer.sh	drives the generation-6 installer pinned to /opt/schott-platform
+test-capability-execution-generation7-installer.sh	drives the generation-7 installer pinned to /opt/schott-platform
+test-capability-execution-generation8-installer.sh	drives the generation-8 installer pinned to /opt/schott-platform
+test-capability-execution-generation9-installer.sh	drives the generation-9 installer pinned to /opt/schott-platform
+test-fabric-evidence-authority.sh	drives the host-evidence ceremony pinned to /opt/schott-platform

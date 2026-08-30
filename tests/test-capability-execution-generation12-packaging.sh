@@ -32,6 +32,14 @@ cd "${ROOT}"
 INSTALLER=provisioning/execution/install-generation-12.sh
 LIBRARY_ROOT=/usr/lib/kyri/python
 
+# PART 1 derives the Generation-11 surface from what is installed now, and the
+# later parts compare the packaged surface against it. Both need the installed
+# Generation-12 runtime; a runner has none, and reporting "0 of 19 rows at their
+# target digests" there would say nothing about the package.
+# shellcheck source=tests/lib/host-only.sh
+. "${SCRIPT_DIR}/lib/host-only.sh"
+host_only_requires "${LIBRARY_ROOT}"
+
 PRODUCTION_FABRIC=/var/lib/kyri/fabric
 BEFORE="$(mktemp)"; AFTER="$(mktemp)"
 INSTALLED_BEFORE="$(mktemp)"; INSTALLED_AFTER="$(mktemp)"

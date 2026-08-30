@@ -23,6 +23,15 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CEREMONY="${REPOSITORY}/provisioning/execution/g5-ceremony.sh"
+
+# This suite drives an operator ceremony that pins its repository as
+# production authority; where the checkout is not that pin the ceremony would
+# read a different repository. Host-only rather than failing for a reason
+# unrelated to what it tests.
+# shellcheck source=tests/lib/host-only.sh
+. "${SCRIPT_DIR}/lib/host-only.sh"
+host_only_requires_pinned_checkout "${CEREMONY}"
+
 [[ -f "${CEREMONY}" ]] || { printf 'ceremony missing: %s\n' "${CEREMONY}" >&2; exit 1; }
 
 FAILURES=0

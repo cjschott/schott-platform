@@ -35,11 +35,13 @@ REPOSITORY="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # runbook it belongs to and is never installed onto the host.
 CEREMONY="${REPOSITORY}/provisioning/execution/install-generation-7.sh"
 [[ -f "${CEREMONY}" ]] || { printf 'ceremony missing: %s\n' "${CEREMONY}" >&2; exit 1; }
-PINNED_REPOSITORY="$(sed -n 's/^REPOSITORY="\(.*\)"$/\1/p' "${CEREMONY}" | head -1)"
-[[ "${PINNED_REPOSITORY}" == "${REPOSITORY}" ]] || {
-  printf 'this checkout is %s but the ceremony pins %s\n' "${REPOSITORY}" "${PINNED_REPOSITORY}" >&2
-  exit 1
-}
+# This suite drives an operator ceremony that pins its repository as
+# production authority. Where the checkout is not that pin the ceremony
+# would read a different repository, so the suite is host-only rather than
+# failing for a reason that has nothing to do with what it tests.
+# shellcheck source=tests/lib/host-only.sh
+. "${SCRIPT_DIR}/lib/host-only.sh"
+host_only_requires_pinned_checkout "${CEREMONY}"
 
 FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }

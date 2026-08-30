@@ -49,7 +49,8 @@ esac
 collect_targets() {
   local -a found=()
   local path
-  for path in "${ROOT}"/scripts/*.sh "${ROOT}"/tests/*.sh "${ROOT}"/tools/dev/*.sh \
+  for path in "${ROOT}"/scripts/*.sh "${ROOT}"/tests/*.sh "${ROOT}"/tests/lib/*.sh \
+              "${ROOT}"/tools/dev/*.sh \
               "${ROOT}"/provisioning/execution/*.sh \
               "${ROOT}"/provisioning/artifacts/*.sh \
               "${ROOT}"/provisioning/evidence/*.sh; do

@@ -40,6 +40,26 @@ jobs:
           bash -n provisioning/artifacts/*.sh
           bash -n provisioning/evidence/*.sh
 
+      # What this job does NOT prove. Fifteen suites test the accepted production
+      # host -- operator ceremonies pinned to /opt/schott-platform, and the
+      # installed Generation-12 runtime -- and report HOST_ONLY_SKIP here rather
+      # than failing. Publishing the list means a green run cannot be mistaken
+      # for coverage it does not have. test-static.sh asserts this manifest
+      # matches the suites that actually declare themselves host-only.
+      - name: Declare host-only coverage
+        run: |
+          printf '## Host-only suites (not proven by GitHub CI)\n\n' >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          printf 'These %d suites require the accepted production host and are\n' \
+            "$(grep -cvE '^#|^$' tests/host-only.manifest)" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          printf 'proven only by the validator on schai:\n\n' >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          while IFS=$'\t' read -r suite reason; do
+            case "${suite}" in ''|\#*) continue ;; esac
+            printf -- '- `%s` — %s\n' "${suite}" "${reason}" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          done < tests/host-only.manifest
+          printf '\n'
+          grep -cvE '^#|^$' tests/host-only.manifest \
+            | xargs printf 'host-only suites declared: %s\n'
+
       - name: Static repository assertions
         run: bash tests/test-static.sh
 

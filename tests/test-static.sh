@@ -150,8 +150,13 @@ assert_dir "ai"
 assert_dir "docs"
 assert_dir "tests"
 
-# Every shell script must declare the bash shebang and strict mode.
+# Every executable shell script must declare the bash shebang and strict mode.
+#
+# Sourced libraries under tests/lib/ are held to a different and stricter rule
+# below: they run in the caller's shell, so a shebang would be inert and
+# `set -Eeuo pipefail` would silently reach into whatever sourced them.
 while IFS= read -r script; do
+  case "${script#"${ROOT}/"}" in tests/lib/*) continue ;; esac
   first_line="$(head -n 1 "${script}")"
   if [[ "${first_line}" != "#!/usr/bin/env bash" ]]; then
     fail "shell script missing '#!/usr/bin/env bash' shebang: ${script#"${ROOT}/"}"
@@ -161,6 +166,45 @@ while IFS= read -r script; do
     pass "shell script conforms to standards: ${script#"${ROOT}/"}"
   fi
 done < <(find "${ROOT}" -type f -name '*.sh' -not -path '*/.git/*')
+
+# A sourced library is not a script. It must not carry a shebang it can never
+# use, must not set shell options in its caller's shell, and must not be
+# executable -- running one directly would do nothing and mean nothing.
+while IFS= read -r library; do
+  relative="${library#"${ROOT}/"}"
+  if [[ "$(head -n 1 "${library}")" == '#!'* ]]; then
+    fail "sourced library carries a shebang it cannot use: ${relative}"
+  elif grep -qE '^set -' "${library}"; then
+    fail "sourced library sets shell options in its caller's shell: ${relative}"
+  elif [[ -x "${library}" ]]; then
+    fail "sourced library is executable: ${relative}"
+  else
+    pass "sourced library is source-only: ${relative}"
+  fi
+done < <(find "${ROOT}/tests/lib" -type f -name '*.sh' 2>/dev/null)
+
+# The host-only manifest must match reality in both directions. A suite that
+# starts skipping on a runner has to say so here, with a reason a reviewer can
+# read; and a line here that no longer corresponds to a host-only suite is a
+# claim about coverage that is no longer true. Either way the pair is the thing
+# under test, not the list alone.
+HOST_ONLY_MANIFEST="${ROOT}/tests/host-only.manifest"
+if [[ ! -f "${HOST_ONLY_MANIFEST}" ]]; then
+  fail "tests/host-only.manifest is missing"
+else
+  declared="$(grep -l 'lib/host-only\.sh' "${ROOT}"/tests/*.sh 2>/dev/null | xargs -r -n1 basename | sort)"
+  listed="$(grep -vE '^#|^$' "${HOST_ONLY_MANIFEST}" | cut -f1 | sort)"
+  if [[ "${declared}" == "${listed}" ]]; then
+    pass "the host-only manifest names exactly the suites that declare themselves host-only ($(printf '%s' "${listed}" | grep -c . ))"
+  else
+    fail "the host-only manifest disagrees with the suites: $(diff <(printf '%s\n' "${declared}") <(printf '%s\n' "${listed}") | tr '\n' ' ')"
+  fi
+  while IFS=$'\t' read -r suite reason; do
+    [[ -z "${suite}" || "${suite}" == \#* ]] && continue
+    [[ -n "${reason}" ]] \
+      || fail "host-only manifest entry ${suite} carries no reason"
+  done < "${HOST_ONLY_MANIFEST}"
+fi
 
 # Local environment files must be ignored.
 assert_ignored ".env"

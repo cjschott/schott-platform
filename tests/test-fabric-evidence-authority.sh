@@ -38,6 +38,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CEREMONY="provisioning/evidence/install-host-evidence.sh"
+
+# This suite drives an operator ceremony that pins its repository as
+# production authority; where the checkout is not that pin the ceremony would
+# read a different repository. Host-only rather than failing for a reason
+# unrelated to what it tests.
+# shellcheck source=tests/lib/host-only.sh
+. "${SCRIPT_DIR}/lib/host-only.sh"
+host_only_requires_pinned_checkout "${ROOT}/${CEREMONY}"
+
 EVIDENCE_ROOT="/var/lib/kyri/evidence"
 EVIDENCE_ID="EVID-000001"
 EVIDENCE_SOURCE="platform-model/evidence/evid-000001-schai-host-architecture.yaml"

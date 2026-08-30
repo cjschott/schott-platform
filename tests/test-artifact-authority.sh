@@ -30,6 +30,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CEREMONY="provisioning/artifacts/install-verification-package.sh"
+
+# This suite drives an operator ceremony that pins its repository as
+# production authority; where the checkout is not that pin the ceremony would
+# read a different repository. Host-only rather than failing for a reason
+# unrelated to what it tests.
+# shellcheck source=tests/lib/host-only.sh
+. "${SCRIPT_DIR}/lib/host-only.sh"
+host_only_requires_pinned_checkout "${ROOT}/${CEREMONY}"
+
 ARTIFACT_ROOT="/var/lib/kyri/artifacts"
 PACKAGE_NAME="kyri-execution-boundary-verification"
 PACKAGE_VERSION="1.0.0"
