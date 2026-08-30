@@ -65,6 +65,12 @@ for path in sys.argv[1:]:
     except FileNotFoundError:
         state[path] = None
         continue
+    except PermissionError:
+        # /etc/sudoers.d is 0755 on the deployment host and 0750 on some
+        # runners. Unreadable is a distinct answer from absent: record it so a
+        # change either way is still visible, rather than crashing the snapshot.
+        state[path] = "unreadable"
+        continue
     except OSError:
         # /root is 0700, so an unprivileged run cannot see inside it. Recorded
         # identically on both sides; the real guard for the transaction root is

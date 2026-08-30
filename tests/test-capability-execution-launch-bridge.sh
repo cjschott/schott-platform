@@ -75,6 +75,12 @@ for path in sys.argv[1:]:
     except FileNotFoundError:
         state[path] = None
         continue
+    except PermissionError:
+        # /etc/sudoers.d is 0755 on the deployment host and 0750 on some
+        # runners. Unreadable is a distinct answer from absent: record it so a
+        # change either way is still visible, rather than crashing the snapshot.
+        state[path] = "unreadable"
+        continue
     state[path] = [info.st_mode, info.st_uid, info.st_gid, info.st_size,
                    info.st_mtime_ns, info.st_ctime_ns]
 print(json.dumps(state, sort_keys=True))
