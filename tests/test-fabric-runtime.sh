@@ -7910,10 +7910,14 @@ try:
               "a fresh advertisement writes nothing to the Trust Plane")
 
         # Re-admission is a new decision under a new request identity.
+        # Bounded by the revived claim's own window (G11-AG), so the refusal
+        # this case is about is the one that fires: an admission reaching past
+        # its advertisement would be refused on the dependency bound and never
+        # reach Trust, which would leave a trust regression invisible here.
         readmitted, error = call("admit_instance", store, trust_store, **dict(
             base, request_id="i7-readmit", evaluated_at=YEAR,
             advertisement_id=revived.record_id, admitted_at=YEAR,
-            admitted_until=YEAR + timedelta(days=30)))
+            admitted_until=YEAR + timedelta(days=1)))
         check(error is None and readmitted is not None,
               "a re-admission attempt raises nothing")
         check(readmitted is not None and readmitted.outcome == REFUSED
@@ -9860,11 +9864,17 @@ with TemporaryDirectory() as tmp:
 # expiry that removes eligibility changes no authoritative record.
 with TemporaryDirectory() as tmp:
     fabric_root = Path(tmp) / "fabric"
+    # The binding is admitted bounded by its claim, because since G11-AG an
+    # admission reaching past its advertisement is refused at the write. The
+    # tail this case needs is then produced as a legacy record through the
+    # variant helper -- a shape a store can still hold, and which historical
+    # CINST-000001 has, but which no governed path will mint again.
     store, trust_store, request, *_, inst = i8_world(
-        tmp, advert={"valid_until": SOON})
+        tmp, advert={"valid_until": SOON}, instance={"admitted_until": SOON})
+    lapsed = variant_instance(store, inst.record_id, "CINST-000002",
+                              admitted_until=STALE_AT + timedelta(days=1))
     before = forensic(fabric_root)
-    verdict, error = verdict_for(store, trust_store, inst.record_id,
-                                 request, STALE_AT)
+    verdict, error = verdict_for(store, trust_store, lapsed, request, STALE_AT)
     check(error is None, f"a lapsed advertisement evaluates cleanly ({error})")
     check(unmet_of(verdict) == ("ELIG-6",),
           "an advertisement outside its validity window fails ELIG-6 alone")
@@ -10013,8 +10023,13 @@ with TemporaryDirectory() as tmp:
 # Every unmet condition is reported, in schema order, so an operator sees the
 # whole picture rather than whichever check happened to run first.
 with TemporaryDirectory() as tmp:
+    # Bounded at the write and lapsed as a legacy record, for the same reason
+    # as the ELIG-6 case above: the matrix needs ELIG-6 unmet while ELIG-7
+    # stays met, and only a historical-shaped record can still be both.
     store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(
-        tmp, advert={"valid_until": SOON})
+        tmp, advert={"valid_until": SOON}, instance={"admitted_until": SOON})
+    lapsed = variant_instance(store, inst.record_id, "CINST-000002",
+                              admitted_until=STALE_AT + timedelta(days=1))
     withdrawn = admission_module.withdraw_subject(
         store, request_id="i8-multi-drain", actor=OPERATOR,
         approving_authority=OPERATOR, recorded_at=STAMP,
@@ -10026,9 +10041,9 @@ with TemporaryDirectory() as tmp:
         "capability-package"))
     eligibility_module.verify_trust_record = substitute
     try:
-        verdict, error = verdict_for(store, trust_store, inst.record_id,
+        verdict, error = verdict_for(store, trust_store, lapsed,
                                      request, STALE_AT)
-        again, _ = verdict_for(store, trust_store, inst.record_id,
+        again, _ = verdict_for(store, trust_store, lapsed,
                                request, STALE_AT)
     finally:
         eligibility_module.verify_trust_record = RELEASED_TRUST_VERIFY_8

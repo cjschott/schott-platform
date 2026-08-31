@@ -154,6 +154,10 @@ REASON_ADVERT_FORKED = "advertisement-chain-forked"
 REASON_ADVERT_CYCLIC = "advertisement-chain-cyclic"
 REASON_ADVERT_INCOHERENT = "advertisement-chain-incoherent"
 REASON_ADMISSION_EXPIRED = "admission-window-expired"
+# Distinct from an expired admission and from a stale advertisement, because it
+# is a different fact from either: the claim is fresh, the window is open, and
+# the binding still reaches past the thing it depends on.
+REASON_ADMISSION_UNBOUNDED = "admission-window-exceeds-advertisement"
 REASON_EMPTY_SCOPE = "empty-effective-scope"
 # Separate from an empty intersection on purpose: nothing overlapped at all is
 # a different fact from an overlap that does not cover this binding, and an
@@ -1634,6 +1638,22 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
             _refuse(REFUSED, REASON_WINDOW)
         if evaluated_at >= admitted_until:
             _refuse(REFUSED, REASON_ADMISSION_EXPIRED)
+        # A binding may not outlive the claim it rests on. Without this the
+        # interval [valid_until, admitted_until) is admissible, and in it the
+        # instance is lifecycle-admitted with ELIG-7 open while ELIG-6 refuses
+        # -- the R17 tail CINST-000001 carries. C5 already fails closed there,
+        # so this is defence in depth for the write rather than a correctness
+        # gap at invoke; what it removes is the ability to CREATE the tail.
+        #
+        # `<=`, because both windows are half-open on the right: an admission
+        # ending exactly at `valid_until` ends where the claim does, and the
+        # instant itself is outside both. Equality is coincidence, not overhang.
+        #
+        # Compared against the value parsed above rather than re-read, so the
+        # bound and the freshness rule cannot come to disagree about the same
+        # advertisement.
+        if admitted_until > expires:
+            _refuse(REFUSED, REASON_ADMISSION_UNBOUNDED)
 
         # 7. Supersession compatibility, before Trust is troubled.
         prior_root = None

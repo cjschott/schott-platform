@@ -257,6 +257,13 @@ jobs:
       - name: Fabric instance admission integrity tests
         run: bash tests/test-fabric-instance-admission-integrity.sh
 
+      # G11-AG: an admission must not claim authority past the advertisement it
+      # depends on. Without the bound, [valid_until, admitted_until) is an R17
+      # tail -- lifecycle-admitted with ELIG-7 open while ELIG-6 refuses.
+      # Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric admission dependency bound tests
+        run: bash tests/test-fabric-admission-dependency-bound.sh
+
       # G11-K: create-route must be rehearsable before the first production
       # route is written. Fixture-only: temporary Fabric and Trust stores.
       - name: Fabric route preflight tests

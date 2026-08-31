@@ -87,11 +87,23 @@ def check(condition, label):
 
 
 def world(tmp, *, advert_hours=48, admit_hours=48):
-    """One governed world, built entirely through released operations.
+    """One governed world, built through released operations.
 
     `advert_hours` and `admit_hours` are separate on purpose: an admission that
-    outlives its advertisement is exactly the R17 tail the released write path
-    still permits, and the fixture has to be able to produce one.
+    outlives its advertisement is exactly the R17 tail this suite exists to
+    refuse at invoke, and the fixture has to be able to produce one.
+
+    Since G11-AG the write path no longer PERMITS one -- `admit_instance`
+    refuses `admitted_until > advertisement.valid_until` with
+    `admission-window-exceeds-advertisement`. So when the two differ, the
+    binding is admitted bounded and its stored `admitted_until` is then
+    extended directly, reproducing the record CINST-000001 already is rather
+    than minting one through a path that now correctly refuses.
+
+    That is a change of fixture construction, not of coverage. What this suite
+    asserts is a RUNTIME property -- that invoke re-evaluates and refuses a
+    binding whose advertisement has lapsed -- and historical records of exactly
+    this shape still exist, so it must keep holding.
     """
     root = Path(tmp)
     store = FabricStore(root / "fabric", expected_uid=UID, expected_gid=GID)
@@ -185,10 +197,27 @@ def world(tmp, *, advert_hours=48, admit_hours=48):
         package_trust_record_id=package_grant.record.record_id,
         host_trust_record_id=host_grant.record.record_id,
         advertisement_id=advert.record_id, admission_scope=dict(SCOPE),
-        admitted_at=admitted, admitted_until=observed + timedelta(hours=admit_hours),
+        admitted_at=admitted,
+        admitted_until=observed + timedelta(hours=min(admit_hours, advert_hours)),
         provenance=PROV)
     for result in (cap, con, pkg, host, advert, instance):
         assert result.outcome == A.ACCEPTED, (result.record_id, result.reason)
+
+    if admit_hours > advert_hours:
+        # The historical shape, reproduced rather than minted -- see the
+        # docstring. Only `admitted_until` moves; every other field is exactly
+        # what the released admission wrote.
+        # Written with plain file IO on purpose: the store refuses to rewrite a
+        # record, which is correct and is not being tested around. The fixture
+        # is standing in a historical artefact, not performing an operation.
+        path = store.path_for("capability-instance", instance.record_id)
+        record = yaml.safe_load(path.read_text(encoding="utf-8"))
+        record["admitted_until"] = (
+            observed + timedelta(hours=admit_hours)).isoformat()
+        mode = path.stat().st_mode & 0o7777
+        path.chmod(0o600)
+        path.write_text(yaml.safe_dump(record, sort_keys=True), encoding="utf-8")
+        path.chmod(mode)
 
     routed = admitted + timedelta(minutes=5)
     route = create_route(

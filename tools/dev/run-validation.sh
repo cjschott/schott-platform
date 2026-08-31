@@ -256,6 +256,17 @@ if (( QUICK == 0 )); then
   run "Fabric instance admission integrity" \
     bash tests/test-fabric-instance-admission-integrity.sh
 
+  # G11-AG. admit_instance checked three clock facts and never the fourth: it
+  # never required the admission window to end inside the advertisement's. The
+  # interval [valid_until, admitted_until) was therefore admissible, and in it a
+  # binding is lifecycle-admitted with ELIG-7 open while ELIG-6 refuses -- the
+  # R17 tail CINST-000001 carries, and which G11-Q avoided for CINST-000002 by
+  # hand rather than by structure. Defence in depth: C5 already fails closed in
+  # the tail, so what this removes is the ability to CREATE one. Fixture-only;
+  # it proves both production stores are unchanged.
+  run "Fabric admission dependency bound" \
+    bash tests/test-fabric-admission-dependency-bound.sh
+
   # G11-K. create-route had never been rehearsed by anything, and it was the
   # next write operation due in production. The released preflight turned out to
   # be correct, so this suite adds coverage rather than a correction: the CLI
