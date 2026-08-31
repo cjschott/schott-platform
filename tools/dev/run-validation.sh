@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=80
+  TOTAL_STEPS=81
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=105
+  TOTAL_STEPS=106
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -545,6 +545,13 @@ run "Capability authority resolution" \
 # Installs nothing, mounts nothing, and creates no sudoers policy.
 run "Capability execution provisioning artifacts" \
   bash tests/test-capability-execution-provisioning.sh
+
+# ENG-0005 G11-AI. The authorised image-export ceremony's identity handling,
+# against the rendering Podman actually emits. Sources the ceremony's parsing
+# functions and feeds them fixtures: it invokes no Podman, opens no container
+# store, reads no production path, and exports nothing.
+run "Capability execution G11-AI image export identity" \
+  bash tests/test-capability-execution-image-export.sh
 
 # ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
 # verification-only artifacts: transactional create-once publication of five

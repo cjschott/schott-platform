@@ -513,6 +513,11 @@ jobs:
       - name: Capability execution provisioning artifact tests
         run: bash tests/test-capability-execution-provisioning.sh
 
+      # G11-AI: image-export identity handling against the rendering Podman
+      # actually emits. Invokes no Podman and touches no container store.
+      - name: Capability execution G11-AI image export identity tests
+        run: bash tests/test-capability-execution-image-export.sh
+
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified
       # generation-6 baseline, driven against throwaway fixture trees only.

@@ -75,6 +75,47 @@ METADATA_MAX_BYTES=1048576
 die() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
 note() { printf '\n=== %s ===\n' "$*"; }
 
+# --- image identity, normalised where it is parsed ---------------------------
+#
+# Podman renders `{{.ID}}` as `sha256:<64hex>` under --no-trunc, and as a
+# 12-character short ID without it. Neither is the bare 64-hex identity that
+# CIMP resolution produced and that this ceremony is written in terms of.
+#
+# The first run of this ceremony aborted with "not in the store" against a store
+# that demonstrably held the image, because the check compared an assumed
+# rendering against the real one. The correction is to normalise the rendering
+# at the boundary where it is read, not to loosen the comparison: a substring or
+# prefix match would have made that run succeed and would also have started
+# accepting identities that are not the governed one.
+canonical_image_id() {
+    local rendered="${1#sha256:}"
+    [ "${#rendered}" -eq 64 ] || return 1
+    case "$rendered" in
+        *[!0-9a-f]*) return 1 ;;
+    esac
+    printf '%s' "$rendered"
+}
+
+# Whether the inventory records exactly this identity.
+#
+# A line whose identity cannot be parsed is a refusal, not a line to skip past.
+# Skipping looks harmless -- "that entry cannot have been the image I was asked
+# about" -- but it is a guess about a rendering this script does not understand,
+# and the answer being guessed at decides whether a privileged export proceeds.
+# "I could not read the inventory" and "the image is not there" are different
+# facts, and only one of them is safe to act on. `RootlessImageStore` applies
+# exactly this rule to `overlay-images/images.json`.
+store_holds_image() {
+    local inventory="$1" wanted="$2" rendered canonical found=1
+    while read -r rendered _ || [ -n "${rendered:-}" ]; do
+        [ -n "$rendered" ] || continue
+        canonical="$(canonical_image_id "$rendered")" || die \
+            "the image inventory holds an unreadable identity: ${rendered}"
+        if [ "$canonical" = "$wanted" ]; then found=0; fi
+    done <"$inventory"
+    return "$found"
+}
+
 # --- the read-only production-store manifest --------------------------------
 #
 # Two files per capture, because they answer different questions. The structural
@@ -185,7 +226,7 @@ run() {
         --format '{{.ID}} {{.Names}} {{.Status}}' \
         | tee "${dir}/containers-before.txt"
 
-    grep -q "^${GOVERNED_IMAGE} " "${dir}/images-before.txt" \
+    store_holds_image "${dir}/images-before.txt" "$GOVERNED_IMAGE" \
         || die "the governed image ${GOVERNED_IMAGE} is not in the store"
 
     as_execution_identity podman image inspect "$GOVERNED_IMAGE" \
@@ -277,8 +318,19 @@ The exported identity differs from the governed identity. Stop."
         printf 'EXPORT_STORE_FOOTPRINT=PRESENT -- review the diff above before proceeding\n'
     fi
 
+    # Through the same normalisation, so this report cannot disagree with the
+    # gate above. The previous form matched the rendering as a raw prefix and
+    # would have silently printed nothing at all.
     note "authoritative image records"
-    grep -E "^${GOVERNED_IMAGE}|^${HISTORICAL_IMAGE}" "${dir}/images-after.txt" || true
+    local identity
+    for identity in "$GOVERNED_IMAGE" "$HISTORICAL_IMAGE"; do
+        if store_holds_image "${dir}/images-after.txt" "$identity"; then
+            printf '  present  %s\n' "$identity"
+        else
+            printf '  ABSENT   %s\n' "$identity"
+        fi
+    done
+    grep -F "$GOVERNED_IMAGE" "${dir}/images-after.txt" || true
     grep -E 'overlay-images/images\.json' "${dir}/store-content-M0.txt" \
         "${dir}/store-content-M2.txt" || true
 
@@ -290,8 +342,13 @@ The exported identity differs from the governed identity. Stop."
     printf 'OCI_ARCHIVE_SHA256=%s\n' "$(cut -d' ' -f1 <"${dir}/archive.sha256")"
 }
 
-case "${1:-}" in
-    --plan) plan ;;
-    --run) run "${2:-}" ;;
-    *) die "usage: $0 --plan | --run DIR" ;;
-esac
+# Sourceable, so the identity functions can be exercised by the suite without
+# privilege, without Podman, and without running any part of the ceremony. The
+# dispatch happens only on direct execution.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    case "${1:-}" in
+        --plan) plan ;;
+        --run) run "${2:-}" ;;
+        *) die "usage: bash $0 --plan | --run DIR" ;;
+    esac
+fi
