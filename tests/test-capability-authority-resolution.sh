@@ -129,7 +129,8 @@ from tools.capability.execution.implementation_authority import (
     current_generation, NamespaceState, IntegrityFailure,
     ImplementationAuthorityError, UnknownImplementation, RetiredImplementation)
 from tools.capability.execution.profile import (
-    PROFILE_SCHEMA_VERSION, MetadataOverrideRefused, fingerprint)
+    PROFILE_SCHEMA_VERSION, MetadataOverrideRefused, fingerprint,
+    EXECUTION_UID, EXECUTION_GID)
 from tools.capability.execution.payload import PAYLOAD_SCHEMA_VERSION
 from tools.capability.execution.canonical_json import serialise
 from tools.capability.execution.worker import CONTAINER_INTERPRETER
@@ -263,7 +264,12 @@ assert bound.profile.adapter_identity == ADAPTER_IDENTITY
 assert bound.provisioning_evidence_digest == evidence_digest(evidence_for(IMAGE))
 # Governed controls are policy, never derived from the admission.
 assert bound.profile.network == 'none'
-assert bound.profile.execution_uid == 1000 and bound.profile.execution_gid == 1000
+# Asserted against the governed constant rather than a literal. A literal
+# here is how the container identity drifted from the admitted image in the
+# first place: the number was restated in enough places that changing the
+# policy did not change the assertions.
+assert bound.profile.execution_uid == EXECUTION_UID
+assert bound.profile.execution_gid == EXECUTION_GID
 print('OK')
 "
 

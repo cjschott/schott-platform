@@ -142,6 +142,12 @@ def observe(backend: Any, container_id: str) -> ObservedProfile:
         tmpfs_mode=data.get("TmpfsMode"),
         tmpfs_options=tuple(data["TmpfsOptions"]) if data.get("TmpfsOptions") is not None else None,
         profile_schema_version=data.get("ProfileSchemaVersion"),
+        # The identity mapping the runtime established, reported exactly as it
+        # was found. `User` above is an echo of the request and reads the same
+        # whether or not a mapping exists; this is the part the request does
+        # not determine, so it is the part worth carrying to the comparison.
+        uid_map=tuple(data["UidMap"]) if data.get("UidMap") is not None else None,
+        gid_map=tuple(data["GidMap"]) if data.get("GidMap") is not None else None,
     )
 
 

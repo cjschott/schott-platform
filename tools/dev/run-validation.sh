@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=81
+  TOTAL_STEPS=82
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=106
+  TOTAL_STEPS=107
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -552,6 +552,12 @@ run "Capability execution provisioning artifacts" \
 # store, reads no production path, and exports nothing.
 run "Capability execution G11-AI image export identity" \
   bash tests/test-capability-execution-image-export.sh
+
+# ENG-0005 G11-AJ. The governed container identity, and the chain that has to
+# agree about it: the admitted image's user contract, the profile constant, the
+# argv, and what T8 verifies. Static and unprivileged -- no Podman, no store.
+run "Capability execution container identity" \
+  bash tests/test-capability-execution-container-identity.sh
 
 # ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
 # verification-only artifacts: transactional create-once publication of five

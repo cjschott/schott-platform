@@ -50,8 +50,41 @@ MAXIMUM_PROFILE_BYTES = 65536
 
 NETWORK = "none"
 HOSTNAME = "trackb"
-EXECUTION_UID = 1000
-EXECUTION_GID = 1000
+
+# The governed CONTAINER identity, stated once and derived nowhere else.
+#
+# This is the identity the admitted image declares, and it is emphatically not
+# the host execution identity: the worker runs as `kyri-capability` 999:987 and
+# the workload runs as 65532:65532 inside. Conflating them is what the user
+# namespace mapping exists to avoid.
+#
+# It was 1000:1000 until G11-AJ. That was true of the Track B alpine image and
+# was never revisited when CIMP-000001 admitted a Chainguard image whose
+# `User` is 65532:65532. The G5 ceremony has always checked the built image's
+# default user as an admission contract (`IMAGE_EXPECT_USER`), but nothing tied
+# that contract to this constant, so the two drifted while every layer inside
+# the runtime went on agreeing with itself.
+#
+# `worker.CONTAINER_UID` is an alias of this rather than a second copy, and
+# `tests/test-capability-execution-container-identity.sh` holds this value and
+# the ceremony's contract together. Two constants that happen to be equal today
+# are the mechanism that produced the defect, not a defence against it.
+EXECUTION_UID = 65532
+EXECUTION_GID = 65532
+
+# The one mapping entry that proves the container identity really is the
+# worker, rather than some subordinate id that merely shares its number.
+#
+# `Config.User` cannot prove this: it is an echo of what Podman was asked for
+# and reads 65532:65532 even when no mapping exists and the workload cannot
+# write its output. The uid/gid map is established by the kernel and is not
+# determined by the request, which is what makes it evidence.
+#
+# `<id>:0:1` reads: container id `<id>` maps to host id 0 -- the invoking
+# rootless user, i.e. the worker -- for a range of one.
+def identity_mapping(container_id: int) -> str:
+    """The map entry binding a container id to the invoking execution identity."""
+    return f"{container_id}:0:1"
 
 MEMORY_BYTES = 256 * 1024 * 1024
 MEMORY_SWAP_BYTES = 256 * 1024 * 1024
@@ -185,6 +218,12 @@ class ObservedProfile:
     tmpfs_mode: Any
     tmpfs_options: Any
     profile_schema_version: Any
+    # The identity mapping the runtime actually established. Reported so it can
+    # be verified against the governed identity: this is the field that
+    # distinguishes a container whose workload really is the worker from one
+    # that was merely asked for the same number.
+    uid_map: Any = None
+    gid_map: Any = None
 
 
 _HEX = frozenset("0123456789abcdef")
@@ -626,6 +665,28 @@ def verify_observed(profile: ExecutionProfile,
     compare("tmpfs_mode", profile.tmpfs_mode, observed.tmpfs_mode)
     compare("profile_schema_version", profile.profile_schema_version,
             observed.profile_schema_version)
+
+    # The identity mapping, which is the only part of the container identity
+    # the request does not determine.
+    #
+    # `execution_uid` above compares the profile against `Config.User`, and
+    # `Config.User` is an echo: Podman reports whatever it was asked for. In
+    # the G11-AJ experiments it read 65532:65532 in all four configurations,
+    # including the two where the workload could not write its output and the
+    # one where no namespace mapping existed at all. Comparing it proves the
+    # runtime received the request, not that the request took effect.
+    #
+    # The map is established by the kernel. Requiring the governed entry in
+    # both directions is what makes the uid and gid checks above mean
+    # something, and it is why a wrong gid mapping -- which still writes
+    # successfully through a 0700 directory owned by the right uid -- is
+    # caught here rather than passing silently.
+    for field, expected_id in (("uid_map", profile.execution_uid),
+                               ("gid_map", profile.execution_gid)):
+        seen = getattr(observed, field)
+        if not isinstance(seen, (list, tuple)) \
+                or identity_mapping(expected_id) not in seen:
+            differing.append(field)
 
     # Order-independent collections, compared as sets.
     for field, expected in (

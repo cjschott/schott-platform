@@ -147,6 +147,7 @@ from tools.capability.execution.profile import (
     ProfileBinding, Mount, ProfileError, MetadataOverrideRefused,
     ProfileMismatch, UnsupportedProfileSchema, ObservedProfile,
     PROFILE_SCHEMA_VERSION, EXECUTION_UID, EXECUTION_GID, HOSTNAME,
+    identity_mapping,
     MEMORY_BYTES, MEMORY_SWAP_BYTES, CPU_QUOTA_US, CPU_PERIOD_US, CPUS,
     PIDS_LIMIT, TIMEOUT_SECONDS, GRACE_SECONDS, TMPFS_BYTES, TMPFS_MODE,
     TMPFS_OPTIONS, PACKAGE_MOUNT, PAYLOAD_MOUNT, OUTPUT_MOUNT)
@@ -194,7 +195,13 @@ def observed_from(p, **overrides):
         mounts=p.mounts, devices=p.devices, sockets=(),
         tmpfs_bytes=p.tmpfs_bytes, tmpfs_mode=p.tmpfs_mode,
         tmpfs_options=p.tmpfs_options,
-        profile_schema_version=p.profile_schema_version)
+        profile_schema_version=p.profile_schema_version,
+        # A correctly mapped container. The map is the one part of the
+        # container identity the request does not determine, so a fixture that
+        # omitted it would be describing a container whose workload cannot
+        # write its output.
+        uid_map=(identity_mapping(p.execution_uid),),
+        gid_map=(identity_mapping(p.execution_gid),))
     fields.update(overrides)
     return ObservedProfile(**fields)
 "
@@ -544,9 +551,15 @@ functions = [n for n, v in vars(module).items()
 # governed_policy and verify_governed_policy joined with Pass 4A: the module
 # that owns the compiled-in policy is also the one that answers whether a
 # profile carries it. Both are pure -- values in, a refusal or nothing out.
+# identity_mapping joined with G11-AJ: the module that states the governed
+# container identity is also the one that says how that identity appears in a
+# runtime's uid/gid map. Pure -- an integer in, a string out -- and stating it
+# once is the point, since a second spelling of the mapping is exactly how the
+# uid itself came to disagree with the admitted image.
 assert sorted(functions) == ['build_profile', 'canonical_profile',
                              'fingerprint', 'governed_policy',
-                             'parse_canonical_profile', 'verify_governed_policy',
+                             'identity_mapping', 'parse_canonical_profile',
+                             'verify_governed_policy',
                              'verify_observed'], functions
 print('OK')
 "

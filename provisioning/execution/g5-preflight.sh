@@ -136,7 +136,26 @@ GENERATION_DELTA=(
 # flag as well as by policy.
 #
 # Declared here as pending. NOT INSTALLED.
-"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|7d661fee3d228366c6bada4fbb47df41f8eef3079316d71bbff4c6ea7c6a392e"
+"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|0340ae750ffd0e678430b9d8a5fc908daff4d3f2284b282b6ed0d2659ffedd04"
+#
+# G11-AJ. The governed container identity, corrected and bound.
+#
+# The runtime launched workloads as container uid 1000 while the admitted image
+# CIMP-000001 declares 65532:65532. 1000 was true of the Track B alpine image
+# and was never revisited. It survived because every layer agreed with every
+# other: the profile said 1000, the worker restated 1000, the argv requested
+# 1000, Podman echoed 1000, and T8 compared 1000 against 1000.
+#
+# `profile.py` now states the identity once, at 65532:65532, and adds the
+# mapping helper. `worker.py` aliases it rather than restating it, and the argv
+# carries the user-namespace mapping that makes a worker-owned 0700 output
+# directory writable by that identity without any chown. `lifecycle.py` reports
+# the uid/gid map the runtime established, because Config.User is an echo of
+# the request and reads correctly even when no mapping exists.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/profile.py|REPLACE|f87947fe096dc981248195a29ba18a38a30287f04091031ab59781730e2bbe97|f3d89f7416e266add8e2d5a54016e41e5af828a2a1f41a13b77c927e2a4f3655"
+"tools/capability/execution/lifecycle.py|REPLACE|65f40fd3aaf48ccd73db52c5d36048353c43731bb80f7a338bd9dd58eafe703d|9cde4b7b8afbef8e09f5c8d8c95f82b2824c6f2fc8199f54fb80c6882b513e25"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

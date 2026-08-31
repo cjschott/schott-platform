@@ -48,9 +48,10 @@ from typing import Any, Protocol, Sequence
 
 from .package_contract import PackageBinding, PackageError, validate_package
 from .payload import PAYLOAD_MAXIMUM_BYTES, PAYLOAD_SCHEMA_VERSION
-from .profile import (ADAPTER_IDENTITY, MAXIMUM_PROFILE_BYTES,
-                      PROFILE_SCHEMA_VERSION, ProfileError, fingerprint,
-                      parse_canonical_profile, verify_governed_policy)
+from .profile import (ADAPTER_IDENTITY, EXECUTION_GID, EXECUTION_UID,
+                      MAXIMUM_PROFILE_BYTES, PROFILE_SCHEMA_VERSION,
+                      ProfileError, fingerprint, parse_canonical_profile,
+                      verify_governed_policy)
 from .types import ExecutionProfile
 
 PODMAN = "/usr/bin/podman"
@@ -70,8 +71,11 @@ F_SEAL_GROW = 0x0004
 F_SEAL_WRITE = 0x0008
 REQUIRED_SEALS = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
 
-CONTAINER_UID = 1000
-CONTAINER_GID = 1000
+# Aliases, not copies. The governed container identity is stated once in
+# `profile`; restating the number here is what let it drift from the admitted
+# image for the whole of Track B. See the note at `profile.EXECUTION_UID`.
+CONTAINER_UID = EXECUTION_UID
+CONTAINER_GID = EXECUTION_GID
 
 # Adapter-owned and complete. Rootless Podman resolves storage from
 # $HOME/.local/share/containers/storage when XDG_DATA_HOME is unset -- the
@@ -626,6 +630,18 @@ def create_argv(snapshot: Any) -> tuple[str, ...]:
         "--cpus", profile.cpus,
         "--hostname", profile.hostname,
         "--user", f"{CONTAINER_UID}:{CONTAINER_GID}",
+        # The mapping that makes the governed identity workable without a
+        # chown. `keep-id` maps the invoking user -- the worker -- onto a
+        # chosen container id, so the worker-owned 0700 output directory
+        # appears inside as owned by the governed container identity and is
+        # writable by it, while files written inside land on the host owned by
+        # the worker and remain collectable.
+        #
+        # The alternative Podman offers is `U=true` on the bind, which chowns
+        # the host directory to a subordinate uid (observed: 165531). That
+        # makes the write succeed and the collection fail, so it is rejected as
+        # architecture rather than left unused.
+        "--userns", f"keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
         "--tmpfs", (f"/tmp:size=16m,mode=1777,"
                     + ",".join(profile.tmpfs_options)),
         *environment,

@@ -518,6 +518,11 @@ jobs:
       - name: Capability execution G11-AI image export identity tests
         run: bash tests/test-capability-execution-image-export.sh
 
+      # G11-AJ: the governed container identity and the chain that must agree
+      # about it. Static and unprivileged.
+      - name: Capability execution container identity tests
+        run: bash tests/test-capability-execution-container-identity.sh
+
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified
       # generation-6 baseline, driven against throwaway fixture trees only.
