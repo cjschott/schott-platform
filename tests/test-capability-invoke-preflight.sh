@@ -48,6 +48,7 @@ snapshot_production > "${BEFORE}"
 
 python3 - <<'PYTHON'
 import json, os, subprocess, sys
+import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -82,6 +83,42 @@ def manifest(root: Path):
     return state
 
 
+def governed_instant(fabric: Path, instance_id: str) -> str:
+    """An instant inside the fixture's OWN admission and advertisement windows.
+
+    The suite used to evaluate at `datetime.now()`. That made every semantic
+    assertion depend on a lease the reviewer deliberately allows to expire: on
+    2026-08-30T16:19:19-05:00 the production window closed and six assertions
+    began failing for a reason that had nothing to do with what they test.
+
+    The instant is DERIVED from the records the fixture actually holds, not
+    pinned to a literal. Both windows are half-open, so the intersection is
+    `[max(admitted_at, observed_at), min(admitted_until, valid_until))` and its
+    midpoint is strictly inside. That is stable under renewal -- a future
+    CADV-000004/CINST-000003 with different windows yields a different instant
+    and the same verdicts -- and it never consults the clock.
+
+    G11-AG's bound guarantees the intersection is exactly the admission window
+    for any binding written from now on, but the midpoint is computed rather
+    than assumed so this holds for the historical shape too.
+    """
+    instance = yaml.safe_load(
+        (fabric / "capability-instances" / f"{instance_id}.yaml")
+        .read_text(encoding="utf-8"))
+    advertisement = yaml.safe_load(
+        (fabric / "capability-advertisements"
+         / f"{instance['advertisement_id']}.yaml").read_text(encoding="utf-8"))
+    opens = max(datetime.fromisoformat(instance["admitted_at"]),
+                datetime.fromisoformat(advertisement["observed_at"]))
+    closes = min(datetime.fromisoformat(instance["admitted_until"]),
+                 datetime.fromisoformat(advertisement["valid_until"]))
+    if not opens < closes:
+        raise SystemExit(
+            f"the fixture's {instance_id} has no live interval: "
+            f"[{opens.isoformat()}, {closes.isoformat()})")
+    return (opens + (closes - opens) / 2).isoformat()
+
+
 def fixture(base: Path):
     """A production-shaped fixture: Fabric, Trust, artifacts, payload, roots."""
     import shutil
@@ -102,13 +139,15 @@ def fixture(base: Path):
     staging = base / "staging"; staging.mkdir(mode=0o700)
     return {"fabric": base / "fabric", "trust": base / "trust",
             "artifacts": base / "artifacts", "payload": payload,
-            "store": store, "staging": staging}
+            "store": store, "staging": staging,
+            "instant": governed_instant(base / "fabric", "CINST-000002")}
 
 
 def run(paths, *extra, operation="execute", instant=None,
         identity="g11ab-preflight-suite"):
     """The released CLI, exactly as an operator would reach it."""
-    at = instant or datetime.now(CT).isoformat()
+    # Derived from the fixture, never from the clock -- see governed_instant.
+    at = instant or paths["instant"]
     argv = [sys.executable, "-m", "tools.capability.cli", "invoke",
             "--store-root", str(paths["store"]),
             "--expected-uid", str(UID), "--expected-gid", str(GID),
