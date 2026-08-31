@@ -653,6 +653,22 @@ assert 'ro=false' in output, output
 print('OK')
 "
 
+run_case "the image is never fetched, so a missing one cannot reach a registry" "${PRELUDE}
+argv = W.create_argv(verified('pull'))
+text = ' '.join(argv)
+# --network none isolates the *container*; it does nothing about Podman itself,
+# which resolves images on the host network before any container exists. Under
+# the default --pull=missing an absent image ID would be treated as a
+# repository reference and fetched. Both halves have to be structural: the
+# container cannot reach the network, and the runtime cannot fetch the image.
+assert '--pull=never' in text, text
+assert argv.index('--pull=never') < argv.index(IMAGE), \
+    'the pull policy must precede the image argument'
+for banned in ('--pull=always', '--pull=missing', '--pull=newer'):
+    assert banned not in text, banned
+print('OK')
+"
+
 run_case "no device, privileged, host-network or socket flag appears" "${PRELUDE}
 argv = W.create_argv(verified('none'))
 text = ' '.join(argv)
@@ -710,7 +726,17 @@ print('OK')
 "
 
 run_case "no pull, and the argv is closed against extra flags" "${PRELUDE}
-assert 'pull' not in code_of(W).lower(), 'the worker can pull'
+# 'pull' may appear exactly once, as the flag that forbids pulling.
+#
+# This used to assert the token was absent entirely. That was weaker than it
+# looked: saying nothing about pulling leaves Podman's default (--pull=missing)
+# in force, so a worker that named no policy at all passed while retaining a
+# route to a registry. The property wanted is that the runtime cannot fetch,
+# not that the source avoids a word.
+code = code_of(W).lower()
+occurrences = [line for line in code.splitlines() if 'pull' in line]
+assert len(occurrences) == 1, occurrences
+assert '--pull=never' in occurrences[0], occurrences[0]
 argv = W.create_argv(verified('closed'))
 # Every element is a constant, a governed identity, or a derived source.
 assert isinstance(argv, tuple), type(argv)

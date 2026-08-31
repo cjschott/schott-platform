@@ -150,6 +150,7 @@ expect "an uppercase identity is refused rather than folded" \
 
 compare() {
   local left="$1" right="$2"
+  # shellcheck source=/dev/null
   if ( source "${CEREMONY}"; manifests_identical "${left}" "${right}" ) 2>/dev/null; then
     printf 'IDENTICAL'
   else

@@ -607,6 +607,15 @@ def create_argv(snapshot: Any) -> tuple[str, ...]:
         PODMAN, "create",
         "--name", container_name(profile.cinv),
         "--network", profile.network,
+        # `--network none` isolates the container; it says nothing about the
+        # runtime, which resolves images on the host network before any
+        # container exists. Under the default (`missing`) an absent image ID
+        # would be read as a repository reference and fetched, so an image that
+        # failed the store check could still arrive from a registry. The image
+        # is governed by CIMP and must already be in the store or the
+        # invocation refuses: there is no acquisition path, by policy and now
+        # by flag.
+        "--pull=never",
         "--read-only",
         "--read-only-tmpfs=false",
         "--cap-drop", "ALL",

@@ -124,6 +124,19 @@ GENERATION_DELTA=(
 # the generation that publishes it is a separate governed ceremony.
 "tools/capability/store.py|REPLACE|581901bfc8ce623d60214e796639261fd1ae9afabadbdba6bfab5fb64d4042b6|a476c5ec72f6ea66f33e8291d78cd9f99934710519ddf0acf2f658037e999fe6"
 "tools/capability/rehearsal.py|CREATE|ABSENT|ed8479391aa2a4abc29ab2c9ab287d8f39aa3486549acc9d0fb856486fcd0355"
+#
+# G11-AI. `create_argv` gains `--pull=never`.
+#
+# `--network none` isolates the container; it says nothing about the runtime,
+# which resolves images on the host network before any container exists. Under
+# Podman's default (`missing`) an absent image ID would be read as a repository
+# reference and fetched, so an image that failed the store presence check could
+# still arrive from a registry. The image is governed by CIMP and must already
+# be present or the invocation refuses: there is now no acquisition path by
+# flag as well as by policy.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|7d661fee3d228366c6bada4fbb47df41f8eef3079316d71bbff4c6ea7c6a392e"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
