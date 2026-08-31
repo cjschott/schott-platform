@@ -153,7 +153,6 @@ def observation(p, **overrides):
         execution_gid=p.execution_gid, hostname=p.hostname, mounts=p.mounts,
         devices=p.devices, sockets=(), tmpfs_bytes=p.tmpfs_bytes,
         tmpfs_mode=p.tmpfs_mode, tmpfs_options=p.tmpfs_options,
-        profile_schema_version=p.profile_schema_version,
         uid_map=(identity_mapping(p.execution_uid),),
         gid_map=(identity_mapping(p.execution_gid),))
     base.update(overrides)

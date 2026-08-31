@@ -30,6 +30,7 @@ import dataclasses
 import enum
 from typing import Any, Sequence
 
+from .mount_evidence import MountEvidenceUnreadable, observed_sockets
 from .profile import ObservedProfile
 from .protocol import MessageKind, ProtocolViolation, Session
 from .types import Classification, Mount
@@ -74,6 +75,21 @@ def create(backend: Any, argv: Sequence[str],
     except OSError as error:
         raise LifecycleRefused(f"container creation failed: {error}") from None
     return _require_container_id(container_id)
+
+
+def _sockets(reported: Any) -> Any:
+    """The derived socket set, with the evidence layer's refusal carried up.
+
+    Absence of a mount report is reported as ``None``, which always fails
+    verification. It is not turned into an empty socket set: a runtime that
+    said nothing about its mounts has not said there were no sockets.
+    """
+    if reported is None:
+        return None
+    try:
+        return observed_sockets(reported)
+    except MountEvidenceUnreadable as error:
+        raise LifecycleRefused(str(error)) from None
 
 
 def _mounts(reported: Any) -> Any:
@@ -137,11 +153,13 @@ def observe(backend: Any, container_id: str) -> ObservedProfile:
         hostname=data.get("Hostname"),
         mounts=_mounts(data.get("Mounts")),
         devices=tuple(data["Devices"]) if data.get("Devices") is not None else None,
-        sockets=tuple(data["Sockets"]) if data.get("Sockets") is not None else None,
+        # Derived from the sources the runtime itself reported, by asking the
+        # filesystem what each one is. There is no Podman field to read here
+        # and no expected value to copy: see `observed_sockets`.
+        sockets=_sockets(data.get("Mounts")),
         tmpfs_bytes=data.get("TmpfsSize"),
         tmpfs_mode=data.get("TmpfsMode"),
         tmpfs_options=tuple(data["TmpfsOptions"]) if data.get("TmpfsOptions") is not None else None,
-        profile_schema_version=data.get("ProfileSchemaVersion"),
         # The identity mapping the runtime established, reported exactly as it
         # was found. `User` above is an echo of the request and reads the same
         # whether or not a mapping exists; this is the part the request does

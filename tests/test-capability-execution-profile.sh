@@ -195,7 +195,6 @@ def observed_from(p, **overrides):
         mounts=p.mounts, devices=p.devices, sockets=(),
         tmpfs_bytes=p.tmpfs_bytes, tmpfs_mode=p.tmpfs_mode,
         tmpfs_options=p.tmpfs_options,
-        profile_schema_version=p.profile_schema_version,
         # A correctly mapped container. The map is the one part of the
         # container identity the request does not determine, so a fixture that
         # omitted it would be describing a container whose workload cannot
@@ -426,7 +425,13 @@ mismatches = {
     'cpu_quota_us': 100000, 'cpu_period_us': 1000, 'pids_limit': 4096,
     'execution_uid': 0, 'execution_gid': 0, 'hostname': 'other',
     'tmpfs_bytes': 1, 'tmpfs_mode': 0o777, 'tmpfs_options': ('noexec',),
-    'profile_schema_version': 3, 'devices': ('/dev/nvidia0',),
+    # No profile_schema_version: a container has no such property, so an
+    # observation cannot differ on it. It is enforced at parsing and by the
+    # schema guard at the top of verify_observed instead.
+    'devices': ('/dev/nvidia0',),
+    # Still compared, and now meaningfully: the observation's socket set is
+    # derived from the runtime's own mount sources rather than copied from the
+    # profile, so this mismatch is one that can actually arise.
     'sockets': ('/run/podman/podman.sock',),
     'effective_capabilities': ('CAP_SYS_ADMIN',),
     'dropped_capabilities': (),

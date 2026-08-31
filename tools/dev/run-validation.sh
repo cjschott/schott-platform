@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=82
+  TOTAL_STEPS=83
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=107
+  TOTAL_STEPS=108
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -558,6 +558,14 @@ run "Capability execution G11-AI image export identity" \
 # argv, and what T8 verifies. Static and unprivileged -- no Podman, no store.
 run "Capability execution container identity" \
   bash tests/test-capability-execution-container-identity.sh
+
+# ENG-0005 G11-AK. What a runtime observation may claim to have seen: the
+# profile schema version is not a container property, and socket absence is
+# derived from the runtime's own mount sources rather than copied from the
+# expected profile. Unprivileged; creates a temporary tree because two of the
+# facts under test are filesystem facts.
+run "Capability execution runtime observation" \
+  bash tests/test-capability-execution-runtime-observation.sh
 
 # ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
 # verification-only artifacts: transactional create-once publication of five

@@ -230,6 +230,12 @@ assert_backstop_coverage() {
                  # the image ID, and refuses every uncertainty rather than
                  # answering that the image is absent.
                  "image_store.py"
+                 # Backstopped by tests/test-capability-execution-runtime-observation.sh,
+                 # which proves it derives the socket set from the runtime's own
+                 # reported sources rather than from the expected profile, never
+                 # follows a symlink, and refuses every source it cannot
+                 # classify instead of answering that there were none.
+                 "mount_evidence.py"
                  # Backstopped by tests/test-capability-execution-contract-outcome.sh,
                  # which proves it imports nothing but typing, reaches no
                  # lifecycle, collector or adapter, re-reads no exit code, and

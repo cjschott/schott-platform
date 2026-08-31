@@ -218,6 +218,19 @@ from tools.capability.execution.protocol import (
     Message, MessageKind, Session, encode, ProtocolViolation)
 from tools.capability.execution.types import Classification, Mount
 WORK = os.environ['WORKDIR']
+
+# Real objects behind the fixture's mount sources. Socket observation asks the
+# filesystem what each reported source is, so a fixture that only described
+# mounts would be refused -- correctly, because 'I could not examine that' is
+# not 'there were no sockets'.
+MOUNT_ROOT = os.path.join(WORK, 'mount-sources')
+os.makedirs(os.path.join(MOUNT_ROOT, 'pkg'), exist_ok=True)
+os.makedirs(os.path.join(MOUNT_ROOT, 'out'), exist_ok=True)
+if not os.path.exists(os.path.join(MOUNT_ROOT, 'payload')):
+    open(os.path.join(MOUNT_ROOT, 'payload'), 'w').close()
+SRC_PKG = os.path.join(MOUNT_ROOT, 'pkg')
+SRC_PAYLOAD = os.path.join(MOUNT_ROOT, 'payload')
+SRC_OUT = os.path.join(MOUNT_ROOT, 'out')
 CINV = 'CINV-000042'
 CID = 'c' * 64
 IMAGE = 'a' * 64
@@ -803,13 +816,12 @@ inspect_data = {
     'MemorySwap': 268435456, 'CpuQuota': 50000, 'CpuPeriod': 100000,
     'PidsLimit': 64, 'User': '65532:65532',
     'UidMap': ['65532:0:1'], 'GidMap': ['65532:0:1'], 'Hostname': 'trackb',
-    'Devices': [], 'Sockets': [], 'TmpfsSize': 16777216,
+    'Devices': [], 'TmpfsSize': 16777216,
     'TmpfsMode': 1023, 'TmpfsOptions': ['noexec', 'nosuid', 'nodev'],
-    'ProfileSchemaVersion': 2,
     'Mounts': [
-        {'Destination': '/kyri/package', 'RW': False, 'Type': 'bind'},
-        {'Destination': '/run/kyri/input/payload', 'RW': False, 'Type': 'bind'},
-        {'Destination': '/kyri/output', 'RW': True, 'Type': 'bind'}],
+        {'Destination': '/kyri/package', 'RW': False, 'Type': 'bind', 'Source': SRC_PKG},
+        {'Destination': '/run/kyri/input/payload', 'RW': False, 'Type': 'bind', 'Source': SRC_PAYLOAD},
+        {'Destination': '/kyri/output', 'RW': True, 'Type': 'bind', 'Source': SRC_OUT}],
 }
 observed = L.observe(FakeBackend(inspect=inspect_data), CID)
 assert isinstance(observed, ObservedProfile)
@@ -840,14 +852,13 @@ base = {
     'EffectiveCaps': [], 'Memory': 268435456, 'MemorySwap': 268435456,
     'CpuQuota': 50000, 'CpuPeriod': 100000, 'PidsLimit': 64,
     'User': '65532:65532',
-    'UidMap': ['65532:0:1'], 'GidMap': ['65532:0:1'], 'Hostname': 'trackb', 'Devices': [], 'Sockets': [],
+    'UidMap': ['65532:0:1'], 'GidMap': ['65532:0:1'], 'Hostname': 'trackb', 'Devices': [],
     'TmpfsSize': 16777216, 'TmpfsMode': 1023,
     'TmpfsOptions': ['noexec', 'nosuid', 'nodev'],
-    'ProfileSchemaVersion': 2,
     'Mounts': [
-        {'Destination': '/kyri/package', 'RW': False, 'Type': 'bind'},
-        {'Destination': '/run/kyri/input/payload', 'RW': False, 'Type': 'bind'},
-        {'Destination': '/kyri/output', 'RW': True, 'Type': 'bind'}],
+        {'Destination': '/kyri/package', 'RW': False, 'Type': 'bind', 'Source': SRC_PKG},
+        {'Destination': '/run/kyri/input/payload', 'RW': False, 'Type': 'bind', 'Source': SRC_PAYLOAD},
+        {'Destination': '/kyri/output', 'RW': True, 'Type': 'bind', 'Source': SRC_OUT}],
 }
 # Moving the tag and changing the manifest digest leaves the identity intact,
 # because neither was ever consulted.
@@ -883,10 +894,10 @@ base = {
     'EffectiveCaps': [], 'Memory': 268435456, 'MemorySwap': 268435456,
     'CpuQuota': 50000, 'CpuPeriod': 100000, 'PidsLimit': 64,
     'User': '65532:65532',
-    'UidMap': ['65532:0:1'], 'GidMap': ['65532:0:1'], 'Hostname': 'trackb', 'Devices': [], 'Sockets': [],
+    'UidMap': ['65532:0:1'], 'GidMap': ['65532:0:1'], 'Hostname': 'trackb', 'Devices': [],
     'TmpfsSize': 16777216, 'TmpfsMode': 1023,
     'TmpfsOptions': ['noexec', 'nosuid', 'nodev'],
-    'ProfileSchemaVersion': 1, 'Mounts': [],
+    'Mounts': [],
 }
 from tools.capability.execution.profile import verify_observed, ProfileMismatch
 for dropped in ('NetworkMode', 'ReadOnlyRootfs', 'PidsLimit', 'Memory',

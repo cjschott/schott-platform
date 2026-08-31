@@ -523,6 +523,10 @@ jobs:
       - name: Capability execution container identity tests
         run: bash tests/test-capability-execution-container-identity.sh
 
+      # G11-AK: what a runtime observation may claim to have seen.
+      - name: Capability execution runtime observation tests
+        run: bash tests/test-capability-execution-runtime-observation.sh
+
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified
       # generation-6 baseline, driven against throwaway fixture trees only.

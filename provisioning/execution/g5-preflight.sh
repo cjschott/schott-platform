@@ -154,8 +154,9 @@ GENERATION_DELTA=(
 # the request and reads correctly even when no mapping exists.
 #
 # Declared here as pending. NOT INSTALLED.
-"tools/capability/execution/profile.py|REPLACE|f87947fe096dc981248195a29ba18a38a30287f04091031ab59781730e2bbe97|f3d89f7416e266add8e2d5a54016e41e5af828a2a1f41a13b77c927e2a4f3655"
-"tools/capability/execution/lifecycle.py|REPLACE|65f40fd3aaf48ccd73db52c5d36048353c43731bb80f7a338bd9dd58eafe703d|9cde4b7b8afbef8e09f5c8d8c95f82b2824c6f2fc8199f54fb80c6882b513e25"
+"tools/capability/execution/profile.py|REPLACE|f87947fe096dc981248195a29ba18a38a30287f04091031ab59781730e2bbe97|37126da4a3bbcc8f1917dfff91a9a2d68b8d78978b35f299273ec426878cff76"
+"tools/capability/execution/lifecycle.py|REPLACE|65f40fd3aaf48ccd73db52c5d36048353c43731bb80f7a338bd9dd58eafe703d|e2d91c39ea7234c6b54d9063abdc0e9e32a0048fb5becdb558e3d850fa848291"
+"tools/capability/execution/mount_evidence.py|CREATE|ABSENT|acbcb2e0ea9ac458c3e17ec909dfdf2f234db842152c086ce23fc327d1dca973"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

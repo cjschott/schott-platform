@@ -217,7 +217,12 @@ class ObservedProfile:
     tmpfs_bytes: Any
     tmpfs_mode: Any
     tmpfs_options: Any
-    profile_schema_version: Any
+    # Deliberately no `profile_schema_version`. It is not a property of a
+    # running container, so a backend could only obtain it from the profile --
+    # and T8 comparing the profile with itself is not verification. It is
+    # enforced where it can be: at profile parsing, in the fingerprint, by the
+    # worker, and by the schema guard at the top of `verify_observed`.
+    #
     # The identity mapping the runtime actually established. Reported so it can
     # be verified against the governed identity: this is the field that
     # distinguishes a container whose workload really is the worker from one
@@ -663,8 +668,6 @@ def verify_observed(profile: ExecutionProfile,
     compare("hostname", profile.hostname, observed.hostname)
     compare("tmpfs_bytes", profile.tmpfs_bytes, observed.tmpfs_bytes)
     compare("tmpfs_mode", profile.tmpfs_mode, observed.tmpfs_mode)
-    compare("profile_schema_version", profile.profile_schema_version,
-            observed.profile_schema_version)
 
     # The identity mapping, which is the only part of the container identity
     # the request does not determine.
