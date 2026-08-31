@@ -139,6 +139,52 @@ expect "an unreadable identity is refused, not skipped past" \
 expect "an uppercase identity is refused rather than folded" \
   "${WORK}/uppercase.txt" "${GOVERNED}" REFUSED
 
+# --- the manifest must not measure its own label ------------------------------
+#
+# The first successful export reported EXPORT_STORE_FOOTPRINT=PRESENT against a
+# store that had not changed at all. Each manifest embedded its own capture
+# label -- "# structural manifest: M1" -- so M1 and M2 differed on that line and
+# on nothing else. A measurement that cannot distinguish its own label from the
+# thing it measures manufactures findings, and a footprint warning nobody can
+# trust is worse than no warning: the next real one gets waved through.
+
+compare() {
+  local left="$1" right="$2"
+  if ( source "${CEREMONY}"; manifests_identical "${left}" "${right}" ) 2>/dev/null; then
+    printf 'IDENTICAL'
+  else
+    printf 'DIFFERENT'
+  fi
+}
+
+expect_compare() {
+  local label="$1" left="$2" right="$3" want="$4" got
+  got="$(compare "${left}" "${right}")"
+  if [[ "${got}" == "${want}" ]]; then
+    pass "${label}"
+  else
+    fail "${label} -- expected ${want}, got ${got}"
+  fi
+}
+
+printf '# structural manifest: M1\nd 0700 999:987 4096 overlay\nf 0644 999:987 64 storage.lock\n' \
+  >"${WORK}/m1.txt"
+printf '# structural manifest: M2\nd 0700 999:987 4096 overlay\nf 0644 999:987 64 storage.lock\n' \
+  >"${WORK}/m2.txt"
+printf '# structural manifest: M2\nd 0700 999:987 4096 overlay\nf 0644 999:987 99 storage.lock\n' \
+  >"${WORK}/m2-changed.txt"
+printf 'd 0700 999:987 4096 overlay\nf 0644 999:987 64 storage.lock\n' \
+  >"${WORK}/m1-bare.txt"
+
+expect_compare "a differing capture label alone is not a store difference" \
+  "${WORK}/m1.txt" "${WORK}/m2.txt" IDENTICAL
+
+expect_compare "a real store difference is still reported" \
+  "${WORK}/m1.txt" "${WORK}/m2-changed.txt" DIFFERENT
+
+expect_compare "a header present on one side only is not a difference" \
+  "${WORK}/m1-bare.txt" "${WORK}/m2.txt" IDENTICAL
+
 # --- the rendering the ceremony asks for --------------------------------------
 
 run_static() {
@@ -170,6 +216,19 @@ text = Path('provisioning/execution/g11-ai-image-export.sh').read_text(encoding=
 assert 'split(\":\", 1)[1]' in text, 'the config digest is no longer normalised'
 assert '\"\$config_digest\" = \"\$GOVERNED_IMAGE\"' in text, \
     'the archive identity comparison changed shape'
+print('OK')
+"
+
+run_static "the manifest body carries no capture label" "
+import re
+from pathlib import Path
+text = Path('provisioning/execution/g11-ai-image-export.sh').read_text(encoding='utf-8')
+body = text[text.index('store_manifest() {'):]
+body = body[:body.index('\n}\n')]
+# The label identifies the capture in the filename and in the printed progress
+# line. Writing it into the file makes every capture differ from every other.
+assert 'manifest: ' not in body, body
+assert 'label' in body, 'the capture label is no longer used for the filename'
 print('OK')
 "
 

@@ -126,30 +126,41 @@ store_holds_image() {
 # data cannot change without changing the metadata that names it, so hashing
 # them would cost minutes to re-prove something the cheap manifest already
 # proves.
+# The capture label names the file and is printed as progress. It is
+# deliberately NOT written into the body.
+#
+# The first successful export reported EXPORT_STORE_FOOTPRINT=PRESENT against a
+# store that had not changed at all: each manifest carried its own label as a
+# header line, so M1 and M2 differed on that line and on nothing else. A
+# measurement that cannot distinguish its own label from the thing it measures
+# manufactures findings, and a footprint warning nobody can trust is worse than
+# no warning -- the next real one gets waved through.
 store_manifest() {
     local label="$1" dir="$2"
 
-    {
-        printf '# structural manifest: %s\n' "$label"
-        printf '# store: %s\n' "$STORE"
-        find "$STORE" -xdev -printf '%y %#m %U:%G %10s %P\n' | LC_ALL=C sort
-    } >"${dir}/store-structure-${label}.txt"
+    find "$STORE" -xdev -printf '%y %#m %U:%G %10s %P\n' | LC_ALL=C sort \
+        >"${dir}/store-structure-${label}.txt"
 
-    {
-        printf '# content manifest: %s\n' "$label"
-        find "$STORE" -xdev -type f -name '*.json' \
-            -size "-${METADATA_MAX_BYTES}c" -printf '%P\n' \
-        | LC_ALL=C sort \
-        | while IFS= read -r relative; do
-            printf '%s  %s\n' \
-                "$(sha256sum <"${STORE}/${relative}" | cut -d' ' -f1)" \
-                "$relative"
-        done
-    } >"${dir}/store-content-${label}.txt"
+    find "$STORE" -xdev -type f -name '*.json' \
+        -size "-${METADATA_MAX_BYTES}c" -printf '%P\n' \
+    | LC_ALL=C sort \
+    | while IFS= read -r relative; do
+        printf '%s  %s\n' \
+            "$(sha256sum <"${STORE}/${relative}" | cut -d' ' -f1)" \
+            "$relative"
+    done >"${dir}/store-content-${label}.txt"
 
     printf '%-4s structure=%s content=%s\n' "$label" \
         "$(sha256sum <"${dir}/store-structure-${label}.txt" | cut -c1-16)" \
         "$(sha256sum <"${dir}/store-content-${label}.txt" | cut -c1-16)"
+}
+
+# Comment lines are ignored on both sides, so a header reintroduced by a later
+# edit still cannot manufacture a difference. Belt and braces: the bodies no
+# longer carry one, and if they ever do again it will not be reported as store
+# mutation.
+manifests_identical() {
+    diff -q <(grep -v '^#' "$1") <(grep -v '^#' "$2") >/dev/null
 }
 
 # Every Podman call in this script goes through here, so the environment the
@@ -307,15 +318,27 @@ The exported identity differs from the governed identity. Stop."
     # export changing image authority, and a single before/after pair would have
     # conflated the two and made a benign write look like a finding.
     note "M0 -> M1 (Podman initialisation footprint)"
-    diff -u "${dir}/store-structure-M0.txt" "${dir}/store-structure-M1.txt" || true
-    diff -u "${dir}/store-content-M0.txt" "${dir}/store-content-M1.txt" || true
+    if manifests_identical "${dir}/store-structure-M0.txt" \
+                           "${dir}/store-structure-M1.txt" \
+        && manifests_identical "${dir}/store-content-M0.txt" \
+                               "${dir}/store-content-M1.txt"; then
+        printf 'PODMAN_INIT_FOOTPRINT=NONE\n'
+    else
+        printf 'PODMAN_INIT_FOOTPRINT=PRESENT\n'
+        diff -u "${dir}/store-structure-M0.txt" "${dir}/store-structure-M1.txt" || true
+        diff -u "${dir}/store-content-M0.txt" "${dir}/store-content-M1.txt" || true
+    fi
 
     note "M1 -> M2 (the export's footprint)"
-    if diff -u "${dir}/store-structure-M1.txt" "${dir}/store-structure-M2.txt" \
-        && diff -u "${dir}/store-content-M1.txt" "${dir}/store-content-M2.txt"; then
+    if manifests_identical "${dir}/store-structure-M1.txt" \
+                           "${dir}/store-structure-M2.txt" \
+        && manifests_identical "${dir}/store-content-M1.txt" \
+                               "${dir}/store-content-M2.txt"; then
         printf 'EXPORT_STORE_FOOTPRINT=NONE\n'
     else
-        printf 'EXPORT_STORE_FOOTPRINT=PRESENT -- review the diff above before proceeding\n'
+        printf 'EXPORT_STORE_FOOTPRINT=PRESENT -- review the diff below before proceeding\n'
+        diff -u "${dir}/store-structure-M1.txt" "${dir}/store-structure-M2.txt" || true
+        diff -u "${dir}/store-content-M1.txt" "${dir}/store-content-M2.txt" || true
     fi
 
     # Through the same normalisation, so this report cannot disagree with the
