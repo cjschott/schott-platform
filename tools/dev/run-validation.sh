@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=89
+  TOTAL_STEPS=90
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=114
+  TOTAL_STEPS=115
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -602,6 +602,13 @@ run "Capability terminal result contract" \
 # interrupted only where authority was durably bound. Hermetic.
 run "Capability adapter binding and interrupted semantics" \
   bash tests/test-capability-adapter-binding.sh
+
+# ENG-0005 G11-AP. The preconditions a coordinator supervisor depends on: the
+# descriptor topology the privileged transition already provides, the protocol
+# state machine it must implement, and the authority split it must not cross.
+# Static and unprivileged.
+run "Capability execution supervision preconditions" \
+  bash tests/test-capability-execution-supervision-preconditions.sh
 
 run "Capability invoke execution end to end" \
   bash tests/test-capability-invoke-execution-e2e.sh

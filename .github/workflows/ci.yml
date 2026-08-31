@@ -551,6 +551,11 @@ jobs:
       - name: Capability adapter binding tests
         run: bash tests/test-capability-adapter-binding.sh
 
+      # G11-AP: supervisor preconditions -- descriptor topology, protocol state
+      # machine, and the authority split. Static.
+      - name: Capability execution supervision precondition tests
+        run: bash tests/test-capability-execution-supervision-preconditions.sh
+
       - name: Capability invoke execution end-to-end tests
         run: bash tests/test-capability-invoke-execution-e2e.sh
 
