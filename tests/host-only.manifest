@@ -34,3 +34,4 @@ test-capability-execution-launch-cli.sh	builds a backing-store fixture from the 
 test-capability-execution-profile-transport.sh	builds a launch record the production code authenticates against the pinned COORDINATOR_UID
 test-capability-execution-transition-action.sh	builds a launch record the production code authenticates against the pinned COORDINATOR_UID
 test-fabric-evidence-authority.sh	drives the host-evidence ceremony pinned to /opt/schott-platform
+test-capability-invoke-execution-e2e.sh	drives a real container from the exported OCI archive against a fixture shaped from the production Fabric, Trust and artifact stores

@@ -540,6 +540,11 @@ jobs:
       - name: Capability execution worker binding tests
         run: bash tests/test-capability-execution-worker-binding.sh
 
+      # G11-AM: full isolated invoke through to a real container. Host-only;
+      # reports HOST_ONLY_SKIP on a runner with no production layout.
+      - name: Capability invoke execution end-to-end tests
+        run: bash tests/test-capability-invoke-execution-e2e.sh
+
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified
       # generation-6 baseline, driven against throwaway fixture trees only.

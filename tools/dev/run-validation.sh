@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=86
+  TOTAL_STEPS=87
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=111
+  TOTAL_STEPS=112
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -586,6 +586,13 @@ run "Capability execution helper coherence" \
 # generation closure reaches the backend without anything being whitelisted.
 run "Capability execution worker binding" \
   bash tests/test-capability-execution-worker-binding.sh
+
+# ENG-0005 G11-AM. One governed invocation, prepared by the real coordinator
+# and executed in a real container: the front half joined to the backend, the
+# mutation manifest, and the failure matrix. Host-only -- it needs the
+# production store shape, Podman, and the exported OCI archive.
+run "Capability invoke execution end to end" \
+  bash tests/test-capability-invoke-execution-e2e.sh
 
 # ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
 # verification-only artifacts: transactional create-once publication of five
