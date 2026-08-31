@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=90
+  TOTAL_STEPS=91
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=115
+  TOTAL_STEPS=116
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -609,6 +609,12 @@ run "Capability adapter binding and interrupted semantics" \
 # Static and unprivileged.
 run "Capability execution supervision preconditions" \
   bash tests/test-capability-execution-supervision-preconditions.sh
+
+# ENG-0005 G11-AQ. The orphan a worker's SIGKILL leaves behind, and the
+# governed operation that recovers it. Host-only: it creates and reconciles
+# real containers in a disposable store.
+run "Capability execution container reconciliation" \
+  bash tests/test-capability-execution-reconciliation.sh
 
 run "Capability invoke execution end to end" \
   bash tests/test-capability-invoke-execution-e2e.sh

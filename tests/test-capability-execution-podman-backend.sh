@@ -137,10 +137,20 @@ for node in ast.walk(tree):
 code = ast.unparse(tree)
 for banned in ('/bin/sh', '/bin/bash', 'os.system', 'popen', 'shell=True'):
     assert banned not in code, banned
-# Every process creation closes stdin and bounds what it will read back.
-assert code.count('stdin=subprocess.DEVNULL') == 2, code.count('stdin=subprocess.DEVNULL')
-assert 'timeout=self._timeout' in code
-assert 'capture_output=True' in code
+# EVERY process creation closes stdin, bounds what it reads back, and has a
+# timeout -- counted against the number of subprocess.run calls rather than a
+# literal, so a new one cannot be added without the same controls.
+runs = [n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and ast.unparse(n.func) == 'subprocess.run']
+assert runs, 'the backend starts no process'
+for call in runs:
+    keywords = {k.arg for k in call.keywords}
+    for required in ('stdin', 'capture_output', 'timeout', 'env', 'shell',
+                     'executable'):
+        assert required in keywords, (required, ast.unparse(call)[:120])
+assert code.count('stdin=subprocess.DEVNULL') == len(runs), (
+    code.count('stdin=subprocess.DEVNULL'), len(runs))
 print('OK')
 "
 

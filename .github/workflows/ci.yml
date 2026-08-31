@@ -556,6 +556,11 @@ jobs:
       - name: Capability execution supervision precondition tests
         run: bash tests/test-capability-execution-supervision-preconditions.sh
 
+      # G11-AQ: governed container reconciliation. Host-only; reports
+      # HOST_ONLY_SKIP where there is no Podman or exported archive.
+      - name: Capability execution container reconciliation tests
+        run: bash tests/test-capability-execution-reconciliation.sh
+
       - name: Capability invoke execution end-to-end tests
         run: bash tests/test-capability-invoke-execution-e2e.sh
 

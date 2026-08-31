@@ -175,6 +175,18 @@ OUTPUT_NAME = "out"
 # interpreter only; `WORKER_INTERPRETER` on the host is untouched.
 CONTAINER_INTERPRETER = "/usr/bin/python"
 
+# The label binding a container to the invocation that created it.
+#
+# The deterministic name is useful and is not sufficient: a name is a string
+# anything could occupy, and reconciliation is about to stop and remove
+# whatever it finds. A label the runtime writes and no caller can influence
+# turns "this is probably the right container" into evidence.
+#
+# Reverse-DNS, as every other label on the admitted image is. The value is the
+# CINV and nothing else -- no package data, no operator input, no metadata
+# reaches it.
+INVOCATION_LABEL = "io.kyri.invocation-id"
+
 EXPECTED_MODES = {
     "invocation": 0o555,
     PACKAGE_NAME: 0o555,
@@ -659,6 +671,9 @@ def create_argv(snapshot: Any) -> tuple[str, ...]:
     return (
         PODMAN, "create",
         "--name", container_name(profile.cinv),
+        # Written from the authenticated profile's own CINV, so the label and
+        # the name cannot disagree about which invocation this container is.
+        "--label", f"{INVOCATION_LABEL}={profile.cinv}",
         "--network", profile.network,
         # `--network none` isolates the container; it says nothing about the
         # runtime, which resolves images on the host network before any

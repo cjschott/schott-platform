@@ -106,6 +106,22 @@ def _require_container_id(value: Any) -> str:
     return value
 
 
+def _require_container_name(value: Any) -> str:
+    """A governed container name, or refuse.
+
+    Closed grammar: the runtime's prefix and one CINV. A caller cannot reach
+    this -- the reconciler derives the name from an invocation identity -- and
+    the check is here so that stays true if anything ever tries.
+    """
+    if not isinstance(value, str) or not value.startswith("kyri-CINV-"):
+        raise PodmanBackendRefused(
+            "only a governed kyri-CINV container name may be named")
+    suffix = value[len("kyri-CINV-"):]
+    if len(suffix) != 6 or set(suffix) - set("0123456789"):
+        raise PodmanBackendRefused("the container name is not kyri-CINV-nnnnnn")
+    return value
+
+
 def _canonical_image_id(value: Any) -> Any:
     """A bare 64-hex image identity, or ``None``.
 
@@ -452,6 +468,61 @@ class PodmanBackend:
         """Remove the container once its evidence has been read."""
         recorded = _require_container_id(container_id)
         self._run("rm", ["--force", recorded])
+
+    # --- reconciliation ---------------------------------------------------
+    #
+    # Keyed by NAME rather than by container id, because reconciliation starts
+    # from an invocation identity and the container id is exactly what is lost
+    # when supervision is lost. The name is derived from the CINV by the
+    # reconciler; nothing here accepts a name a caller composed.
+
+    def find_container(self, name: str) -> Any:
+        """The inspection for one named container, or ``None`` if absent.
+
+        Absence is a value, not an error: it is the terminal state
+        reconciliation is trying to reach, and the ordinary case after a normal
+        execution. Every other failure still raises.
+        """
+        _require_container_name(name)
+        argv = [PODMAN, *self._storage, "inspect", "--type", "container", name]
+        try:
+            completed = subprocess.run(  # noqa: S603 - argv vector, never a shell
+                argv, executable=PODMAN, shell=False,
+                stdin=subprocess.DEVNULL, capture_output=True,
+                env=dict(self._environment), timeout=self._timeout, check=False)
+        except subprocess.TimeoutExpired:
+            raise PodmanBackendRefused(
+                f"the runtime did not answer within {self._timeout}s") from None
+        except OSError as error:
+            raise PodmanBackendRefused(
+                f"the runtime could not be executed: {error}") from None
+        if completed.returncode != 0:
+            detail = completed.stderr.decode("utf-8", "replace")
+            # Podman distinguishes "no such container" from every other
+            # failure, and only that one is an answer rather than a problem.
+            if "no such container" in detail.lower():
+                return None
+            raise PodmanBackendRefused(f"the runtime refused: {detail[:512].strip()}")
+        document = json.loads(completed.stdout)
+        if not isinstance(document, list) or len(document) != 1:
+            raise PodmanBackendRefused(
+                "the inspection did not describe exactly one container")
+        return document[0]
+
+    def stop_container(self, name: str, *, timeout: int) -> None:
+        """Ask one named container to stop, within a bounded time."""
+        _require_container_name(name)
+        self._run("stop", ["--time", str(int(timeout)), name])
+
+    def kill_container(self, name: str) -> None:
+        """Stop one named container without asking."""
+        _require_container_name(name)
+        self._run("kill", ["--signal", "KILL", name])
+
+    def remove_container(self, name: str) -> None:
+        """Remove one named container."""
+        _require_container_name(name)
+        self._run("rm", ["--force", name])
 
 
 # --- the closed backend registry -------------------------------------------
