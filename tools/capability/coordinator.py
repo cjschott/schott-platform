@@ -22,13 +22,39 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from .evidence import STATUS_PREFLIGHT, STATUS_PREPARED, record_invocation
+from .evidence import (STATUS_PREFLIGHT, STATUS_PREPARED, record_invocation,
+                       record_terminal_result)
+# The governed result file's name, imported rather than restated: two
+# spellings of which file is the result is one more than can be kept true.
+from .execution.collector import RESULT_NAME
 from .fabric_evidence import verify_selected_evidence
 from .invocation_identity import bind, payload_digest
 from .package_resolution import resolve_and_stage_package
 
 # The one thing this can honestly say once preparation succeeds.
 REASON_NO_ADAPTER = "no_authorised_adapter"
+
+
+def _admitted_result_digest(outcome: Any) -> Any:
+    """The digest of the result T14 admitted, or nothing.
+
+    Read from the collector's manifest entry for the governed result file, in
+    the released `sha256:<64hex>` form. Deliberately not recomputed: the bytes
+    that were admitted are the bytes that were hashed during collection, and
+    re-hashing whatever is on disk now would answer a different question.
+
+    Nothing is derived from untrusted output. `outcome.result` exists only
+    where every admission condition held, so an absent result yields an absent
+    digest rather than a hash of something nobody trusted.
+    """
+    result = getattr(outcome, "result", None)
+    if result is None:
+        return None
+    manifest = getattr(result, "manifest", None)
+    for entry in getattr(manifest, "files", ()) or ():
+        if getattr(entry, "relative_path", None) == RESULT_NAME:
+            return f"sha256:{entry.sha256}"
+    return None
 
 
 def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
@@ -96,15 +122,33 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
             # copied through the adapter, and this module adds no judgement of
             # its own to it.
             outcome = adapter.execute(execution_binding)
+
+            # The digest of the result that was actually ADMITTED, taken from
+            # the collector's own manifest rather than recomputed here. Nothing
+            # re-reads the output tree: T14 already decided what could be
+            # believed, and hashing it a second time would be a second opinion.
+            result_digest = _admitted_result_digest(outcome)
+
+            # The terminal outcome, made durable. Until G11-AN nothing wrote
+            # this, so every executed invocation left the same store state as
+            # one that never ran.
+            terminal = record_terminal_result(
+                store, invocation_record_id=decision.invocation_record_id,
+                outcome=outcome, result_digest=result_digest,
+                result_artifact_reference=None, actor=actor,
+                invocation_id=invocation_id, recorded_at=requested_at)
             return type(decision)(
-                decision.status, outcome.outcome_class,
+                decision.status, terminal.reason or outcome.outcome_class,
                 invocation_record_id=decision.invocation_record_id,
-                result_record_id=decision.result_record_id,
+                result_record_id=terminal.result_record_id,
                 invocation_id=decision.invocation_id,
                 binding_digest=decision.binding_digest,
                 payload_digest=decision.payload_digest,
                 artifact_digest=decision.artifact_digest,
-                staged_path=decision.staged_path)
+                staged_path=decision.staged_path,
+                succeeded=terminal.succeeded,
+                result_digest=terminal.result_digest,
+                result_artifact_reference=terminal.result_artifact_reference)
         # Preparation succeeded. Execution has not been authorised, and this is
         # where the flow ends -- before any surface that could run anything.
         return type(decision)(

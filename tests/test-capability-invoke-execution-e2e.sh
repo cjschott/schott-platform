@@ -81,7 +81,7 @@ from tools.capability.execution import lifecycle as L
 from tools.capability.execution import profile as P
 from tools.capability.execution import snapshot as S
 from tools.capability.execution import worker as W
-from tools.capability.records import INVOCATION_KIND
+from tools.capability.records import INVOCATION_KIND, RESULT_KIND
 from tools.capability.store import CapabilityStore
 
 failures = 0
@@ -290,12 +290,15 @@ with TemporaryDirectory() as tmp:
     # The outcome class T13 concluded, carried through unchanged.
     check("execution outcome", "completed", decision.reason)
     check("CINV allocated", True, bool(decision.invocation_record_id))
-    # PINNED, not expected. The coordinator allocates a result record ONLY on
-    # refusal: a prepared invocation returns result_record_id=None and nothing
-    # writes one afterwards. So the durable store carries no record of what the
-    # execution did. See the report -- this is the checkpoint's stop.
-    check("CRES absent for a prepared invocation", None,
-          decision.result_record_id)
+    # G11-AM found no result record was ever written for an executed
+    # invocation. G11-AN writes one, so the store now says what the execution
+    # did rather than only that it was prepared.
+    check("CRES allocated for the execution", True,
+          bool(decision.result_record_id))
+    check("the invocation succeeded", True, decision.succeeded)
+    check("result digest carried", True,
+          isinstance(decision.result_digest, str)
+          and decision.result_digest.startswith("sha256:"))
     check("package staged", True, bool(decision.staged_path))
     check("payload digest bound", True, bool(decision.payload_digest))
     check("fabric authority unchanged", before, manifest(paths["fabric"]))
@@ -337,8 +340,9 @@ with TemporaryDirectory() as tmp:
     check("preparation still prepared", "prepared", decision.status)
     check("outcome is a provider error", "provider-error", decision.reason)
     check("CINV spent anyway", True, bool(decision.invocation_record_id))
-    check("CRES still absent after a failed execution", None,
-          decision.result_record_id)
+    check("CRES written for the failed execution", True,
+          bool(decision.result_record_id))
+    check("the invocation did not succeed", False, decision.succeeded)
     reap()
 
     # Replay: the same invocation identity a second time.
@@ -355,8 +359,12 @@ with TemporaryDirectory() as tmp:
     paths = fixture(Path(tmp))
     decision, bound = invoke(paths, name="kam-noresult", body="pass\n")
     # The container exited zero. Nothing was collectable, so nothing is
-    # admitted -- backend process success is not capability success.
-    check("terminal class", "completed", decision.reason)
+    # admitted -- backend process success is not capability success. G11-AM
+    # reported this as `completed`, indistinguishable from a real success;
+    # it now names the governed reason and says it did not succeed.
+    check("terminal reason", "result-missing", decision.reason)
+    check("did not succeed", False, decision.succeeded)
+    check("no result digest", None, decision.result_digest)
     base = bound[6]
     check("no result was written", False,
           (base / "out" / "result.json").exists())
@@ -383,13 +391,21 @@ def matrix_case(label, expected_reason, **kwargs):
         durable = (store.read_record(INVOCATION_KIND,
                                      decision.invocation_record_id)
                    if spent else {})
+        # CINV is the immutable pre-execution attempt record and stays
+        # execution-prepared; the outcome lives in the CRES, which is the
+        # separation the architecture asks for.
         recorded = (durable.get("evidence") or {}).get("outcome")
+        result = (store.read_record(RESULT_KIND, decision.result_record_id)
+                  if decision.result_record_id else {})
         ok = (decision.reason == expected_reason
               and recorded == "execution-prepared"
-              and decision.result_record_id is None)
+              and bool(decision.result_record_id)
+              and decision.succeeded is False
+              and result.get("result_digest") is None)
         print(f"  {label:22} reason={decision.reason:15} "
-              f"CINV={'spent' if spent else 'unspent':7} "
-              f"CRES={'none':5} durable={recorded or 'absent':19} "
+              f"CINV=spent CRES={decision.result_record_id or 'none':11} "
+              f"class={result.get('outcome_class', '-'):15} "
+              f"succeeded={decision.succeeded!s:5} "
               f"containers={left} orphan=NO {'PASS' if ok else 'FAIL'}")
         return ok
 
@@ -435,7 +451,7 @@ ok &= matrix_case("wrong-user-mapping", "adapter-error", body=WRITES,
                   argv_edit=wrong_mapping)
 ok &= matrix_case("workload-exit-42", "provider-error",
                   body="import sys\nsys.exit(42)\n")
-ok &= matrix_case("output-absent", "completed", body="pass\n")
+ok &= matrix_case("output-absent", "result-missing", body="pass\n")
 ok &= matrix_case("timeout", "timeout", body="import time\ntime.sleep(20)\n",
                   clock=Late())
 if not ok:
@@ -450,16 +466,8 @@ if failures:
 print("FULL_ISOLATED_INVOKE_E2E=PASS")
 print("FAILURE_INVOKE_E2E=PASS")
 print("CINV_LIFECYCLE=PASS   (spent at preparation, before the adapter)")
+print("CRES_LIFECYCLE=PASS   (terminal result written for every execution)")
 print("ORPHAN_CONTAINER=NO")
-print()
-print("CRES_LIFECYCLE=INCOMPLETE -- pinned, not passed.")
-print("  A result record is allocated ONLY on refusal. Every row above leaves")
-print("  the same durable state: CINV spent, no CRES, outcome still recorded")
-print("  as execution-prepared. Seven materially different outcomes --")
-print("  completed, provider-error, adapter-error, timeout -- are")
-print("  indistinguishable in the store, and a prepared CINV cannot be told")
-print("  apart from one that never executed. The outcome exists in memory")
-print("  only. This is the checkpoint's stop; see the G11-AM report.")
 HARNESS
 ); then
   fail "the isolated invoke harness failed"

@@ -3189,13 +3189,20 @@ def _opened_capability(tmp, name="capability"):
 
 # --- record schemas are closed and versioned -------------------------------
 check(RECORD_SCHEMA_VERSION == 1, f"records carry schema version 1 ({RECORD_SCHEMA_VERSION})")
+# G11-AN split them: the invocation record did not change and keeps 1, while
+# the result record gained the section 15 fields and is 2.
+from tools.capability.records import INVOCATION_SCHEMA_VERSION, RESULT_SCHEMA_VERSION
+check(INVOCATION_SCHEMA_VERSION == 1, "the invocation schema stays version 1")
+check(RESULT_SCHEMA_VERSION == 2, "the result schema is version 2")
 for field in ("invocation_record_id", "invocation_id", "request_id", "selection_id",
               "instance_id", "capability_package_id", "contract_id", "capability_id",
               "actor", "payload_digest", "binding_digest", "effect_class",
               "artifact_digest", "requested_at", "kind", "schema_version", "evidence"):
     check(field in INVOCATION_FIELDS, f"the invocation record carries {field}")
 for field in ("capability_result_id", "invocation_record_id", "attempt_number",
-              "outcome_class", "reason", "recorded_at", "kind", "schema_version",
+              "outcome_class", "reason", "result_digest",
+              "result_artifact_reference", "started_at", "ended_at",
+              "recorded_at", "kind", "schema_version",
               "evidence"):
     check(field in RESULT_FIELDS, f"the result record carries {field}")
 for forbidden in ("payload", "command", "argv", "environment", "secret", "adapter",
@@ -3462,11 +3469,38 @@ with TemporaryDirectory() as tmp:
     check(decision.invocation_record_id != spent,
           f"an allocated-but-unwritten identity is not reused ({decision.invocation_record_id})")
 
-# --- the critical section is entered exactly once --------------------------
+# --- each durable write enters the critical section exactly once ------------
+#
+# Counted per WRITER rather than per module. G11-AN added a second durable
+# write -- the terminal result -- and it is a separate operation entered after
+# the adapter returns, not a second acquisition inside the first. The property
+# worth protecting is that neither writer nests or re-enters, and that neither
+# holds the section across capability execution.
+import ast as _ast
 _evidence_module_source = (root / "tools" / "capability" / "evidence.py").read_text(encoding="utf-8")
-check(_evidence_module_source.count("invocation_critical_section") == 1,
-      f"the decision enters its critical section exactly once "
-      f"({_evidence_module_source.count('invocation_critical_section')})")
+_evidence_tree = _ast.parse(_evidence_module_source)
+for _name in ("record_invocation", "record_terminal_result"):
+    _fn = [n for n in _ast.walk(_evidence_tree)
+           if isinstance(n, _ast.FunctionDef) and n.name == _name]
+    check(len(_fn) == 1, f"evidence defines {_name} once")
+    # Code, not prose: both docstrings discuss the adapter in order to say
+    # they never reach it, and a raw scan reads the explanation as the thing
+    # it forbids.
+    _body = _fn[0].body[1:] if (_fn[0].body
+        and isinstance(_fn[0].body[0], _ast.Expr)
+        and isinstance(_fn[0].body[0].value, _ast.Constant)) else _fn[0].body
+    _code = _ast.unparse(_ast.Module(body=_body, type_ignores=[]))
+    _entries = _code.count("invocation_critical_section")
+    check(_entries == 1,
+          f"{_name} enters its critical section exactly once ({_entries})")
+    # An adapter call inside the section would hold the invocation lock for the
+    # whole of a capability's runtime, blocking every other identity operation.
+    # Asserted on CALLS, not on the word: record_terminal_result names the
+    # adapter in a refusal message precisely to say it performs one attempt.
+    _calls = [_ast.unparse(n.func) for n in _ast.walk(_fn[0])
+              if isinstance(n, _ast.Call)]
+    check(not [c for c in _calls if "adapter" in c or c.endswith(".execute")],
+          f"{_name} invokes no adapter ({_calls})")
 check("request_critical_section" not in _evidence_module_source,
       "the fabric request lock is never acquired")
 
@@ -4018,12 +4052,17 @@ def _cinv(identity, *, invocation_id="inv-a", outcome=OUTCOME_PREPARED):
     }
 
 
-def _cres(identity, invocation_record_id):
+def _cres(identity, invocation_record_id, outcome_class="refused",
+          reason="instance-not-admitted", result_digest=None):
+    """A result record in the schema-2 shape G11-AN gave it."""
     return {
         "capability_result_id": identity,
         "invocation_record_id": invocation_record_id, "attempt_number": 1,
-        "outcome_class": "refused", "reason": "instance-not-admitted",
-        "recorded_at": _WHEN, "kind": "capability-result", "schema_version": 1,
+        "outcome_class": outcome_class, "reason": reason,
+        "result_digest": result_digest, "result_artifact_reference": None,
+        "started_at": None if outcome_class == "refused" else _WHEN,
+        "ended_at": None if outcome_class == "refused" else _WHEN,
+        "recorded_at": _WHEN, "kind": "capability-result", "schema_version": 2,
         "evidence": {"actor": "operator:cschott", "outcome": OUTCOME_REFUSED},
     }
 

@@ -19,7 +19,9 @@ from typing import Any, Mapping
 from .errors import CapabilityError
 from .evidence import OUTCOME_PREPARED, OUTCOME_REFUSED
 from .records import (INVOCATION_FIELDS, INVOCATION_KIND, RECORD_SCHEMA_VERSION,
-                      RESULT_FIELDS, RESULT_KIND)
+                      RESULT_FIELDS, RESULT_KIND,
+                      INVOCATION_SCHEMA_VERSION, RESULT_SCHEMA_VERSION)
+OUTCOME_CLASS_REFUSED = "refused"
 
 STATUS_REPORTED = "reported"
 STATUS_NOT_FOUND = "not-found"
@@ -37,6 +39,8 @@ KIND_ORDER = (INVOCATION_KIND, RESULT_KIND)
 _ID_FIELD = {INVOCATION_KIND: "invocation_record_id",
              RESULT_KIND: "capability_result_id"}
 _FIELDS = {INVOCATION_KIND: INVOCATION_FIELDS, RESULT_KIND: RESULT_FIELDS}
+_SCHEMA_VERSION = {INVOCATION_KIND: INVOCATION_SCHEMA_VERSION,
+                   RESULT_KIND: RESULT_SCHEMA_VERSION}
 
 
 @dataclass(frozen=True)
@@ -53,7 +57,11 @@ def _shape(kind: str, record: Any) -> str | None:
         return FINDING_MALFORMED
     if record.get("kind") != kind:
         return FINDING_MALFORMED
-    if record.get("schema_version") != RECORD_SCHEMA_VERSION:
+    # Per kind, since G11-AN. The invocation record did not change and keeps
+    # version 1; the result record gained the section 15 fields and is version
+    # 2. One shared constant would have made a correct record of either kind
+    # look malformed the moment the other moved.
+    if record.get("schema_version") != _SCHEMA_VERSION[kind]:
         return FINDING_MALFORMED
     identity = record.get(_ID_FIELD[kind])
     if not isinstance(identity, str) or not identity:
@@ -124,8 +132,33 @@ def validate_store(store) -> Report:
         outcome = evidence.get("outcome") if isinstance(evidence, Mapping) else None
         linked = results.get(identity, [])
         if outcome == OUTCOME_PREPARED:
-            # Sound: no execution was attempted, so there is no result.
-            if linked:
+            # A prepared invocation WITH a terminal result is the ordinary
+            # successful shape now that G6 is open: CINV is the immutable
+            # pre-execution attempt record and stays `execution-prepared`,
+            # while what the execution did lives in the CRES. Reporting that
+            # pairing as a mismatch was correct only while nothing could
+            # execute.
+            #
+            # A prepared invocation with NO result is deliberately still not
+            # reported. Design section 17 calls that interrupted, but this
+            # record cannot yet tell "execution was attempted and left no
+            # result" from "no adapter was ever authorised, so nothing was
+            # attempted" -- both write `execution-prepared` and nothing else.
+            # Section 14 names an `adapter_identity` field on the invocation
+            # record that would separate them; the implementation does not
+            # carry it. Reporting every prepared invocation as interrupted
+            # would relabel records that were never attempted, and guessing
+            # from a clock is exactly what the doctrine forbids. See the
+            # G11-AN report: this is the checkpoint's stop.
+            #
+            # What IS still a mismatch: a refusal result filed under a prepared
+            # invocation, which is two records disagreeing about whether
+            # anything was attempted, and more than one terminal result for a
+            # single attempt.
+            if len(linked) > 1:
+                findings.append(f"{identity}: {FINDING_OUTCOME_MISMATCH}")
+            elif any(entry.get("outcome_class") == OUTCOME_CLASS_REFUSED
+                     for entry in linked):
                 findings.append(f"{identity}: {FINDING_OUTCOME_MISMATCH}")
         elif outcome == OUTCOME_REFUSED:
             if not linked:

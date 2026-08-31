@@ -542,6 +542,10 @@ jobs:
 
       # G11-AM: full isolated invoke through to a real container. Host-only;
       # reports HOST_ONLY_SKIP on a runner with no production layout.
+      # G11-AN: the terminal result contract. Hermetic.
+      - name: Capability terminal result contract tests
+        run: bash tests/test-capability-result-contract.sh
+
       - name: Capability invoke execution end-to-end tests
         run: bash tests/test-capability-invoke-execution-e2e.sh
 

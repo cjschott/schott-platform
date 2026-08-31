@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=87
+  TOTAL_STEPS=88
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=112
+  TOTAL_STEPS=113
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -591,6 +591,12 @@ run "Capability execution worker binding" \
 # and executed in a real container: the front half joined to the backend, the
 # mutation manifest, and the failure matrix. Host-only -- it needs the
 # production store shape, Podman, and the exported OCI archive.
+# ENG-0005 G11-AN. The terminal result contract: whether a result was
+# admitted survives to the caller, and what an execution did becomes durable.
+# Hermetic -- constructed outcomes, temporary stores, no container.
+run "Capability terminal result contract" \
+  bash tests/test-capability-result-contract.sh
+
 run "Capability invoke execution end to end" \
   bash tests/test-capability-invoke-execution-e2e.sh
 

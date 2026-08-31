@@ -39,6 +39,8 @@ from .rehearsal import is_rehearsing
 from .invocation_identity import (CONFLICT, CONSUMED, compare_binding,
                                   validate_invocation_id)
 from .records import (INVOCATION_FIELDS, INVOCATION_KIND, RECORD_SCHEMA_VERSION,
+                      RESULT_SCHEMA_VERSION, REASON_RESULT_MISSING,
+                      OUTCOME_CLASSES,
                       RESULT_FIELDS, RESULT_KIND)
 
 STATUS_PREPARED = "prepared"
@@ -75,6 +77,17 @@ class InvocationDecision:
     payload_digest: str | None = None
     artifact_digest: str | None = None
     staged_path: str | None = None
+    # Whether a governed result was ADMITTED, which is not the same question as
+    # whether the process finished. `outcome_class` answers the second; a
+    # capability that exits zero and writes nothing is `completed` and did not
+    # succeed.
+    #
+    # `None` where no adapter ran: a preparation that never reached execution
+    # did not fail, and `False` would be a claim about a run that never
+    # happened. Only an actual execution outcome sets True or False.
+    succeeded: bool | None = None
+    result_digest: str | None = None
+    result_artifact_reference: str | None = None
 
 
 def _digest_shaped(value: Any) -> bool:
@@ -171,19 +184,132 @@ def _invocation_body(identity: str, *, invocation_id: str, request_id: Any,
     }
 
 
-def _result_body(identity: str, *, invocation_record_id: str, reason: str,
-                 recorded_at: datetime, actor: str) -> dict[str, Any]:
+def _result_body(identity: str, *, invocation_record_id: str, reason: Any,
+                 recorded_at: datetime, actor: str,
+                 outcome_class: str = OUTCOME_CLASS_REFUSED,
+                 result_digest: Any = None,
+                 result_artifact_reference: Any = None,
+                 started_at: Any = None, ended_at: Any = None,
+                 outcome: str = OUTCOME_REFUSED) -> dict[str, Any]:
+    """One result record, in the section 15 shape.
+
+    A pre-execution refusal has no `started_at`: nothing started. Encoding that
+    as null rather than as the recording instant keeps "when the work ran" and
+    "when we wrote this down" distinct, which is the whole reason both exist.
+    """
     return {
         "capability_result_id": identity,
         "invocation_record_id": invocation_record_id,
         "attempt_number": 1,
-        "outcome_class": OUTCOME_CLASS_REFUSED,
+        "outcome_class": outcome_class,
         "reason": reason,
+        "result_digest": result_digest,
+        "result_artifact_reference": result_artifact_reference,
+        "started_at": started_at,
+        "ended_at": ended_at,
         "recorded_at": recorded_at,
         "kind": RESULT_KIND,
-        "schema_version": RECORD_SCHEMA_VERSION,
-        "evidence": {"actor": actor, "outcome": OUTCOME_REFUSED},
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "evidence": {"actor": actor, "outcome": outcome},
     }
+
+
+def require_execution_success(value: Any) -> bool:
+    """The adapter's admission verdict, or refuse.
+
+    Fails closed on anything that is not exactly a boolean. A missing or
+    oddly-typed `succeeded` is not evidence that a result was admitted, and
+    defaulting it either way would answer a question nobody asked -- which is
+    how `completed` came to read as success in the first place.
+    """
+    if value is not True and value is not False:
+        raise CapabilityError(
+            "the adapter outcome does not carry a usable success verdict")
+    return value
+
+
+def record_terminal_result(store, *, invocation_record_id: Any, outcome: Any,
+                           result_digest: Any = None,
+                           result_artifact_reference: Any = None,
+                           actor: Any = "unknown",
+                           invocation_id: Any = None,
+                           recorded_at: datetime | None = None) -> InvocationDecision:
+    """Persist the terminal outcome of one execution attempt.
+
+    **It records conclusions and reaches none.** The outcome class was decided
+    by T13, the admission verdict by T14, and the digest by whatever collected
+    the result. Nothing here reruns the adapter, re-reads an exit code,
+    reinterprets output, or revisits eligibility.
+
+    **It never touches the invocation record.** CINV is the immutable
+    pre-execution attempt evidence, written before the adapter precisely so a
+    crash mid-flight is still attributable. Recording completion by editing it
+    would destroy the property that makes it worth having.
+
+    **An undescribable pair is refused rather than written.** A success with no
+    digest, or a failure carrying one, is not an outcome anybody reached, and a
+    record of it would be worse than none.
+    """
+    admitted = require_execution_success(getattr(outcome, "succeeded", None))
+    outcome_class = getattr(outcome, "outcome_class", None)
+    if outcome_class not in OUTCOME_CLASSES:
+        raise CapabilityError(
+            f"the outcome class {outcome_class!r} is not a released one")
+
+    if admitted:
+        if not _digest_shaped(result_digest):
+            raise CapabilityError(
+                "an admitted result must carry a governed result digest")
+        reason = None
+    else:
+        if result_digest is not None or result_artifact_reference is not None:
+            raise CapabilityError(
+                "a result that was not admitted may not carry a digest or a "
+                "reference")
+        # The governed name for what went wrong. `completed` with nothing
+        # admitted is the case that used to read as success, so it gets the
+        # one reason added for it; every other class already names itself.
+        reason = (REASON_RESULT_MISSING if outcome_class == "completed"
+                  else outcome_class)
+
+    # Supplied, never read from a clock here. This module records conclusions
+    # and the instant a record was written is the caller's fact, the same way
+    # `requested_at` already is on the refusal path.
+    if recorded_at is None:
+        raise CapabilityError("a terminal result must be recorded at an instant")
+
+    terminal = getattr(outcome, "terminal", None)
+    started_at = getattr(terminal, "started_at", None)
+    ended_at = getattr(terminal, "finished_at", None)
+
+    # Serialised, and entered only now. The invocation critical section is the
+    # store's own -- not the Fabric's -- and it is deliberately NOT held across
+    # the execution: a capability that runs for its full timeout must not block
+    # every other invocation-identity operation for that long.
+    with store.invocation_critical_section(invocation_id or invocation_record_id):
+        for existing in store.list_records(RESULT_KIND):
+            if (existing.get("invocation_record_id") == invocation_record_id
+                    and existing.get("attempt_number") == 1):
+                raise CapabilityError(
+                    f"a terminal result already exists for "
+                    f"{invocation_record_id}; this adapter performs one attempt")
+        identity = store.allocate_id(RESULT_KIND)
+        store.write_atomic(
+            store.path_for(RESULT_KIND, identity),
+            _result_body(identity, invocation_record_id=invocation_record_id,
+                         reason=reason, recorded_at=recorded_at,
+                         actor=actor, outcome_class=outcome_class,
+                         result_digest=result_digest if admitted else None,
+                         result_artifact_reference=(
+                             result_artifact_reference if admitted else None),
+                         started_at=started_at, ended_at=ended_at,
+                         outcome=outcome_class))
+    return InvocationDecision(
+        STATUS_PREPARED, reason, invocation_record_id=invocation_record_id,
+        result_record_id=identity, succeeded=admitted,
+        result_digest=result_digest if admitted else None,
+        result_artifact_reference=(
+            result_artifact_reference if admitted else None))
 
 
 def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
