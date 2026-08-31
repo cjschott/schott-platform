@@ -827,10 +827,23 @@ for node in ast_module.walk(tree):
         rendered = ast_module.unparse(node.func)
         for banned in ('Popen', 'system', 'execv', 'execve', 'fork', 'spawn'):
             assert not rendered.endswith(banned), rendered
-# The installed worker entrypoint still refuses at G6 and builds no argv.
-entry = open('provisioning/execution/kyri-exec-worker.py', encoding='utf-8').read()
-assert 'no governed runtime backend is bound' in entry
-assert 'create_argv' not in entry and 'verify_execution' not in entry
+# The entrypoint no longer refuses at G6 -- G11-AL bound the backend, which is
+# what opened it -- so what is asserted here is what remained true across that
+# change: this suite reaches no container, and the entrypoint still builds no
+# argv of its own. It calls the library's builder and the library's gate; a
+# second copy of either is the failure, and the provisioning suite pins that
+# distinction structurally.
+entry_tree = ast_module.parse(
+    open('provisioning/execution/kyri-exec-worker.py', encoding='utf-8').read())
+assert not [n for n in ast_module.walk(entry_tree)
+            if isinstance(n, ast_module.FunctionDef)
+            and n.name in ('create_argv', 'verify_execution')], \
+    'the entrypoint defines its own argv builder or gate'
+for node in ast_module.walk(entry_tree):
+    if isinstance(node, ast_module.Call):
+        rendered = ast_module.unparse(node.func)
+        for banned in ('Popen', 'system', 'execv', 'execve', 'fork', 'spawn'):
+            assert not rendered.endswith(banned), rendered
 print('OK')
 "
 

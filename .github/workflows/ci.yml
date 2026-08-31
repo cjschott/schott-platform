@@ -536,6 +536,10 @@ jobs:
       - name: Capability execution helper coherence tests
         run: bash tests/test-capability-execution-helper-coherence.sh
 
+      # G11-AL: the worker entrypoint's backend binding and privilege ordering.
+      - name: Capability execution worker binding tests
+        run: bash tests/test-capability-execution-worker-binding.sh
+
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified
       # generation-6 baseline, driven against throwaway fixture trees only.

@@ -510,7 +510,13 @@ for field in ('cinv', 'cimp', 'profile_digest', 'handoff_root',
 schema = helper.split('LAUNCH_RECORD_SCHEMA = (')[1].split(')')[0]
 assert schema.count(chr(34)) == 14, schema
 worker = Path('provisioning/execution/kyri-exec-worker.py').read_text(encoding='utf-8')
-assert 'no governed runtime backend is bound' in worker
+# The worker's own contract, which this pass must leave alone. It used to be
+# asserted by the G6 refusal string; G11-AL bound the backend and that string
+# is gone, so what is asserted now is the property the string stood for -- the
+# entrypoint still takes exactly the governed argv and still resolves its
+# library from the one compiled-in root.
+assert 'RUNTIME_LIBRARY_ROOT = ' + chr(34) + '/usr/lib/kyri/python' + chr(34) in worker
+assert 'CINV-nnnnnn CIMP-nnnnnn' in worker
 for production in ('/var/lib/kyri/implementation-authority',
                    '/var/lib/kyri/implementation-authority-control'):
     # The production namespace legitimately exists once an operator has run the

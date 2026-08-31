@@ -173,13 +173,39 @@ print('OK')
 "
 
 run_case "the worker delegates to the accepted library and restates no policy" "${PRELUDE}
+import ast
 code = stripped(WORKER)
 assert 'from tools.capability.execution import worker' in code, \
     'the worker does not delegate to the accepted library'
-# Execution policy belongs to the library. A second copy here is the failure.
-for token in ('--network', '--cap-drop', 'create_argv', 'podman', 'Podman',
-              '--user', '--mount', 'PYTHONHASHSEED', 'oci_image_id'):
-    assert token not in code, token
+
+# Execution policy belongs to the library. A second COPY here is the failure --
+# not a call into the library, which is the delegation this file exists to do.
+# G11-AL bound the backend here, so the entrypoint now legitimately calls
+# create_argv and names the installed backend module; what it still may not do
+# is state a container contract of its own.
+tree = ast.parse(WORKER.read_text(encoding='utf-8'))
+
+# No flag, image or environment literal may appear anywhere in the source.
+literals = [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+for token in ('--network', '--cap-drop', '--user', '--mount', '--pull',
+              '--userns', '--read-only', 'PYTHONHASHSEED', 'oci_image_id',
+              '/usr/bin/podman', 'keep-id'):
+    for literal in literals:
+        assert token not in literal, (token, literal)
+
+# The argv builder is the library's. The entrypoint may call it and may not
+# define one: a locally defined create_argv is exactly the second copy.
+assert not [n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == 'create_argv'], \
+    'the worker defines its own argv builder'
+calls = [n for n in ast.walk(tree)
+         if isinstance(n, ast.Call) and getattr(n.func, 'attr', None) == 'create_argv']
+for call in calls:
+    assert isinstance(call.func, ast.Attribute), ast.dump(call)
+    assert getattr(call.func.value, 'id', None) == 'worker', \
+        'create_argv is called on something other than the accepted library'
+
 # Naming its own installed path is fine; building a container name is not.
 assert chr(39) + 'kyri-' + chr(39) not in code, 'the worker builds a container name'
 print('OK')
@@ -284,11 +310,28 @@ print('OK')
 run_case "the canonical installed library root is fixed and compiled in" "${PRELUDE}
 W = load(WORKER, 'kyri_exec_worker')
 assert W.RUNTIME_LIBRARY_ROOT == '/usr/lib/kyri/python', W.RUNTIME_LIBRARY_ROOT
+import ast
 code = stripped(WORKER)
 assert 'RUNTIME_LIBRARY_ROOT' in code
-head = code.split('def main')[0]
-for source in ('getenv', 'environ', 'getcwd', 'PYTHONPATH'):
-    assert source not in head, source
+
+# The root must not be derived from anything a caller can influence. Asserted
+# as attribute accesses rather than as substrings: an environment= keyword
+# argument contains those letters and would trip a text scan while having
+# nothing to do with reading the process environment.
+# Docstrings removed first: _library's prose explains that an inherited
+# PYTHONPATH must not win, and scanning it would read the explanation as the
+# thing it forbids.
+tree = ast.parse(stripped(WORKER))
+for node in ast.walk(tree):
+    if isinstance(node, ast.Attribute) and getattr(node.value, 'id', None) == 'os':
+        assert node.attr not in ('environ', 'environb', 'getenv', 'putenv',
+                                 'getcwd'), f'os.{node.attr}'
+    if isinstance(node, ast.Call):
+        name = getattr(node.func, 'attr', None) or getattr(node.func, 'id', None)
+        assert name not in ('getenv', 'getcwd'), name
+for node in ast.walk(tree):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        assert 'PYTHONPATH' not in node.value, node.value
 print('OK')
 "
 
