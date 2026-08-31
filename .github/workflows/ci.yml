@@ -527,6 +527,10 @@ jobs:
       - name: Capability execution runtime observation tests
         run: bash tests/test-capability-execution-runtime-observation.sh
 
+      # G11-AK: the governed Podman backend. No Podman runs here.
+      - name: Capability execution Podman backend tests
+        run: bash tests/test-capability-execution-podman-backend.sh
+
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified
       # generation-6 baseline, driven against throwaway fixture trees only.

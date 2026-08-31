@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=83
+  TOTAL_STEPS=84
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=108
+  TOTAL_STEPS=109
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -566,6 +566,12 @@ run "Capability execution container identity" \
 # facts under test are filesystem facts.
 run "Capability execution runtime observation" \
   bash tests/test-capability-execution-runtime-observation.sh
+
+# ENG-0005 G11-AK. The governed Podman backend: the one module that starts a
+# process. Static and fixture-driven -- no Podman runs and no container is
+# created, so it proves the same things on a runner with no container runtime.
+run "Capability execution Podman backend" \
+  bash tests/test-capability-execution-podman-backend.sh
 
 # ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
 # verification-only artifacts: transactional create-once publication of five
