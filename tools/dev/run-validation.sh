@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=84
+  TOTAL_STEPS=85
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=109
+  TOTAL_STEPS=110
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -572,6 +572,13 @@ run "Capability execution runtime observation" \
 # created, so it proves the same things on a runner with no container runtime.
 run "Capability execution Podman backend" \
   bash tests/test-capability-execution-podman-backend.sh
+
+# ENG-0005 G11-AK. The privileged helper must move as one thing: the argv
+# builder and the exec site must agree about where the worker target comes
+# from. G11-AI found them disagreeing on the live host. Source-level and
+# unprivileged; the installed state is reported, never enforced.
+run "Capability execution helper coherence" \
+  bash tests/test-capability-execution-helper-coherence.sh
 
 # ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
 # verification-only artifacts: transactional create-once publication of five

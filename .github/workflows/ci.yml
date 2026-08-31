@@ -531,6 +531,11 @@ jobs:
       - name: Capability execution Podman backend tests
         run: bash tests/test-capability-execution-podman-backend.sh
 
+      # G11-AK: the privileged helper's halves must agree about the worker
+      # target. Source-level; the installed state is reported, not enforced.
+      - name: Capability execution helper coherence tests
+        run: bash tests/test-capability-execution-helper-coherence.sh
+
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified
       # generation-6 baseline, driven against throwaway fixture trees only.
