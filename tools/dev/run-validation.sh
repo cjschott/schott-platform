@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=79
+  TOTAL_STEPS=80
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=104
+  TOTAL_STEPS=105
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -356,6 +356,15 @@ run "Capability execution protocol" bash tests/test-capability-execution-protoco
 # unprivileged and installs nothing. Helper installation is gate G2.
 run "Capability execution helper policy" \
   bash tests/test-capability-execution-helper-policy.sh
+
+# ENG-0005 G11-AH. The coordinator is a deployment identity, not the number
+# 1000. The helper used to compile in `COORDINATOR_UID = 1000`, which was true
+# of schai only because cschott happens to be uid 1000; the deployment now
+# states it in root-owned authority and the constant is gone, so there is
+# nothing for a missing authority to degrade to. Policy only: no privilege, no
+# installation, and it proves /etc/kyri is unchanged.
+run "Capability execution coordinator authority" \
+  bash tests/test-capability-execution-coordinator-authority.sh
 
 # ENG-0005 T11. The privileged action layer, exercised through an injected
 # backend: no root, no sudo, no credential change. Real transition is gate G6.

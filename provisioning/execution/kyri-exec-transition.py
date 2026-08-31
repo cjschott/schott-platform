@@ -61,7 +61,27 @@ WORKING_DIRECTORY = "/"
 WORKER_USER = "kyri-capability"
 WORKER_UID = 999
 WORKER_GID = 987
-COORDINATOR_UID = 1000
+
+# The coordinator is a DEPLOYMENT identity, and this is where the deployment
+# states it. There is deliberately no constant here to fall back to.
+#
+# A compiled-in coordinator uid used to live at this line. It was never derived
+# and never provisioned: it was true of `schai` because `cschott` happens to be
+# uid 1000, and three suites passed on that coincidence. A helper meant to be
+# deployment-independent cannot carry one deployment's account number as if it
+# were a property of Kyri.
+#
+# The file sits beside `backing-store.json` in `/etc/kyri` and follows the same
+# rule: provisioned, never generated, and a malformed one is a refusal rather
+# than a prompt to write a fresh one. Absent, wrongly owned, or writable by
+# anyone but root fails closed -- and because the constant is gone, there is
+# nothing for a failure to silently degrade to.
+COORDINATOR_AUTHORITY_PATH = "/etc/kyri/coordinator-identity.json"
+COORDINATOR_AUTHORITY_SCHEMA = (
+    "coordinator_account", "coordinator_uid", "schema_version",
+)
+SUPPORTED_COORDINATOR_SCHEMA_VERSION = 1
+MAXIMUM_COORDINATOR_AUTHORITY_BYTES = 4096
 
 LAUNCH_RECORD_NAME = "launch-authorisation"
 LAUNCH_AUTHORIZED = "launch_authorized"
@@ -115,6 +135,13 @@ REQUIRED_SEALS = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
 
 _DIGITS = frozenset("0123456789")
 _HEX = frozenset("0123456789abcdef")
+# POSIX portable account names, plus the two separators Debian's `useradd`
+# accepts. Constrained here rather than at the sudoers writer because a name
+# that cannot appear in a grant must not be readable as authority either: a
+# principal carrying whitespace, a comma, or a newline could change what a
+# sudoers line means.
+_ACCOUNT_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 # The §6 minimum, and nothing more. Widening this is the schema stop condition:
 # if the helper needs broad A1-A5 semantics to decide, that is a halt-and-rule
@@ -312,6 +339,159 @@ def parse_launch_record(data: Any) -> dict[str, Any]:
     _require(isinstance(document, dict),
              "the launch record is not a JSON object")
     return document
+
+
+_APPROVED = object()
+
+
+class CoordinatorAuthority:
+    """The deployment's approved coordinator, as read from provisioned authority.
+
+    Not a plain dataclass, for the same reason ``AuthenticatedLaunch`` is not:
+    this value decides whose published objects the privileged boundary will
+    accept, so "was this read from root-owned authority?" must be answerable
+    from the type rather than from trusting the producer. Only
+    ``load_coordinator_authority`` can build one.
+    """
+
+    __slots__ = ("coordinator_account", "coordinator_uid")
+
+    def __init__(self, token: Any, **fields: Any) -> None:
+        if token is not _APPROVED:
+            raise TransitionRefused(
+                "a coordinator authority is produced by "
+                "load_coordinator_authority and cannot be constructed")
+        for name in self.__slots__:
+            object.__setattr__(self, name, fields[name])
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise TransitionRefused("the coordinator authority is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise TransitionRefused("the coordinator authority is immutable")
+
+
+def check_coordinator_authority_object(info: os.stat_result) -> None:
+    """The deployment authority must be root's, and writable by nobody else.
+
+    Ownership is the whole protection. The coordinator is the identity this
+    file exists to name, so a file the coordinator can write is a file that
+    names whoever the coordinator likes -- which is not an authority, it is a
+    declaration. Group and world write bits are refused for the same reason;
+    the read bits are not constrained, because 0400 and 0444 are both root's
+    decision to make and neither weakens anything.
+    """
+    _require(stat_module.S_ISREG(info.st_mode),
+             "the coordinator authority is not a regular file")
+    _require(info.st_uid == 0,
+             "the coordinator authority is not owned by root")
+    _require(info.st_gid == 0,
+             "the coordinator authority is not owned by the root group")
+    _require(not (stat_module.S_IMODE(info.st_mode) & 0o022),
+             "the coordinator authority is writable by other than root")
+
+
+def parse_coordinator_authority(data: Any) -> dict[str, Any]:
+    """One bounded JSON object from ``data``, or refuse.
+
+    The bound is applied to the raw bytes before parsing, and duplicate keys
+    are refused rather than collapsed -- the same rule the launch record gets,
+    for the same reason: a dictionary has already discarded the evidence that a
+    record said two different things about who the coordinator is.
+    """
+    _require(isinstance(data, (bytes, bytearray)),
+             "the coordinator authority must be bytes")
+    _require(len(data) <= MAXIMUM_COORDINATOR_AUTHORITY_BYTES,
+             f"the coordinator authority exceeds "
+             f"{MAXIMUM_COORDINATOR_AUTHORITY_BYTES} bytes")
+    try:
+        text = bytes(data).decode("utf-8")
+    except UnicodeDecodeError:
+        raise TransitionRefused(
+            "the coordinator authority is not valid UTF-8") from None
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        seen: set[str] = set()
+        for key, _ in items:
+            if key in seen:
+                raise TransitionRefused(
+                    f"the coordinator authority repeats the field {key!r}")
+            seen.add(key)
+        return dict(items)
+
+    try:
+        document = json.loads(text, object_pairs_hook=pairs)
+    except TransitionRefused:
+        raise
+    except ValueError:
+        raise TransitionRefused(
+            "the coordinator authority is not one JSON document") from None
+    _require(isinstance(document, dict),
+             "the coordinator authority is not a JSON object")
+    return document
+
+
+def load_coordinator_authority(data: Any,
+                               info: os.stat_result) -> CoordinatorAuthority:
+    """The deployment's approved coordinator, or refuse.
+
+    Ownership is judged before the bytes are read as authority: a file the
+    coordinator could have written says nothing, however well-formed it is.
+
+    **The uid is the authority and the account name is not.** The kernel fact
+    the helper can check is ``st_uid`` on a descriptor it already holds. A name
+    would have to be resolved through NSS at the privileged boundary -- a
+    lookup the helper must not depend on, through a database an attacker who
+    reached it could aim. The name is carried because the sudoers grant is
+    written in names, and ``sudoers_principal`` derives it from this object so
+    the grant and the boundary cannot come to disagree.
+    """
+    check_coordinator_authority_object(info)
+    document = parse_coordinator_authority(data)
+
+    for name in document:
+        _require(name in COORDINATOR_AUTHORITY_SCHEMA,
+                 f"the coordinator authority carries unknown field {name!r}")
+    for name in COORDINATOR_AUTHORITY_SCHEMA:
+        _require(name in document,
+                 f"the coordinator authority is missing {name!r}")
+
+    version = document["schema_version"]
+    _require(isinstance(version, int) and not isinstance(version, bool)
+             and version == SUPPORTED_COORDINATOR_SCHEMA_VERSION,
+             "the coordinator authority declares an unsupported schema")
+
+    uid = document["coordinator_uid"]
+    # `bool` first: `True == 1` would otherwise make a boolean an acceptable
+    # uid. Zero is refused by name -- root is the identity the helper already
+    # has, and a coordinator that is root is not a boundary.
+    _require(isinstance(uid, int) and not isinstance(uid, bool)
+             and 0 < uid < 2 ** 31,
+             "the coordinator authority does not name a uid")
+
+    account = document["coordinator_account"]
+    _require(isinstance(account, str) and account and account.strip() == account
+             and len(account) <= 32 and not (set(account) - _ACCOUNT_CHARACTERS),
+             "the coordinator authority does not name an account")
+
+    return CoordinatorAuthority(_APPROVED, coordinator_uid=uid,
+                                coordinator_account=account)
+
+
+def sudoers_principal(authority: Any) -> str:
+    """The sudoers principal for an approved coordinator, or refuse.
+
+    Type first, and for the reason the whole function exists: the grant is
+    written in account names while the boundary checks numbers, so the one way
+    they could drift is a principal derived from something other than the
+    record the helper actually read. Taking ``CoordinatorAuthority`` -- which
+    only ``load_coordinator_authority`` can produce -- makes a look-alike
+    mapping structurally unusable here rather than merely discouraged.
+    """
+    _require(isinstance(authority, CoordinatorAuthority),
+             "a sudoers principal is derived from an approved coordinator "
+             "authority and from nothing else")
+    return authority.coordinator_account
 
 
 def check_launch_authorisation(record: Any, cinv: str) -> AuthenticatedLaunch:

@@ -816,15 +816,25 @@ run_case "T10 exposes only policy functions" "${PRELUDE}
 import types as pytypes
 functions = sorted(n for n, v in vars(helper).items()
                    if isinstance(v, pytypes.FunctionType) and not n.startswith('_'))
-assert functions == ['check_evidence_object', 'check_handoff_object',
+assert functions == ['check_coordinator_authority_object',
+                     'check_evidence_object', 'check_handoff_object',
                      'check_launch_authorisation', 'check_profile_object',
-                     'evidence_path', 'handoff_path', 'parse_launch_record',
+                     'evidence_path', 'handoff_path',
+                     'load_coordinator_authority',
+                     'parse_coordinator_authority', 'parse_launch_record',
                      'policy_for', 'profile_path', 'require_authenticated',
-                     'validate_cinv', 'worker_argv'], functions
+                     'sudoers_principal', 'validate_cinv',
+                     'worker_argv'], functions
 # Every addition is a decision, not an action: locating the profile, checking
 # its object properties, parsing one bounded record, closing that record into a
 # type, rebinding it, and stating the command line. None of them open, copy,
 # seal, or place anything -- T11 still owns every syscall.
+#
+# G11-AH added four, and they keep that shape. Checking a stat result, parsing
+# bounded bytes, closing them into a type only this module can build, and
+# naming the principal derived from it are all decisions; the descriptor the
+# stat came from and the read that produced the bytes belong to the action
+# layer, exactly as they do for the launch record.
 source = SOURCE
 for banned in ('memfd', 'F_ADD_SEALS', 'F_GET_SEALS', 'dup2', 'F_SETFD',
                'os.write', 'os.read', 'os.open'):

@@ -197,7 +197,7 @@ def _require_policy(policy: Any, module: Any) -> None:
 
 
 def _read_member(dir_fd: int, name: str, check: Any, maximum: int,
-                 module: Any) -> bytes:
+                 module: Any, *, expected_uid: int) -> bytes:
     """One governed file beneath ``dir_fd``, read exactly once.
 
     Opened relative to a descriptor with ``O_NOFOLLOW``, so no component can be
@@ -210,7 +210,7 @@ def _read_member(dir_fd: int, name: str, check: Any, maximum: int,
     except OSError as error:
         raise refused(f"the governed {name} is unusable: {error}") from None
     try:
-        check(os.fstat(handle), expected_uid=module.COORDINATOR_UID)
+        check(os.fstat(handle), expected_uid=expected_uid)
         chunks: list[bytes] = []
         total = 0
         while True:
@@ -228,7 +228,59 @@ def _read_member(dir_fd: int, name: str, check: Any, maximum: int,
     return b"".join(chunks)
 
 
-def _open_invocation(root_fd: int, cinv: str, check: Any, module: Any) -> int:
+def coordinator_authority(module: Any, *, backend: Any) -> Any:
+    """The deployment's approved coordinator, read from provisioned authority.
+
+    Read through the same descriptor-relative seam everything else uses: the
+    directory is opened no-follow and the file is opened relative to it, so no
+    component can be swapped between the check and the read. No new backend
+    primitive is introduced -- widening that seam to fetch one file would be a
+    larger change to the privileged surface than the thing it fetches.
+
+    There is no cache and no default. Every privileged decision that needs the
+    coordinator identity reads it, so a deployment that removes or damages the
+    authority stops authorising transitions immediately rather than at the next
+    restart.
+    """
+    refused = module.TransitionRefused
+    directory, _, name = module.COORDINATOR_AUTHORITY_PATH.rpartition("/")
+    try:
+        root = backend.open_directory(directory)
+    except OSError as error:
+        raise refused(
+            f"the coordinator authority directory is unusable: {error}") from None
+    try:
+        try:
+            handle = os.open(name, _READ_FLAGS, dir_fd=root)
+        except OSError as error:
+            raise refused(
+                f"the coordinator authority is unusable: {error}") from None
+        try:
+            info = os.fstat(handle)
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(handle, _CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > module.MAXIMUM_COORDINATOR_AUTHORITY_BYTES:
+                    raise refused(
+                        "the coordinator authority exceeds "
+                        f"{module.MAXIMUM_COORDINATOR_AUTHORITY_BYTES} bytes")
+                chunks.append(chunk)
+        except OSError as error:
+            raise refused(
+                f"the coordinator authority could not be read: {error}") from None
+        finally:
+            os.close(handle)
+    finally:
+        os.close(root)
+    return module.load_coordinator_authority(b"".join(chunks), info)
+
+
+def _open_invocation(root_fd: int, cinv: str, check: Any, module: Any, *,
+                     expected_uid: int | None = None) -> int:
     """The per-invocation directory beneath a governed root, no-follow."""
     refused = module.TransitionRefused
     try:
@@ -238,7 +290,7 @@ def _open_invocation(root_fd: int, cinv: str, check: Any, module: Any) -> int:
             f"the governed directory for {cinv} is unusable: {error}") from None
     try:
         if check is not None:
-            check(os.fstat(handle), expected_uid=module.COORDINATOR_UID)
+            check(os.fstat(handle), expected_uid=expected_uid)
     except BaseException:
         os.close(handle)
         raise
@@ -258,6 +310,7 @@ def authenticate_launch(policy: Any, *, backend: Any) -> Any:
     module = _policy()
     refused = module.TransitionRefused
     _require_policy(policy, module)
+    approved = coordinator_authority(module, backend=backend)
 
     try:
         root = backend.open_directory(module.EXECUTION_ROOT)
@@ -268,7 +321,8 @@ def authenticate_launch(policy: Any, *, backend: Any) -> Any:
         try:
             data = _read_member(invocation, module.LAUNCH_RECORD_NAME,
                                 module.check_evidence_object,
-                                module.MAXIMUM_LAUNCH_RECORD_BYTES, module)
+                                module.MAXIMUM_LAUNCH_RECORD_BYTES, module,
+                                expected_uid=approved.coordinator_uid)
         finally:
             os.close(invocation)
     finally:
@@ -291,6 +345,7 @@ def authenticate_profile_source(policy: Any, launch: Any, *,
     refused = module.TransitionRefused
     _require_policy(policy, module)
     authorised = module.require_authenticated(launch, policy.cinv)
+    approved = coordinator_authority(module, backend=backend)
 
     try:
         root = backend.open_directory(module.HANDOFF_ROOT)
@@ -298,11 +353,13 @@ def authenticate_profile_source(policy: Any, launch: Any, *,
         raise refused(f"the handoff root is unusable: {error}") from None
     try:
         invocation = _open_invocation(root, authorised.cinv,
-                                      module.check_handoff_object, module)
+                                      module.check_handoff_object, module,
+                                      expected_uid=approved.coordinator_uid)
         try:
             data = _read_member(invocation, module.PROFILE_NAME,
                                 module.check_profile_object,
-                                module.MAXIMUM_PROFILE_BYTES, module)
+                                module.MAXIMUM_PROFILE_BYTES, module,
+                                expected_uid=approved.coordinator_uid)
         finally:
             os.close(invocation)
     finally:
