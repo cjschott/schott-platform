@@ -522,6 +522,74 @@ assert 'REPLACE' in text or 'PLACEHOLDER' in text, \\
 print('OK')
 "
 
+# --- the argument constraint is a regex, and fails closed if it is not --------
+#
+# sudoers matches command arguments with shell globs by default. An argument is
+# read as a regular expression only when it begins with '^' and ends with '\$',
+# and only on sudo >= 1.9.10. Parsing successfully proves neither, so the form
+# is pinned here: an edit that drops an anchor silently changes which
+# invocations the grant admits, and would do it without any syntax error.
+
+run_case "the sudoers argument is anchored, so sudoers reads it as a regex" "${PRELUDE}
+text = SUDOERS.read_text(encoding='utf-8')
+lines = [line.strip() for line in text.splitlines()
+         if line.strip() and not line.strip().startswith('#')]
+alias = [line for line in lines if 'Cmnd_Alias' in line]
+assert len(alias) == 1, alias
+argument = alias[0].split()[-1]
+assert argument.startswith('^'), argument
+assert argument.endswith('\$'), argument
+assert argument == '^CINV-[0-9]{6}\$', argument
+print('OK')
+"
+
+run_case "a sudo too old for regex arguments would deny every CINV, not admit one" "${PRELUDE}
+import fnmatch
+pattern = '^CINV-[0-9]{6}\$'
+# Under glob semantics '^', '{6}' and '\$' are literal and '[0-9]' matches a
+# single character, so the pattern describes strings no well-formed CINV can
+# be. Misinterpretation therefore costs availability, never authority -- which
+# is the direction a privilege grant is allowed to fail in.
+for identity in ('CINV-000000', 'CINV-000123', 'CINV-999999'):
+    assert not fnmatch.fnmatchcase(identity, pattern), identity
+print('OK')
+"
+
+run_case "the sudoers regex admits exactly what the helper admits" "${PRELUDE}
+import re
+module = load(Path('provisioning/execution/kyri-exec-transition.py'),
+              'kyri_exec_transition')
+# The anchors are sudoers syntax; the expression between them is the pattern.
+expression = re.compile('CINV-[0-9]{6}')
+
+accepted = ('CINV-000000', 'CINV-000123', 'CINV-999999')
+refused = ('CINV-00012', 'CINV-0001234', 'cinv-000123', 'CINV-00012a',
+           ' CINV-000123', 'CINV-000123 ', 'CINV-000123\\\\n', '',
+           'CINV-', 'CINV-000123; rm -rf /', 'CINV-0001 3', '../CINV-000123')
+for identity in accepted + refused:
+    by_regex = expression.fullmatch(identity) is not None
+    try:
+        module.validate_cinv(identity)
+        by_helper = True
+    except module.TransitionRefused:
+        by_helper = False
+    assert by_regex == by_helper, (identity, by_regex, by_helper)
+    assert by_helper == (identity in accepted), identity
+print('OK')
+"
+
+run_case "the grant does not carry noexec, which would break the helper" "${PRELUDE}
+text = SUDOERS.read_text(encoding='utf-8')
+lines = [line.strip() for line in text.splitlines()
+         if line.strip() and not line.strip().startswith('#')]
+body = ' '.join(lines).lower()
+# The helper's entire purpose is to execve the worker after dropping privilege.
+# NOEXEC would forbid exactly that, and the grant would look more restrictive
+# while being non-functional.
+assert 'noexec' not in body, body
+print('OK')
+"
+
 # --- the runbook --------------------------------------------------------------
 
 run_case "the runbook records the live quota blocker without remediating it" "${PRELUDE}
