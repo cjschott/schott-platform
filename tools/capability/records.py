@@ -30,7 +30,11 @@ from __future__ import annotations
 #
 # `RECORD_SCHEMA_VERSION` is kept as the invocation version under its released
 # name, because that is the value already written into invocation records.
-INVOCATION_SCHEMA_VERSION = 1
+# G11-AO moved the invocation record to 2: `adapter_identity` joined its
+# closed field set, which is a change to what an invocation record means. The
+# result record did not change and stays at 2 -- versions are per kind exactly
+# so one may move without relabelling the other.
+INVOCATION_SCHEMA_VERSION = 2
 RECORD_SCHEMA_VERSION = INVOCATION_SCHEMA_VERSION
 RESULT_SCHEMA_VERSION = 2
 
@@ -42,7 +46,20 @@ INVOCATION_FIELDS = (
     "invocation_record_id", "invocation_id", "request_id", "selection_id",
     "instance_id", "capability_package_id", "contract_id", "capability_id",
     "operation", "actor", "payload_digest", "binding_digest", "effect_class",
-    "artifact_digest", "staged_path", "requested_at", "kind", "schema_version",
+    "artifact_digest", "staged_path",
+    # The execution mechanism that was authorised and bound for this
+    # invocation, written BEFORE the adapter is entered. Design section 14
+    # names it among the invocation record's conceptual fields.
+    #
+    # It says authority was bound. It does not say a container was created, a
+    # process started, or a workload finished -- and that is the point: it is
+    # what lets an invocation with no result be told apart from one where
+    # nothing was ever authorised to run.
+    #
+    # Null means no execution mechanism was authorised. A caller never supplies
+    # it; it is derived from the source-governed execution binding.
+    "adapter_identity",
+    "requested_at", "kind", "schema_version",
     "evidence",
 )
 

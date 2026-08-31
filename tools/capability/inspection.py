@@ -22,6 +22,7 @@ from .records import (INVOCATION_FIELDS, INVOCATION_KIND, RECORD_SCHEMA_VERSION,
                       RESULT_FIELDS, RESULT_KIND,
                       INVOCATION_SCHEMA_VERSION, RESULT_SCHEMA_VERSION)
 OUTCOME_CLASS_REFUSED = "refused"
+from .execution.profile import ADAPTER_IDENTITY
 
 STATUS_REPORTED = "reported"
 STATUS_NOT_FOUND = "not-found"
@@ -32,6 +33,14 @@ FINDING_IDENTITY = "record-identity-mismatch"
 FINDING_INTERRUPTED_REFUSAL = "refusal-without-result"
 FINDING_ORPHAN_RESULT = "result-without-invocation"
 FINDING_OUTCOME_MISMATCH = "result-outcome-mismatch"
+# Execution authority was durably bound and no terminal outcome became durable.
+# Design section 17: observable residue, never cleaned, never repaired. Named
+# distinctly from the refusal case because they mean different things -- one is
+# an execution nobody can account for, the other a decision that was never
+# written down.
+FINDING_INTERRUPTED_EXECUTION = "execution-interrupted"
+# A result exists for an invocation that never authorised an execution.
+FINDING_RESULT_WITHOUT_AUTHORITY = "result-without-execution-authority"
 FINDING_DUPLICATE_IDENTITY = "duplicate-invocation-identity"
 FINDING_RESIDUE = "partial-write-left-behind"
 
@@ -63,6 +72,13 @@ def _shape(kind: str, record: Any) -> str | None:
     # look malformed the moment the other moved.
     if record.get("schema_version") != _SCHEMA_VERSION[kind]:
         return FINDING_MALFORMED
+    # A stored invocation may name only the governed execution mechanism, or
+    # none. A record claiming a mechanism this build does not govern is not a
+    # record whose meaning anybody reviewed.
+    if kind == INVOCATION_KIND:
+        bound = record.get("adapter_identity")
+        if bound is not None and bound != ADAPTER_IDENTITY:
+            return FINDING_MALFORMED
     identity = record.get(_ID_FIELD[kind])
     if not isinstance(identity, str) or not identity:
         return FINDING_IDENTITY
@@ -131,6 +147,12 @@ def validate_store(store) -> Report:
         evidence = record.get("evidence")
         outcome = evidence.get("outcome") if isinstance(evidence, Mapping) else None
         linked = results.get(identity, [])
+        # The execution mechanism this invocation durably bound, if any. A
+        # record written before the field existed carries nothing, and nothing
+        # is inferred from that: see the v1 branch below.
+        adapter_identity = record.get("adapter_identity")
+        legacy = record.get("schema_version") != INVOCATION_SCHEMA_VERSION
+
         if outcome == OUTCOME_PREPARED:
             # A prepared invocation WITH a terminal result is the ordinary
             # successful shape now that G6 is open: CINV is the immutable
@@ -160,6 +182,20 @@ def validate_store(store) -> Report:
             elif any(entry.get("outcome_class") == OUTCOME_CLASS_REFUSED
                      for entry in linked):
                 findings.append(f"{identity}: {FINDING_OUTCOME_MISMATCH}")
+            elif linked and adapter_identity is None and not legacy:
+                # A terminal result for an execution nobody authorised.
+                findings.append(
+                    f"{identity}: {FINDING_RESULT_WITHOUT_AUTHORITY}")
+            elif not linked and adapter_identity is not None:
+                # Section 17's case, now separable. Authority was bound and no
+                # outcome is durable, so the adapter cannot be shown not to
+                # have acted. Reported, never repaired, never replayed.
+                findings.append(
+                    f"{identity}: {FINDING_INTERRUPTED_EXECUTION}")
+            # Prepared, nothing authorised, no result: sound. Nothing was
+            # attempted, and a v1 record -- written before the field existed --
+            # falls here too rather than being read as evidence of an attempt
+            # it never recorded.
         elif outcome == OUTCOME_REFUSED:
             if not linked:
                 findings.append(f"{identity}: {FINDING_INTERRUPTED_REFUSAL}")

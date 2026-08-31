@@ -35,11 +35,13 @@ from datetime import datetime
 from typing import Any, Mapping
 
 from .errors import CapabilityError
+from .execution.profile import ADAPTER_IDENTITY
 from .rehearsal import is_rehearsing
 from .invocation_identity import (CONFLICT, CONSUMED, compare_binding,
                                   validate_invocation_id)
 from .records import (INVOCATION_FIELDS, INVOCATION_KIND, RECORD_SCHEMA_VERSION,
-                      RESULT_SCHEMA_VERSION, REASON_RESULT_MISSING,
+                      RESULT_SCHEMA_VERSION, INVOCATION_SCHEMA_VERSION,
+                      REASON_RESULT_MISSING,
                       OUTCOME_CLASSES,
                       RESULT_FIELDS, RESULT_KIND)
 
@@ -158,7 +160,7 @@ def _existing(store, invocation_id: str):
 def _invocation_body(identity: str, *, invocation_id: str, request_id: Any,
                      evidence, staged, actor: str, payload_digest: str,
                      binding_digest: str, requested_at: datetime,
-                     outcome: str) -> dict[str, Any]:
+                     outcome: str, adapter_identity: Any = None) -> dict[str, Any]:
     return {
         "invocation_record_id": identity,
         "invocation_id": invocation_id,
@@ -175,9 +177,10 @@ def _invocation_body(identity: str, *, invocation_id: str, request_id: Any,
         "effect_class": evidence.effect_class,
         "artifact_digest": staged.package_tree_sha256 if staged is not None else None,
         "staged_path": staged.staged_path if staged is not None else None,
+        "adapter_identity": adapter_identity,
         "requested_at": requested_at,
         "kind": INVOCATION_KIND,
-        "schema_version": RECORD_SCHEMA_VERSION,
+        "schema_version": INVOCATION_SCHEMA_VERSION,
         "evidence": {"actor": actor, "outcome": outcome,
                      "request_id": request_id,
                      "selection_id": evidence.selection_id},
@@ -212,6 +215,23 @@ def _result_body(identity: str, *, invocation_record_id: str, reason: Any,
         "schema_version": RESULT_SCHEMA_VERSION,
         "evidence": {"actor": actor, "outcome": outcome},
     }
+
+
+def require_adapter_identity(value: Any) -> Any:
+    """The governed execution mechanism bound to an invocation, or refuse.
+
+    Two legal values and no others: the one adapter identity this build
+    governs, or `None` where no execution mechanism was authorised. A caller
+    never supplies this -- it is derived from the source-governed execution
+    binding -- so an unrecognised value is not a caller's mistake to tolerate,
+    it is a record claiming an execution mechanism that does not exist.
+    """
+    if value is None:
+        return None
+    if value != ADAPTER_IDENTITY:
+        raise CapabilityError(
+            f"{value!r} is not the governed adapter identity")
+    return value
 
 
 def require_execution_success(value: Any) -> bool:
@@ -314,7 +334,8 @@ def record_terminal_result(store, *, invocation_record_id: Any, outcome: Any,
 
 def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
                       payload_digest: Any, evidence, staged, actor: Any,
-                      request_id: Any, requested_at: datetime) -> InvocationDecision:
+                      request_id: Any, requested_at: datetime,
+                      adapter_identity: Any = None) -> InvocationDecision:
     """Decide this invocation once, and record the decision durably.
 
     A prepared decision means the invocation was verified and recorded. **It is
@@ -407,7 +428,9 @@ def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
                              staged=staged if refusal is None else None,
                              actor=actor, payload_digest=payload_digest,
                              binding_digest=binding_digest,
-                             requested_at=requested_at, outcome=outcome))
+                             requested_at=requested_at, outcome=outcome,
+                             adapter_identity=require_adapter_identity(
+                                 adapter_identity)))
 
         if refusal is None:
             return InvocationDecision(

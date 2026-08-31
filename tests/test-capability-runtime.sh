@@ -3188,11 +3188,13 @@ def _opened_capability(tmp, name="capability"):
 
 
 # --- record schemas are closed and versioned -------------------------------
-check(RECORD_SCHEMA_VERSION == 1, f"records carry schema version 1 ({RECORD_SCHEMA_VERSION})")
+check(RECORD_SCHEMA_VERSION == 2, f"invocation records carry schema version 2 ({RECORD_SCHEMA_VERSION})")
 # G11-AN split them: the invocation record did not change and keeps 1, while
 # the result record gained the section 15 fields and is 2.
 from tools.capability.records import INVOCATION_SCHEMA_VERSION, RESULT_SCHEMA_VERSION
-check(INVOCATION_SCHEMA_VERSION == 1, "the invocation schema stays version 1")
+# G11-AO: adapter_identity joined the invocation record's closed fields, so
+# its version moved. The result record did not change and stays at 2.
+check(INVOCATION_SCHEMA_VERSION == 2, "the invocation schema is version 2")
 check(RESULT_SCHEMA_VERSION == 2, "the result schema is version 2")
 for field in ("invocation_record_id", "invocation_id", "request_id", "selection_id",
               "instance_id", "capability_package_id", "contract_id", "capability_id",
@@ -3392,7 +3394,9 @@ for mutation, description in (
         (lambda b: b.__setitem__("payload_digest", "sha256:short"), "a malformed payload digest"),
         (lambda b: b.__setitem__("invocation_id", ""), "a malformed opaque identity"),
         (lambda b: b.__setitem__("kind", "capability-result"), "a wrong record kind"),
-        (lambda b: b.__setitem__("schema_version", 2), "an unknown schema version"),
+        # 99, not 2: G11-AO moved the invocation record TO 2, so the old
+        # corruption value became the correct one and stopped corrupting.
+        (lambda b: b.__setitem__("schema_version", 99), "an unknown schema version"),
         (lambda b: b.__setitem__("unexpected", "field"), "an unknown field"),
         (lambda b: b.pop("binding_digest"), "a missing binding digest")):
     with TemporaryDirectory() as tmp:
@@ -3499,7 +3503,11 @@ for _name in ("record_invocation", "record_terminal_result"):
     # adapter in a refusal message precisely to say it performs one attempt.
     _calls = [_ast.unparse(n.func) for n in _ast.walk(_fn[0])
               if isinstance(n, _ast.Call)]
-    check(not [c for c in _calls if "adapter" in c or c.endswith(".execute")],
+    # Invoking an adapter, not naming one: require_adapter_identity validates a
+    # governed string and reaches nothing. The call that would matter is an
+    # execute on an injected collaborator.
+    check(not [c for c in _calls
+               if c.endswith(".execute") or c == "adapter" or ".adapter." in c],
           f"{_name} invokes no adapter ({_calls})")
 check("request_critical_section" not in _evidence_module_source,
       "the fabric request lock is never acquired")
@@ -4035,7 +4043,8 @@ def _seed(tmp, records):
     return store
 
 
-def _cinv(identity, *, invocation_id="inv-a", outcome=OUTCOME_PREPARED):
+def _cinv(identity, *, invocation_id="inv-a", outcome=OUTCOME_PREPARED,
+          adapter_identity=None):
     return {
         "invocation_record_id": identity, "invocation_id": invocation_id,
         "request_id": "req-1", "selection_id": "CSEL-000001",
@@ -4045,8 +4054,9 @@ def _cinv(identity, *, invocation_id="inv-a", outcome=OUTCOME_PREPARED):
         "actor": "operator:cschott", "payload_digest": payload_digest({"a": 1}),
         "binding_digest": payload_digest({"b": 2}), "effect_class": "read-only",
         "artifact_digest": payload_digest({"c": 3}), "staged_path": "/staging/x",
+        "adapter_identity": adapter_identity,
         "requested_at": _WHEN, "kind": "capability-invocation",
-        "schema_version": 1,
+        "schema_version": 2,
         "evidence": {"actor": "operator:cschott", "outcome": outcome,
                      "request_id": "req-1", "selection_id": "CSEL-000001"},
     }

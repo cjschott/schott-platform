@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=88
+  TOTAL_STEPS=89
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=113
+  TOTAL_STEPS=114
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -596,6 +596,12 @@ run "Capability execution worker binding" \
 # Hermetic -- constructed outcomes, temporary stores, no container.
 run "Capability terminal result contract" \
   bash tests/test-capability-result-contract.sh
+
+# ENG-0005 G11-AO. The execution mechanism bound to an invocation before the
+# adapter runs, and what an invocation with no result therefore means:
+# interrupted only where authority was durably bound. Hermetic.
+run "Capability adapter binding and interrupted semantics" \
+  bash tests/test-capability-adapter-binding.sh
 
 run "Capability invoke execution end to end" \
   bash tests/test-capability-invoke-execution-e2e.sh

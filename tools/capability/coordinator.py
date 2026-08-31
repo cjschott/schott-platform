@@ -35,6 +35,24 @@ from .package_resolution import resolve_and_stage_package
 REASON_NO_ADAPTER = "no_authorised_adapter"
 
 
+def _bound_adapter_identity(adapter: Any, execution_binding: Any) -> Any:
+    """The governed adapter identity for this invocation, or nothing.
+
+    Execution needs both an authorised mechanism and a governed binding, so
+    either being absent means nothing was authorised and the record says so
+    with a null rather than with a name it did not earn.
+
+    The name is read from the binding's own authenticated profile rather than
+    from a module constant: the identity recorded is the identity that was
+    actually bound, and `require_adapter_identity` still refuses anything
+    outside the governed vocabulary.
+    """
+    if adapter is None or execution_binding is None:
+        return None
+    profile = getattr(execution_binding, "profile", None)
+    return getattr(profile, "adapter_identity", None)
+
+
 def _admitted_result_digest(outcome: Any) -> Any:
     """The digest of the result T14 admitted, or nothing.
 
@@ -103,10 +121,22 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
                    selection_id=selection_id, instance_id=instance_id,
                    capability_package_id=capability_package_id,
                    operation=operation, actor=actor)
+    # The execution mechanism, determined BEFORE the immutable record is
+    # written and carried into it. Ordering is the whole point: once this is
+    # durable the platform can no longer prove the adapter did not act, which
+    # is what makes an invocation with no result honestly interrupted rather
+    # than merely unexplained.
+    #
+    # Derived from the binding the runtime itself constructed, never from a
+    # caller. Absent binding means no mechanism was authorised, and null is the
+    # truthful record of that.
+    adapter_identity = _bound_adapter_identity(adapter, execution_binding)
+
     decision = record_invocation(
         store, invocation_id=invocation_id, binding_digest=binding,
         payload_digest=payload_digest(payload), evidence=evidence, staged=staged,
-        actor=actor, request_id=request_id, requested_at=requested_at)
+        actor=actor, request_id=request_id, requested_at=requested_at,
+        adapter_identity=adapter_identity)
 
     # A rehearsal's verdict is carried back exactly as it was reached. Naming
     # the missing adapter here would overwrite the reason the rehearsal computed

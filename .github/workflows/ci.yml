@@ -546,6 +546,11 @@ jobs:
       - name: Capability terminal result contract tests
         run: bash tests/test-capability-result-contract.sh
 
+      # G11-AO: adapter identity on the invocation record, and interrupted
+      # semantics that depend on it. Hermetic.
+      - name: Capability adapter binding tests
+        run: bash tests/test-capability-adapter-binding.sh
+
       - name: Capability invoke execution end-to-end tests
         run: bash tests/test-capability-invoke-execution-e2e.sh
 

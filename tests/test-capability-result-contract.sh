@@ -102,7 +102,9 @@ run_case "the result schema version is its own, not the invocation's" "${PRELUDE
 assert hasattr(R, 'RESULT_SCHEMA_VERSION'), 'result schema version is not stated'
 assert hasattr(R, 'INVOCATION_SCHEMA_VERSION'), \\
     'invocation schema version is not stated'
-assert R.INVOCATION_SCHEMA_VERSION == 1, R.INVOCATION_SCHEMA_VERSION
+# G11-AO moved the invocation record to 2 when adapter_identity joined its
+# closed field set. The result record did not change and stays at 2.
+assert R.INVOCATION_SCHEMA_VERSION == 2, R.INVOCATION_SCHEMA_VERSION
 assert R.RESULT_SCHEMA_VERSION == 2, R.RESULT_SCHEMA_VERSION
 print('OK')
 "
