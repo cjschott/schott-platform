@@ -230,6 +230,49 @@ assert 'UidMap' in src and 'GidMap' in src, src
 print('OK')
 "
 
+# --- the closed environment ----------------------------------------------------
+
+run_case "the effective environment is declared in full, with its sources" "${PRELUDE}
+declared = W.CONTAINER_EFFECTIVE_ENVIRONMENT
+# Nine, observed from the governed image running under the governed argv. Six
+# would be the answer from reading the image config and this module; the other
+# three come from Podman and appear in neither.
+assert len(declared) == 9, len(declared)
+names = [n for n, _, _, _ in declared]
+assert names == sorted(names), 'the declaration is not sorted'
+assert len(set(names)) == len(names), 'the declaration repeats a name'
+sources = {s for _, _, s, _ in declared}
+assert sources == {'IMAGE', 'ADAPTER', 'RUNTIME'}, sources
+for name, value, source, rule in declared:
+    assert rule in ('REQUIRED', 'GOVERNED'), (name, rule)
+    assert isinstance(value, str) and value, name
+# The three Podman contributes are the ones no amount of reading finds.
+runtime = {n for n, _, s, _ in declared if s == 'RUNTIME'}
+assert runtime == {'HOME', 'HOSTNAME', 'container'}, runtime
+print('OK')
+"
+
+run_case "the declaration and the adapter's own set cannot disagree" "${PRELUDE}
+adapter = tuple(sorted((n, v) for n, v, s, _ in W.CONTAINER_EFFECTIVE_ENVIRONMENT
+                       if s == 'ADAPTER'))
+assert adapter == tuple(sorted(W.CONTAINER_ENVIRONMENT)), (adapter,
+    W.CONTAINER_ENVIRONMENT)
+# HOSTNAME is the governed one, not a second spelling of it.
+declared = dict((n, v) for n, v, _, _ in W.CONTAINER_EFFECTIVE_ENVIRONMENT)
+assert declared['HOSTNAME'] == P.HOSTNAME, declared['HOSTNAME']
+print('OK')
+"
+
+run_case "the environment no longer claims to be inherited from nothing" "${PRELUDE}
+# The claim was false and unchecked: it described what the adapter contributes,
+# not what the workload sees, and survived to G11-AF because nothing had ever
+# read the environment of a running container.
+source = Path('tools/capability/execution/worker.py').read_text(encoding='utf-8')
+assert 'inherited from nothing --' not in source, \
+    'the stale environment claim is still stated as fact'
+print('OK')
+"
+
 printf '\n'
 if [[ "${FAILURES}" -eq 0 ]]; then
   printf 'Capability execution container identity validation passed.\n'

@@ -136,7 +136,7 @@ GENERATION_DELTA=(
 # flag as well as by policy.
 #
 # Declared here as pending. NOT INSTALLED.
-"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|0340ae750ffd0e678430b9d8a5fc908daff4d3f2284b282b6ed0d2659ffedd04"
+"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|43211d7fbec52a499b843d1a10449731704d4712212de486c0a7868ecde5b1e3"
 #
 # G11-AJ. The governed container identity, corrected and bound.
 #

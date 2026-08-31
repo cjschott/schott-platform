@@ -48,7 +48,7 @@ from typing import Any, Protocol, Sequence
 
 from .package_contract import PackageBinding, PackageError, validate_package
 from .payload import PAYLOAD_MAXIMUM_BYTES, PAYLOAD_SCHEMA_VERSION
-from .profile import (ADAPTER_IDENTITY, EXECUTION_GID, EXECUTION_UID,
+from .profile import (ADAPTER_IDENTITY, EXECUTION_GID, EXECUTION_UID, HOSTNAME,
                       MAXIMUM_PROFILE_BYTES, PROFILE_SCHEMA_VERSION,
                       ProfileError, fingerprint, parse_canonical_profile,
                       verify_governed_policy)
@@ -86,9 +86,16 @@ ENVIRONMENT: tuple[tuple[str, str], ...] = (
 )
 
 # §9, added at the G4 review of 2026-08-12. The container's Python environment
-# is adapter-owned and complete: inherited from nothing -- not the host process,
-# not the payload, not the package, not the protocol -- and stated here as
-# literals so there is no path by which any of them could contribute a value.
+# is adapter-owned: not the host process, not the payload, not the package, not
+# the protocol, and stated here as literals so there is no path by which any of
+# them could contribute a value.
+#
+# This block used to say "inherited from nothing", and that was wrong. It is
+# the set the adapter *contributes*, not the set the workload *sees*. The image
+# supplies two more and Podman itself supplies three; the effective environment
+# is nine variables, enumerated and classified in
+# `CONTAINER_EFFECTIVE_ENVIRONMENT` below. The claim was never checked against
+# a running container, which is exactly how it stayed wrong through G11-AF.
 #
 # `PYTHONDONTWRITEBYTECODE=1` is the load-bearing one. `/kyri/package` is
 # mounted read-only, so an interpreter that tried to write `__pycache__` beside
@@ -104,6 +111,48 @@ CONTAINER_ENVIRONMENT: tuple[tuple[str, str], ...] = (
     ("PYTHONDONTWRITEBYTECODE", "1"),
     ("PYTHONHASHSEED", "0"),
     ("PYTHONUTF8", "1"),
+)
+
+# The complete effective environment, observed from the governed image running
+# under the governed argv -- not derived from the image config, and not from
+# what this module injects, because neither of those alone is what the workload
+# sees.
+#
+# Three sources, and only one of them is this adapter:
+#
+#   IMAGE    the admitted image's `Config.Env`, which Podman preserves.
+#   ADAPTER  `CONTAINER_ENVIRONMENT` above, injected as `--env`.
+#   RUNTIME  Podman's own additions, which appear in neither.
+#
+# The RUNTIME three are the reason this block exists. `HOME` is derived from the
+# container user's passwd entry, so it is a function of the governed identity
+# and changes if that identity changes. `HOSTNAME` follows `--hostname`.
+# `container` is injected unconditionally. None can be found by reading the
+# image or this module, and all three were missed until a container was run.
+#
+# Classification, and what each would mean if it changed:
+#
+#   REQUIRED   the workload depends on it.
+#   GOVERNED   permitted, pinned to an exact value, inert as configured.
+#
+# Nothing is currently MUST-REMOVE or MUST-OVERRIDE. `SSL_CERT_FILE` is the one
+# to watch: it is inert only because the network is none, and it becomes live
+# the moment networking is ever granted.
+#
+# A tenth variable is a failure, not a curiosity. The set is closed here so
+# that an image rebuild or a Podman upgrade which adds one is caught rather
+# than absorbed.
+CONTAINER_EFFECTIVE_ENVIRONMENT: tuple[tuple[str, str, str, str], ...] = (
+    ("HOME", "/home/nonroot", "RUNTIME", "GOVERNED"),
+    ("HOSTNAME", HOSTNAME, "RUNTIME", "GOVERNED"),
+    ("LC_ALL", "C.UTF-8", "ADAPTER", "REQUIRED"),
+    ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin",
+     "IMAGE", "GOVERNED"),
+    ("PYTHONDONTWRITEBYTECODE", "1", "ADAPTER", "REQUIRED"),
+    ("PYTHONHASHSEED", "0", "ADAPTER", "REQUIRED"),
+    ("PYTHONUTF8", "1", "ADAPTER", "REQUIRED"),
+    ("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt", "IMAGE", "GOVERNED"),
+    ("container", "podman", "RUNTIME", "GOVERNED"),
 )
 
 PACKAGE_DESTINATION = "/kyri/package"
