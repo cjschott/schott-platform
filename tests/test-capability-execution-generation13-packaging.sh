@@ -160,15 +160,24 @@ print('OK')
 
 # --- the matrix against the live host -------------------------------------------
 
-run_case "every row's baseline is the byte the live host holds" "${PRELUDE}
+run_case "the live host is wholly at one of the two declared generations" "${PRELUDE}
+# Once the generation is installed on production the host is the SUCCESSOR, not
+# the predecessor, and a row's baseline is no longer what is on disk. What stays
+# true either way -- and is the property that matters -- is that every object is
+# at exactly one of its two declared states, and that all of them agree.
+at_base, at_target, unknown = [], [], []
 for row in ROWS:
     have = installed_digest(row['target'])
-    if row['op'] == 'CREATE':
-        assert row['base'] == 'ABSENT', row
-        assert have is None, (row['target'], 'is declared CREATE and is installed')
+    if have == row['want']:
+        at_target.append(row['target'])
+    elif (row['op'] == 'CREATE' and have is None) or have == row['base']:
+        at_base.append(row['target'])
     else:
-        assert have is not None, (row['target'], 'is declared REPLACE and is absent')
-        assert have == row['base'], (row['target'], have, row['base'])
+        unknown.append((row['target'], have))
+assert not unknown, ('objects in neither declared state', unknown)
+assert not (at_base and at_target), \
+    ('the host is split between generations', len(at_base), len(at_target))
+assert len(at_base) + len(at_target) == len(ROWS)
 print('OK')
 "
 
@@ -183,9 +192,11 @@ print('OK')
 
 run_case "the declared counts are the matrix's own, not typed in" "${PRELUDE}
 installed = [p for p in LIBRARY_ROOT.rglob('*.py') if '__pycache__' not in p.parts]
-assert len(installed) == BASELINE_N, (len(installed), BASELINE_N)
 creates = [row for row in ROWS if row['op'] == 'CREATE']
+# The arithmetic is the matrix's own and holds whatever the host is at.
 assert BASELINE_N + len(creates) == TARGET_N, (BASELINE_N, len(creates), TARGET_N)
+# And the host is at one of the two counts, never between them.
+assert len(installed) in (BASELINE_N, TARGET_N), (len(installed), BASELINE_N, TARGET_N)
 # And the operations are only the two this transaction implements.
 assert {row['op'] for row in ROWS} == {'CREATE', 'REPLACE'}, {row['op'] for row in ROWS}
 print(f'OK' if len(ROWS) == 21 else f'unexpected row count {len(ROWS)}')
@@ -252,13 +263,70 @@ print('OK')
 
 # --- the installed tree is a working runtime -------------------------------------
 
-build_installed() {
+# A Generation-12 root, reconstructed from reviewed data, then installed.
+#
+# This used to copy the live library and install on top. That was true until
+# the generation was installed on production, at which point the fixture
+# started at Generation 13 and the install became a no-op that wrote no
+# evidence. A baseline is reviewed data, so it is rebuilt from reviewed data.
+GEN12_COMMIT="$(sed -n 's/^GEN12_COMMIT="\(.*\)"$/\1/p' "${CEREMONY}" | head -1)"
+
+matrix_rows() {
+  sed -n '/^MATRIX=(/,/^)/p' "${CEREMONY}" | sed -n 's/^"\(.*\)"$/\1/p'
+}
+row_field() { printf '%s' "$1" | cut -d'|' -f"$2"; }
+row_target() {
+  local target; target="$(row_field "$1" 2)"
+  printf '%s' "${target#\$\{LIBRARY_ROOT\}/}"
+}
+
+gen12_blob() {
+  local source="$1" wanted="$2" commit
+  if [[ "$(git -C "${REPOSITORY}" show "${GEN12_COMMIT}:${source}" 2>/dev/null \
+             | sha256sum | cut -d' ' -f1)" == "${wanted}" ]]; then
+    git -C "${REPOSITORY}" show "${GEN12_COMMIT}:${source}"
+    return 0
+  fi
+  while IFS= read -r commit; do
+    if [[ "$(git -C "${REPOSITORY}" show "${commit}:${source}" 2>/dev/null \
+               | sha256sum | cut -d' ' -f1)" == "${wanted}" ]]; then
+      git -C "${REPOSITORY}" show "${commit}:${source}"
+      return 0
+    fi
+  done < <(git -C "${REPOSITORY}" log --format=%H -- "${source}")
+  return 1
+}
+
+build_gen12_root() {
   local root="$1"
   rm -rf "${root}"
   mkdir -p "${root}${LIBRARY_ROOT}" "${root}/root" "${root}/etc/sudoers.d" \
            "${root}/usr/libexec" "${root}/etc/kyri"
   ( cd "${LIBRARY_ROOT}" && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
     | ( cd "${LIBRARY_ROOT}" && xargs -0 -I{} cp --parents {} "${root}${LIBRARY_ROOT}/" )
+
+  local row target source base
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    target="${root}${LIBRARY_ROOT}/$(row_target "${row}")"
+    source="$(row_field "${row}" 1)"
+    base="$(row_field "${row}" 5)"
+    if [[ "$(row_field "${row}" 4)" == "CREATE" ]]; then
+      rm -f "${target}"
+      continue
+    fi
+    mkdir -p "$(dirname "${target}")"
+    rm -f "${target}"
+    gen12_blob "${source}" "${base}" > "${target}" || return 1
+    [[ "$(sha256sum "${target}" | cut -d' ' -f1)" == "${base}" ]] || return 1
+    chmod 0444 "${target}"
+  done < <(matrix_rows)
+  return 0
+}
+
+build_installed() {
+  local root="$1"
+  build_gen12_root "${root}" || return 1
   ( cd "${root}${LIBRARY_ROOT}" && find . -type f -name '*.py' -print0 | sort -z \
       | xargs -0 sha256sum ) \
     | sed "s#  \\./#  ${LIBRARY_ROOT}/#" > "${root}/root/kyri-gen12-library-digests.txt"
@@ -566,10 +634,12 @@ print('OK')
 # that cannot resolve what it imports. Shown against two fixtures rather than
 # argued.
 
+# A Generation-12 root and nothing else. Built the same way as the one the
+# install starts from -- from reviewed data -- because copying the live library
+# would compare Generation 13 against itself once the generation is installed.
 GEN12_ONLY="${WORK}/gen12-only"
-mkdir -p "${GEN12_ONLY}${LIBRARY_ROOT}"
-( cd "${LIBRARY_ROOT}" && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
-  | ( cd "${LIBRARY_ROOT}" && xargs -0 -I{} cp --parents {} "${GEN12_ONLY}${LIBRARY_ROOT}/" )
+build_gen12_root "${GEN12_ONLY}" \
+  || fail "the Generation-12-only fixture could not be built"
 
 order_case() {
   local label="$1" root="$2" expect="$3" actual

@@ -49,6 +49,7 @@ read_number() {
 }
 BASELINE_N="$(read_number EXPECTED_LIBRARY_FILES_BASELINE)"
 TARGET_N="$(read_number EXPECTED_LIBRARY_FILES_TARGET)"
+GEN12_COMMIT="$(sed -n 's/^GEN12_COMMIT="\(.*\)"$/\1/p' "${CEREMONY}" | head -1)"
 
 # The matrix, read out of the ceremony rather than restated. A suite carrying
 # its own copy would test its copy.
@@ -66,6 +67,43 @@ row_target() {
 # Built from the live installed library, which is the shape this ceremony
 # governs. Its Generation-12 evidence is a sha256sum listing keyed by the real
 # installed pathnames, exactly as that transaction wrote it.
+# A Generation-12 library root, reconstructed from REVIEWED DATA rather than
+# copied from the live host.
+#
+# This suite used to copy `/usr/lib/kyri/python` and call the result a
+# Generation-12 host. That was true right up until the generation was installed
+# on production, at which point the fixture silently became a Generation-13 tree
+# and every case that starts at the predecessor failed. A baseline is reviewed
+# data, so it is rebuilt from reviewed data: carried-over objects come from the
+# host (they are identical in both generations, which the matrix is what
+# establishes), REPLACE targets are restored to the baseline bytes the matrix
+# pins, and CREATE targets are removed.
+#
+# The helper library modules are copied as they are: they belong to the helper
+# ceremony, are unchanged by either generation, and are the stale state a real
+# host carries.
+gen12_blob() {
+  # The reviewed bytes whose digest is "$2", for repository path "$1". Tried at
+  # the Generation-12 authority first, then searched back through the history of
+  # that path. A row whose baseline is in neither is a matrix that does not
+  # describe any reviewed state, which is a failure rather than something to
+  # work around.
+  local source="$1" wanted="$2" commit
+  if [[ "$(git -C "${REPOSITORY}" show "${GEN12_COMMIT}:${source}" 2>/dev/null \
+             | sha256sum | cut -d' ' -f1)" == "${wanted}" ]]; then
+    git -C "${REPOSITORY}" show "${GEN12_COMMIT}:${source}"
+    return 0
+  fi
+  while IFS= read -r commit; do
+    if [[ "$(git -C "${REPOSITORY}" show "${commit}:${source}" 2>/dev/null \
+               | sha256sum | cut -d' ' -f1)" == "${wanted}" ]]; then
+      git -C "${REPOSITORY}" show "${commit}:${source}"
+      return 0
+    fi
+  done < <(git -C "${REPOSITORY}" log --format=%H -- "${source}")
+  return 1
+}
+
 build_host() {
   local root="$1"
   rm -rf "${root}"
@@ -73,15 +111,38 @@ build_host() {
            "${root}/usr/libexec" "${root}/etc/kyri"
   ( cd "${LIBRARY_ROOT}" && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
     | ( cd "${LIBRARY_ROOT}" && xargs -0 -I{} cp --parents {} "${root}${LIBRARY_ROOT}/" )
+
+  local row target source base
+  while IFS= read -r row; do
+    [[ -n "${row}" ]] || continue
+    target="${root}${LIBRARY_ROOT}/$(row_target "${row}")"
+    source="$(row_field "${row}" 1)"
+    base="$(row_field "${row}" 5)"
+    if [[ "$(row_field "${row}" 4)" == "CREATE" ]]; then
+      rm -f "${target}"
+      continue
+    fi
+    mkdir -p "$(dirname "${target}")"
+    # The copied objects arrive 0444, so the baseline is written into a fresh
+    # file rather than over a read-only one.
+    rm -f "${target}"
+    gen12_blob "${source}" "${base}" > "${target}" \
+      || { printf 'FIXTURE: no reviewed bytes hash to %s for %s\n' \
+             "${base}" "${source}" >&2; return 1; }
+    [[ "$(sha256sum "${target}" | cut -d' ' -f1)" == "${base}" ]] \
+      || { printf 'FIXTURE: %s did not restore to its baseline\n' "${source}" >&2; return 1; }
+    chmod 0444 "${target}"
+  done < <(matrix_rows)
+
   ( cd "${root}${LIBRARY_ROOT}" && find . -type f -name '*.py' -print0 | sort -z \
       | xargs -0 sha256sum ) \
     | sed "s#  \\./#  ${LIBRARY_ROOT}/#" > "${root}/root/kyri-gen12-library-digests.txt"
   {
-    printf 'commit %s\n' "$(sed -n 's/^GEN12_COMMIT="\(.*\)"$/\1/p' "${CEREMONY}" | head -1)"
+    printf 'commit %s\n' "${GEN12_COMMIT}"
     printf 'state COMMITTED\n'
   } > "${root}/root/kyri-gen12-helper-digests.txt"
-  # The privileged surface as this host really carries it: stale, and none of
-  # it this ceremony's to touch.
+  # The privileged surface as a real host carries it: stale, and none of it
+  # this ceremony's to touch.
   local helper
   for helper in kyri-exec-transition kyri-exec-verify kyri-exec-quota \
                 kyri-exec-worker.py kyri-exec-verify-worker.py; do
