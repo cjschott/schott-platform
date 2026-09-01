@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=95
+  TOTAL_STEPS=97
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=120
+  TOTAL_STEPS=122
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -626,6 +626,17 @@ run "Capability execution identity authority" \
 # genuine; no privilege, no Podman, no container.
 run "Capability execution supervision" \
   bash tests/test-capability-execution-supervision.sh
+
+# ENG-0005 G11-AU. The Generation-13 transaction and everything that can
+# interrupt it. Fixture-only: every case builds a throwaway host from the
+# installed library and drives the ceremony against that.
+run "Capability execution generation-13 installer" \
+  bash tests/test-capability-execution-generation13-installer.sh
+
+# ENG-0005 G11-AU. What that transaction packages, and whether the packaged
+# bytes are a working runtime with the repository out of reach.
+run "Capability execution generation-13 packaging" \
+  bash tests/test-capability-execution-generation13-packaging.sh
 
 # ENG-0005 G11-AS. The privileged reconciliation entrypoint G11-AR could not
 # safely build: what it becomes, in what order, and that Podman is unreachable

@@ -37,3 +37,5 @@ test-fabric-evidence-authority.sh	drives the host-evidence ceremony pinned to /o
 test-capability-invoke-execution-e2e.sh	drives a real container from the exported OCI archive against a fixture shaped from the production Fabric, Trust and artifact stores
 test-capability-execution-reconciliation.sh	creates and reconciles real containers from the exported OCI archive in a disposable Podman store
 test-capability-supervised-execution-e2e.sh	supervises real containers from the exported OCI archive in a disposable Podman store
+test-capability-execution-generation13-installer.sh	drives the generation-13 ceremony against a fixture built from the installed runtime
+test-capability-execution-generation13-packaging.sh	reads the installed Generation-12 runtime and installs a Generation-13 fixture from it

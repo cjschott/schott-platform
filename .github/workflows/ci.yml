@@ -569,6 +569,14 @@ jobs:
       - name: Capability execution supervision tests
         run: bash tests/test-capability-execution-supervision.sh
 
+      # G11-AU: the Generation-13 transaction and its packaging. Host-only;
+      # both report HOST_ONLY_SKIP without an installed runtime to build from.
+      - name: Capability execution generation-13 installer tests
+        run: bash tests/test-capability-execution-generation13-installer.sh
+
+      - name: Capability execution generation-13 packaging tests
+        run: bash tests/test-capability-execution-generation13-packaging.sh
+
       - name: Capability execution reconcile entrypoint tests
         run: bash tests/test-capability-execution-reconcile-entrypoint.sh
 
