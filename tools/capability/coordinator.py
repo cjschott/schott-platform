@@ -22,11 +22,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from .errors import CapabilityError
 from .evidence import (STATUS_PREFLIGHT, STATUS_PREPARED, record_invocation,
                        record_terminal_result)
-# The governed result file's name, imported rather than restated: two
-# spellings of which file is the result is one more than can be kept true.
-from .execution.collector import RESULT_NAME
 from .fabric_evidence import verify_selected_evidence
 from .invocation_identity import bind, payload_digest
 from .package_resolution import resolve_and_stage_package
@@ -54,25 +52,33 @@ def _bound_adapter_identity(adapter: Any, execution_binding: Any) -> Any:
 
 
 def _admitted_result_digest(outcome: Any) -> Any:
-    """The digest of the result T14 admitted, or nothing.
+    """The digest of the result T14 admitted, as the adapter concluded it.
 
-    Read from the collector's manifest entry for the governed result file, in
-    the released `sha256:<64hex>` form. Deliberately not recomputed: the bytes
-    that were admitted are the bytes that were hashed during collection, and
-    re-hashing whatever is on disk now would answer a different question.
+    **Read, not derived.** This used to walk the collector's manifest here,
+    which made the coordinator a second reader of somebody else's evidence and
+    a second opinion about which file was the result. The conclusion belongs to
+    whatever performed the collection, so it is carried on the outcome and this
+    only checks that what arrived is the released shape.
 
-    Nothing is derived from untrusted output. `outcome.result` exists only
-    where every admission condition held, so an absent result yields an absent
-    digest rather than a hash of something nobody trusted.
+    It also has to be read rather than derived now that execution can happen
+    across the privilege boundary: a supervised outcome carries the digest the
+    worker reported and no manifest at all, because a manifest cannot cross a
+    pipe and re-deriving one from output the coordinator cannot see would be
+    inventing evidence.
+
+    An absent digest is an absent digest. `record_terminal_result` refuses a
+    success without one, so nothing here needs to guess.
     """
-    result = getattr(outcome, "result", None)
-    if result is None:
+    digest = getattr(outcome, "result_digest", None)
+    if digest is None:
         return None
-    manifest = getattr(result, "manifest", None)
-    for entry in getattr(manifest, "files", ()) or ():
-        if getattr(entry, "relative_path", None) == RESULT_NAME:
-            return f"sha256:{entry.sha256}"
-    return None
+    if not isinstance(digest, str) or not digest.startswith("sha256:") \
+            or len(digest) != len("sha256:") + 64 \
+            or set(digest[len("sha256:"):]) - set("0123456789abcdef"):
+        raise CapabilityError(
+            "the adapter reported a result digest that is not the released "
+            "sha256:<64hex> form")
+    return digest
 
 
 def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
@@ -191,3 +197,41 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
             artifact_digest=decision.artifact_digest,
             staged_path=decision.staged_path)
     return decision
+
+
+def execute_supervised(store, *, invocation_record_id: Any, invocation_id: Any,
+                       supervisor: Any, binding: Any, actor: Any,
+                       recorded_at: datetime):
+    """Supervise one already-authorised invocation and record its outcome.
+
+    **This is not a second preparation.** `prepare_invocation` decided
+    eligibility, staged the package and spent the identity; the launch bridge
+    published the handoff and wrote the authorisation. All of that is durable
+    before this is reachable, and re-running any of it here would either refuse
+    as a replay or make a second decision about a question already answered.
+
+    **The coordinator keeps result authority, and this is where it keeps it.**
+    The supervisor drives the privileged execution and concludes facts; nothing
+    on the far side of the boundary may write a Capability Runtime record, and
+    the worker could not -- it has no store, no allocator and no path to one.
+    What comes back is carried into `record_terminal_result` exactly as it
+    arrived, which is the same call `prepare_invocation` makes for a locally
+    executed adapter, for the same reason.
+
+    **A refusal writes nothing.** A supervised execution that could not be
+    concluded -- an untrusted conversation, a worker that stopped talking, a
+    container whose disposal could not be proven -- leaves the invocation with
+    no terminal result, which is precisely the state `recovery` enumerates and
+    the readiness gate acts on. Writing an `adapter-error` result instead would
+    close the question without answering it, and would take the invocation out
+    of the one enumeration that could still resolve it.
+    """
+    if supervisor is None or binding is None:
+        raise CapabilityError(
+            "a supervised execution needs both a supervisor and a binding")
+    outcome = supervisor.execute(binding)
+    return record_terminal_result(
+        store, invocation_record_id=invocation_record_id, outcome=outcome,
+        result_digest=_admitted_result_digest(outcome),
+        result_artifact_reference=None, actor=actor,
+        invocation_id=invocation_id, recorded_at=recorded_at)

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import os
 from typing import Any
 
@@ -460,3 +461,87 @@ __all__ = ["HANDOFF_ROOT", "LAUNCH_RECORD_SCHEMA", "LIFECYCLE_STATE",
            "TRANSPORT_SCHEMA_VERSION", "LaunchDisagreement", "LaunchError",
            "LaunchReady", "LaunchRefused", "authorise_launch",
            "commitment_digest", "launch_record"]
+
+
+# The execution root the bridge writes its authorisation beneath. Compiled in
+# for the reason `HANDOFF_ROOT` is: a caller able to name it would be a caller
+# able to name another invocation's authorisation.
+EXECUTION_ROOT = "/data/kyri/capability-runtime/execution"
+
+
+def _published_bytes(root: str, cinv: str, name: str) -> bytes:
+    """One governed object beneath a compiled-in root, read no-follow.
+
+    Bounded, and opened relative to a directory descriptor so no component can
+    be swapped between the check and the read.
+    """
+    cinv = _require_cinv(cinv)
+    try:
+        directory = os.open(os.path.join(root, cinv), _DIR_FLAGS)
+    except OSError as error:
+        raise LaunchRefused(
+            f"the governed directory for {cinv} is unusable "
+            f"({error.strerror})") from None
+    try:
+        handle = os.open(name, _READ_FLAGS, dir_fd=directory)
+    except OSError as error:
+        raise LaunchRefused(
+            f"the governed {name} for {cinv} is unusable "
+            f"({error.strerror})") from None
+    try:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(handle, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAXIMUM_PUBLISHED_BYTES:
+                raise LaunchRefused(
+                    f"the governed {name} for {cinv} is oversized")
+            chunks.append(chunk)
+    finally:
+        os.close(handle)
+        os.close(directory)
+    return b"".join(chunks)
+
+
+MAXIMUM_PUBLISHED_BYTES = 65536
+
+
+def supervised_binding(cinv: str):
+    """What this bridge published for one invocation, read back for supervision.
+
+    **Nothing here is chosen.** The implementation and the profile digest come
+    from the authorisation this module wrote; the profile comes from the handoff
+    this module published, and is required to hash to the digest that
+    authorisation committed to. A supervisor handed a profile that did not is a
+    supervisor checking the worker against a document nobody authorised.
+
+    It lives here rather than in the operator surface because these are this
+    module's own objects. A command-line tool that parsed a published profile
+    would be a second reader of evidence this module owns, and it would need the
+    profile parser to do it -- which is exactly the authority the launch CLI is
+    asserted not to have.
+    """
+    from .profile import parse_canonical_profile
+    from .supervision import SupervisedBinding
+
+    record = _published_bytes(EXECUTION_ROOT, cinv, LAUNCH_AUTHORISATION_NAME)
+    try:
+        authorisation = json.loads(record.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise LaunchRefused(
+            f"{cinv} has no readable launch authorisation") from None
+    digest = authorisation.get("profile_digest")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise LaunchRefused(f"{cinv} carries no governed profile digest")
+
+    published = _published_bytes(HANDOFF_ROOT, cinv, PROFILE_NAME)
+    if hashlib.sha256(published).hexdigest() != digest:
+        raise LaunchRefused(
+            f"the published profile for {cinv} does not hash to the digest its "
+            "launch authorisation committed to")
+    return SupervisedBinding(cinv=cinv,
+                             profile=parse_canonical_profile(published),
+                             profile_digest=digest)

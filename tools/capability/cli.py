@@ -27,6 +27,7 @@ and the answer is no.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -40,11 +41,12 @@ from . import fabric_evidence
 from .fabric_evidence import verify_selected_evidence
 from .execution import image_store, implementation_authority
 from .rehearsal import rehearsing
-from .coordinator import prepare_invocation
+from .coordinator import execute_supervised, prepare_invocation
 from .errors import CapabilityError
 from .execution.backing_store import (BackingStoreError, ObservedFilesystem,
                                       verify_backing_store)
-from .execution.launch import HANDOFF_ROOT, LaunchError, authorise_launch
+from .execution.launch import (HANDOFF_ROOT, LaunchError, authorise_launch,
+                               supervised_binding)
 from .inspection import STATUS_NOT_FOUND, STATUS_REPORTED, inspect_records, validate_store
 from .store import CapabilityStore
 
@@ -92,6 +94,7 @@ _ELIGIBILITY_REASONS = frozenset({
 CAPABILITY_RUNTIME_ROOT = "/data/kyri/capability-runtime"
 AUTHORITY_ROOT = "/var/lib/kyri/implementation-authority"   # prod-path-reference
 BACKING_STORE_CONFIG = "/etc/kyri/backing-store.json"       # prod-path-reference
+
 
 # Read from the bridge so the two can never disagree about what it spells.
 from .execution.launch import LIFECYCLE_STATE as LAUNCH_AUTHORIZED_STATE
@@ -285,7 +288,63 @@ def _execution_outlook(evidence) -> dict:
     # this command to tell them what they themselves installed. The helper
     # enforces its own authority; a preflight opinion about it would be a
     # second one.
+    outlook.update(_supervision_outlook())
     return outlook
+
+
+def _supervision_outlook() -> dict:
+    """What supervision would need, asked read-only and answered honestly.
+
+    **It mutates nothing and could not.** No helper is invoked, no
+    reconciliation is run, no CINV or CRES is created, no snapshot is
+    materialised and no container is created. Every field below is a read of an
+    object root already published, and a failure to read one is reported as a
+    failure to read it rather than as an absence.
+
+    **A field this surface cannot observe says so.** The two privilege grants
+    live in a namespace the coordinator may not read -- correctly, and by the
+    same rule that keeps this command out of the elevation namespace at all.
+    Reporting them as unobservable is the truthful answer; reporting them as
+    absent would be a claim about something nobody here looked at, and naming
+    the mechanism would be this surface reaching for it.
+    """
+    from .execution import helpers, identity
+
+    report = {
+        "coordinator_identity_authority": False,
+        "execution_identity_authority": False,
+        "execution_identity_account": None,
+        "helper_compatibility": None,
+        "helpers_blocking": [],
+        "launch_grant": "unobservable",
+        "reconcile_grant": "unobservable",
+        "supervision_ready": False,
+    }
+    report["coordinator_identity_authority"] = os.path.exists(
+        "/etc/kyri/coordinator-identity.json")            # prod-path-reference
+    try:
+        who = identity.read_execution_identity()
+    except identity.ExecutionIdentityError:
+        who = None
+    if who is not None:
+        report["execution_identity_authority"] = True
+        report["execution_identity_account"] = who.account
+
+    verdict = helpers.compatibility()
+    report["helper_compatibility"] = verdict.verdict
+    report["helpers_blocking"] = [
+        {"path": helper.path, "state": helper.state, "purpose": helper.purpose}
+        for helper in verdict.blocking]
+
+    # Ready means every observable precondition holds. It is deliberately NOT
+    # weakened by the two unobservable ones: a host that satisfies everything
+    # here still has to satisfy sudoers, and the helper will refuse if it does
+    # not. What this cannot see, it does not vouch for.
+    report["supervision_ready"] = bool(
+        report["coordinator_identity_authority"]
+        and report["execution_identity_authority"]
+        and verdict.compatible)
+    return report
 
 
 def command_preflight(args) -> int:
@@ -544,6 +603,164 @@ def command_authorise_launch(args) -> int:
     return EXIT_SUCCESS
 
 
+def command_execute(args) -> int:
+    """Supervise one authorised invocation and record its terminal result.
+
+    **It decides nothing about whether execution is permitted.** That was
+    decided twice already: `invoke` verified eligibility and spent the identity,
+    and `authorise-launch` published the handoff and wrote the authorisation.
+    This step drives what those two authorised, and writes the one record they
+    deliberately left unwritten.
+
+    **The caller supplies one CINV.** No adapter, no backend, no binding, no
+    image and no argv -- there is no flag for any of them, which is what makes
+    "the caller does not choose what runs" a property of the surface rather
+    than a rule about it.
+
+    **A refusal writes nothing.** A supervised execution that could not be
+    concluded leaves the invocation unresolved on purpose, so the recovery
+    enumeration and the execution-safety gate can still find it. An
+    `adapter-error` record would close the question without answering it.
+    """
+    from .execution import supervision
+
+    launcher = _helper_launcher()
+    try:
+        store = CapabilityStore(CAPABILITY_RUNTIME_ROOT,
+                                expected_uid=args.expected_uid,
+                                expected_gid=args.expected_gid)
+    except CapabilityError as error:
+        raise _Unusable(
+            f"the capability runtime store is unusable ({error})") from None
+    try:
+        record = store.read_record("capability-invocation", args.cinv)
+    except CapabilityError as error:
+        print(f"capability: {error}", file=sys.stderr)
+        return EXIT_DENIED
+
+    binding = supervised_binding(args.cinv)
+    supervisor = supervision.ExecutionSupervisor(
+        launcher=launcher, reconciler=launcher.reconcile)
+    try:
+        terminal = execute_supervised(
+            store, invocation_record_id=record.get("invocation_record_id"),
+            invocation_id=args.cinv, supervisor=supervisor, binding=binding,
+            actor=args.actor,
+            recorded_at=_instant(args.recorded_at, "--recorded-at"))
+    except supervision.SupervisionRefused as refusal:
+        # Reported in full and recorded not at all. The trace says how far the
+        # conversation got and what reconciliation proved, which is what an
+        # operator needs to decide whether this host is still safe to execute
+        # on -- and the execution-safety gate answers that mechanically.
+        trace = supervisor.trace
+        _emit({
+            "cinv": args.cinv,
+            "status": "unresolved",
+            "reason": str(refusal),
+            "protocol_states": list(trace.states) if trace else [],
+            "worker_reaped": trace.worker_reaped if trace else None,
+            "disposal_proven": trace.disposal_proven if trace else False,
+            "reconciled": trace.reconciled if trace else None,
+            "result_recorded": False,
+        })
+        return EXIT_DENIED
+    except CapabilityError as error:
+        print(f"capability: {error}", file=sys.stderr)
+        return EXIT_DENIED
+
+    _emit({
+        "cinv": args.cinv,
+        "status": terminal.status,
+        "reason": terminal.reason,
+        "invocation_record_id": terminal.invocation_record_id,
+        "result_record_id": terminal.result_record_id,
+        "succeeded": terminal.succeeded,
+        "result_digest": terminal.result_digest,
+        "result_artifact_reference": terminal.result_artifact_reference,
+        "disposal_proven": True,
+    })
+    return EXIT_SUCCESS if terminal.succeeded else EXIT_DENIED
+
+
+def _helper_launcher():
+    """The one seam that starts a privileged process, resolved from the tree.
+
+    Loaded the way the worker resolves its backend, and for the same reason:
+    everything under `tools/capability/` is asserted to reach no subprocess, so
+    the module that does lives outside it and is named here rather than
+    imported at the top of a package that must stay clean.
+    """
+    root = "/usr/lib/kyri/python"          # prod-path-reference
+    expected = os.path.join(root, "kyri_exec_launcher.py")
+    if not os.path.isfile(expected):
+        raise _Unusable(
+            f"the governed helper launcher is not installed at {expected}")
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        # A literal import, not a name resolved at runtime. The generation's
+        # closure is computed from the import graph, so a module reached only
+        # through `importlib` would have to be whitelisted into the installed
+        # surface by hand -- and a surface somebody listed is not one the graph
+        # requires.
+        import kyri_exec_launcher as module
+    except ImportError as error:
+        raise _Unusable(
+            f"the governed helper launcher is not importable ({error})") from None
+    resolved = getattr(module, "__file__", None)
+    if not resolved or not os.path.realpath(resolved).startswith(
+            os.path.realpath(root) + os.sep):
+        raise _Unusable(
+            f"the helper launcher resolved outside {root} ({resolved})")
+    return module.HelperLauncher()
+
+
+def command_recover(args) -> int:
+    """Resolve every interrupted invocation's container, and report the verdict.
+
+    **The records decide what to look at.** An invocation carrying an adapter
+    identity with no terminal result is one where execution was authorised and
+    its outcome was never established -- which is exactly what a killed worker
+    or a killed coordinator leaves behind. Podman is never enumerated: the
+    coordinator has no authority to ask what containers exist and must not gain
+    any.
+
+    **It writes nothing.** No result is synthesised for an interrupted
+    invocation and the invocation record is never touched. What this resolves is
+    the container, which is a different question with a different answer, and
+    leaving the invocation interrupted is the honest reading of an execution
+    whose supervision was lost.
+
+    **Running it twice is harmless.** Reconciliation treats absence as success,
+    so a second pass proves the same thing and changes nothing.
+    """
+    from .execution import recovery
+
+    launcher = _helper_launcher()
+    try:
+        store = CapabilityStore(CAPABILITY_RUNTIME_ROOT,
+                                expected_uid=args.expected_uid,
+                                expected_gid=args.expected_gid)
+    except CapabilityError as error:
+        raise _Unusable(
+            f"the capability runtime store is unusable ({error})") from None
+
+    safety = recovery.execution_safety(store, reconciler=launcher.reconcile)
+    _emit({
+        "execution_safety": safety.state,
+        "invocations_checked": safety.checked,
+        "unresolved": [
+            {"invocation_id": finding.invocation_id,
+             "invocation_record_id": finding.invocation_record_id,
+             "disposition": finding.disposition,
+             "interrupted": finding.interrupted,
+             "reason": finding.reason}
+            for finding in safety.unresolved],
+        "results_written": 0,
+    })
+    return EXIT_SUCCESS if safety.ready else EXIT_DENIED
+
+
 def command_inspect(args) -> int:
     """Records as stored, in a canonical order."""
     store = _runtime_store(args)
@@ -630,6 +847,29 @@ def build_parser() -> argparse.ArgumentParser:
                         help="file name inside the approved payload directory")
     launch.add_argument("--package-entrypoint", required=True)
     launch.set_defaults(handler=command_authorise_launch)
+
+    # The third step, and the last one before a result exists. It takes one
+    # CINV: everything else -- the implementation, the profile, the identity,
+    # the image, the argv -- was decided by the two steps before it and is read
+    # from what they made durable. There is deliberately no --adapter,
+    # --backend or --execution-binding: a caller able to name any of those
+    # would be a caller choosing what runs.
+    execute = subparsers.add_parser("execute")
+    execute.add_argument("--expected-uid", required=True, type=int)
+    execute.add_argument("--expected-gid", required=True, type=int)
+    execute.add_argument("--cinv", required=True)
+    execute.add_argument("--actor", required=True)
+    execute.add_argument("--recorded-at", required=True)
+    execute.set_defaults(handler=command_execute)
+
+    # Recovery, and the execution-safety verdict it decides. It takes no
+    # invocation: the ones to resolve are the ones the runtime records say were
+    # never resolved, and an operator able to name one would be an operator
+    # able to name one that was fine.
+    recover = subparsers.add_parser("recover")
+    recover.add_argument("--expected-uid", required=True, type=int)
+    recover.add_argument("--expected-gid", required=True, type=int)
+    recover.set_defaults(handler=command_recover)
     return parser
 
 
