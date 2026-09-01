@@ -3,11 +3,11 @@
 **Status: prepared, awaiting operator action.** Sections 1–7 and 16 are complete
 and independently derived. Sections 8–15 are the post-write verification and are
 filled in from operator evidence; they are marked as pending below rather than
-predicted.
+predicted. Section numbering follows the checkpoint's report contract.
 
 Branch `arch/eng-0005-execution-transition`. Preparation implementation commits
 `e2b9755` (the two ceremonies, the rehearsal suite, and the validation and CI
-wiring) and `02e90a7` (file-mode precedent).
+wiring), `02e90a7` (file-mode precedent) and the split recorded in §7 and §16.
 
 ---
 
@@ -162,6 +162,18 @@ naming an account whose uid was later reassigned — which a number alone cannot
 detect and a name alone would put NSS in charge of. So it carries both and
 requires them to still agree.
 
+**One asymmetry found and left as it is.** The policy layer's
+`CoordinatorAuthority` and `ExecutionIdentity` are token-guarded: they cannot be
+constructed at all, only produced by their loader, so *"was this read from
+root-owned authority?"* is answerable from the type. The runtime's
+`ExecutionIdentity` is a frozen dataclass — immutable, but constructible. That
+was found by asserting the stronger property and being wrong, and it is left
+alone because the two values are not the same kind of thing: the policy value
+authorises a privileged credential drop, and the runtime one is a read-only
+record on the unprivileged observation surface. Both suites now assert what is
+actually true of each, so the difference stays visible rather than being
+rediscovered later.
+
 **Why root ownership is the whole protection.** Each authority names the
 principal it protects against. A coordinator-writable coordinator authority
 names whoever the coordinator likes; an execution-writable execution authority
@@ -170,27 +182,45 @@ is why both are `root:root` and why the write bits, not the read bits, are what
 the readers constrain — `0400` and `0444` are both root's decision and neither
 weakens anything.
 
-## 6. Ownership and mode
+## 6. Fixture rehearsal
 
-Precedent re-derived from the live host, not taken from the brief:
+Two committed programs, and two suites — **46 assertions**, all passing. Every
+install lands in a disposable root; neither suite reads anything under `/etc`,
+uses sudo, or installs a pathname a production host has.
 
-```
-/etc/kyri                      root:root  711
-/etc/kyri/backing-store.json   root:root  444  104 bytes
-```
+| suite | assertions | where it runs |
+| --- | --- | --- |
+| `test-capability-identity-authority-schema.sh` | 21 | everywhere, including CI |
+| `test-capability-identity-authority-ceremony.sh` | 25 | host-only |
 
-`root:root 0444` for both new files, matching the one authority already
-provisioned in that directory. The directory stays `0711`: the coordinator can
-traverse to a named file it is allowed to read and cannot enumerate the
-directory, which is why this report states the two destinations by name and
-defers a full `/etc/kyri` listing to the operator.
+### Why that split exists, and what it cost to find
 
-## 7. Fixture rehearsal
+The first version was one suite that called `pwd.getpwnam('cschott')`. It passed
+here and **failed CI**, because a GitHub runner has never heard of that account.
 
-Two committed programs, rehearsed by `tests/test-capability-identity-authority-ceremony.sh`
-(**35 assertions**, all passing). Every install lands in a disposable root; the
-suite reads nothing under `/etc`, uses no sudo, and installs no pathname a
-production host has.
+The failure was the correct outcome and the defect was mine, but it is worth
+recording precisely, because it is the same defect these two authorities exist
+to close, one directory further out. `COORDINATOR_UID = 1000` and
+`WORKER_UID = 999` were true of `schai` because that is how the accounts
+happened to be created, and three suites passed on that coincidence. A suite
+that resolves the host's own account database is testing the host — and would
+pass just as happily against a compiled-in constant.
+
+So the assertions are split by what they actually depend on:
+
+- **The grammar and the boundary between the two roles are deployment-neutral**,
+  and are proven with injected resolvers and two unrelated fixture deployments
+  (`4100`/`4101:4102` and `7700`/`7701:7702`) that share no number with each
+  other or with `schai`. This runs in CI, which is where it needs to run.
+- **The reviewed digests are facts about this deployment.** Only the ceremony
+  rehearsal depends on them, so only it is host-only, declaring
+  `host_only_requires_account cschott kyri-capability` and reporting
+  `HOST_ONLY_SKIP` elsewhere. The skip path was exercised directly rather than
+  assumed.
+
+`host_only_requires_account` was added to `tests/lib/host-only.sh` for this;
+`tests/host-only.manifest` records the suite and its reason, and
+`test-static.sh` enforces that pairing in both directions.
 
 `provisioning/execution/g11-aw-freeze-coordinator-identity.sh` and
 `provisioning/execution/g11-aw-freeze-execution-identity.sh` are deliberately
@@ -217,11 +247,21 @@ What the rehearsal proves, per candidate and then jointly:
 | a refused ceremony leaves the existing authority byte-identical | both |
 | refuses an account the database does not know, installing nothing | proven |
 | refuses bytes that are not the reviewed candidate, installing nothing | proven |
+
+And, deployment-neutrally, across both fixture deployments:
+
+| | |
+| --- | --- |
 | malformed bodies refused (empty, truncated, non-object, duplicate key, trailing document) | both |
 | unknown field refused | both |
-| unsupported `schema_version` refused | both |
-| numbers disagreeing with the account database refused | execution |
-| not root-owned / not root-group / group-writable refused | both |
+| unsupported `schema_version` refused, including `True` and `"1"` | both |
+| identity numbers refused unless usable and non-root (`0`, `-1`, `True`, `"999"`, `2³¹`) | both |
+| numbers disagreeing with the account database refused, uid and gid | execution |
+| not root-owned / not root-group / group- or world-writable / not a regular file | both |
+| `0400` accepted — the read bits are root's decision | both |
+| oversized authority refused before parsing | execution |
+| the privileged identities cannot be constructed without their loader token | both |
+| the rootless environment is derived from the uid and carries nothing else | execution |
 
 The ownership rule is exercised in **both** directions rather than branched
 around: a fixture cannot be root-owned without privilege, so each ceremony
@@ -259,6 +299,64 @@ Proven structurally so it holds in CI as well as on the host:
   conjuncts include helper compatibility alongside the two authorities. Two
   installed authorities cannot, on their own, make it true.
 
+## 7. Exact operator commands
+
+Two blocks, run consecutively only after both candidates above have been
+independently reviewed. Each is a subshell, so a refusal ends the block rather
+than the operator's session, and each captures its own privileged `/etc/kyri`
+manifest before and after — so a delta is attributable to one block rather than
+to the pair.
+
+Neither block writes to `/etc/sudoers.d`, installs a helper, renews Fabric,
+creates a record, or invokes anything. The only write either performs is the one
+`install` naming its own destination.
+
+**BLOCK A — coordinator authority**
+
+```bash
+bash <<'BLOCK_A'
+set -Eeuo pipefail
+cd /opt/schott-platform
+printf '\n########## /etc/kyri BEFORE block A ##########\n'
+sudo find /etc/kyri -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+bash provisioning/execution/g11-aw-freeze-coordinator-identity.sh
+printf '\n########## /etc/kyri AFTER block A ##########\n'
+sudo find /etc/kyri -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+BLOCK_A
+```
+
+**BLOCK B — execution authority**
+
+```bash
+bash <<'BLOCK_B'
+set -Eeuo pipefail
+cd /opt/schott-platform
+printf '\n########## /etc/kyri BEFORE block B ##########\n'
+sudo find /etc/kyri -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+bash provisioning/execution/g11-aw-freeze-execution-identity.sh
+printf '\n########## /etc/kyri AFTER block B ##########\n'
+sudo find /etc/kyri -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+BLOCK_B
+```
+
+Each ceremony performs, in order and refusing at the first failure:
+
+1. `set -Eeuo pipefail`, and a destination-exists check **before** anything is
+   rendered — so a refusal leaves an existing authority untouched;
+2. resolves the account and renders the canonical document into `mktemp`;
+3. computes SHA-256 and byte count, and compares the **full** digest against the
+   reviewed value — not a prefix;
+4. `sudo install -o root -g root -m 0444` to the destination;
+5. removes the temporary file;
+6. `sudo sha256sum` and `sudo stat` on what actually landed;
+7. re-reads the installed bytes through the accepted reader — both readers for
+   the execution authority — and re-checks the account binding against the
+   account database.
+
+The two blocks are separate programs on purpose: the operator can see exactly
+which authority succeeded, and a partial ceremony is a state that can be named
+and stopped in.
+
 ## 8. Operator evidence
 
 *Pending — filled in from the operator's output of the two blocks in §7a.*
@@ -267,9 +365,22 @@ Proven structurally so it holds in CI as well as on the host:
 
 *Pending.*
 
-## 10. Ownership and mode as installed
+## 10. Ownership and mode
 
-*Pending.*
+Precedent re-derived from the live host, not taken from the brief:
+
+```
+/etc/kyri                      root:root  711
+/etc/kyri/backing-store.json   root:root  444  104 bytes
+```
+
+`root:root 0444` for both new files, matching the one authority already
+provisioned in that directory. The directory stays `0711`: the coordinator can
+traverse to a named file it is allowed to read and cannot enumerate the
+directory, which is why this report states the two destinations by name and
+defers a full `/etc/kyri` listing to the operator.
+
+*As-installed reading pending operator evidence.*
 
 ## 11. Two-path mutation accounting
 
@@ -382,13 +493,15 @@ Re-measured, not incremented.
 
 | | before | after |
 | --- | --- | --- |
-| quick | 97/97 | **98/98** |
-| full | 122/122 | **123/123** |
+| quick | 97/97 | **99/99** |
+| full | 122/122 | **124/124** |
 
-The new suite is always-on, so both totals rose by one. It is wired into
+Both new suites are always-on, so both totals rose by two. Both are wired into
 `tools/dev/run-validation.sh` and `.github/workflows/ci.yml`; the
 developer-experience backstop that fails on a suite local validation never runs
-is satisfied.
+is satisfied. The host-only suite runs in full here and reports
+`HOST_ONLY_SKIP` on a runner, which is a skip and not a pass — `test-static.sh`
+holds it to its manifest entry in both directions.
 
 Focused authority suites, all passing:
 
@@ -396,13 +509,22 @@ Focused authority suites, all passing:
 | --- | --- |
 | `test-capability-execution-coordinator-authority.sh` | coordinator grammar |
 | `test-capability-execution-identity-authority.sh` | execution grammar, account/uid/gid binding |
-| `test-capability-identity-authority-ceremony.sh` | the ceremony, cross-role refusal, closed helper compatibility, not-ready preflight |
+| `test-capability-identity-authority-schema.sh` | cross-role refusal, closed helper compatibility, not-ready preflight |
+| `test-capability-identity-authority-ceremony.sh` | the ceremony against this deployment |
 
-Every one of the 17 generated case scripts in the new suite was mechanically
-extracted as bash passes it and compiled, then checked for the prelude and the
+All 28 generated case scripts across the two suites were mechanically extracted
+as bash passes them and compiled, then checked for the shared prelude and the
 terminating `print('OK')`. This guards the failure mode that produced a silently
 truncated, silently passing case earlier in this programme: a stray quote ending
 a double-quoted string early, leaving a fragment that runs and reports PASS.
+
+### CI on the preparation commits
+
+The first push (`f7e9940`) went green on Gitleaks, Trivy, CodeQL, ShellCheck and
+Semgrep, and **failed CI** on the host-dependency defect described in §7. It is
+recorded here rather than amended away: the suite was wrong, CI was right, and
+the fix was to split the assertions by what they depend on rather than to make
+CI tolerate the suite.
 
 ## 17. Handoff
 
