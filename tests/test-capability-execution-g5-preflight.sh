@@ -366,6 +366,37 @@ else
   fail "the declared delta was not classified: $(tail -12 "${root}/last-run.log")"
 fi
 
+# The shape that actually matters: a library root identical to the live host's.
+#
+# Every case above builds a generation-6 fixture, so for two generations the
+# declaration was only ever checked against a tree that predates most of it. At
+# G11-AU the live host turned out to hold two objects the declaration called
+# undeclared drift -- `records.py` at its Generation-12 bytes, which the row had
+# never been widened for, and `execution/launch.py`, which Generation 8
+# installed and a CREATE row insisted must be absent. Both were reviewed bytes;
+# the declaration was simply wrong about the host it governs, and nothing ran it
+# against that host.
+#
+# Skipped where there is no installed runtime, because then there is no live
+# shape to mirror.
+if [[ -d /usr/lib/kyri/python ]]; then
+  root="${WORK}/live-shaped"; build_fixture "${root}"
+  rm -rf "${root:?}/usr/lib/kyri/python"
+  mkdir -p "${root}/usr/lib/kyri/python"
+  ( cd /usr/lib/kyri/python \
+      && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
+    | ( cd /usr/lib/kyri/python && xargs -0 -I{} \
+        cp --parents {} "${root}/usr/lib/kyri/python/" )
+  if run_preflight "${root}" --verify-source; then
+    pass "the declaration classifies the live installed runtime, not only a fixture"
+  else
+    fail "the declaration does not classify the live installed runtime: $(
+      grep -E '^(FAIL|bad)' "${root}/last-run.log" | head -4)"
+  fi
+else
+  pass "no installed runtime on this machine; the live-shaped case does not apply"
+fi
+
 # An installed-runtime object that changed and was never declared. This is the
 # case the whole invariant exists for, and it must still fail.
 root="${WORK}/g8-undeclared"; build_fixture "${root}"

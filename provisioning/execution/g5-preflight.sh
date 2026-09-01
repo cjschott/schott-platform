@@ -86,10 +86,29 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 # is exact today and a later ordinary commit can become the reviewed authority
 # an installer would pin.
 #
+# TWO ROWS WERE WRONG ABOUT THE LIVE HOST, AND NOTHING NOTICED. Found at
+# G11-AU while re-deriving the Generation-12 baseline the Generation-13
+# installer has to pin.
+#
+# `records.py` carried the Generation-11 baseline only. Generation 12 installed
+# a newer one and the row was never widened, so from the moment that generation
+# went in, the live host held bytes this declaration called undeclared drift.
+#
+# `execution/launch.py` was declared CREATE|ABSENT. Generation 8 installed it
+# and it has been present ever since; G11-AT then moved the checkout, and a
+# CREATE row demands the installed object be absent or already at the new
+# bytes. It was neither.
+#
+# Both installed objects are reviewed bytes -- traced to `9300250` and
+# `bc05f911` respectively -- so the host was never in an unexplained state. What
+# was wrong was the declaration, and the reason it stayed wrong is that the
+# suite only ever ran this against fixtures. It now runs against the live host
+# too.
+#
 #   source_path|operation|installed_baseline_digest|next_generation_digest
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
-"tools/capability/execution/launch.py|CREATE|ABSENT|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
+"tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
 "tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
@@ -109,7 +128,7 @@ GENERATION_DELTA=(
 # without changing its evidence.
 "tools/capability/fabric_evidence.py|REPLACE|e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742,e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742|e51d893936ba5e465fa94893a46a3f85c66ad4904a29970f66dc00f63fb67e67"
 "tools/capability/invocation_identity.py|REPLACE|617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2,617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2|3a01471a43c1f0b27aac987c77941446368e17ba293cfaf0451191a587c5def8"
-"tools/capability/records.py|REPLACE|563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31,563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31|90312ba3096aad7f3c09628536f5a17d594d4f70d63c6147570f8ed65616e27e"
+"tools/capability/records.py|REPLACE|563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31,a6744501a1f58eafb926f128fec1eadcc2ccced9ebb601718c8cc55a4b1da38e|90312ba3096aad7f3c09628536f5a17d594d4f70d63c6147570f8ed65616e27e"
 "tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea|b72e7e2576095c96ffd5b4a3a48acc2fed7c1852b631a5f6f7d691e0bf8603c0"
 # Generation 13 candidate, ENG-0005 G11-AB. `invoke --preflight`: the rehearsal
 # every other governed write in this platform already had. G11-AA proved the
