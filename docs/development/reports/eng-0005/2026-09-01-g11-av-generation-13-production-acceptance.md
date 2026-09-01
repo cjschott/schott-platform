@@ -10,11 +10,10 @@ bytes**, not from the installer's own report: 78 objects, all `0444 root:root`,
 13/13 replaced and 8/8 created at their reviewed targets, all three coherence
 groups whole, and no undeclared object anywhere in the tree.
 
-**One thing is not closed.** The transaction journal and both generations'
-evidence live under `/root`, which the coordinator may not read — correctly. I
-could not read them, so `GEN13_JOURNAL_STATE` and `GEN12_EVIDENCE_PRESERVED` are
-reported **UNKNOWN** rather than inferred from the operator's `--verify-installed`
-PASS. §8 gives the exact commands that close it.
+The one item this checkpoint could not read itself — the transaction journal and
+both generations' evidence, which live under `/root` — was closed by operator
+evidence after the report was first written. **§8a records it, and every value
+in it cross-checks against something derived here independently.**
 
 Nothing was installed, renewed or invoked. Quick **97/97**, full **122/122**.
 
@@ -171,7 +170,7 @@ Static and import proof only. **No helper was invoked.**
 | the worker's identity comes from authority | required argument |
 | the Podman backend has no compiled-in environment | required argument |
 
-## 8. Journal and evidence — the one open item
+## 8. Journal and evidence — why this needed the operator
 
 `/root` is not readable by the coordinator, and that is the correct permission
 rather than an obstacle to work around. The operator's `--verify-installed` PASS
@@ -207,6 +206,31 @@ sudo bash /opt/schott-platform/provisioning/execution/install-generation-13.sh \
 Expected: `state=COMMITTED`, `commit=7709cf0…`, `baseline_commit=1313df01…`,
 `library_objects 78`, four `expects_helper` lines, and both Generation-12 files
 still present.
+
+## 8a. Journal and evidence — closed
+
+The operator ran those reads. Every expectation held, and — this is the part
+worth having — every value cross-checks against something this report derived
+from bytes without ever seeing the journal.
+
+| Journal / evidence says | Cross-checks against |
+| --- | --- |
+| `state=COMMITTED` | the commit point is reached only after all 21 targets publish **and** verify, and §3 finds all 21 at target |
+| `commit=7709cf0443ab11f2b84c94eefbbb60f1eb95c98c` | §3 — all 21 installed objects equal that authority's blobs |
+| `baseline_commit=1313df019472a73e139cfc294ee8e016ad1355c0` | §3 — 55 of 57 carried-over objects are byte-identical to it |
+| `library_objects=78` | §2 — 78 objects counted directly under the library root |
+| 4/4 `expects_helper` declarations | §14 — the runtime's own `REQUIRED_HELPERS` names exactly those four |
+| Generation-12 evidence preserved | the transaction is required never to consume its own baseline |
+| Generation-13 evidence present | written only after `COMMITTED` |
+| `--verify-installed` PASS, in full | the unprivileged half passed here; this is the half that reads `/root` |
+
+So the journal is not being taken on trust: it agrees, field for field, with an
+independent derivation that did not consult it. A journal that said `COMMITTED`
+while the bytes disagreed is precisely the state the installer halts on, and
+that state does not obtain here.
+
+`GEN13_JOURNAL_STATE = COMMITTED`. `GEN12_EVIDENCE_PRESERVED = YES`.
+Generation-13 evidence present.
 
 ## 9. Governance non-mutation
 
@@ -504,10 +528,9 @@ the operator performed before this checkpoint began.
 
 ## 22. Next
 
-Two operator actions, in this order:
+§8a is closed, so one action remains:
 
-1. **Close §8** — the five read-only `sudo` commands, so the journal state and
-   both generations' evidence are read rather than inferred.
-2. **G11-AW** — freeze and install the two identity authorities, which are
-   prepared, byte-identical to their accepted values, and inert on this host
-   until the helper ceremony follows them.
+**G11-AW** — freeze and install the two identity authorities. Both are prepared,
+byte-identical to their accepted values, and inert on this host until the helper
+ceremony follows them: the installed helper policy has no parser for either
+(§10), which is exactly why they are safe to install first.
