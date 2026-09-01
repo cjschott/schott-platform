@@ -892,6 +892,41 @@ else:
 print('OK')
 "
 
+run_case "a coordinator that dies before disposal leaves no result" "${PRELUDE}
+import ast
+from pathlib import Path
+# The coordinator-death model, made structural. There is exactly one point at
+# which a terminal result becomes durable, and it is after the supervisor has
+# returned -- which it only does after disposal was proven. So a coordinator
+# killed at any earlier instant leaves a CINV carrying an adapter identity and
+# no CRES, which is precisely what the recovery enumeration looks for.
+tree = ast.parse(Path('tools/capability/coordinator.py').read_text(encoding='utf-8'))
+functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+supervised = functions['execute_supervised']
+lines = {}
+for node in ast.walk(supervised):
+    if isinstance(node, ast.Call):
+        name = getattr(node.func, 'attr', None) or getattr(node.func, 'id', None)
+        if name in ('execute', 'record_terminal_result'):
+            lines.setdefault(name, node.lineno)
+assert lines['execute'] < lines['record_terminal_result'], lines
+
+# And inside the supervisor, disposal precedes every return of an outcome.
+tree = ast.parse(Path('tools/capability/execution/supervision.py').read_text(
+    encoding='utf-8'))
+functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+body = functions['execute']
+dispose = [n.lineno for n in ast.walk(body) if isinstance(n, ast.Call)
+           and (getattr(n.func, 'attr', None) == '_dispose')]
+conclude = [n.lineno for n in ast.walk(body) if isinstance(n, ast.Call)
+            and (getattr(n.func, 'attr', None) == '_conclude')]
+assert dispose and conclude, (dispose, conclude)
+assert max(dispose) < min(conclude), (dispose, conclude)
+returns = [n.lineno for n in ast.walk(body) if isinstance(n, ast.Return)]
+assert all(line > max(dispose) for line in returns), (returns, dispose)
+print('OK')
+"
+
 printf '\n'
 if [[ "${FAILURES}" -eq 0 ]]; then
   printf 'Capability execution supervision validation passed.\n'
