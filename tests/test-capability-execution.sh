@@ -261,7 +261,24 @@ assert_backstop_coverage() {
                  # NSS only through an injected resolver, and carries no
                  # compiled-in uid or gid to fall back to -- and behaviourally
                  # that two unrelated deployments load through it unchanged.
-                 "identity.py")
+                 "identity.py"
+                 # Backstopped by tests/test-capability-execution-supervision.sh,
+                 # which proves it starts no process, imports no os or
+                 # subprocess, names no container runtime, reaches no
+                 # create_argv, and writes no Capability Runtime record -- and
+                 # behaviourally that a worker it cannot reap or a container it
+                 # cannot prove gone yields no outcome at all.
+                 "supervision.py"
+                 # Backstopped by the same suite, which proves it enumerates
+                 # records rather than containers, calls only the injected
+                 # reconciler, allocates no identity, writes no result, and is
+                 # harmless on a second pass.
+                 "recovery.py"
+                 # Backstopped by the same suite, which proves its declared
+                 # digests are the reviewed sources they name, that the whole
+                 # supervised privileged surface is declared, and that a stale
+                 # or absent object is never reported compatible.
+                 "helpers.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

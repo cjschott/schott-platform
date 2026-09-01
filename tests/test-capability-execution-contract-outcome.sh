@@ -307,10 +307,30 @@ print('OK')
 "
 
 run_case "no committed module emits cancelled" "
-import pathlib
-hits = [str(p) for p in pathlib.Path('tools').rglob('*.py')
-        if 'cancelled' in p.read_text(encoding='utf-8')
-        and p.name != 'records.py' and p.name != 'contract_outcome.py']
+import ast, pathlib
+# Scanned as a CODE literal, not as text. A comment explaining that a module
+# cannot carry this class is the opposite of emitting it, and a substring
+# search cannot tell those apart -- G11-AT hit exactly that when the protocol
+# documented which classes a worker may not claim.
+hits = []
+for path in pathlib.Path('tools').rglob('*.py'):
+    if path.name in ('records.py', 'contract_outcome.py'):
+        continue
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    for node in ast.walk(tree):
+        block = getattr(node, 'body', None)
+        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+                and block and isinstance(block[0], ast.Expr)
+                and isinstance(block[0].value, ast.Constant)
+                and isinstance(block[0].value.value, str)):
+            block.pop(0)
+            if not block:
+                block.append(ast.Pass())
+    ast.fix_missing_locations(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and node.value == 'cancelled':
+            hits.append(str(path))
+            break
 assert hits == [], hits
 print('OK')
 "

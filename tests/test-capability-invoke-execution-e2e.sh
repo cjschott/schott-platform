@@ -59,7 +59,7 @@ printf '=== isolated import ===\n'
 podman --root "${WORK}/r" --runroot "${WORK}/rr" load -i "${ARCHIVE}" 2>&1 | tail -1
 
 if ! (cd "${ROOT}" && WORK="${WORK}" ARCHIVE="${ARCHIVE}" python3 - <<'HARNESS'
-import importlib.util, json, os, shutil, subprocess, sys
+import hashlib, importlib.util, json, os, shutil, subprocess, sys
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -195,8 +195,20 @@ def execution(name, body, *, image=None, argv_edit=None, timeout=60):
         environment=env, timeout=timeout)
 
     class Session:
+        '''Start authority granted, and every report recorded.
+
+        G11-AT made the adapter announce what it establishes, so a session that
+        can only be asked for authority is no longer one the adapter accepts.
+        This grants the start the way a coordinator would and keeps what came
+        back; the supervised path over real pipes is proven separately.
+        '''
+
         def __init__(self):
             self.container_id = None
+            self.sent = []
+
+        def send(self, kind, **fields):
+            self.sent.append((kind.value, fields))
 
         def expect(self, kind):
             class Message:
@@ -219,6 +231,11 @@ def execution(name, body, *, image=None, argv_edit=None, timeout=60):
 
     handle = os.open(str(base / "out"), os.O_RDONLY | os.O_DIRECTORY)
     return (AD.ExecutionBinding(cinv="CINV-000042", profile=profile,
+                                # The digest the transition would have sealed.
+                                # Taken over the canonical profile, which is
+                                # exactly what the launch bridge commits to.
+                                profile_digest=hashlib.sha256(
+                                    P.canonical_profile(profile)).hexdigest(),
                                 argv=tuple(argv), environment=env,
                                 output_fd=handle),
             backend, session, creating, original, handle, base)

@@ -3755,9 +3755,16 @@ def _world(tmp):
 # --- the command inventory, and nothing beyond it --------------------------
 code, out, err = _run(["--help"])
 check(code in (EXIT_SUCCESS, EXIT_USAGE), "the interface offers help")
-for command in ("invoke", "inspect", "validate"):
+for command in ("invoke", "inspect", "validate", "execute", "recover"):
     check(command in out, f"the interface offers {command}")
-for forbidden in ("retry", "cancel", "list-adapters", "run", "execute", "start"):
+# `execute` and `recover` left this list at G11-AT, and the reason is the whole
+# point of that checkpoint: the released path now finishes. What stays banned
+# is unchanged and is what the list was always protecting -- there is no retry,
+# no cancel, no way to see or choose an adapter, and no generic run or start.
+# `execute` supervises the one invocation the two steps before it authorised;
+# it takes a CINV and there is no flag through which a caller could name what
+# runs.
+for forbidden in ("retry", "cancel", "list-adapters", "run", "start"):
     check(f" {forbidden} " not in out.replace(",", " "),
           f"the interface offers no {forbidden} command")
 
@@ -4150,8 +4157,29 @@ with TemporaryDirectory() as tmp:
           "nothing imported, executed, or spawned the staged package")
 
 # --- there is no adapter to find -------------------------------------------
+#
+# Scanned over CODE, with comments and docstrings removed. Prose saying a module
+# starts no subprocess is the opposite of it starting one, and a scan that
+# cannot tell those apart is a scan about prose -- which is how a docstring
+# explaining the boundary came to fail this at G11-AT.
+def _code_only(text):
+    tree = _ast.parse(text)
+    for node in _ast.walk(tree):
+        block = getattr(node, "body", None)
+        if (isinstance(node, (_ast.Module, _ast.ClassDef, _ast.FunctionDef))
+                and block and isinstance(block[0], _ast.Expr)
+                and isinstance(block[0].value, _ast.Constant)
+                and isinstance(block[0].value.value, str)):
+            block.pop(0)
+            if not block:
+                block.append(_ast.Pass())
+    _ast.fix_missing_locations(tree)
+    return _ast.unparse(tree)
+
+
 for module in ("cli", "coordinator", "inspection"):
-    source_text = (root / "tools" / "capability" / f"{module}.py").read_text(encoding="utf-8")
+    source_text = _code_only(
+        (root / "tools" / "capability" / f"{module}.py").read_text(encoding="utf-8"))
     for token, description in (("subprocess", "a subprocess"), ("os.system", "a shell"),
                                ("importlib", "dynamic loading"), ("runpy", "a module runner"),
                                ("docker", "docker"), ("podman", "podman"),
@@ -4368,9 +4396,15 @@ for module in _all_production:
 # `contextvars` joins at G11-AB: rehearsal state has to be per-context so a
 # rehearsal cannot leak into a concurrent write in the same process. Still
 # standard library, and still the whole dependency surface.
+# `kyri_exec_launcher` is the one non-standard name, and it is not a
+# dependency of this package: it is the installed module that owns the process
+# boundary, imported by name from the canonical root at the moment the released
+# `execute` verb needs it. Everything under tools/capability/ still reaches no
+# subprocess -- that is exactly why the launcher lives outside it, the same way
+# `kyri_exec_podman` does on the worker's side.
 _expected = {"__future__", "argparse", "contextlib", "contextvars", "dataclasses",
              "datetime", "fcntl", "hashlib", "hmac", "json", "os", "pathlib", "re",
-             "stat", "sys", "tempfile", "typing", "yaml"}
+             "stat", "sys", "tempfile", "typing", "yaml", "kyri_exec_launcher"}
 check(_imports <= _expected,
       f"the package depends only on the standard library and yaml "
       f"({sorted(_imports - _expected)})")

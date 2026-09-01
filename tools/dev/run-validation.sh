@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=93
+  TOTAL_STEPS=95
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=118
+  TOTAL_STEPS=120
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -620,6 +620,13 @@ run "Capability execution supervision preconditions" \
 run "Capability execution identity authority" \
   bash tests/test-capability-execution-identity-authority.sh
 
+# ENG-0005 G11-AT. The coordinator's half of a governed execution: what it
+# authorises, what it refuses, and what it does when the worker stops talking.
+# Real forked children over real pipes, so end of stream and reaping are
+# genuine; no privilege, no Podman, no container.
+run "Capability execution supervision" \
+  bash tests/test-capability-execution-supervision.sh
+
 # ENG-0005 G11-AS. The privileged reconciliation entrypoint G11-AR could not
 # safely build: what it becomes, in what order, and that Podman is unreachable
 # until after the drop. Credential primitives are injected recorders -- a real
@@ -632,6 +639,12 @@ run "Capability execution container reconciliation" \
 
 run "Capability invoke execution end to end" \
   bash tests/test-capability-invoke-execution-e2e.sh
+
+# ENG-0005 G11-AT. The whole chain, supervised: a real container, a worker
+# SIGKILLed while it runs, the orphan reconciled, and the readiness gate that
+# refuses new execution until the container state is proven. Host-only.
+run "Capability supervised execution end to end" \
+  bash tests/test-capability-supervised-execution-e2e.sh
 
 # ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
 # verification-only artifacts: transactional create-once publication of five

@@ -564,6 +564,11 @@ jobs:
       - name: Capability execution identity authority tests
         run: bash tests/test-capability-execution-identity-authority.sh
 
+      # G11-AT: coordinator supervision, recovery enumeration and the
+      # readiness gate. Forked children and pipes only.
+      - name: Capability execution supervision tests
+        run: bash tests/test-capability-execution-supervision.sh
+
       - name: Capability execution reconcile entrypoint tests
         run: bash tests/test-capability-execution-reconcile-entrypoint.sh
 
@@ -572,6 +577,11 @@ jobs:
 
       - name: Capability invoke execution end-to-end tests
         run: bash tests/test-capability-invoke-execution-e2e.sh
+
+      # G11-AT: the supervised chain against real containers. Host-only;
+      # reports HOST_ONLY_SKIP where there is no Podman or exported archive.
+      - name: Capability supervised execution end-to-end tests
+        run: bash tests/test-capability-supervised-execution-e2e.sh
 
       # G6.1A: the trusted-runtime installation ceremony. Transactional
       # create-once publication of five new objects onto a verified

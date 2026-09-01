@@ -317,7 +317,12 @@ for action in parser._actions:
         verbs = sorted(action.choices)
 assert verbs is not None, 'no subcommands'
 assert 'authorise-launch' in verbs, verbs
-assert set(verbs) == {'authorise-launch', 'inspect', 'invoke', 'validate'}, verbs
+# Closed on purpose. G11-AT added the two verbs that finish the released path:
+# one supervises an authorised invocation, and one resolves the containers of
+# invocations whose supervision was lost. A third would be a new operator
+# surface and belongs in a reviewed increment, not in this set by accident.
+assert set(verbs) == {'authorise-launch', 'execute', 'inspect', 'invoke',
+                      'recover', 'validate'}, verbs
 print('OK')
 "
 
@@ -436,10 +441,23 @@ print('OK')
 # ===========================================================================
 
 run_case "the CLI implements no authorisation policy of its own" "${FIXTURE}
-import inspect
-source = inspect.getsource(C)
-body = '\n'.join(line for line in source.splitlines()
-                 if not line.lstrip().startswith('#'))
+import ast, inspect
+# Scanned over CODE. Comments were already excluded; docstrings are removed
+# too, because prose saying the CLI decides nothing is the opposite of the CLI
+# deciding something, and a scan that cannot tell those apart is a scan about
+# prose. G11-AT hit exactly that.
+tree = ast.parse(inspect.getsource(C))
+for node in ast.walk(tree):
+    block = getattr(node, 'body', None)
+    if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+            and block and isinstance(block[0], ast.Expr)
+            and isinstance(block[0].value, ast.Constant)
+            and isinstance(block[0].value.value, str)):
+        block.pop(0)
+        if not block:
+            block.append(ast.Pass())
+ast.fix_missing_locations(tree)
+body = ast.unparse(tree)
 # Every one of these belongs to the Generation-8 bridge. A second copy here
 # would be a second opinion about whether a launch was approved.
 for banned in ('LAUNCH_RECORD_SCHEMA = ', 'commitment_digest(', 'launch_record(',
@@ -625,16 +643,36 @@ print('OK')
 # ===========================================================================
 
 run_case "the CLI cannot elevate, execute, or reach a container runtime" "${FIXTURE}
-import inspect
-source = inspect.getsource(C)
-body = '\n'.join(line for line in source.splitlines()
-                 if not line.lstrip().startswith('#'))
+import ast, inspect
+tree = ast.parse(inspect.getsource(C))
+for node in ast.walk(tree):
+    block = getattr(node, 'body', None)
+    if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+            and block and isinstance(block[0], ast.Expr)
+            and isinstance(block[0].value, ast.Constant)
+            and isinstance(block[0].value.value, str)):
+        block.pop(0)
+        if not block:
+            block.append(ast.Pass())
+ast.fix_missing_locations(tree)
+body = ast.unparse(tree)
 for banned in ('subprocess', 'os.system', 'os.exec', 'os.spawn', 'os.fork',
                'popen', 'su' + 'do', 'pod' + 'man', 'doc' + 'ker', 'create_argv',
                'libexec', 'ctypes', 'socket', 'urllib', 'requests',
                'setuid', 'setgid', 'sudoers', '__import__', 'eval(', 'exec(',
                'importlib', 'getattr(C', 'xfs_' + 'quota', 'quot' + 'actl'):
     assert banned not in body, banned
+# G11-AT gave the CLI a released execution path, and this is the one thing it
+# gained: a named import of the governed launcher module. It is not elevation
+# and it is not a widening -- every banned token above is still absent, so the
+# CLI still cannot name sudo, a helper path, a container runtime or an argv.
+# The launcher owns all four, and its own suite pins them.
+imported = set()
+for node in ast.walk(tree):
+    if isinstance(node, ast.Import):
+        imported.update(alias.name for alias in node.names)
+assert imported <= {'argparse', 'hashlib', 'json', 'os', 'sys',
+                    'kyri_exec_launcher'}, imported
 print('OK')
 "
 

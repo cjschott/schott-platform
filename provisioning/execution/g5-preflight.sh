@@ -89,8 +89,8 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 #   source_path|operation|installed_baseline_digest|next_generation_digest
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
-"tools/capability/execution/launch.py|CREATE|ABSENT|ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98|b5628bfdfccbedf8fcfd59bef3dab1dfb1906e22bd27092636dd87de78f82ea6"
+"tools/capability/execution/launch.py|CREATE|ABSENT|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -110,7 +110,7 @@ GENERATION_DELTA=(
 "tools/capability/fabric_evidence.py|REPLACE|e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742,e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742|e51d893936ba5e465fa94893a46a3f85c66ad4904a29970f66dc00f63fb67e67"
 "tools/capability/invocation_identity.py|REPLACE|617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2,617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2|3a01471a43c1f0b27aac987c77941446368e17ba293cfaf0451191a587c5def8"
 "tools/capability/records.py|REPLACE|563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31,563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31|90312ba3096aad7f3c09628536f5a17d594d4f70d63c6147570f8ed65616e27e"
-"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea|d95cd2549c44b127876bfbc2035bc8229815a1247d27a74f6ced518941ded84a"
+"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea|b72e7e2576095c96ffd5b4a3a48acc2fed7c1852b631a5f6f7d691e0bf8603c0"
 # Generation 13 candidate, ENG-0005 G11-AB. `invoke --preflight`: the rehearsal
 # every other governed write in this platform already had. G11-AA proved the
 # cost of its absence -- the only way to learn whether an invocation would be
@@ -155,7 +155,7 @@ GENERATION_DELTA=(
 #
 # Declared here as pending. NOT INSTALLED.
 "tools/capability/execution/profile.py|REPLACE|f87947fe096dc981248195a29ba18a38a30287f04091031ab59781730e2bbe97|3072e4557d6fae4912d872547b5cd26597be3a19254451fefc3c642c99f2748b"
-"tools/capability/execution/lifecycle.py|REPLACE|65f40fd3aaf48ccd73db52c5d36048353c43731bb80f7a338bd9dd58eafe703d|e2d91c39ea7234c6b54d9063abdc0e9e32a0048fb5becdb558e3d850fa848291"
+"tools/capability/execution/lifecycle.py|REPLACE|65f40fd3aaf48ccd73db52c5d36048353c43731bb80f7a338bd9dd58eafe703d|f64d58359acaeeaa02fd3fe0521641b179e267f2c07d986b18b356abdf1d536a"
 "tools/capability/execution/mount_evidence.py|CREATE|ABSENT|acbcb2e0ea9ac458c3e17ec909dfdf2f234db842152c086ce23fc327d1dca973"
 #
 # G11-AN. The terminal result contract. `records.py` splits the invocation and
@@ -190,6 +190,29 @@ GENERATION_DELTA=(
 # Declared here as pending. NOT INSTALLED.
 "tools/capability/execution/identity.py|CREATE|ABSENT|f7a01f2f64ef5d494f198f443a717d9ef110496042298935105bfa1d8ce684bc"
 "tools/capability/execution/verification.py|REPLACE|ABSENT,ed5b49ed03add16c8ba7a233d53a8c5528e5ba4d0fc23f53cdd41bb788bd2e73|7a792aaf3c59ed0bb4bd32cb55267e6fc26dfae06f5da1b8b36efff9e1efa952"
+#
+# G11-AT. Coordinator supervision, recovery, and the readiness gate.
+#
+# `protocol.py` gains a duplex channel and the two facts a terminal state has
+# to carry across the boundary -- T13's outcome class and the runtime's own
+# timings -- because the coordinator cannot observe the container and a fact
+# that is not reported is one it will never have. `adapter.py` announces what it
+# establishes as it establishes it; until now nothing in production ever called
+# `protocol.encode`, which is how the coordinator ended up blind to an execution
+# it had authorised. `supervision.py` is the adapter implementation that fits
+# the coordinator's seam from the other side of the privilege boundary;
+# `recovery.py` enumerates interrupted invocations from records rather than from
+# containers; `helpers.py` is how a runtime refuses to supervise through helper
+# bytes it was not built against. `cli.py` gains the two released verbs that
+# reach them, and `coordinator.py` the one narrow entry that keeps result
+# authority where it has always been.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/protocol.py|REPLACE|613ff30d5999e47e615ac28023b2e9a6e799439154b0e353eb385888b2484cfb|c2040807fa26c349f6948b7c44ca28aeea6e2fdd8f57cb54d0e608c12c9d09c1"
+"tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
+"tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
+"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f"
+"tools/capability/execution/helpers.py|CREATE|ABSENT|eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
