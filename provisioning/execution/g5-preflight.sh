@@ -136,7 +136,7 @@ GENERATION_DELTA=(
 # flag as well as by policy.
 #
 # Declared here as pending. NOT INSTALLED.
-"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|5a38e5be84b5219d521da86ce636602543ce27bb68c009d174278fcfbfc20adb"
+"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|df9d252e3c1e90418a9b841ed6f3f873446dcbc35893c4c593b54b0e9dad0a6b"
 #
 # G11-AJ. The governed container identity, corrected and bound.
 #
@@ -154,7 +154,7 @@ GENERATION_DELTA=(
 # the request and reads correctly even when no mapping exists.
 #
 # Declared here as pending. NOT INSTALLED.
-"tools/capability/execution/profile.py|REPLACE|f87947fe096dc981248195a29ba18a38a30287f04091031ab59781730e2bbe97|37126da4a3bbcc8f1917dfff91a9a2d68b8d78978b35f299273ec426878cff76"
+"tools/capability/execution/profile.py|REPLACE|f87947fe096dc981248195a29ba18a38a30287f04091031ab59781730e2bbe97|3072e4557d6fae4912d872547b5cd26597be3a19254451fefc3c642c99f2748b"
 "tools/capability/execution/lifecycle.py|REPLACE|65f40fd3aaf48ccd73db52c5d36048353c43731bb80f7a338bd9dd58eafe703d|e2d91c39ea7234c6b54d9063abdc0e9e32a0048fb5becdb558e3d850fa848291"
 "tools/capability/execution/mount_evidence.py|CREATE|ABSENT|acbcb2e0ea9ac458c3e17ec909dfdf2f234db842152c086ce23fc327d1dca973"
 #
@@ -168,6 +168,28 @@ GENERATION_DELTA=(
 #
 # Declared here as pending. NOT INSTALLED.
 "tools/capability/inspection.py|REPLACE|9ddf6cbba02063bc9f0a204d4565f4a11cea0afccd29dcfc8bbe9f4b9bf6a202|adb0e46b03c649895564aabccf95cbd7b2bdd6d4a71bbc94773630691bef1297"
+#
+# G11-AS. The deployment execution identity authority.
+#
+# A compiled-in worker uid and gid lived in `worker.py`, and they were true of
+# `schai` only because account creation happened to assign those numbers. G11-AH had
+# already removed the equivalent coordinator constant and left the argument in
+# the source it corrected; the argument was never applied to the identity on the
+# far side of the transition. G11-AR proved no authority existed to apply it
+# with and stopped rather than building an eighth site.
+#
+# `identity.py` carries the runtime half of the parser and reads
+# `/etc/kyri/execution-identity.json`; `worker.py` and `verification.py` take
+# the identity as an argument instead of restating it; `profile.py` corrects a
+# comment that described the host identity as a fixed pair.
+#
+# The authority file itself is NOT part of this generation. It is deployment
+# authority, installed by its own ceremony, and a runtime that consumed it must
+# not be installed against a host that has not been given it.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/identity.py|CREATE|ABSENT|f7a01f2f64ef5d494f198f443a717d9ef110496042298935105bfa1d8ce684bc"
+"tools/capability/execution/verification.py|REPLACE|ABSENT,ed5b49ed03add16c8ba7a233d53a8c5528e5ba4d0fc23f53cdd41bb788bd2e73|7a792aaf3c59ed0bb4bd32cb55267e6fc26dfae06f5da1b8b36efff9e1efa952"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
@@ -431,6 +453,22 @@ generation_row_coherent() {
     [[ "${installed}" == "${expected}" ]]
     return
   fi
+  # A REPLACE whose object is ABSENT from this installed tree, on a row that
+  # names ABSENT as one of its baselines. That is a real and coherent state the
+  # declaration could not express before G11-AS: the object was created by a
+  # generation later than the one installed here, so this tree predates it
+  # entirely, while a newer host carries an intermediate version the row lists.
+  # One declaration has to describe both, because it is checked against both.
+  #
+  # It is not a loosening. The row must still name ABSENT explicitly, the
+  # checkout must still carry exactly the declared bytes, and a host that HAS
+  # the object must still hold either a named baseline or the new bytes.
+  if [[ ! -e "${LIBRARY_ROOT}/${source}" ]]; then
+    local baselines
+    baselines=",$4,"
+    [[ "${baselines}" == *",ABSENT,"* ]]
+    return
+  fi
   [[ "${installed}" == "${expected}" ]]
 }
 
@@ -490,7 +528,8 @@ require_operator_source() {
       # Not observed as a pending difference, so it must be already applied --
       # the installed object holding the declared new bytes. Anything else is a
       # row that describes neither the host nor the checkout.
-      if ! generation_row_coherent "${source}" "${operation}" "${expected}"; then
+      if ! generation_row_coherent "${source}" "${operation}" "${expected}" \
+           "$(field "${row}" 2)"; then
         bad "the declared change at ${source} is neither pending nor applied"
         drift=$((drift + 1)); complete=0
       fi

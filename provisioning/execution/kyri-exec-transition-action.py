@@ -228,8 +228,9 @@ def _read_member(dir_fd: int, name: str, check: Any, maximum: int,
     return b"".join(chunks)
 
 
-def coordinator_authority(module: Any, *, backend: Any) -> Any:
-    """The deployment's approved coordinator, read from provisioned authority.
+def _read_authority(module: Any, *, backend: Any, path: str, label: str,
+                    maximum: int) -> tuple[bytes, Any]:
+    """One root-owned deployment authority's bytes and status, or refuse.
 
     Read through the same descriptor-relative seam everything else uses: the
     directory is opened no-follow and the file is opened relative to it, so no
@@ -237,24 +238,21 @@ def coordinator_authority(module: Any, *, backend: Any) -> Any:
     primitive is introduced -- widening that seam to fetch one file would be a
     larger change to the privileged surface than the thing it fetches.
 
-    There is no cache and no default. Every privileged decision that needs the
-    coordinator identity reads it, so a deployment that removes or damages the
-    authority stops authorising transitions immediately rather than at the next
-    restart.
+    The path is a compiled-in constant belonging to the policy module. There is
+    no parameter here a caller could reach, which is what keeps "the authority
+    is at one location" a property of the code rather than a convention.
     """
     refused = module.TransitionRefused
-    directory, _, name = module.COORDINATOR_AUTHORITY_PATH.rpartition("/")
+    directory, _, name = path.rpartition("/")
     try:
         root = backend.open_directory(directory)
     except OSError as error:
-        raise refused(
-            f"the coordinator authority directory is unusable: {error}") from None
+        raise refused(f"the {label} directory is unusable: {error}") from None
     try:
         try:
             handle = os.open(name, _READ_FLAGS, dir_fd=root)
         except OSError as error:
-            raise refused(
-                f"the coordinator authority is unusable: {error}") from None
+            raise refused(f"the {label} is unusable: {error}") from None
         try:
             info = os.fstat(handle)
             chunks: list[bytes] = []
@@ -264,19 +262,92 @@ def coordinator_authority(module: Any, *, backend: Any) -> Any:
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > module.MAXIMUM_COORDINATOR_AUTHORITY_BYTES:
-                    raise refused(
-                        "the coordinator authority exceeds "
-                        f"{module.MAXIMUM_COORDINATOR_AUTHORITY_BYTES} bytes")
+                if total > maximum:
+                    raise refused(f"the {label} exceeds {maximum} bytes")
                 chunks.append(chunk)
         except OSError as error:
-            raise refused(
-                f"the coordinator authority could not be read: {error}") from None
+            raise refused(f"the {label} could not be read: {error}") from None
         finally:
             os.close(handle)
     finally:
         os.close(root)
-    return module.load_coordinator_authority(b"".join(chunks), info)
+    return b"".join(chunks), info
+
+
+def coordinator_authority(module: Any, *, backend: Any) -> Any:
+    """The deployment's approved coordinator, read from provisioned authority.
+
+    There is no cache and no default. Every privileged decision that needs the
+    coordinator identity reads it, so a deployment that removes or damages the
+    authority stops authorising transitions immediately rather than at the next
+    restart.
+    """
+    data, info = _read_authority(
+        module, backend=backend, path=module.COORDINATOR_AUTHORITY_PATH,
+        label="coordinator authority",
+        maximum=module.MAXIMUM_COORDINATOR_AUTHORITY_BYTES)
+    return module.load_coordinator_authority(data, info)
+
+
+def resolve_account(account: str) -> tuple[int, int]:
+    """The kernel identity the account database gives ``account``, or refuse.
+
+    It lives here rather than in the policy module because the policy module is
+    the pure decision layer -- the T10 backstop forbids it `pwd` and `grp`, and
+    that rule is correct: a decision that consults ambient system state is not
+    one that can be proved without privilege.
+
+    The coordinator authority deliberately does *not* do this. It treats the uid
+    as authority and the name as documentation, because the fact it needs is
+    `st_uid` on a descriptor it already holds and NSS would be a dependency it
+    does not need. The execution identity is a different kind of thing: it is a
+    target to become rather than a publisher to recognise, and the failure it
+    must survive is an authority naming an account whose uid was later
+    reassigned. Nothing but the account database can detect that.
+
+    ``pwd`` is imported at the call rather than at module scope so the one place
+    this boundary reaches NSS is visible where it happens.
+    """
+    import pwd
+
+    module = _policy()
+    try:
+        entry = pwd.getpwnam(account)
+    except KeyError:
+        raise module.TransitionRefused(
+            f"the account database does not know {account!r}") from None
+    except OSError as error:
+        raise module.TransitionRefused(
+            f"the account database is unusable: {error}") from None
+    return entry.pw_uid, entry.pw_gid
+
+
+def execution_identity(*, backend: Any) -> Any:
+    """The deployment's execution principal, read from provisioned authority.
+
+    Read the same way and cached the same amount, which is not at all. The
+    identity this returns is the one root permanently becomes, so a deployment
+    that removes the authority must stop transitioning immediately rather than
+    keep acting on a value read at some earlier time.
+
+    The account is resolved through the policy module's own resolver, so the
+    binding between the name and the numbers happens inside the parser that
+    already refuses everything else -- not here, where it would be a second
+    opinion the parser knew nothing about.
+
+    The policy module is resolved rather than passed, for the reason
+    `authenticate_launch` resolves it: the G6.1 verification policy is a thin
+    derivation of the production one, and the identity authority must be the
+    production module's regardless of which entrypoint is running. A `module`
+    parameter would be a place for a governed variant to supply a different
+    authority path.
+    """
+    module = _policy()
+    data, info = _read_authority(
+        module, backend=backend, path=module.EXECUTION_AUTHORITY_PATH,
+        label="execution authority",
+        maximum=module.MAXIMUM_EXECUTION_AUTHORITY_BYTES)
+    return module.load_execution_identity(data, info, resolve=resolve_account)
 
 
 def _open_invocation(root_fd: int, cinv: str, check: Any, module: Any, *,
@@ -487,6 +558,105 @@ def verify_profile_descriptor(descriptor: int, digest: str) -> None:
         raise refused("the profile descriptor does not hold the authorised bytes")
 
 
+def drop_privilege(policy: Any, *, backend: Any) -> None:
+    """Become the policy's identity, permanently and provably, or refuse.
+
+    **Order is the security property.** ``setgroups`` before ``setgid`` before
+    ``setuid``, because each step spends privilege the next one needs; and
+    ``no_new_privs`` after the drop rather than before, because setting it while
+    still root would be setting it on the wrong process.
+
+    **The drop is verified in every component**, not just the effective one. A
+    process that kept a saved uid can take privilege back, so a check of
+    ``euid`` alone would report a drop that had not happened.
+
+    Shared by the launch and reconciliation transitions on purpose. This is the
+    security-critical sequence in the whole boundary, and a second copy of it
+    would be a second thing to keep correct and a first thing to get wrong --
+    the argument `kyri_exec_verify` already makes about the policy.
+
+    The identity comes from ``policy``, which only a governed policy builder can
+    produce and which only an approved execution authority can populate. There
+    is no uid parameter here for a caller to supply.
+    """
+    module = _policy()
+    refused = module.TransitionRefused
+
+    try:
+        backend.setgroups((policy.worker_gid,))
+        backend.setgid(policy.worker_gid)
+        backend.setuid(policy.worker_uid)
+    except OSError as error:
+        raise refused(f"the credential drop failed: {error}") from None
+
+    after = backend.credentials()
+    if after.privileged():
+        raise refused("privilege survived the drop")
+    if (after.ruid, after.euid, after.suid) != (policy.worker_uid,) * 3:
+        raise refused("the uid drop is not complete in every component")
+    if (after.rgid, after.egid, after.sgid) != (policy.worker_gid,) * 3:
+        raise refused("the gid drop is not complete in every component")
+    if tuple(after.groups) != (policy.worker_gid,):
+        raise refused("the supplementary group set is not the expected one")
+
+    try:
+        backend.set_no_new_privs()
+        observed = backend.get_no_new_privs()
+    except OSError as error:
+        raise refused(f"no_new_privs failed: {error}") from None
+    if observed != 1:
+        raise refused("no_new_privs did not read back as set")
+
+    final = backend.credentials()
+    if final.privileged() or final != after:
+        raise refused("credentials changed after verification")
+
+
+def perform_reconciliation(policy: Any, *, backend: Any,
+                           assume_root: bool) -> NoReturn:
+    """Close descriptors, drop permanently, and exec the reconcile worker.
+
+    Deliberately shorter than `perform_transition`, and the omissions are the
+    design. There is no quota, because reconciliation writes no output. There is
+    no profile transport, because it authors nothing and reads no
+    coordinator-published object. There is no launch record, because nothing
+    about a container's existence is authorised by one -- the container is
+    already there, or it is not.
+
+    What is identical is the part that must be: the descriptor closure and the
+    credential drop are the same code the launch transition runs, so the two
+    privileged paths cannot come to disagree about what a complete drop is.
+
+    **Podman is not reachable from here.** This module never imports the
+    backend, and the reconcile worker that does is only reached through
+    ``execve`` below -- which happens after the drop. Running the operation as
+    root is therefore not a mistake this code can make; there is no route.
+    """
+    module = _policy()
+    refused = module.TransitionRefused
+
+    if not isinstance(policy, module.ReconciliationPolicy):
+        raise refused("a validated ReconciliationPolicy is required")
+    if not assume_root:
+        raise refused("the reconciliation requires root and does not hold it")
+
+    try:
+        backend.close_extra_descriptors(policy.inherited_descriptors)
+    except OSError as error:
+        raise refused(f"the descriptor cleanup failed: {error}") from None
+
+    drop_privilege(policy, backend=backend)
+
+    try:
+        backend.execve(policy.worker_interpreter,
+                       (policy.worker_interpreter, policy.worker_script,
+                        policy.cinv),
+                       policy.environment)
+    except OSError as error:
+        raise refused(f"execve failed: {error}") from None
+    raise refused("execve returned without executing")
+
+
 def perform_transition(policy: Any, *, launch_authorisation: Any, backend: Any,
                        quota: Any, assume_root: bool) -> NoReturn:
     """Perform the accepted transport, credential drop, and exec, or refuse.
@@ -554,34 +724,7 @@ def perform_transition(policy: Any, *, launch_authorisation: Any, backend: Any,
     # must still be one that excludes execution.
     verify_profile_descriptor(policy.profile_fd, launch.profile_digest)
 
-    try:
-        backend.setgroups((policy.worker_gid,))
-        backend.setgid(policy.worker_gid)
-        backend.setuid(policy.worker_uid)
-    except OSError as error:
-        raise refused(f"the credential drop failed: {error}") from None
-
-    after = backend.credentials()
-    if after.privileged():
-        raise refused("privilege survived the drop")
-    if (after.ruid, after.euid, after.suid) != (policy.worker_uid,) * 3:
-        raise refused("the uid drop is not complete in every component")
-    if (after.rgid, after.egid, after.sgid) != (policy.worker_gid,) * 3:
-        raise refused("the gid drop is not complete in every component")
-    if tuple(after.groups) != (policy.worker_gid,):
-        raise refused("the supplementary group set is not the expected one")
-
-    try:
-        backend.set_no_new_privs()
-        observed = backend.get_no_new_privs()
-    except OSError as error:
-        raise refused(f"no_new_privs failed: {error}") from None
-    if observed != 1:
-        raise refused("no_new_privs did not read back as set")
-
-    final = backend.credentials()
-    if final.privileged() or final != after:
-        raise refused("credentials changed after verification")
+    drop_privilege(policy, backend=backend)
 
     try:
         # The target comes from the authenticated policy, not from the policy
