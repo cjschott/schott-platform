@@ -236,6 +236,23 @@ _VALID_STATES = ("created", "running", "exited", "stopped", "paused", "unknown")
 _TERMINAL_STATES = ("exited", "stopped")
 
 
+def reported_state(observed: Any) -> str:
+    """The observed state as one of the words this adapter reasons about.
+
+    Normalised at the reporting boundary rather than left to be refused
+    downstream. A runtime word outside `_VALID_STATES` is not a state this
+    adapter can reason about -- `_inconsistent` already treats it as an
+    integrity failure and the outcome carries that -- so what travels to the
+    coordinator is `unknown`, which is the vocabulary's own word for exactly
+    this and the only honest one available.
+
+    It lives here because the vocabulary lives here. A caller mapping the word
+    itself would be a second place that decides what a state is.
+    """
+    state = getattr(observed, "state", None)
+    return state if state in _VALID_STATES else "unknown"
+
+
 class TerminalDisposition(enum.Enum):
     """What the lifecycle says happened, before any exit code is read."""
 

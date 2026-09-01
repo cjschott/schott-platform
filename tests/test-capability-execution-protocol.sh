@@ -168,10 +168,17 @@ def started(cinv=CINV):
     return Message(kind=MessageKind.STARTED, cinv=cinv,
                    fields=(('container_id', CID),))
 
-def terminal(cinv=CINV, exit_code=0, started_proven=True):
+STARTED_AT = '2026-09-01T06:00:00.123456789Z'
+FINISHED_AT = '2026-09-01T06:00:01Z'
+
+def terminal(cinv=CINV, exit_code=0, started_proven=True,
+             started_at=STARTED_AT, finished_at=FINISHED_AT,
+             outcome_class='completed'):
     return Message(kind=MessageKind.TERMINAL, cinv=cinv, fields=(
         ('container_id', CID), ('lifecycle_state', 'exited'),
-        ('exit_code', exit_code), ('started_proven', started_proven)))
+        ('outcome_class', outcome_class),
+        ('exit_code', exit_code), ('started_proven', started_proven),
+        ('started_at', started_at), ('finished_at', finished_at)))
 
 def collected(cinv=CINV):
     return Message(kind=MessageKind.COLLECTED, cinv=cinv, fields=(

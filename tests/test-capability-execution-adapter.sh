@@ -160,12 +160,27 @@ OTHER = 'b' * 64
 
 
 class Session:
-    '''Start authority, as the coordinator would grant it.'''
+    '''Start authority, as the coordinator would grant it, and a record of
+    everything the adapter reported back -- which G11-AT made the other half of
+    the same object.'''
 
     def __init__(self, container_id=CID, refuse=False):
         self.container_id = container_id
         self.refuse = refuse
         self.expected = 0
+        self.sent = []
+
+    def send(self, kind, **fields):
+        self.sent.append((kind, fields))
+
+    def reported(self):
+        return [kind.value for kind, _ in self.sent]
+
+    def fields_of(self, name):
+        for kind, fields in self.sent:
+            if kind.value == name:
+                return fields
+        raise AssertionError(f'{name} was never reported: {self.reported()}')
 
     def expect(self, kind):
         self.expected += 1
@@ -224,11 +239,22 @@ class Clock:
 
 
 class Profile:
-    '''Stands in for the T8 profile; comparison stays T8's to perform.'''
+    '''Stands in for the T8 profile; comparison stays T8's to perform.
+
+    It carries the six fields a verified-profile report names, because a
+    report is only worth making if it says which profile was verified.
+    '''
+
+    oci_image_id = 'b' * 64
+    cimp = 'CIMP-000001'
+    profile_schema_version = 1
+    execution_uid = 65532
+    execution_gid = 65532
 
 
 def binding(output_fd=None):
     return AD.ExecutionBinding(cinv='CINV-000001', profile=Profile(),
+                               profile_digest='d' * 64,
                                argv=('create',), environment=(),
                                output_fd=output_fd)
 
@@ -477,7 +503,20 @@ for node in ast.walk(tree):
             assert target.attr not in ('execute', 'create', 'start'), target.attr
         if isinstance(target, ast.Name):
             assert 'Adapter' not in target.id, target.id
-body = Path('tools/capability/cli.py').read_text(encoding='utf-8')
+# Scanned over CODE, with docstrings removed. A docstring saying the CLI never
+# enumerates the runtime is the opposite of reaching it, and a scan that cannot
+# tell those apart is a scan about prose rather than about behaviour.
+for node in ast.walk(tree):
+    block = getattr(node, 'body', None)
+    if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+            and block and isinstance(block[0], ast.Expr)
+            and isinstance(block[0].value, ast.Constant)
+            and isinstance(block[0].value.value, str)):
+        block.pop(0)
+        if not block:
+            block.append(ast.Pass())
+ast.fix_missing_locations(tree)
+body = ast.unparse(tree)
 for token in ('podman', 'Podman', 'subprocess', 'execution_binding'):
     assert token not in body, 'the CLI reaches ' + token
 print('OK')

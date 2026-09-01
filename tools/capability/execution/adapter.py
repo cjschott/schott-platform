@@ -34,12 +34,40 @@ from typing import Any
 from . import collector as collector_module
 from . import lifecycle as lifecycle_module
 from .profile import ExecutionProfile, ProfileMismatch, verify_observed
+from .protocol import MessageKind, ProtocolError
 from .types import Classification
 
 # What the adapter is allowed to conclude on its own: nothing. Every value here
 # arrives from T13, and the mapping exists only so the coordinator can read one
 # field instead of five.
 OUTCOME_ADAPTER_ERROR = "adapter-error"
+
+# The governed name of the result file, as the collector writes it into its own
+# manifest. Imported rather than restated so the digest below and the file T14
+# admitted cannot come to mean different files.
+RESULT_NAME = collector_module.RESULT_NAME
+
+
+def _admitted_digest(result: Any) -> str | None:
+    """The digest of the result T14 admitted, or nothing.
+
+    Read from the collector's own manifest entry for the governed result file,
+    in the released `sha256:<64hex>` form. Deliberately not recomputed: the
+    bytes that were admitted are the bytes hashed during collection, and hashing
+    whatever is on disk now would answer a different question.
+
+    It lives here rather than in the coordinator, where it used to, because
+    "which file was the result" is a conclusion of collection. A coordinator
+    walking the manifest was a second reader of somebody else's evidence, and
+    across the privilege boundary there is no manifest to walk at all.
+    """
+    if result is None:
+        return None
+    manifest = getattr(result, "manifest", None)
+    for entry in getattr(manifest, "files", ()) or ():
+        if getattr(entry, "relative_path", None) == RESULT_NAME:
+            return f"sha256:{entry.sha256}"
+    return None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,6 +82,11 @@ class ExecutionBinding:
 
     cinv: str
     profile: ExecutionProfile
+    # The digest the transition sealed and told the worker on argv. It is not a
+    # field of the profile -- a document cannot carry its own hash -- and the
+    # coordinator needs it back to confirm the worker verified the profile IT
+    # published rather than some other well-formed one.
+    profile_digest: str
     argv: tuple[str, ...]
     environment: tuple[tuple[str, str], ...]
     output_fd: int | None = None
@@ -77,6 +110,13 @@ class AdapterOutcome:
     output: Any
     started_proven: bool
     succeeded: bool
+    # The digest of the result T14 admitted, in the released `sha256:<64hex>`
+    # form, or nothing. Concluded here rather than by whoever reads this: the
+    # bytes that were admitted are the bytes collection hashed, and a second
+    # walk of the manifest downstream would be a second opinion about which
+    # file was the result. It is also the one field a supervised execution can
+    # carry across the privilege boundary, where no manifest travels.
+    result_digest: str | None = None
 
 
 class AdapterRefused(ValueError):
@@ -133,6 +173,28 @@ class PythonPodmanAdapter:
         except collector_module.OutputRefused:
             return tree, None
 
+    def _report(self, kind: Any, **fields: Any) -> None:
+        """Tell the coordinator what was just established, or refuse.
+
+        **Reporting is not deciding.** Every value here was concluded by the
+        module that owns it a line earlier; this states it on the wire so the
+        other side of the privilege boundary can see the same facts. The
+        coordinator cannot observe the container -- it has no Podman authority
+        and must not gain any -- so a fact that is not reported is a fact it
+        will never have.
+
+        A session that cannot send is refused rather than tolerated. Until
+        G11-AT nothing ever called `protocol.encode` in production, which is
+        exactly how the coordinator ended up blind, and a silent fallback here
+        would restore that.
+        """
+        sender = getattr(self._session, "send", None)
+        if sender is None:
+            raise AdapterRefused(
+                "a governed execution reports its progress; this session "
+                "cannot send")
+        sender(kind, **fields)
+
     def execute(self, binding: Any) -> AdapterOutcome:
         """Run one governed execution and report what was established.
 
@@ -140,6 +202,12 @@ class PythonPodmanAdapter:
         against the governed profile, start only when the coordinator has
         authorised it, read the lifecycle, let T13 classify it, and only then
         let T14 decide whether anything may be trusted.
+
+        Each step is announced as it completes, which is what makes the
+        conversation a supervision rather than a monologue: `created` before the
+        coordinator could authorise anything, `verified_profile` before it
+        should, `started` only after it did, and `terminal`/`collected` carrying
+        the conclusions T13 and T14 reached.
         """
         if not isinstance(binding, ExecutionBinding):
             raise AdapterRefused("an ExecutionBinding is required")
@@ -148,10 +216,26 @@ class PythonPodmanAdapter:
         try:
             container_id = lifecycle_module.create(
                 self._backend, binding.argv, binding.environment)
+            self._report(MessageKind.CREATED, container_id=container_id)
+
             self._verify(binding, container_id)
+            self._report(
+                MessageKind.VERIFIED_PROFILE, container_id=container_id,
+                profile_digest=binding.profile_digest,
+                oci_image_id=binding.profile.oci_image_id,
+                cimp=binding.profile.cimp,
+                profile_schema_version=binding.profile.profile_schema_version,
+                execution_uid=binding.profile.execution_uid,
+                execution_gid=binding.profile.execution_gid)
+
             started = self._clock()
+            # The gate. `start_when_authorised` is what consumes `start_now`,
+            # so the report below is only reachable once the coordinator has
+            # granted it -- the worker cannot announce a start it was not given.
             lifecycle_module.start_when_authorised(
                 self._backend, container_id, session=self._session)
+            self._report(MessageKind.STARTED, container_id=container_id)
+
             observed = lifecycle_module.observe_lifecycle(
                 self._backend, container_id)
         except AdapterRefused as error:
@@ -164,7 +248,21 @@ class PythonPodmanAdapter:
 
         timed_out = lifecycle_module.timed_out(elapsed=self._clock() - started)
         terminal = lifecycle_module.classify(observed, timed_out=timed_out)
+        self._report(
+            MessageKind.TERMINAL, container_id=container_id,
+            lifecycle_state=lifecycle_module.reported_state(observed),
+            outcome_class=terminal.outcome_class,
+            exit_code=terminal.exit_code,
+            started_proven=terminal.started_proven,
+            started_at=terminal.started_at, finished_at=terminal.finished_at)
+
         tree, result = self._collect(binding, terminal)
+        digest = _admitted_digest(result)
+        self._report(
+            MessageKind.COLLECTED,
+            result_digest=digest[len("sha256:"):] if digest else None,
+            output_manifest_digest=None,
+            stdout_truncated=False, stderr_truncated=False)
 
         return AdapterOutcome(
             cinv=binding.cinv,
@@ -175,7 +273,8 @@ class PythonPodmanAdapter:
             result=result,
             output=tree,
             started_proven=terminal.started_proven,
-            succeeded=result is not None)
+            succeeded=result is not None,
+            result_digest=digest)
 
     def _unestablished(self, binding: ExecutionBinding, container_id: str | None,
                        classification: Classification | None,
@@ -186,7 +285,19 @@ class PythonPodmanAdapter:
         classification asserts execution can be excluded, and reaching here
         means it cannot. The coordinator routes this into reconciliation, which
         is where a question this module cannot answer belongs.
+
+        The failure is announced where the protocol still allows it. If it does
+        not -- the conversation already ended, or the pipe is gone because the
+        coordinator died first -- nothing further is attempted and nothing is
+        pretended: the coordinator sees end of stream instead, which it already
+        treats as an execution whose fate is unknown. That is the honest
+        reading, and it is why this is narrow rather than a bare except.
         """
+        if classification is not None:
+            try:
+                self._report(MessageKind.ERROR, detail=classification.value)
+            except (AdapterRefused, ProtocolError, OSError):
+                pass
         return AdapterOutcome(
             cinv=binding.cinv,
             container_id=container_id,

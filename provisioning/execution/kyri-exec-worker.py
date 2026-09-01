@@ -77,30 +77,71 @@ USAGE = ("usage: /usr/bin/python3 /usr/libexec/kyri-exec-worker.py "
 
 _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 
-# The protocol arrives on the inherited descriptor the transition left open.
-# Bounded, because a coordinator that never stops talking must not be able to
-# make this process consume memory without limit.
-PROTOCOL_FD = 0
+# The protocol descriptors the transition left open. Two directions, because
+# the conversation has two: the coordinator authorises a start on descriptor 0
+# and learns what happened on descriptor 1.
+#
+# They are inherited rather than opened. This process holds rootless Podman
+# authority and the coordinator does not; a worker that could open its own
+# channel could talk to something other than the coordinator that launched it.
+#
+# Until G11-AT this side only ever READ. Nothing in production called
+# `protocol.encode`, so the coordinator was told nothing at all and could not
+# supervise an execution it had authorised.
+PROTOCOL_IN_FD = 0
+PROTOCOL_OUT_FD = 1
 MAXIMUM_PROTOCOL_BYTES = 64 * 1024
 
 
-def _frames():
-    """The coordinator's already-written frames, read once and bounded.
+def _frame_reader(descriptor=PROTOCOL_IN_FD):
+    """One newline-delimited frame at a time, bounded, or nothing at EOF.
 
-    `protocol.Session` deliberately takes frames rather than a descriptor --
-    reading them is somebody else's authority -- so this is that authority, and
-    it is the whole of it: it splits on newlines and validates nothing. Every
-    rule about what a frame may say belongs to the protocol module.
+    `protocol.Channel` deliberately takes callables rather than a descriptor --
+    reading is somebody else's authority -- so this is that authority, and it is
+    the whole of it: it splits on newlines and validates nothing. Every rule
+    about what a frame may say belongs to the protocol module.
+
+    Incremental rather than read-once. The coordinator cannot write `start_now`
+    until it has seen `verified_profile`, so a reader that drained the stream
+    before the conversation began would deadlock against a coordinator waiting
+    for this side to speak first.
     """
-    body = b""
-    while len(body) <= MAXIMUM_PROTOCOL_BYTES:
-        chunk = os.read(PROTOCOL_FD, 4096)
-        if not chunk:
-            break
-        body += chunk
-    if len(body) > MAXIMUM_PROTOCOL_BYTES:
-        raise SystemExit("refused: the protocol stream exceeded its bound")
-    return [line for line in body.split(b"\n") if line]
+    buffered = bytearray()
+
+    def next_frame():
+        while True:
+            index = buffered.find(b"\n")
+            if index >= 0:
+                frame = bytes(buffered[:index + 1])
+                del buffered[:index + 1]
+                return frame
+            if len(buffered) > MAXIMUM_PROTOCOL_BYTES:
+                raise SystemExit(
+                    "refused: the protocol stream exceeded its bound")
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                return None if not buffered else bytes(buffered) + b"\n"
+            buffered.extend(chunk)
+
+    return next_frame
+
+
+def _frame_writer(descriptor=PROTOCOL_OUT_FD):
+    """One encoded frame onto the coordinator's descriptor, completely.
+
+    A short write is a partial message, and a partial message is a frame the
+    other side will refuse. There is no retry policy here beyond finishing the
+    write the caller asked for.
+    """
+    def emit(frame):
+        written = 0
+        while written < len(frame):
+            step = os.write(descriptor, frame[written:])
+            if step <= 0:
+                raise SystemExit("refused: the protocol stream stopped short")
+            written += step
+
+    return emit
 
 # The canonical installed library root, compiled in and not configurable.
 #
@@ -267,6 +308,7 @@ def run_execution(worker, context, profile, *, backend_module, session, clock,
     from tools.capability.execution import adapter as adapter_module
     execution = adapter_module.ExecutionBinding(
         cinv=profile.cinv, profile=profile,
+        profile_digest=context.profile_digest,
         argv=worker.create_argv(binding), environment=environment,
         output_fd=os.open(binding.output, _DIR_FLAGS))
     try:
@@ -340,7 +382,9 @@ def main(argv: list[str]) -> int:
             outcome = run_execution(
                 worker, context, profile,
                 backend_module=_backend_module(),
-                session=protocol.Session(_frames()),
+                session=protocol.Channel(context.cinv,
+                                         reader=_frame_reader(),
+                                         writer=_frame_writer()),
                 clock=time.monotonic,
                 handoff_fd=handoff_fd, snapshot_fd=snapshot_fd,
                 images=image_store.RootlessImageStore(),

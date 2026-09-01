@@ -158,6 +158,64 @@ def _is_optional_sha256(value: Any) -> bool:
     return value is None or _is_sha256(value)
 
 
+# The outcome classes a worker can reach, which is deliberately NARROWER than
+# the released set. T13 maps every lifecycle disposition onto exactly these
+# five; `refused`, `cancelled` and `serialisation-failure` are conclusions
+# reached elsewhere and are not the worker's to claim, so there is no field
+# value here that could carry one.
+#
+# Restated rather than imported because this module takes `canonical_json` and
+# `types` on purpose -- a protocol that pulled in the lifecycle layer would make
+# the wire format depend on it. The two copies are held together by test, the
+# discipline `PROFILE_FD` already gets.
+_OUTCOME_CLASSES = frozenset({
+    "adapter-error", "completed", "interrupted", "provider-error", "timeout"})
+
+
+def _is_outcome_class(value: Any) -> bool:
+    """One outcome class a worker may report, from a closed vocabulary."""
+    return value in _OUTCOME_CLASSES
+
+
+def _is_timestamp(value: Any) -> bool:
+    """RFC3339 as the runtime reports it, or nothing.
+
+    A fixed grammar rather than free text, for the reason every other string
+    field here has one: a field that accepts arbitrary text is somewhere a path
+    or a command could ride even as an unused value. Absence is legal because a
+    container that never started has no start time to report.
+
+    Checked positionally rather than parsed. Turning this into a datetime would
+    put a clock library in a module that must stay pure, and would answer a
+    question nobody asked -- the coordinator carries the runtime's own words
+    into the durable record, it does not reinterpret them.
+    """
+    if value is None:
+        return True
+    if not isinstance(value, str) or not 20 <= len(value) <= 35:
+        return False
+    if (value[4], value[7], value[10], value[13], value[16]) != (
+            "-", "-", "T", ":", ":"):
+        return False
+    for start, stop in ((0, 4), (5, 7), (8, 10), (11, 13), (14, 16), (17, 19)):
+        if not set(value[start:stop]) <= _DIGITS:
+            return False
+    tail = value[19:]
+    if tail.startswith("."):
+        fraction = tail[1:]
+        digits = 0
+        while digits < len(fraction) and fraction[digits] in _DIGITS:
+            digits += 1
+        if not 1 <= digits <= 9:
+            return False
+        tail = fraction[digits:]
+    if tail == "Z":
+        return True
+    if len(tail) == 6 and tail[0] in "+-" and tail[3] == ":":
+        return set(tail[1:3]) <= _DIGITS and set(tail[4:6]) <= _DIGITS
+    return False
+
+
 # Every field each kind carries, with its validator. The absence of anything
 # command-shaped here is the guarantee, not a comment about it.
 MESSAGE_SCHEMAS: dict[MessageKind, dict[str, Any]] = {
@@ -178,6 +236,19 @@ MESSAGE_SCHEMAS: dict[MessageKind, dict[str, Any]] = {
         "lifecycle_state": _is_lifecycle_word,
         "exit_code": _is_exit_code,
         "started_proven": _is_bool,
+        # T13's conclusion, carried rather than re-derived. The coordinator has
+        # no observation to classify and the mapping from lifecycle words to an
+        # outcome class already exists once, in the module that owns it; a
+        # supervisor that recomputed it from the two facts below would be a
+        # second opinion that could not see `timed_out` at all.
+        "outcome_class": _is_outcome_class,
+        # The runtime's own words about when the workload ran, carried so the
+        # durable result can state it. The coordinator never observes the
+        # container, so if these did not travel the record could only say
+        # "sometime". Absence is legal: a container that never started has no
+        # start time.
+        "started_at": _is_timestamp,
+        "finished_at": _is_timestamp,
     },
     MessageKind.COLLECTED: {
         "result_digest": _is_optional_sha256,
@@ -328,6 +399,133 @@ def decode(line: bytes) -> Message:
               if name not in ("protocol_version", "kind", "cinv")}
     fields = _validate(kind, document["cinv"], values)
     return Message(kind=kind, cinv=document["cinv"], fields=fields)
+
+
+class ProtocolEnded(ProtocolError):
+    """The peer stopped talking before the conversation finished.
+
+    Deliberately **not** a `ProtocolViolation`, and deliberately carrying no
+    classification. A worker that was killed did not breach the contract; it
+    died, and calling that a protocol violation would file a process death
+    under the same heading as a malformed frame. They need different responses:
+    a violation is concluded, a death leaves the container's fate unknown and is
+    exactly what reconciliation exists for.
+    """
+
+
+class Channel:
+    """One live conversation, driven from either side of the boundary.
+
+    **It still owns no descriptor.** `Session` takes frames rather than a file
+    for a stated reason -- reading them is somebody else's authority, and
+    keeping this module pure is what lets the ordering rules be tested without a
+    process on the other end. That holds here: the two collaborators are a
+    callable that yields the next frame (or ``None`` at end of stream) and a
+    callable that accepts one encoded frame. Where those come from is the
+    caller's business.
+
+    **One state machine governs both directions.** The worker sends `created`
+    where the coordinator expects it, and the coordinator sends `start_now`
+    where the worker expects it, so the same transition table is walked from
+    both ends. Two tables would be two chances to disagree about what the
+    conversation is.
+
+    **Bound to one invocation.** Every message names a `CINV` and a message
+    naming another is refused. `Session` never checked that because it replayed
+    frames somebody had already chosen; a live channel is reading whatever
+    arrives, and "well-formed" was never "belongs to this conversation".
+    """
+
+    __slots__ = ("_cinv", "_reader", "_writer", "_state")
+
+    def __init__(self, cinv: str, *, reader: Any = None,
+                 writer: Any = None) -> None:
+        if not _is_cinv(cinv):
+            raise ProtocolViolation("a channel is bound to a canonical CINV")
+        self._cinv = cinv
+        self._reader = reader
+        self._writer = writer
+        self._state = SessionState.START
+
+    @property
+    def cinv(self) -> str:
+        return self._cinv
+
+    @property
+    def state(self) -> SessionState:
+        return self._state
+
+    def _advance(self, kind: MessageKind) -> None:
+        """Walk the one table, or refuse. Shared by both directions."""
+        if kind in _TERMINATING:
+            if self._state not in _MAY_TERMINATE:
+                raise ProtocolViolation(
+                    f"{kind.value} is not legal in state {self._state.value}")
+            self._state = SessionState.ENDED
+            return
+        allowed = _TRANSITIONS[self._state]
+        if kind not in allowed:
+            raise ProtocolViolation(
+                f"{kind.value} is not legal in state {self._state.value}")
+        self._state = allowed[kind]
+
+    def send(self, kind: MessageKind, **fields: Any) -> Message:
+        """Encode, hand to the writer, and advance -- or refuse and send nothing.
+
+        Legality is decided before the bytes exist. A frame that would be
+        illegal here is never written, so the peer cannot receive a message this
+        side has already decided was out of order.
+        """
+        if self._writer is None:
+            raise ProtocolViolation("this channel cannot send")
+        if not isinstance(kind, MessageKind):
+            raise ProtocolViolation("kind must be a MessageKind")
+        frame = encode(Message(kind=kind, cinv=self._cinv,
+                               fields=tuple(fields.items())))
+        self._advance(kind)
+        self._writer(frame)
+        return decode(frame)
+
+    def receive(self) -> Message:
+        """The next message, if anything it could be is legal here.
+
+        Unlike `expect`, this does not pre-commit to one kind, because a live
+        reader does not get to choose what arrives. What it refuses is anything
+        the current state does not permit -- which includes `started` before
+        `start_now` and a second `terminal` -- while still admitting the two
+        terminating kinds, since either side may end the conversation.
+
+        End of stream raises `ProtocolEnded` rather than a violation. The
+        difference is the whole reason the type exists.
+        """
+        if self._reader is None:
+            raise ProtocolViolation("this channel cannot receive")
+        frame = self._reader()
+        if frame is None:
+            raise ProtocolEnded(
+                f"the peer ended the conversation in state {self._state.value}")
+        message = decode(frame)
+        if message.cinv != self._cinv:
+            raise ProtocolViolation(
+                f"message names {message.cinv}, not {self._cinv}")
+        self._advance(message.kind)
+        return message
+
+    def expect(self, kind: MessageKind) -> Message:
+        """`receive`, refusing anything that is not ``kind``.
+
+        Kept because the lifecycle's start gate takes a session and asks it for
+        exactly `start_now`; a channel is a session that can also talk back.
+        """
+        if not isinstance(kind, MessageKind):
+            raise ProtocolViolation("expected kind must be a MessageKind")
+        before = self._state
+        message = self.receive()
+        if message.kind is not kind:
+            raise ProtocolViolation(
+                f"expected {kind.value} in state {before.value}, "
+                f"received {message.kind.value}")
+        return message
 
 
 class Session:
