@@ -209,7 +209,13 @@ run_case() {
 PRELUDE="
 import os, shutil
 from tools.capability.execution import worker as W
+from tools.capability.execution import identity as I
 from tools.capability.execution import lifecycle as L
+# The deployment's execution principal. A fixture, because it is deployment
+# authority now rather than two constants: G11-AS removed the compiled-in pair
+# and every host-identity assertion below is against this object.
+IDENTITY = I.ExecutionIdentity(account='kyri-capability', uid=999, gid=987)
+ENVIRONMENT = I.environment(IDENTITY)
 from tools.capability.execution.implementation_authority import Admission
 from tools.capability.execution.profile import (
     PROFILE_SCHEMA_VERSION,
@@ -435,18 +441,37 @@ def argv_of(backend):
 run_case "the worker refuses to run as root" "${PRELUDE}
 for uid in (0,):
     try:
-        W.require_worker_identity(uid=uid, gid=987)
+        W.require_worker_identity(uid=uid, gid=987, identity=IDENTITY)
     except W.WorkerRefused:
         continue
     raise AssertionError('running as root was accepted')
-# And refuses any identity other than the accepted one.
-for uid, gid in ((1000, 987), (999, 0), (0, 0), (1000, 1000)):
+# And refuses any identity other than the one the deployment authorised.
+for uid, gid in ((1000, 987), (999, 0), (0, 0), (1000, 1000), (2203, 2207)):
     try:
-        W.require_worker_identity(uid=uid, gid=gid)
+        W.require_worker_identity(uid=uid, gid=gid, identity=IDENTITY)
     except W.WorkerRefused:
         continue
     raise AssertionError(f'accepted uid={uid} gid={gid}')
-assert W.require_worker_identity(uid=999, gid=987) is None
+assert W.require_worker_identity(uid=999, gid=987, identity=IDENTITY) is None
+# Another deployment governs its own identity through the same code, and each
+# refuses the other's -- which a compiled-in pair could not have done.
+other = I.ExecutionIdentity(account='fixture-b', uid=2203, gid=2207)
+assert W.require_worker_identity(uid=2203, gid=2207, identity=other) is None
+for wrong in (IDENTITY, other):
+    pair = (2203, 2207) if wrong is IDENTITY else (999, 987)
+    try:
+        W.require_worker_identity(uid=pair[0], gid=pair[1], identity=wrong)
+    except W.WorkerRefused:
+        continue
+    raise AssertionError('one deployment accepted the other identity')
+# And an identity that did not come from the authority parser is refused.
+try:
+    W.require_worker_identity(uid=999, gid=987,
+                              identity={'uid': 999, 'gid': 987})
+except W.WorkerRefused:
+    pass
+else:
+    raise AssertionError('a look-alike identity governed the worker')
 print('OK')
 "
 
@@ -461,9 +486,13 @@ print('OK')
 "
 
 run_case "the rootless environment is exactly the two accepted variables" "${PRELUDE}
-assert dict(W.ENVIRONMENT) == {'HOME': '/data/kyri/capability',
-                               'XDG_RUNTIME_DIR': '/run/user/999'}, W.ENVIRONMENT
-names_ = {n for n, _ in W.ENVIRONMENT}
+assert dict(ENVIRONMENT) == {'HOME': '/data/kyri/capability',
+                             'XDG_RUNTIME_DIR': '/run/user/999'}, ENVIRONMENT
+# Derived, not stored: another deployment gets its own runtime directory from
+# the same function without a second code path.
+other = I.environment(I.ExecutionIdentity(account='b', uid=2203, gid=2207))
+assert dict(other)['XDG_RUNTIME_DIR'] == '/run/user/2203', other
+names_ = {n for n, _ in ENVIRONMENT}
 for banned in ('CONTAINER_HOST', 'DOCKER_HOST', 'XDG_DATA_HOME',
                'XDG_CONFIG_HOME', 'PATH', 'LD_PRELOAD'):
     assert banned not in names_, banned
@@ -628,7 +657,7 @@ assert 'PYTHONUTF8=1' in pairs, pairs
 for pair in pairs:
     assert '99' not in pair and 'en_US' not in pair, pair
 # The host process environment is a different thing and stays what it was.
-assert W.CONTAINER_ENVIRONMENT != W.ENVIRONMENT
+assert W.CONTAINER_ENVIRONMENT != ENVIRONMENT
 print('OK')
 "
 
@@ -767,7 +796,7 @@ else:
 run_case "create returns the full 64-hex container ID" "${PRELUDE}
 backend = FakeBackend()
 container_id = L.create(backend, W.create_argv(verified('create')),
-                        W.ENVIRONMENT)
+                        ENVIRONMENT)
 assert container_id == CID
 assert names(backend) == ['create']
 print('OK')
@@ -777,7 +806,7 @@ run_case "a short or malformed container ID is refused as authority" "${PRELUDE}
 for bad in ('c' * 12, 'c' * 63, 'c' * 65, 'C' * 64, '', 'deadbeef', None, 42):
     backend = FakeBackend(container_id=bad)
     try:
-        L.create(backend, W.create_argv(verified('short')), W.ENVIRONMENT)
+        L.create(backend, W.create_argv(verified('short')), ENVIRONMENT)
     except L.LifecycleRefused:
         continue
     raise AssertionError(f'accepted container id {bad!r}')
@@ -787,7 +816,7 @@ print('OK')
 run_case "create failure never retries, recreates, or falls back" "${PRELUDE}
 backend = FakeBackend(create_error=OSError('create refused'))
 try:
-    L.create(backend, W.create_argv(verified('fail')), W.ENVIRONMENT)
+    L.create(backend, W.create_argv(verified('fail')), ENVIRONMENT)
 except L.LifecycleRefused:
     pass
 else:

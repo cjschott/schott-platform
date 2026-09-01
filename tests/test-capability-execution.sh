@@ -254,7 +254,14 @@ assert_backstop_coverage() {
                  # no Trust -- and behaviourally that it repairs nothing, so a
                  # disagreement with the committed authority is refused rather
                  # than tidied away.
-                 "launch.py")
+                 "launch.py"
+                 # Backstopped by tests/test-capability-execution-identity-authority.sh,
+                 # which proves it starts no process, names no container
+                 # runtime, accepts no caller-supplied authority path, reaches
+                 # NSS only through an injected resolver, and carries no
+                 # compiled-in uid or gid to fall back to -- and behaviourally
+                 # that two unrelated deployments load through it unchanged.
+                 "identity.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

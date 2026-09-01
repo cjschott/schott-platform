@@ -77,12 +77,21 @@ print('OK')
 "
 
 run_case "the container identity is non-root and is the image's, not the host's" "${PRELUDE}
+from tools.capability.execution import identity as I
 assert P.EXECUTION_UID == 65532, P.EXECUTION_UID
 assert P.EXECUTION_GID == 65532, P.EXECUTION_GID
-# The host execution identity is a different thing and must not be conflated.
-assert P.EXECUTION_UID != W.WORKER_UID, 'container and host identity collapsed'
-assert P.EXECUTION_GID != W.WORKER_GID, 'container and host identity collapsed'
 assert P.EXECUTION_UID != 0 and P.EXECUTION_GID != 0
+# The host execution identity is a DIFFERENT identity, from a different
+# authority, and the two must not be conflated. The container identity is
+# adapter-bound and constant; the host identity is deployment-bound and varies.
+# Two unrelated deployments govern the same container identity, which is what
+# proves the container contract does not follow the host.
+for account, uid, gid in (('fixture-a', 999, 987), ('fixture-b', 2203, 2207)):
+    host = I.ExecutionIdentity(account=account, uid=uid, gid=gid)
+    assert P.EXECUTION_UID != host.uid, 'container and host identity collapsed'
+    assert P.EXECUTION_GID != host.gid, 'container and host identity collapsed'
+    # And the host identity does not leak into the container's mapping.
+    assert P.identity_mapping(P.EXECUTION_UID) == '65532:0:1'
 print('OK')
 "
 

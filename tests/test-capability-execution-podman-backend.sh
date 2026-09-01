@@ -60,17 +60,25 @@ B = importlib.util.module_from_spec(spec)
 sys.modules['kyri_exec_podman'] = B
 spec.loader.exec_module(B)
 IMAGE = '5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190'
+# The host environment rootless Podman is reached under. It is SUPPLIED here
+# rather than read from the module: G11-AS removed the compiled-in default,
+# which carried one deployment's uid and made the backend correct on exactly one
+# host. Two shapes are used below, so nothing can pass by matching a constant.
+ENV_A = (('HOME', '/data/kyri/capability'), ('PATH', '/usr/bin:/bin'),
+         ('XDG_RUNTIME_DIR', '/run/user/999'))
+ENV_B = (('HOME', '/data/kyri/capability'), ('PATH', '/usr/bin:/bin'),
+         ('XDG_RUNTIME_DIR', '/run/user/2203'))
 "
 
 # --- the closed registry --------------------------------------------------------
 
 run_case "the registry binds exactly one adapter identity" "${PRELUDE}
-backend = B.backend_for('python-podman-v1')
+backend = B.backend_for('python-podman-v1', environment=ENV_A)
 assert isinstance(backend, B.PodmanBackend), type(backend)
 for unknown in ('python-docker-v1', 'python-podman-v2', 'PYTHON-PODMAN-V1',
                 'python-podman', '', 'default'):
     try:
-        B.backend_for(unknown)
+        B.backend_for(unknown, environment=ENV_A)
     except B.PodmanBackendRefused:
         continue
     raise AssertionError(f'an unknown adapter resolved: {unknown!r}')
@@ -113,7 +121,7 @@ assert B.PERMITTED_SUBCOMMANDS == {
 for banned in ('pull', 'build', 'run', 'load', 'save', 'push', 'tag', 'exec',
                'cp', 'import', 'commit', 'login'):
     assert banned not in B.PERMITTED_SUBCOMMANDS, banned
-backend = B.backend_for('python-podman-v1')
+backend = B.backend_for('python-podman-v1', environment=ENV_A)
 for banned in ('pull', 'build', 'run', 'exec'):
     try:
         backend._run(banned, [])
@@ -173,12 +181,36 @@ else:
 print('OK')
 "
 
+run_case "the rootless environment is required and never defaulted" "${PRELUDE}
+import inspect
+# A default here carried \`/run/user/999\` and made this backend correct on
+# exactly one deployment. It is gone, and its absence is the assertion: a caller
+# cannot reach Podman without stating whose rootless state it is reaching.
+assert not hasattr(B, 'BACKEND_ENVIRONMENT'), 'the compiled-in default returned'
+parameter = inspect.signature(B.PodmanBackend.__init__).parameters['environment']
+assert parameter.default is inspect.Parameter.empty, parameter.default
+assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, parameter.kind
+try:
+    B.PodmanBackend()
+except TypeError:
+    pass
+else:
+    raise AssertionError('a backend was built with no environment at all')
+# And the identity actually reaches the process environment, rather than being
+# accepted and discarded: two deployments produce two different XDG_RUNTIME_DIRs.
+for env, expected in ((ENV_A, '/run/user/999'), (ENV_B, '/run/user/2203')):
+    backend = B.backend_for('python-podman-v1', environment=env)
+    assert dict(backend._environment)['XDG_RUNTIME_DIR'] == expected
+print('OK')
+"
+
 run_case "the storage seam admits only --root and --runroot, absolute" "${PRELUDE}
-B.PodmanBackend(storage=('--root', '/tmp/a', '--runroot', '/tmp/b'))
+B.PodmanBackend(environment=ENV_A,
+                storage=('--root', '/tmp/a', '--runroot', '/tmp/b'))
 for bad in (('--storage-driver', 'vfs'), ('--remote', '/x'), ('--root',),
             ('--root', 'relative'), ('--url', 'tcp://x'), ('/tmp/a',)):
     try:
-        B.PodmanBackend(storage=bad)
+        B.PodmanBackend(environment=ENV_A, storage=bad)
     except B.PodmanBackendRefused:
         continue
     raise AssertionError(f'the storage seam accepted {bad!r}')
@@ -188,8 +220,8 @@ print('OK')
 # --- create takes the governed argv and composes none of it ---------------------
 
 run_case "create refuses any command line it did not receive governed" "${PRELUDE}
-backend = B.backend_for('python-podman-v1')
-env = tuple(B.BACKEND_ENVIRONMENT)
+backend = B.backend_for('python-podman-v1', environment=ENV_A)
+env = ENV_A
 for bad in ([], ['/usr/bin/docker', 'create'], ['/usr/bin/podman', 'run'],
             ['/usr/bin/podman', 'pull', IMAGE], ['podman', 'create']):
     try:
@@ -201,7 +233,7 @@ print('OK')
 "
 
 run_case "create refuses a transition environment it was not built with" "${PRELUDE}
-backend = B.backend_for('python-podman-v1')
+backend = B.backend_for('python-podman-v1', environment=ENV_A)
 try:
     backend.create(['/usr/bin/podman', 'create'], (('HOME', '/somewhere/else'),))
 except B.PodmanBackendRefused:

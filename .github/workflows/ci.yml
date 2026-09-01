@@ -558,9 +558,14 @@ jobs:
 
       # G11-AQ: governed container reconciliation. Host-only; reports
       # HOST_ONLY_SKIP where there is no Podman or exported archive.
-      # G11-AR: deployment-bound vs compiled-in execution identity. Static.
+      # G11-AS: the deployment execution identity authority, and the privileged
+      # reconciliation entrypoint it made buildable. Both static: fixture
+      # authorities, injected account resolvers, injected credential recorders.
       - name: Capability execution identity authority tests
         run: bash tests/test-capability-execution-identity-authority.sh
+
+      - name: Capability execution reconcile entrypoint tests
+        run: bash tests/test-capability-execution-reconcile-entrypoint.sh
 
       - name: Capability execution container reconciliation tests
         run: bash tests/test-capability-execution-reconciliation.sh

@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=92
+  TOTAL_STEPS=93
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=117
+  TOTAL_STEPS=118
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -613,11 +613,19 @@ run "Capability execution supervision preconditions" \
 # ENG-0005 G11-AQ. The orphan a worker's SIGKILL leaves behind, and the
 # governed operation that recovers it. Host-only: it creates and reconciles
 # real containers in a disposable store.
-# ENG-0005 G11-AR. Which execution identities are deployment-bound and which
-# are still compiled-in numbers. The coordinator half is asserted positively;
-# the worker half is bounded, because no authority governs it yet.
+# ENG-0005 G11-AS. The deployment execution identity authority that closed the
+# G11-AR stop. Both halves are now asserted positively, and every case runs two
+# unrelated fixture deployments through the same code -- because a suite that
+# only ever exercised the schai numbers would pass against a constant too.
 run "Capability execution identity authority" \
   bash tests/test-capability-execution-identity-authority.sh
+
+# ENG-0005 G11-AS. The privileged reconciliation entrypoint G11-AR could not
+# safely build: what it becomes, in what order, and that Podman is unreachable
+# until after the drop. Credential primitives are injected recorders -- a real
+# drop would drive rootless Podman into the production graphroot.
+run "Capability execution reconcile entrypoint" \
+  bash tests/test-capability-execution-reconcile-entrypoint.sh
 
 run "Capability execution container reconciliation" \
   bash tests/test-capability-execution-reconciliation.sh

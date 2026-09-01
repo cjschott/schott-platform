@@ -127,14 +127,89 @@ print('OK')
 # --- the ceremony must be atomic ---------------------------------------------------
 
 run_case "the ceremony's pieces are named together, not one at a time" "${PRELUDE}
-# Four objects move as one: two library modules, the transition entrypoint, and
-# the verification surface. A ceremony that installs a subset reproduces the
-# split, which is how the live defect arose in the first place.
+# The objects that move as one. A ceremony that installs a subset reproduces
+# the split, which is how the live defect arose in the first place.
+#
+# G11-AS added the reconciliation surface. It is part of THIS set rather than a
+# ceremony of its own because it shares the policy module, the action module and
+# the credential drop with the launch path -- a host carrying a reconcile
+# entrypoint over an older action module would be the 16f285e defect again,
+# with a different pair of halves.
 pieces = [TRANSITION, ACTION, VERIFY, ENTRYPOINT,
           Path('provisioning/execution/kyri-exec-verify-worker.py'),
-          Path('provisioning/execution/kyri-exec-transition-entrypoint.py')]
+          Path('provisioning/execution/kyri-exec-transition-entrypoint.py'),
+          Path('provisioning/execution/kyri-exec-reconcile.py'),
+          Path('provisioning/execution/kyri-exec-reconcile-entrypoint.py'),
+          Path('provisioning/execution/kyri-exec-reconcile-worker.py'),
+          Path('provisioning/execution/kyri-exec-podman.py')]
 for piece in pieces:
     assert piece.is_file(), f'{piece} is absent from the ceremony set'
+print('OK')
+"
+
+run_case "a reconcile entrypoint over an older action module is detectable" "${PRELUDE}
+# The same coherence question the launch halves get, asked of the pair G11-AS
+# introduced. The entrypoint calls two things the action module must provide;
+# an action module predating this checkpoint has neither, and the mismatch is
+# visible from the two files alone.
+entry = Path('provisioning/execution/kyri-exec-reconcile-entrypoint.py')
+tree = ast.parse(entry.read_text(encoding='utf-8'))
+required = {getattr(n.func, 'attr', None) for n in ast.walk(tree)
+            if isinstance(n, ast.Call)}
+provided = {n.name for n in ast.walk(ast.parse(ACTION.read_text(encoding='utf-8')))
+            if isinstance(n, ast.FunctionDef)}
+for name in ('execution_identity', 'perform_reconciliation'):
+    assert name in required, (name, 'the entrypoint stopped calling it')
+    assert name in provided, (name, 'the action module cannot provide it')
+# And the policy the entrypoint asks for must exist in the policy module.
+policy_names = {n.name for n in
+                ast.walk(ast.parse(TRANSITION.read_text(encoding='utf-8')))
+                if isinstance(n, ast.FunctionDef)}
+assert 'reconciliation_policy_for' in policy_names, policy_names
+print('OK')
+"
+
+run_case "both privileged paths drop through one implementation" "${PRELUDE}
+# Two credential drops would be two things to keep correct and one thing to get
+# wrong -- the argument kyri_exec_verify already makes about the policy. Each
+# transition calls the shared drop; neither performs its own.
+tree = ast.parse(ACTION.read_text(encoding='utf-8'))
+functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+assert 'drop_privilege' in functions, 'the shared credential drop is gone'
+inside = {n.attr for n in ast.walk(functions['drop_privilege'])
+          if isinstance(n, ast.Attribute)}
+assert {'setgroups', 'setgid', 'setuid', 'set_no_new_privs'} <= inside, inside
+for name in ('perform_transition', 'perform_reconciliation'):
+    body = functions[name]
+    called = {getattr(n.func, 'id', None) for n in ast.walk(body)
+              if isinstance(n, ast.Call)}
+    assert 'drop_privilege' in called, (name, 'it does not use the shared drop')
+    own = {n.attr for n in ast.walk(body) if isinstance(n, ast.Attribute)}
+    assert not ({'setgroups', 'setgid', 'setuid'} & own), (name, own)
+print('OK')
+"
+
+run_case "the ceremony's identity expectation is one path and one schema" "${PRELUDE}
+# The helper and the runtime read the same authority. The helper cannot import
+# the runtime package, so the contract is stated twice and held together here:
+# a ceremony that installed a helper expecting one schema onto a runtime
+# expecting another would be a mixed state nothing else would notice.
+import importlib.util
+spec = importlib.util.spec_from_file_location('kyri_exec_transition', str(TRANSITION))
+policy = importlib.util.module_from_spec(spec)
+sys.modules['kyri_exec_transition'] = policy
+spec.loader.exec_module(policy)
+sys.path.insert(0, '.')
+from tools.capability.execution import identity as runtime
+assert policy.EXECUTION_AUTHORITY_PATH == runtime.EXECUTION_AUTHORITY_PATH
+assert policy.EXECUTION_AUTHORITY_SCHEMA == runtime.EXECUTION_AUTHORITY_SCHEMA
+assert policy.SUPPORTED_EXECUTION_SCHEMA_VERSION \\
+    == runtime.SUPPORTED_EXECUTION_SCHEMA_VERSION
+# And the authority file is NOT one of the ceremony's objects. It is deployment
+# authority with its own ceremony, and a helper that installed it would be
+# choosing the deployment's identity rather than reading it.
+for piece in Path('provisioning/execution').glob('*'):
+    assert 'execution-identity.json' != piece.name, piece
 print('OK')
 "
 
@@ -148,7 +223,9 @@ lib = pathlib.Path('/usr/lib/kyri/python')
 repo = pathlib.Path('provisioning/execution')
 pairs = [('kyri_exec_transition.py', 'kyri-exec-transition.py'),
          ('kyri_exec_transition_action.py', 'kyri-exec-transition-action.py'),
-         ('kyri_exec_verify.py', 'kyri-exec-verify.py')]
+         ('kyri_exec_verify.py', 'kyri-exec-verify.py'),
+         ('kyri_exec_podman.py', 'kyri-exec-podman.py'),
+         ('kyri_exec_reconcile.py', 'kyri-exec-reconcile.py')]
 digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 lines = []
 for installed, source in pairs:

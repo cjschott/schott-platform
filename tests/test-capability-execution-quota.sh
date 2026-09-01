@@ -398,15 +398,31 @@ assert 'quota' in taken, taken
 assert all(d is None for d in transition[0].args.kw_defaults), \\
     'the quota seam carries a default'
 # The quota call precedes every credential-spending call in source order.
+#
+# G11-AS factored the drop itself into drop_privilege, so the three credential
+# primitives now live there and perform_transition calls it. The ordering
+# property is unchanged and is checked across both: quota first in the
+# transition, and every primitive inside the function the transition calls.
+# Following the call is the point -- an assertion that only looked at one
+# function would have been satisfied by moving the drop somewhere else.
+drop = [n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == 'drop_privilege']
+assert len(drop) == 1, 'the shared credential drop is gone'
 lines = {}
 for node in ast.walk(transition[0]):
     if isinstance(node, ast.Attribute) and node.attr in (
-            'apply', 'setgroups', 'setgid', 'setuid', 'execve',
-            'close_extra_descriptors'):
+            'apply', 'execve', 'close_extra_descriptors'):
         lines.setdefault(node.attr, node.lineno)
-for later in ('close_extra_descriptors', 'setgroups', 'setgid', 'setuid',
-              'execve'):
+    elif isinstance(node, ast.Call) and getattr(node.func, 'id', None) \
+            == 'drop_privilege':
+        lines.setdefault('drop_privilege', node.lineno)
+for later in ('close_extra_descriptors', 'drop_privilege', 'execve'):
     assert lines['apply'] < lines[later], (later, lines)
+# And the primitives are inside the drop, not scattered back into the caller.
+inside = {n.attr for n in ast.walk(drop[0]) if isinstance(n, ast.Attribute)}
+assert {'setgroups', 'setgid', 'setuid'} <= inside, inside
+outside = {n.attr for n in ast.walk(transition[0]) if isinstance(n, ast.Attribute)}
+assert not ({'setgroups', 'setgid', 'setuid'} & outside), outside
 print('OK')
 "
 

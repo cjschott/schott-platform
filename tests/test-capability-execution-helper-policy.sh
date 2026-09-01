@@ -232,6 +232,28 @@ def code_only():
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)
 
+def authority(account='kyri-capability', uid=999, gid=987, **overrides):
+    '''One execution identity authority body, as the ceremony renders it.'''
+    import json
+    body = dict(execution_account=account, execution_gid=gid,
+                execution_uid=uid, schema_version=1)
+    body.update(overrides)
+    return json.dumps(body, sort_keys=True, separators=(',', ':')).encode()
+
+class Status:
+    '''What os.fstat reports for a correctly provisioned authority.'''
+    st_mode = 0o100444
+    st_uid = 0
+    st_gid = 0
+
+def identity(account='kyri-capability', uid=999, gid=987):
+    '''An approved execution identity, built the only way there is.'''
+    return helper.load_execution_identity(
+        authority(account, uid, gid), Status(),
+        resolve=lambda name: (uid, gid))
+
+IDENTITY = identity()
+
 def record(**overrides):
     body = dict(
         cinv='CINV-000042', cimp='CIMP-000001',
@@ -246,7 +268,8 @@ def record(**overrides):
 # --- CLI grammar --------------------------------------------------------------
 
 run_case "exactly one argument beyond the program name is accepted" "${PRELUDE}
-policy = helper.policy_for(['/usr/libexec/kyri-exec-transition', 'CINV-000042'])
+policy = helper.policy_for(['/usr/libexec/kyri-exec-transition', 'CINV-000042'],
+                           identity=IDENTITY)
 assert policy.cinv == 'CINV-000042'
 print('OK')
 "
@@ -255,7 +278,7 @@ run_case "a missing, extra, or empty argument list is refused" "${PRELUDE}
 for argv in ([], ['prog'], ['prog', 'CINV-000042', 'CINV-000043'],
              ['prog', 'CINV-000042', '--force'], ['prog', '', 'x']):
     try:
-        helper.policy_for(argv)
+        helper.policy_for(argv, identity=IDENTITY)
     except helper.TransitionRefused:
         continue
     raise AssertionError(f'accepted argv {argv}')
@@ -264,8 +287,24 @@ print('OK')
 
 run_case "the CLI carries no command, executable, identity, or environment slot" "${PRELUDE}
 import inspect
-params = list(inspect.signature(helper.policy_for).parameters)
-assert params == ['argv'], params
+signature = inspect.signature(helper.policy_for)
+# One positional parameter -- the command line -- and one keyword-only
+# parameter carrying the deployment's execution identity. The second is NOT a
+# caller slot: it is keyword-only, has no default, and is type-checked against
+# a class only \`load_execution_identity\` can produce, so the only value that
+# satisfies it came from root-owned authority. G11-AS added it; before that the
+# identity was two constants compiled into this file.
+params = list(signature.parameters)
+assert params == ['argv', 'identity'], params
+assert signature.parameters['identity'].kind is inspect.Parameter.KEYWORD_ONLY
+assert signature.parameters['identity'].default is inspect.Parameter.empty
+for wrong in (None, 999, 'kyri-capability', {'uid': 999, 'gid': 987},
+              type('Look', (), {'account': 'x', 'uid': 999, 'gid': 987})()):
+    try:
+        helper.policy_for(['prog', 'CINV-000042'], identity=wrong)
+    except helper.TransitionRefused:
+        continue
+    raise AssertionError(f'a look-alike identity was accepted: {wrong!r}')
 source = pathlib.Path('provisioning/execution/kyri-exec-transition.py').read_text()
 for banned in ('--exec', '--command', '--user', '--uid', '--gid', '--env',
                '--cwd', '--image', '--mount', '--worker', '--config',
@@ -639,10 +678,19 @@ print('OK')
 # --- fixed identity, executable, environment ------------------------------------------
 
 run_case "the target identity is fixed and cannot be chosen" "${PRELUDE}
-policy = helper.policy_for(['prog', 'CINV-000042'])
-assert policy.worker_user == 'kyri-capability'
-assert policy.worker_uid == 999 and policy.worker_gid == 987
-assert helper.WORKER_USER == 'kyri-capability'
+# The target identity is whatever the deployment's authority named, and
+# nothing else -- not a constant here, and not anything the caller reached.
+for account, uid, gid in (('kyri-capability', 999, 987),
+                          ('fixture-b', 2203, 2207)):
+    policy = helper.policy_for(['prog', 'CINV-000042'],
+                               identity=identity(account, uid, gid))
+    assert policy.worker_user == account, policy.worker_user
+    assert (policy.worker_uid, policy.worker_gid) == (uid, gid)
+    # And the rootless runtime directory follows the uid rather than a literal.
+    assert dict(policy.environment)['XDG_RUNTIME_DIR'] == f'/run/user/{uid}'
+# Nothing compiled in remains to fall back to.
+for gone in ('WORKER_USER', 'WORKER_UID', 'WORKER_GID'):
+    assert not hasattr(helper, gone), gone
 source = pathlib.Path('provisioning/execution/kyri-exec-transition.py').read_text()
 for banned in ('pwd.getpwnam', 'grp.getgrnam', 'int(sys.argv', 'os.getuid()'):
     assert banned not in source, banned
@@ -650,7 +698,7 @@ print('OK')
 "
 
 run_case "the worker executable is fixed, absolute, and never searched for" "${PRELUDE}
-policy = helper.policy_for(['prog', 'CINV-000042'])
+policy = helper.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 assert policy.worker_interpreter == '/usr/bin/python3', policy.worker_interpreter
 assert policy.worker_script == '/usr/libexec/kyri-exec-worker.py', policy.worker_script
 # vNext: argv is five elements and is built from the AUTHENTICATED record, not
@@ -702,7 +750,7 @@ print('OK')
 "
 
 run_case "the environment policy is closed and carries nothing inherited" "${PRELUDE}
-policy = helper.policy_for(['prog', 'CINV-000042'])
+policy = helper.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 assert isinstance(policy.environment, tuple)
 names = {name for name, _ in policy.environment}
 # Exactly the two rootless Podman requires, and nothing inherited.
@@ -720,7 +768,7 @@ print('OK')
 "
 
 run_case "the working directory is fixed and never the caller's" "${PRELUDE}
-policy = helper.policy_for(['prog', 'CINV-000042'])
+policy = helper.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 assert policy.working_directory == helper.WORKING_DIRECTORY
 assert policy.working_directory.startswith('/')
 source = pathlib.Path('provisioning/execution/kyri-exec-transition.py').read_text()
@@ -729,7 +777,7 @@ print('OK')
 "
 
 run_case "descriptor policy names the protocol descriptors and the sealed profile" "${PRELUDE}
-policy = helper.policy_for(['prog', 'CINV-000042'])
+policy = helper.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 # vNext: one governed exception to stdio-only inheritance, and it is an
 # exception rather than a return to ambient inheritance -- the number is
 # compiled in, root opens the object itself, and no caller may name a
@@ -749,7 +797,7 @@ print('OK')
 # --- policy result ---------------------------------------------------------------
 
 run_case "the policy result is immutable and carries no generic execution field" "${PRELUDE}
-policy = helper.policy_for(['prog', 'CINV-000042'])
+policy = helper.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 try:
     policy.worker_executable = '/bin/sh'
 except Exception:
@@ -817,12 +865,16 @@ import types as pytypes
 functions = sorted(n for n, v in vars(helper).items()
                    if isinstance(v, pytypes.FunctionType) and not n.startswith('_'))
 assert functions == ['check_coordinator_authority_object',
-                     'check_evidence_object', 'check_handoff_object',
+                     'check_evidence_object',
+                     'check_execution_authority_object',
+                     'check_handoff_object',
                      'check_launch_authorisation', 'check_profile_object',
-                     'evidence_path', 'handoff_path',
-                     'load_coordinator_authority',
-                     'parse_coordinator_authority', 'parse_launch_record',
-                     'policy_for', 'profile_path', 'require_authenticated',
+                     'evidence_path', 'execution_environment', 'handoff_path',
+                     'load_coordinator_authority', 'load_execution_identity',
+                     'parse_coordinator_authority', 'parse_execution_authority',
+                     'parse_launch_record',
+                     'policy_for', 'profile_path', 'reconciliation_policy_for',
+                     'require_authenticated',
                      'sudoers_principal', 'validate_cinv',
                      'worker_argv'], functions
 # Every addition is a decision, not an action: locating the profile, checking
@@ -835,6 +887,13 @@ assert functions == ['check_coordinator_authority_object',
 # naming the principal derived from it are all decisions; the descriptor the
 # stat came from and the read that produced the bytes belong to the action
 # layer, exactly as they do for the launch record.
+#
+# G11-AS added five, and every one of them is the same shape applied to the
+# second deployment identity, plus one derivation (the rootless environment
+# from an approved identity) and one second policy builder. The account
+# resolver is deliberately NOT here: consulting NSS is a syscall dependency,
+# it is forbidden by the backstop above, and it lives in the action layer with
+# every other one. This module receives it injected and cannot go looking.
 source = SOURCE
 for banned in ('memfd', 'F_ADD_SEALS', 'F_GET_SEALS', 'dup2', 'F_SETFD',
                'os.write', 'os.read', 'os.open'):
