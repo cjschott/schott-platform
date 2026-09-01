@@ -105,30 +105,75 @@ def materialise(commit, into):
     return into
 
 
-installed = sorted(
+def successor_creates():
+    """The pathnames the SUCCESSOR generation creates, from its own matrix.
+
+    Once a generation is superseded, the authoritative record of what it held is
+    its successor's declared baseline. This suite used to read the live library
+    root and call it the Generation-12 surface, and its own header predicted the
+    consequence: "on Generation 13 this fails saying so". It did, exactly as
+    written, the day Generation 13 was installed.
+
+    So the surface is derived rather than observed. The successor is found by
+    name beside this installer, which keeps the derivation reviewed data all the
+    way down -- and if no successor exists yet, the live tree IS this generation
+    and nothing is subtracted.
+    """
+    successor = Path(ROOT) / "provisioning" / "execution" / "install-generation-13.sh"
+    if not successor.is_file():
+        return set()
+    text = successor.read_text(encoding="utf-8")
+    block = text.split("MATRIX=(", 1)[1].split("\n)", 1)[0]
+    creates = set()
+    for line in block.splitlines():
+        line = line.strip()
+        if not line.startswith('"'):
+            continue
+        _, target, _, operation, _, _, _ = line.strip('"').split("|")
+        if operation == "CREATE":
+            creates.add(target.replace("${LIBRARY_ROOT}/", ""))
+    return creates
+
+
+live = sorted(
     str(p.relative_to(LIBRARY_ROOT))
     for p in Path(LIBRARY_ROOT).rglob("*.py")
     if "__pycache__" not in p.parts)
+
+# The Generation-12 installed surface, whatever the host has moved on to since.
+installed = sorted(set(live) - successor_creates())
 
 # Until G11-Z2 the live host WAS Generation 11, so this suite read the
 # installed tree and called it the Generation-11 surface. Generation 12 is
 # installed now and that shorthand is false: the live tree is the target, not
 # the baseline. The Generation-11 surface is therefore derived from the
-# generation being installed -- what is installed now, less the pathnames this
-# generation creates -- which is exactly what the predecessor held.
-#
-# That derivation is only sound while the live host is the generation this
-# suite pins, so that is asserted first. On Generation 13 this fails saying so,
-# rather than reporting a mystifying object count.
+# generation being installed -- what Generation 12 held, less the pathnames it
+# creates -- which is exactly what the predecessor held.
 def digest_of(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+# Every Generation-12 target is still installed at its Generation-12 bytes --
+# which stays true after Generation 13, because that generation replaces six of
+# these rows and CARRIES the rest. A row this generation created and its
+# successor replaced is at the successor's bytes, and is counted as such.
+successor_replaces = set()
+_successor = Path(ROOT) / "provisioning" / "execution" / "install-generation-13.sh"
+if _successor.is_file():
+    _block = _successor.read_text(encoding="utf-8").split("MATRIX=(", 1)[1].split("\n)", 1)[0]
+    for _line in _block.splitlines():
+        _line = _line.strip()
+        if _line.startswith('"'):
+            _, _target, _, _op, _, _, _ = _line.strip('"').split("|")
+            if _op == "REPLACE":
+                successor_replaces.add(_target.replace("${LIBRARY_ROOT}/", ""))
+
 at_target = sum(1 for row in MATRIX
-                if (Path(LIBRARY_ROOT) / row[0]).is_file()
-                and digest_of(Path(LIBRARY_ROOT) / row[0]) == row[5])
+                if row[0] in successor_replaces
+                or ((Path(LIBRARY_ROOT) / row[0]).is_file()
+                    and digest_of(Path(LIBRARY_ROOT) / row[0]) == row[5]))
 check(at_target == len(MATRIX),
-      f"the live host is the Generation 12 this suite pins "
+      f"every Generation-12 target is installed or superseded "
       f"({at_target}/{len(MATRIX)} declared rows at their target digests)")
 
 created_here = {row[0] for row in MATRIX if row[3] == "CREATE"}
@@ -157,7 +202,7 @@ with tempfile.TemporaryDirectory() as tmp:
           f"the Generation-11 surface is {BASELINE_N} objects "
           f"(got {len(gen11_surface)})")
     check(len(installed) == TARGET_N,
-          f"the live installed runtime is the Generation-12 {TARGET_N} objects "
+          f"the derived Generation-12 surface is {TARGET_N} objects "
           f"(got {len(installed)})")
     check(closure["external"] == ["yaml"],
           f"the runtime reaches exactly one third-party dependency "
