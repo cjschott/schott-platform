@@ -1,9 +1,10 @@
 # ENG-0005 G11-AW — Coordinator and execution identity authority, production ceremony
 
-**Status: prepared, awaiting operator action.** Sections 1–7 and 16 are complete
-and independently derived. Sections 8–15 are the post-write verification and are
-filled in from operator evidence; they are marked as pending below rather than
-predicted. Section numbering follows the checkpoint's report contract.
+**Status: complete. Both authorities installed and independently verified.**
+Sections 1–7 are the preparation; 8–15 are the post-write verification, re-derived
+from production rather than taken from operator output. The one claim that could
+not be reproduced unprivileged is named as such in §11. Section numbering follows
+the checkpoint's report contract.
 
 Branch `arch/eng-0005-execution-transition`. Preparation implementation commits
 `e2b9755` (the two ceremonies, the rehearsal suite, and the validation and CI
@@ -359,142 +360,328 @@ and stopped in.
 
 ## 8. Operator evidence
 
-*Pending — filled in from the operator's output of the two blocks in §7a.*
+Both blocks were executed and both reported success. As supplied:
+
+**Block A — coordinator authority.** Destination absent beforehand. Observed
+account `cschott`, uid 1000, primary gid 1000. Candidate reconstructed to 76
+bytes at `3dec888c…2811`. Installed at `/etc/kyri/coordinator-identity.json`,
+read back `root:root 0444`, 76 bytes, same digest.
+`kyri_exec_transition.load_coordinator_authority` PASS; binding
+`cschott -> uid 1000` PASS.
+
+**Block B — execution authority.** Destination absent beforehand. Observed
+account `kyri-capability`, uid 999, gid 987, group `kyri-capability`, shell
+`/usr/sbin/nologin`. Candidate reconstructed to 99 bytes at `891beeeb…e373`.
+Installed at `/etc/kyri/execution-identity.json`, read back `root:root 0444`, 99
+bytes, same digest. Both readers PASS, parser agreement PASS, binding
+`kyri-capability -> 999:987` PASS. Derived environment
+`HOME=/data/kyri/capability`, `XDG_RUNTIME_DIR=/run/user/999`.
+
+Everything below was re-derived from production rather than taken from that
+output. Where a claim rests on operator evidence that could not be reproduced
+unprivileged, §11 says so by name.
 
 ## 9. Byte identity
 
-*Pending.*
+Read directly from production, and compared two ways: against the reviewed
+digests, and against candidates re-rendered from the account database at
+verification time.
+
+| | coordinator | execution |
+| --- | --- | --- |
+| path | `/etc/kyri/coordinator-identity.json` | `/etc/kyri/execution-identity.json` |
+| bytes | **76** | **99** |
+| SHA-256 | `3dec888c9efa4214d9cbc8a943818fbe21cd41fbf81ee252a1e38d5d25fd2811` | `891beeeb35bbf0e70dad9351825f34595875e8090f831c5db83ed8f66466e373` |
+| equals the reviewed digest | **yes** | **yes** |
+| byte-identical to a freshly re-derived candidate | **yes** | **yes** |
+
+```
+{"coordinator_account":"cschott","coordinator_uid":1000,"schema_version":1}
+{"execution_account":"kyri-capability","execution_gid":987,"execution_uid":999,"schema_version":1}
+```
+
+The second comparison is the one that matters more. Matching the reviewed digest
+proves the right bytes were installed; matching a candidate re-rendered *now*
+proves the deployment those bytes describe has not moved since they were
+reviewed.
+
+### Parsers, against the installed files
+
+| reader | result |
+| --- | --- |
+| `kyri_exec_transition.load_coordinator_authority` | **PASS** — `cschott` uid 1000 |
+| `kyri_exec_transition.load_execution_identity` | **PASS** — `kyri-capability` 999:987 |
+| `tools.capability.execution.identity.read_execution_identity` | **PASS** — `kyri-capability` 999:987 |
+| both execution readers derive the same identity | **PASS** |
+
+The runtime reader was driven through `read_execution_identity()`, which takes
+**no path parameter** — it opens the one production location itself, `O_NOFOLLOW`,
+and takes its status from the descriptor it opened. That is a stronger check than
+handing a reader bytes: it proves the file is readable, well-owned and parseable
+at the exact pathname production will use, with nothing aimed at it by this
+report.
+
+### Account binding, re-resolved
+
+```
+cschott          -> uid 1000       authority names 1000      PASS
+kyri-capability  -> 999:987        authority names 999:987   PASS
+```
+
+Derived environment, from the installed authority:
+`HOME=/data/kyri/capability`, `XDG_RUNTIME_DIR=/run/user/999` — the runtime
+directory derived from the uid rather than stored beside it, and nothing else.
 
 ## 10. Ownership and mode
 
-Precedent re-derived from the live host, not taken from the brief:
+Precedent re-derived from the live host before the ceremony, not taken from the
+brief:
 
 ```
 /etc/kyri                      root:root  711
 /etc/kyri/backing-store.json   root:root  444  104 bytes
 ```
 
-`root:root 0444` for both new files, matching the one authority already
-provisioned in that directory. The directory stays `0711`: the coordinator can
-traverse to a named file it is allowed to read and cannot enumerate the
-directory, which is why this report states the two destinations by name and
-defers a full `/etc/kyri` listing to the operator.
+As installed, read back from production:
 
-*As-installed reading pending operator evidence.*
+```
+/etc/kyri/coordinator-identity.json   root:root  444   76 bytes
+/etc/kyri/execution-identity.json     root:root  444   99 bytes
+```
+
+Both match the precedent exactly. The directory remains `0711`: the coordinator
+can traverse to a named file it is allowed to read and cannot enumerate the
+directory — which is what §11 has to work around.
+
+`root` ownership is the whole protection, and it is now the live state rather
+than an intention. Each authority names the principal it protects against: a
+coordinator-writable coordinator authority would name whoever the coordinator
+likes, and an execution-writable execution authority would let one compromised
+worker choose what the next transition becomes. Both readers check `st_uid`,
+`st_gid` and the write bits before they read a byte as authority, and both were
+exercised against the installed files above.
 
 ## 11. Two-path mutation accounting
 
-Expected, and nothing else:
+The intended delta, and nothing else:
 
 ```
-CREATE  /etc/kyri/coordinator-identity.json
-CREATE  /etc/kyri/execution-identity.json
+CREATE  /etc/kyri/coordinator-identity.json    76 bytes  root:root 0444
+CREATE  /etc/kyri/execution-identity.json      99 bytes  root:root 0444
 ```
 
-Two additions, zero replacements, zero removals, zero unrelated modifications.
-Each block captures a privileged `/etc/kyri` manifest before and after its own
-install, so the delta is attributable to one block rather than to the pair.
+**REPLACE = 0. REMOVE = 0. UNRELATED_MODIFICATION = 0.**
 
-Pre-ceremony state, as far as an unprivileged coordinator can observe it:
+Verified against the pre-ceremony baseline this checkpoint captured in §11 of the
+preparation, pathname by pathname:
 
+| pathname | before | after | verdict |
+| --- | --- | --- | --- |
+| `/etc/kyri` | `root:root 0711` | `root:root 0711` | unchanged |
+| `/etc/kyri/backing-store.json` | `root:root 0444`, 104 bytes | `root:root 0444`, 104 bytes | **byte-identical** |
+| `/etc/kyri/coordinator-identity.json` | absent | present, reviewed bytes | **CREATE** |
+| `/etc/kyri/execution-identity.json` | absent | present, reviewed bytes | **CREATE** |
+
+`backing-store.json` is proven byte-identical rather than merely same-sized: its
+exact body was read before the ceremony, and reconstructing it now reproduces
+`cd77188e705b64aaf6d0750996f7abfc5490db8bd709886f566759c3b3837fc9` against the
+file on disk.
+
+### The bound on this claim, stated rather than glossed
+
+`/etc/kyri` is mode `0711`. An unprivileged coordinator can read a file it can
+name and **cannot enumerate the directory**, and this session has no
+non-interactive sudo — that was checked, not assumed.
+
+So the accounting above is complete *for every pathname in the pre-ceremony
+baseline*, and that baseline was itself a read of named paths. A file that
+existed in `/etc/kyri` before the ceremony and was never named in either the
+baseline or the operator's inventories is outside what either observation could
+see. Nothing suggests one exists — the operator captured privileged `BEFORE` and
+`AFTER` inventories around each block and reported no other change — but that
+half of the claim rests on that operator evidence, which was summarised rather
+than reproduced here, not on a derivation in this report.
+
+Recorded this way deliberately. The alternative is to write "zero unrelated
+modifications" as though this report had enumerated the directory, which it could
+not. One privileged command closes it completely, and it is read-only:
+
+```bash
+sudo find /etc/kyri -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+sudo find /etc/kyri -type f -exec sha256sum {} \;
 ```
-/etc/kyri                             root:root  711
-/etc/kyri/backing-store.json          root:root  444  104
-/etc/kyri/coordinator-identity.json   ABSENT
-/etc/kyri/execution-identity.json     ABSENT
-```
-
-The directory is `0711`, so this is a read of named paths and not an
-enumeration. The operator's BEFORE manifest closes that gap.
-
-*Post-write accounting pending.*
 
 ## 12. Runtime unchanged
 
-Baseline captured before the ceremony:
+Recomputed from installed bytes after the ceremony:
 
-| | |
-| --- | --- |
-| installed runtime objects | 78 |
-| runtime aggregate | `bc985098f8774e44dab3d4d5291bca1654a2002a3edf94a794b57987b5c745c2` |
-| `/usr/libexec` aggregate | `731dde469eaa6ad6b163fe8c285e43033e7f87f7833d95690300d11d1ad584ac` |
+| | before | after |
+| --- | --- | --- |
+| installed runtime objects | 78 | **78** |
+| runtime aggregate | `bc985098f877…c745c2` | **identical** |
+| mode | all `0444` | all `0444` |
+| owner | all `root:root` | all `root:root` |
+| `/usr/libexec` aggregate | `731dde469eaa…d584ac` | **identical** |
 
-*Post-write comparison pending.*
+Generation-13 matrix, re-proven against the live tree: **REPLACE 13/13** and
+**CREATE 8/8** at target, 57 carried over.
+
+Coherence groups, from installed bytes:
+
+| group | | |
+| --- | --- | --- |
+| A — execution and supervision | 10/10 | **WHOLE GEN13** |
+| B — result and lifecycle | 7/7 | **WHOLE GEN13** |
+| C — identity, recovery and readiness | 4/4 | **WHOLE GEN13** |
+
+And the four pairings that would be dangerous if split — new worker with its
+Podman backend, new supervisor with the new result writer, execution with its
+recovery enumeration, released CLI with the launcher it imports — all **PASS**.
+
+`GEN13_RUNTIME_UNCHANGED = YES`. Installing two files in `/etc` mutated no
+runtime object, which is what the pathname-disjointness of the two ceremonies
+predicted and what the aggregate now shows.
 
 ## 13. Helper compatibility remains closed
 
-Baseline, read from the **installed** runtime:
+**This is the checkpoint's critical postcondition**, and it is a live reading,
+not a restatement.
 
 ```
 helper_compatibility        incompatible
-supervision_ready           false
-coordinator_identity_authority   false
-execution_identity_authority     false
-launch_grant                unobservable
-reconcile_grant             unobservable
+compatible                  False
 ```
 
-Blocking:
+Naming its blocking surfaces, each with the purpose it serves:
 
-| helper | state |
-| --- | --- |
-| `/usr/libexec/kyri-exec-transition` | stale |
-| `/usr/libexec/kyri-exec-worker.py` | stale |
-| `/usr/libexec/kyri-exec-reconcile` | absent |
-| `/usr/libexec/kyri-exec-reconcile-worker.py` | absent |
+| helper | state | purpose |
+| --- | --- | --- |
+| `/usr/libexec/kyri-exec-transition` | **stale** | the privileged launch entrypoint the supervisor starts |
+| `/usr/libexec/kyri-exec-worker.py` | **stale** | the worker the launch transition execs |
+| `/usr/libexec/kyri-exec-reconcile` | **absent** | the privileged reconciliation entrypoint disposal proves through |
+| `/usr/libexec/kyri-exec-reconcile-worker.py` | **absent** | the unprivileged half reconciliation execs |
 
-The sharpest evidence for behavioural inertness is not a verdict string. The
+Identical to the pre-ceremony reading, and the `/usr/libexec` aggregate in §12
+proves no helper pathname changed during G11-AW. `HELPERS_UNCHANGED = YES`.
+
+### The readiness observation
+
+The non-mutating supervised preflight, run against the live deployment from
+installed bytes. No helper was invoked, no CINV or CRES created, no container
+made, no snapshot materialised.
+
+| field | before | after |
+| --- | --- | --- |
+| `coordinator_identity_authority` | false | **true** |
+| `execution_identity_authority` | false | **true** |
+| `execution_identity_account` | null | **`kyri-capability`** |
+| `helper_compatibility` | incompatible | **incompatible** |
+| `launch_grant` | unobservable | unobservable |
+| `reconcile_grant` | unobservable | unobservable |
+| `supervision_ready` | false | **false** |
+
+**The two identity gates flipped and readiness did not.** That is the whole
+point of the checkpoint, and it holds because `supervision_ready` is a
+conjunction that also requires helper compatibility — a property the schema
+suite asserts structurally so it cannot regress unnoticed.
+
+Worth restating why this was never in doubt on the privileged path. The
 installed helper policy module `/usr/lib/kyri/python/kyri_exec_transition.py`
-(`6488044b…`, against `de264c64…` in the reviewed source) contains **zero**
-references to either authority pathname and still carries the compiled-in
-constants the reviewed source deleted:
+(`6488044b…`, against `de264c64…` reviewed) carries **zero** references to either
+authority pathname and still compiles in `WORKER_USER`, `WORKER_UID = 999` and
+`WORKER_GID = 987`. It cannot read these files. The field that moved is served by
+`tools/capability/execution/identity.py`, which **is** installed and current — the
+coordinator's read-only observation surface, not an execution path.
 
-```
-61:WORKER_USER = "kyri-capability"
-62:WORKER_UID = 999
-63:WORKER_GID = 987
-```
-
-The installed privileged surface cannot read either file. It will keep using its
-constants until the G11-AX helper ceremony replaces it. Installing these two
-authorities therefore changes nothing on the privileged path — it is not that
-the files are ignored by policy, it is that the code that would read them is not
-installed.
-
-The one field that will move is `execution_identity_authority`, because
-`tools/capability/execution/identity.py` **is** installed and current
-(`f7a01f2f…`, byte-identical to the reviewed source). That is the coordinator's
-read-only observation surface, not an execution path.
-
-*Post-write confirmation pending.*
+The two grants remain `unobservable` rather than `absent`. That is the truthful
+answer: they live in a namespace the coordinator may not read, and reporting them
+as absent would be a claim about something nobody here looked at.
 
 ## 14. Sudoers
 
-`/etc/sudoers.d` holds zero non-`README` drop-ins before the ceremony. Neither
-block writes to `/etc/sudoers.d`, and neither invokes a helper.
+```
+/etc/sudoers.d contents        ['README']
+/etc/sudoers.d/kyri-exec              absent
+/etc/sudoers.d/kyri-exec-verify       absent
+/etc/sudoers.d/kyri-exec-reconcile    absent
+```
 
-*Post-write confirmation pending.*
+Zero non-`README` drop-ins, before and after. No launch grant, no reconcile
+grant. Neither block writes to `/etc/sudoers.d`, and neither did.
+`SUDOERS_CLOSED = YES`.
 
 ## 15. Fabric unchanged and expired
+
+Recomputed with the repository's store-manifest formula:
 
 | store | files | aggregate | recorded baseline |
 | --- | --- | --- | --- |
 | Fabric `/var/lib/kyri/fabric` | 21 | `bcb2559bdbc13ad760b5cb19e40d9327fc3c5e94b1988ae1e690159dcdcff15e` | **identical** |
 | Trust `/var/lib/kyri/trust` | 26 | `cffd362c376bd01b5a992c6a22f404c158624692c8ea85c9df64037b75fbbc39` | **identical** |
 
-Production CINV: **0**. Production CRES: **0**. The Fabric chain remains
-expired; no CADV, CINST, CROUTE or CSEL is created by this checkpoint.
+Records and sequences:
 
-*Post-write confirmation pending.*
+| | count | sequence |
+| --- | --- | --- |
+| CADV | 3 | 3 |
+| CINST | 2 | 2 |
+| CROUTE | 2 | 2 |
+| CSEL | 1 | 1 |
+
+**No new record, no sequence advanced.** `FABRIC_UNCHANGED = YES`,
+`TRUST_UNCHANGED = YES`.
+
+Expiry, read from the record rather than carried forward:
+
+```
+CADV-000003  valid_until    2026-08-30T16:19:19-05:00
+CINST-000002 admitted_until 2026-08-30T16:19:19-05:00
+now                         2026-09-01T16:04-05:00
+```
+
+The chain expired two days ago and this checkpoint did not renew it.
+`FABRIC_CHAIN_EXPIRED = YES`.
+
+### Invocation records
+
+```
+PRODUCTION_CINV_COUNT = 0
+PRODUCTION_CRES_COUNT = 0
+handoff root entries  = 0
+```
+
+Installing identity authorities produced no invocation record, which it could
+not have: neither block invokes anything.
+
+### Production invoke authority, derived from live gates
+
+Not printed as a constant — each gate was read and the conjunction evaluated:
+
+| gate | state |
+| --- | --- |
+| runtime | ready — 78 objects at the accepted aggregate |
+| coordinator identity | **ready** — reader PASS against the installed file |
+| execution identity | **ready** — reader PASS against the installed file |
+| helpers | **NOT READY** — two stale, two absent |
+| sudoers | **CLOSED** |
+| Fabric | **EXPIRED** |
+
+`PRODUCTION_INVOKE_AUTHORISED = NO`, blocked independently by **helpers,
+sudoers and Fabric**. Two of the six gates moved this checkpoint; three still
+close the path, and any one of them would.
 
 ## 16. Validation
 
 Re-measured, not incremented.
 
-| | before | after |
-| --- | --- | --- |
-| quick | 97/97 | **99/99** |
-| full | 122/122 | **124/124** |
+| | baseline | this checkpoint | re-run after the ceremony |
+| --- | --- | --- | --- |
+| quick | 97/97 | 99/99 | **99/99 PASS** |
+| full | 122/122 | 124/124 | **124/124 PASS** |
+
+Both were re-run *after* the two authorities were installed, not only before.
+That matters: several suites read `/etc/kyri`, and a suite that silently depended
+on those pathnames being absent would have started failing here. None did.
 
 Both new suites are always-on, so both totals rose by two. Both are wired into
 `tools/dev/run-validation.sh` and `.github/workflows/ci.yml`; the
@@ -512,6 +699,9 @@ Focused authority suites, all passing:
 | `test-capability-identity-authority-schema.sh` | cross-role refusal, closed helper compatibility, not-ready preflight |
 | `test-capability-identity-authority-ceremony.sh` | the ceremony against this deployment |
 
+Re-run against the installed state: **44**, **15**, **21** and **25** assertions
+respectively, all passing, zero failures.
+
 All 28 generated case scripts across the two suites were mechanically extracted
 as bash passes them and compiled, then checked for the shared prelude and the
 terminating `print('OK')`. This guards the failure mode that produced a silently
@@ -528,9 +718,36 @@ CI tolerate the suite.
 
 ## 17. Handoff
 
-*Pending operator evidence; the G11-AX handoff is stated once the write is
-verified.*
+G11-AW is complete. The exact production mutation was two file creations in
+`/etc/kyri` and nothing else; every other surface — runtime, helpers, sudoers,
+Fabric, Trust, records — was re-derived and is unchanged.
 
-Next checkpoint is **G11-AX — the coherent helper ceremony**, which must move
-the full accepted helper set together and flip helper compatibility from
-`incompatible` to `compatible`. No helper object is installed by G11-AW.
+The checkpoint's own postcondition held: the two identity gates flipped to true
+and supervised readiness stayed **false**, because helper compatibility is still
+`incompatible` and is a required conjunct. Production invocation remains
+unauthorised, blocked independently by helpers, sudoers and Fabric.
+
+### Next: G11-AX — coherent helper ceremony
+
+Its job is to move the full accepted helper set **together** and flip helper
+compatibility from `incompatible` to `compatible`. What this checkpoint leaves
+it, measured:
+
+| | |
+| --- | --- |
+| stale, needing replacement | `kyri-exec-transition`, `kyri-exec-worker.py`, `kyri-exec-verify`, `kyri-exec-verify-worker.py` |
+| stale library modules | `kyri_exec_transition.py`, `kyri_exec_transition_action.py`, `kyri_exec_verify.py` |
+| absent, needing creation | `kyri-exec-reconcile`, `kyri-exec-reconcile-worker.py`, `kyri_exec_reconcile.py` |
+| already current | `kyri-exec-quota`, `kyri_exec_quota.py` |
+
+Ten objects to move, which is why it has to be one transaction: the installed
+policy module still compiles in `WORKER_UID = 999` while the reviewed one reads
+`/etc/kyri/execution-identity.json`, and a host holding some of each would have
+two disagreeing answers to who the worker is.
+
+Both authorities that ceremony will depend on are now installed, root-owned,
+`0444`, and proven readable by every accepted reader.
+
+Still not authorised by this checkpoint, and each needs its own: the helper
+ceremony, the sudoers grants, Fabric renewal, and any production invocation.
+
