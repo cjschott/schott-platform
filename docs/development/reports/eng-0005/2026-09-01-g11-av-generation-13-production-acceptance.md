@@ -3,7 +3,7 @@
 **Date:** 2026-09-01
 **Branch:** `arch/eng-0005-execution-transition`
 **Starting authority:** `1374e12f308e35b9542c3b96886df153d9dfa0fb`
-**Implementation:** `a27b3fc` (test fixtures only — no runtime change)
+**Implementation:** `a27b3fc`, `b67a902` (test fixtures only — no runtime change)
 
 Generation 13 is installed on production and is accepted here **from installed
 bytes**, not from the installer's own report: 78 objects, all `0444 root:root`,
@@ -480,8 +480,10 @@ neither fails rather than being worked around. Two assertions were restated
 rather than relaxed: the host is at one of the two declared generations and
 never between them.
 
-`a27b3fc` is test fixtures only. **No runtime object changed**, which is what
-lets the installed Generation 13 remain the reviewed `7709cf0…` surface.
+Both fixture commits are test-only. **No runtime object changed**, which is
+what lets the installed Generation 13 remain the reviewed `7709cf0…`
+surface. The two should have been one commit; the Generation-12 suite's fix
+was left out of the first and landed in the second.
 
 ## 21. Production safety
 
