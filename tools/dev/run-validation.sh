@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=98
+  TOTAL_STEPS=99
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=123
+  TOTAL_STEPS=124
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -620,10 +620,17 @@ run "Capability execution supervision preconditions" \
 run "Capability execution identity authority" \
   bash tests/test-capability-execution-identity-authority.sh
 
-# ENG-0005 G11-AW. The ceremony that installs the two authorities above, as
-# opposed to the grammars that read them. Every install lands in a disposable
-# root: it reads nothing under /etc, uses no sudo, and installs no pathname a
-# production host has.
+# ENG-0005 G11-AW. The boundary between the two deployment identity authorities:
+# cross-role refusal in all four directions, and the proof that installing them
+# cannot open execution on its own. Deployment-neutral -- injected resolvers and
+# two unrelated fixture deployments, never this host's account database.
+run "Capability identity authority schema" \
+  bash tests/test-capability-identity-authority-schema.sh
+
+# And the ceremony that installs them for THIS deployment. Host-only: the
+# reviewed digests are what cschott and kyri-capability render, so a machine
+# without those accounts reports HOST_ONLY_SKIP rather than a verdict about its
+# own /etc/passwd. Every install lands in a disposable root; no sudo.
 run "Capability identity authority ceremony" \
   bash tests/test-capability-identity-authority-ceremony.sh
 

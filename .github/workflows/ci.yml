@@ -564,9 +564,15 @@ jobs:
       - name: Capability execution identity authority tests
         run: bash tests/test-capability-execution-identity-authority.sh
 
-      # G11-AW: the ceremony that installs those authorities. Rehearses both
-      # freeze/install programs against a disposable root and proves cross-role
-      # refusal in all four directions. Reads nothing under /etc; no sudo.
+      # G11-AW: the boundary between the two authorities -- cross-role refusal
+      # in all four directions, and the proof that installing them cannot open
+      # execution. Injected resolvers and two unrelated fixture deployments, so
+      # it proves the grammar rather than the runner's account database.
+      - name: Capability identity authority schema tests
+        run: bash tests/test-capability-identity-authority-schema.sh
+
+      # G11-AW: the ceremony that installs them for the accepted deployment.
+      # Host-only; reports HOST_ONLY_SKIP where those accounts do not exist.
       - name: Capability identity authority ceremony tests
         run: bash tests/test-capability-identity-authority-ceremony.sh
 

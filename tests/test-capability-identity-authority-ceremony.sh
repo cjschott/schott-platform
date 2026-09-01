@@ -11,25 +11,30 @@ set -Eeuo pipefail
 # ======================
 # `tests/test-capability-execution-identity-authority.sh` and
 # `tests/test-capability-execution-coordinator-authority.sh` prove the two
-# GRAMMARS: what a well-formed authority is and what each reader refuses. This
-# suite proves the CEREMONY -- that the two programs an operator will run on
-# production install exactly the reviewed bytes at exactly the reviewed mode,
-# refuse a destination that already exists, and cannot be made to install one
-# role's record at the other role's pathname.
+# GRAMMARS, and `tests/test-capability-identity-authority-schema.sh` proves the
+# boundary between them. This suite proves the CEREMONY -- that the two programs
+# an operator will run on production render exactly the reviewed bytes for THIS
+# deployment, install them at exactly the reviewed mode, and refuse a
+# destination that already exists.
 #
 # The distinction matters because the two failures are different. A grammar bug
 # is caught the first time anything reads the file. A ceremony bug installs
 # something plausible at a pathname a privileged boundary trusts, and is caught
 # by nobody.
 #
-# THE ASSERTION THAT MATTERS MOST
-# ===============================
-# Cross-role refusal, in all four directions. The two authorities are separate
-# because they are separate security roles: the coordinator prepares and may
-# never touch Podman; the execution principal holds rootless Podman authority
-# and may never write Capability Runtime records. If a coordinator record were
-# accepted at the execution pathname -- or the reverse -- that separation would
-# exist in the documentation and nowhere else.
+# WHY THIS ONE IS HOST-ONLY AND THE SCHEMA SUITE IS NOT
+# =====================================================
+# The reviewed digests below are facts about THIS deployment: they are what
+# `cschott` at uid 1000 and `kyri-capability` at 999:987 render. A machine that
+# has never heard of those accounts cannot reproduce them, so a suite asserting
+# them there would be reporting on the runner's account database.
+#
+# That is precisely why the GRAMMAR is proven somewhere else, with injected
+# resolvers and two unrelated fixture deployments. A case that only ever
+# exercised these numbers would pass against a compiled-in constant too, which
+# is the whole defect these authorities exist to close -- so the deployment-bound
+# assertions are quarantined here and everything portable lives in the schema
+# suite, where CI can prove it.
 #
 # THE CANDIDATES ARE DERIVED, NOT TYPED
 # =====================================
@@ -40,6 +45,10 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# shellcheck source=tests/lib/host-only.sh
+. "${SCRIPT_DIR}/lib/host-only.sh"
+host_only_requires_account cschott kyri-capability
 
 COORDINATOR_CEREMONY="provisioning/execution/g11-aw-freeze-coordinator-identity.sh"
 EXECUTION_CEREMONY="provisioning/execution/g11-aw-freeze-execution-identity.sh"
@@ -164,19 +173,6 @@ for path, digest in (
 print('OK')
 "
 
-run_case "the ceremony renders the same encoding the deployment already uses" "${PRELUDE}
-# /etc/kyri/backing-store.json is the provisioned precedent for this directory.
-# It is compact and sorted; it carries no trailing newline, and the identity
-# authorities deliberately do -- the convention g11-as-execution-identity-
-# candidate.sh states. Both are canonical to the repository's own parser, which
-# is the property that has to hold.
-from tools.capability.execution import canonical_json
-for body in (coordinator_body('cschott'), execution_body('kyri-capability')):
-    document = canonical_json.parse(body, maximum_bytes=4096)
-    assert canonical(document) == body, body
-print('OK')
-"
-
 printf '\n=== Phase 8: each ceremony rehearsed into a disposable root ===\n'
 
 rehearse() {
@@ -293,78 +289,6 @@ fi
 check "the digest-mismatch refusal installed nothing" \
   "$([[ "$(find "${DRIFT_ROOT}" -type f | wc -l)" -eq 0 ]] && echo yes || echo no)"
 
-printf '\n=== Phase 8: malformed and alternate authorities are refused ===\n'
-
-run_case "a malformed coordinator authority is refused" "${PRELUDE}
-for body in (b'', b'{', b'[]', b'null', b'{\"coordinator_account\":\"cschott\"}',
-             b'{\"coordinator_account\":\"cschott\",\"coordinator_uid\":1000,'
-             b'\"coordinator_uid\":2,\"schema_version\":1}',
-             coordinator_body('cschott') + b'{}'):
-    assert refused(policy.load_coordinator_authority, body, RootOwned()), body
-print('OK')
-"
-
-run_case "a malformed execution authority is refused by both readers" "${PRELUDE}
-for body in (b'', b'{', b'[]', b'null', b'{\"execution_account\":\"kyri-capability\"}',
-             execution_body('kyri-capability') + b'{}'):
-    for loader in (policy.load_execution_identity, runtime.load_execution_identity):
-        assert refused(loader, body, RootOwned(), resolve=resolver), (loader, body)
-print('OK')
-"
-
-run_case "an authority carrying an unknown field is refused" "${PRELUDE}
-entry = pwd.getpwnam('kyri-capability')
-body = canonical({'execution_account': entry.pw_name,
-                  'execution_gid': entry.pw_gid,
-                  'execution_uid': entry.pw_uid,
-                  'schema_version': 1,
-                  'execution_home': '/data/kyri/capability'})
-for loader in (policy.load_execution_identity, runtime.load_execution_identity):
-    assert 'unknown field' in (refused(loader, body, RootOwned(), resolve=resolver) or ''), loader
-print('OK')
-"
-
-run_case "an authority at an unsupported schema version is refused" "${PRELUDE}
-entry = pwd.getpwnam('kyri-capability')
-body = canonical({'execution_account': entry.pw_name,
-                  'execution_gid': entry.pw_gid,
-                  'execution_uid': entry.pw_uid,
-                  'schema_version': 2})
-for loader in (policy.load_execution_identity, runtime.load_execution_identity):
-    assert 'schema' in (refused(loader, body, RootOwned(), resolve=resolver) or ''), loader
-print('OK')
-"
-
-run_case "an authority whose numbers disagree with the account database is refused" "${PRELUDE}
-entry = pwd.getpwnam('kyri-capability')
-body = canonical({'execution_account': entry.pw_name,
-                  'execution_gid': entry.pw_gid,
-                  'execution_uid': entry.pw_uid + 1,
-                  'schema_version': 1})
-for loader in (policy.load_execution_identity, runtime.load_execution_identity):
-    assert 'resolves' in (refused(loader, body, RootOwned(), resolve=resolver) or ''), loader
-print('OK')
-"
-
-run_case "an authority root does not own is refused" "${PRELUDE}
-class NotRoot(RootOwned):
-    st_uid = 1000
-
-class NotRootGroup(RootOwned):
-    st_gid = 1000
-
-class GroupWritable(RootOwned):
-    st_mode = stat.S_IFREG | 0o464
-
-for status in (NotRoot(), NotRootGroup(), GroupWritable()):
-    assert refused(policy.load_coordinator_authority,
-                   coordinator_body('cschott'), status), status
-    for loader in (policy.load_execution_identity, runtime.load_execution_identity):
-        assert refused(loader, execution_body('kyri-capability'), status,
-                       resolve=resolver), (loader, status)
-print('OK')
-"
-
 printf '\n=== Phase 9: a combined fixture, and cross-role refusal ===\n'
 
 COMBINED="${WORK}/combined"
@@ -427,63 +351,6 @@ execution = open(f'{root}/execution-identity.json', 'rb').read()
 for loader in (policy.load_execution_identity, runtime.load_execution_identity):
     assert refused(loader, coordinator, RootOwned(), resolve=resolver), loader
 assert refused(policy.load_coordinator_authority, execution, RootOwned())
-print('OK')
-"
-
-run_case "no field name is shared between the two schemas" "${PRELUDE}
-# Cross-role refusal above holds because the schemas are closed AND disjoint. If
-# they ever came to share a field, a record could satisfy both readers and the
-# refusals above would start passing for the wrong reason.
-shared = set(policy.COORDINATOR_AUTHORITY_SCHEMA) & set(policy.EXECUTION_AUTHORITY_SCHEMA)
-assert shared == {'schema_version'}, shared
-assert policy.COORDINATOR_AUTHORITY_PATH != policy.EXECUTION_AUTHORITY_PATH
-print('OK')
-"
-
-printf '\n=== identity installation alone cannot open execution ===\n'
-
-run_case "helper compatibility is decided by helper objects and nothing else" "${PRELUDE}
-import ast
-from tools.capability.execution import helpers
-
-# The two authorities this ceremony installs must not appear anywhere in the
-# helper compatibility decision. If they did, installing them could move the
-# verdict, and the whole inertness claim would rest on prose.
-source = open('tools/capability/execution/helpers.py', encoding='utf-8').read()
-tree = ast.parse(source)
-literals = {node.value for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)}
-for path in (policy.COORDINATOR_AUTHORITY_PATH, policy.EXECUTION_AUTHORITY_PATH):
-    assert not any(path in text for text in literals), path
-required = [helper.path for helper in helpers.REQUIRED_HELPERS]
-assert required, 'no helper is required, so compatibility decides nothing'
-assert all(path.startswith('/usr/') for path in required), required
-assert not set(required) & {policy.COORDINATOR_AUTHORITY_PATH,
-                            policy.EXECUTION_AUTHORITY_PATH}, required
-print('OK')
-"
-
-run_case "supervision readiness requires helper compatibility as well as identity" "${PRELUDE}
-import ast
-
-# Read structurally rather than by running it: the live verdict depends on the
-# host, and the property being protected is that the CONJUNCTION includes helper
-# compatibility -- so that two installed authorities can never, on their own,
-# make this true.
-tree = ast.parse(open('tools/capability/cli.py', encoding='utf-8').read())
-outlook = next(node for node in ast.walk(tree)
-               if isinstance(node, ast.FunctionDef) and node.name == '_supervision_outlook')
-assignment = next(
-    node for node in ast.walk(outlook)
-    if isinstance(node, ast.Assign)
-    and any(isinstance(t, ast.Subscript)
-            and isinstance(t.slice, ast.Constant)
-            and t.slice.value == 'supervision_ready' for t in node.targets))
-conjunction = ast.dump(assignment.value)
-for required in ('coordinator_identity_authority', 'execution_identity_authority',
-                 'compatible'):
-    assert required in conjunction, (required, conjunction)
-assert 'BoolOp' in conjunction and 'And' in conjunction, conjunction
 print('OK')
 "
 

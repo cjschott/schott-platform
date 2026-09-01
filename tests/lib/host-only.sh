@@ -92,6 +92,35 @@ host_only_requires_identity() {
   exit 0
 }
 
+# host_only_requires_account <account> [<account>...]
+#
+# A deployment identity ceremony resolves an account and installs the numbers
+# the account database gives it. Which numbers those are is a fact about the
+# deployment, and the reviewed candidate digest is a fact about THIS one: on a
+# machine that has never heard of these accounts the ceremony cannot render its
+# candidate at all, and a suite driving it would be reporting on the runner's
+# /etc/passwd rather than on the ceremony.
+#
+# Only the ceremony needs this. The grammar the ceremony's output has to satisfy
+# is deployment-neutral and is proven with injected resolvers and unrelated
+# fixture deployments, which run everywhere -- because a case that only ever
+# exercised one deployment's numbers would pass against a compiled-in constant
+# too, which is the entire defect these authorities exist to close.
+host_only_requires_account() {
+  local _ho_account _ho_suite
+  local -a _ho_missing=()
+  _ho_suite="$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]} - 1]}")"
+  for _ho_account in "$@"; do
+    getent passwd "${_ho_account}" >/dev/null 2>&1 || _ho_missing+=("${_ho_account}")
+  done
+  (( ${#_ho_missing[@]} == 0 )) && return 0
+  printf 'HOST_ONLY_SKIP\t%s\t%s\n' "${_ho_suite}" \
+    "the account database does not know ${_ho_missing[*]}"
+  printf 'This suite drives a deployment identity ceremony for %s.\n' "$*"
+  printf 'Missing from the account database: %s\n' "${_ho_missing[*]}"
+  exit 0
+}
+
 # host_only_requires_observable_filesystem <path> <repository-root>
 #
 # The backing-store fixture does not invent a filesystem UUID; it asks the
