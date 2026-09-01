@@ -45,8 +45,9 @@ from typing import Any
 # Named imports only, and deliberately not `from . import worker`: binding the
 # module would put `create_argv` one attribute access away, and the whole point
 # of this module is that it is not.
-from .worker import (PROFILE_FD, REQUIRED_SEALS, WORKER_GID, WORKER_UID,
-                     LaunchContext, WorkerRefused, verify_execution)
+from .identity import ExecutionIdentity
+from .worker import (PROFILE_FD, REQUIRED_SEALS, LaunchContext, WorkerRefused,
+                     verify_execution)
 from .profile import PROFILE_SCHEMA_VERSION
 from .types import ExecutionProfile
 
@@ -156,7 +157,8 @@ def require_dropped_credentials(*, uid: int, gid: int) -> None:
             f"supplementary groups survived the drop: {sorted(groups - {gid})}")
 
 
-def execution_record(context: Any, profile: Any) -> dict[str, Any]:
+def execution_record(context: Any, profile: Any, *,
+                     identity: Any) -> dict[str, Any]:
     """What was proven, derived from the contracts that proved it.
 
     Split out from `verify_only` because the three self-checks above are facts
@@ -174,14 +176,17 @@ def execution_record(context: Any, profile: Any) -> dict[str, Any]:
         raise WorkerRefused("a validated LaunchContext is required")
     if not isinstance(profile, ExecutionProfile):
         raise WorkerRefused("a built ExecutionProfile is required")
+    if not isinstance(identity, ExecutionIdentity):
+        raise WorkerRefused("a loaded ExecutionIdentity is required")
     return {
         "result": "verified",
         "cinv": context.cinv,
         "cimp": context.cimp,
-        # From the worker's own governed constants, so a record cannot agree
-        # with itself while disagreeing with the identity that was required.
-        "execution_uid": WORKER_UID,
-        "execution_gid": WORKER_GID,
+        # From the same deployment authority the drop was checked against, so a
+        # record cannot agree with itself while disagreeing with the identity
+        # that was required.
+        "execution_uid": identity.uid,
+        "execution_gid": identity.gid,
         "profile_sealed": True,
         "handoff_verified": True,
         # No container was created, started or run, and `create_argv` was never
@@ -200,8 +205,8 @@ def execution_record(context: Any, profile: Any) -> dict[str, Any]:
     }
 
 
-def verify_only(context: Any, profile: Any, *, root_fd: int,
-                images: Any) -> dict[str, Any]:
+def verify_only(context: Any, profile: Any, *, root_fd: int, images: Any,
+                identity: Any) -> dict[str, Any]:
     """Run the whole shared chain and return what was proven, or refuse.
 
     The order is the production order, because it *is* the production order:
@@ -218,9 +223,12 @@ def verify_only(context: Any, profile: Any, *, root_fd: int,
         raise WorkerRefused("a validated LaunchContext is required")
     if not isinstance(profile, ExecutionProfile):
         raise WorkerRefused("a built ExecutionProfile is required")
+    if not isinstance(identity, ExecutionIdentity):
+        raise WorkerRefused("a loaded ExecutionIdentity is required")
 
-    # The transition's own claims, checked from the far side of execve.
-    require_dropped_credentials(uid=WORKER_UID, gid=WORKER_GID)
+    # The transition's own claims, checked from the far side of execve against
+    # the deployment authority rather than against a compiled-in pair.
+    require_dropped_credentials(uid=identity.uid, gid=identity.gid)
     require_descriptor_closure()
     require_no_new_privs()
 
@@ -231,10 +239,10 @@ def verify_only(context: Any, profile: Any, *, root_fd: int,
     # Built only after every check above returned. If the profile and the build
     # disagreed about the schema, `require_runtime_contract` inside
     # `verify_execution` has already refused and this line is unreachable.
-    return execution_record(context, profile)
+    return execution_record(context, profile, identity=identity)
 
 
-def success_record(record: dict[str, Any]) -> str:
+def success_record(record: dict[str, Any], *, identity: Any) -> str:
     """One line of canonical JSON, or refuse.
 
     Serialised through the platform's canonical encoder so two runs of the same
@@ -257,6 +265,8 @@ def success_record(record: dict[str, Any]) -> str:
     }
     if not isinstance(record, dict):
         raise WorkerRefused("a success record is a mapping")
+    if not isinstance(identity, ExecutionIdentity):
+        raise WorkerRefused("a loaded ExecutionIdentity is required")
 
     for name, expected in required.items():
         actual = record.get(name)
@@ -267,8 +277,8 @@ def success_record(record: dict[str, Any]) -> str:
         if type(actual) is not type(expected) or actual != expected:
             raise WorkerRefused(f"the success record is not a success at {name!r}")
 
-    for name, expected in (("execution_uid", WORKER_UID),
-                           ("execution_gid", WORKER_GID),
+    for name, expected in (("execution_uid", identity.uid),
+                           ("execution_gid", identity.gid),
                            ("profile_schema_version", PROFILE_SCHEMA_VERSION)):
         actual = record.get(name)
         if isinstance(actual, bool) or not isinstance(actual, int) \

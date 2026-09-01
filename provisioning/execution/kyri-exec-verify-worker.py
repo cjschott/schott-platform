@@ -84,6 +84,12 @@ def _library():
     """
     expected = os.path.join(RUNTIME_LIBRARY_ROOT, "tools", "capability",
                             "execution", "verification.py")
+    identity_expected = os.path.join(RUNTIME_LIBRARY_ROOT, "tools", "capability",
+                                     "execution", "identity.py")
+    if not os.path.isfile(identity_expected):
+        raise SystemExit(
+            "the governed execution identity authority reader is not installed "
+            f"at {identity_expected}")
     if not os.path.isdir(RUNTIME_LIBRARY_ROOT) or not os.path.isfile(expected):
         raise SystemExit(
             f"the governed verification library is not installed at {expected}")
@@ -96,6 +102,7 @@ def _library():
         # Named imports, never the module object: binding `worker` here would
         # put `create_argv` one attribute access away from a file whose whole
         # purpose is that it is not.
+        from tools.capability.execution import identity as identity_module
         from tools.capability.execution.worker import (
             WorkerRefused, profile_from_descriptor, require_launch_context,
             require_worker_identity, PROFILE_FD)
@@ -110,8 +117,9 @@ def _library():
         raise SystemExit(
             f"the verification library resolved outside {RUNTIME_LIBRARY_ROOT} "
             f"({resolved}); refusing rather than executing it")
-    return (verification, WorkerRefused, profile_from_descriptor,
-            require_launch_context, require_worker_identity, PROFILE_FD)
+    return (verification, identity_module, WorkerRefused,
+            profile_from_descriptor, require_launch_context,
+            require_worker_identity, PROFILE_FD)
 
 
 def main(argv: list[str]) -> int:
@@ -125,13 +133,22 @@ def main(argv: list[str]) -> int:
     if len(argv) != 4:
         raise SystemExit(USAGE)
 
-    (verification, WorkerRefused, profile_from_descriptor,
+    (verification, identity_module, WorkerRefused, profile_from_descriptor,
      require_launch_context, require_worker_identity, profile_fd) = _library()
 
     try:
+        # The deployment's execution principal, from root-owned authority. Read
+        # before anything else, because every step below is a claim about which
+        # identity this process is.
+        try:
+            identity = identity_module.read_execution_identity()
+        except identity_module.ExecutionIdentityError as error:
+            raise WorkerRefused(str(error)) from None
+
         # The execution identity, by the library's own rule. Root is refused
         # there explicitly.
-        require_worker_identity(uid=os.getuid(), gid=os.getgid())
+        require_worker_identity(uid=os.getuid(), gid=os.getgid(),
+                                identity=identity)
 
         # The launch context, through the library's grammar rather than a local
         # copy of it.
@@ -152,11 +169,12 @@ def main(argv: list[str]) -> int:
 
         try:
             record = verification.verify_only(
-                context, profile, root_fd=root_fd, images=_images())
+                context, profile, root_fd=root_fd, images=_images(),
+                identity=identity)
         finally:
             os.close(root_fd)
 
-        line = verification.success_record(record)
+        line = verification.success_record(record, identity=identity)
     except WorkerRefused as error:
         # No record, no partial output, and a non-zero exit. A reader that sees
         # nothing on stdout has been told everything it needs.

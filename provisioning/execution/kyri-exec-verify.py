@@ -68,7 +68,7 @@ WORKER_SCRIPT = "/usr/libexec/kyri-exec-verify-worker.py"
 PRODUCTION_WORKER_SCRIPT = _production.WORKER_SCRIPT
 
 
-def policy_for(argv: Sequence[str]) -> Any:
+def policy_for(argv: Sequence[str], *, identity: Any) -> Any:
     """The production transition decision, with the verification target.
 
     Exactly one field is replaced, on a frozen dataclass, after production has
@@ -82,7 +82,7 @@ def policy_for(argv: Sequence[str]) -> Any:
     module this was written against or something has already substituted a
     target; both are refusals rather than a base to build on.
     """
-    policy = _production.policy_for(argv)
+    policy = _production.policy_for(argv, identity=identity)
     if policy.worker_script != PRODUCTION_WORKER_SCRIPT:
         raise TransitionRefused(
             "the production policy did not name the production worker; "

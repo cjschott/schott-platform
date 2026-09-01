@@ -54,9 +54,11 @@ HOSTNAME = "trackb"
 # The governed CONTAINER identity, stated once and derived nowhere else.
 #
 # This is the identity the admitted image declares, and it is emphatically not
-# the host execution identity: the worker runs as `kyri-capability` 999:987 and
-# the workload runs as 65532:65532 inside. Conflating them is what the user
-# namespace mapping exists to avoid.
+# the host execution identity: the worker runs as whichever account the
+# deployment's execution identity authority names, and the workload runs as
+# 65532:65532 inside regardless. The two are governed by different authorities
+# and no numeric relationship between them is required or implied. Conflating
+# them is what the user namespace mapping exists to avoid.
 #
 # It was 1000:1000 until G11-AJ. That was true of the Track B alpine image and
 # was never revisited when CIMP-000001 admitted a Chainguard image whose

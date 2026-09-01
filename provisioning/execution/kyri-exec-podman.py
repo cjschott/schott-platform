@@ -52,22 +52,18 @@ PODMAN = "/usr/bin/podman"
 PERMITTED_SUBCOMMANDS = frozenset({"create", "inspect", "start", "stop",
                                    "kill", "rm", "ps"})
 
-# The environment the Podman process itself gets. This is the *host* side --
-# the container's own environment is the adapter's closed set and travels in
-# the argv, never here.
+# The environment the Podman process itself gets is *supplied*, never compiled
+# in. This is the host side -- the container's own environment is the adapter's
+# closed set and travels in the argv, never here.
 #
-# `HOME` and `XDG_RUNTIME_DIR` are what rootless Podman resolves its storage
-# and runtime state from, and they are exactly the two the transition sets in
-# `worker.ENVIRONMENT`. They are taken from the transition rather than compiled
-# in: the values below are the production ones and the default, but a backend
-# that hardcoded them could only ever run as one identity, and the seam that
-# makes it testable is the same seam the transition already owns.
-BACKEND_ENVIRONMENT: tuple[tuple[str, str], ...] = (
-    ("HOME", "/data/kyri/capability"),
-    ("PATH", "/usr/bin:/bin"),
-    ("XDG_RUNTIME_DIR", "/run/user/999"),
-)
-
+# `HOME` and `XDG_RUNTIME_DIR` are what rootless Podman resolves its storage and
+# runtime state from, and `XDG_RUNTIME_DIR` is a function of the execution
+# identity's uid. There used to be a default here naming one deployment's
+# rootless runtime directory, which meant this backend could only ever be
+# correct on one host. It is gone: `environment` is a required argument, so a
+# caller cannot reach Podman without stating whose rootless state it is
+# reaching it under.
+#
 # Closed: three names, and no route by which a fourth could arrive.
 PERMITTED_ENVIRONMENT = frozenset({"HOME", "PATH", "XDG_RUNTIME_DIR"})
 
@@ -217,8 +213,8 @@ class PodmanBackend:
 
     __slots__ = ("_environment", "_storage", "_timeout")
 
-    def __init__(self, *, storage: Sequence[str] = (),
-                 environment: Sequence[tuple[str, str]] = BACKEND_ENVIRONMENT,
+    def __init__(self, *, environment: Sequence[tuple[str, str]],
+                 storage: Sequence[str] = (),
                  timeout: int = DEFAULT_TIMEOUT_SECONDS) -> None:
         closed: dict[str, str] = {}
         for name, value in environment:
@@ -544,6 +540,5 @@ def backend_for(adapter_identity: str, **options: Any) -> PodmanBackend:
     return implementation(**options)
 
 
-__all__ = ["BACKEND_ENVIRONMENT", "PERMITTED_ENVIRONMENT", "PODMAN",
-           "PERMITTED_SUBCOMMANDS",
+__all__ = ["PERMITTED_ENVIRONMENT", "PODMAN", "PERMITTED_SUBCOMMANDS",
            "PodmanBackend", "PodmanBackendRefused", "backend_for"]

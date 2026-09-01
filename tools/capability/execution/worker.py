@@ -46,6 +46,7 @@ import os
 import stat as stat_module
 from typing import Any, Protocol, Sequence
 
+from . import identity as identity_module
 from .package_contract import PackageBinding, PackageError, validate_package
 from .payload import PAYLOAD_MAXIMUM_BYTES, PAYLOAD_SCHEMA_VERSION
 from .profile import (ADAPTER_IDENTITY, EXECUTION_GID, EXECUTION_UID, HOSTNAME,
@@ -56,9 +57,6 @@ from .types import ExecutionProfile
 
 PODMAN = "/usr/bin/podman"
 HANDOFF_ROOT = "/data/kyri/capability-handoff"
-
-WORKER_UID = 999
-WORKER_GID = 987
 
 # The governed profile descriptor and the seals it must carry. Both are stated
 # here rather than imported: the transition helper installs beneath a different
@@ -76,14 +74,6 @@ REQUIRED_SEALS = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
 # image for the whole of Track B. See the note at `profile.EXECUTION_UID`.
 CONTAINER_UID = EXECUTION_UID
 CONTAINER_GID = EXECUTION_GID
-
-# Adapter-owned and complete. Rootless Podman resolves storage from
-# $HOME/.local/share/containers/storage when XDG_DATA_HOME is unset -- the
-# graphroot Track B provisioned -- and keeps runtime state in XDG_RUNTIME_DIR.
-ENVIRONMENT: tuple[tuple[str, str], ...] = (
-    ("HOME", "/data/kyri/capability"),
-    ("XDG_RUNTIME_DIR", "/run/user/999"),
-)
 
 # §9, added at the G4 review of 2026-08-12. The container's Python environment
 # is adapter-owned: not the host process, not the payload, not the package, not
@@ -327,18 +317,22 @@ def profile_from_descriptor(context: LaunchContext, *,
     return profile
 
 
-def require_worker_identity(*, uid: int, gid: int) -> None:
-    """Confirm this is the execution identity, or refuse.
+def require_worker_identity(*, uid: int, gid: int, identity: Any) -> None:
+    """Confirm this is the deployment's execution identity, or refuse.
 
     Root is refused explicitly rather than incidentally: a worker running as
     root would drive rootless Podman into an entirely different storage tree
     and every later verification would be about the wrong container.
+
+    ``identity`` is required and comes from root-owned deployment authority.
+    Two compiled-in numbers used to stand here, and they were true of `schai`
+    only because `useradd` happened to assign them; see
+    `tools/capability/execution/identity.py` for the whole argument.
     """
-    if uid == 0 or gid == 0:
-        raise WorkerRefused("the worker must never run as root")
-    if uid != WORKER_UID or gid != WORKER_GID:
-        raise WorkerRefused(
-            f"the worker must run as {WORKER_UID}:{WORKER_GID}, not {uid}:{gid}")
+    try:
+        identity_module.require_identity(identity, uid=uid, gid=gid)
+    except identity_module.ExecutionIdentityError as error:
+        raise WorkerRefused(str(error)) from None
 
 
 def _validate_cinv(value: Any) -> str:

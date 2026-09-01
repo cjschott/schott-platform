@@ -92,9 +92,15 @@ def main(argv: list[str]) -> int:
 
     The argument shape is checked before anything is loaded, so a malformed
     invocation never reaches an import. Everything after that belongs to the
-    accepted transition: it establishes the output quota, drops credentials,
-    sets `no_new_privs`, and execs the worker, in that order, and this file
-    adds no step to that sequence and removes none.
+    accepted transition: it validates the deployment's execution identity,
+    establishes the output quota, drops credentials, sets `no_new_privs`, and
+    execs the worker, in that order, and this file adds no step to that sequence
+    and removes none.
+
+    **The identity is read before the policy is built, and there is no order in
+    which it could be skipped.** `policy_for` requires it, so a transition
+    policy without an approved execution identity is not something this file
+    could construct by forgetting a line.
     """
     if len(argv) != 2:
         raise SystemExit(USAGE)
@@ -106,7 +112,8 @@ def main(argv: list[str]) -> int:
     backend = action.SystemBackend()
 
     try:
-        policy = policy_module.policy_for(argv)
+        identity = action.execution_identity(backend=backend)
+        policy = policy_module.policy_for(argv, identity=identity)
         # Authorisation is read and checked before the transition is asked to
         # do anything, and what comes back is a closed type only the policy
         # layer can build. The `CIMP` and profile digest the worker is told to

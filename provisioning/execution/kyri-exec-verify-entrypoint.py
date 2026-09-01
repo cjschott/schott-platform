@@ -129,7 +129,8 @@ def main(argv: list[str]) -> int:
     backend = action.SystemBackend()
 
     try:
-        policy = policy_module.policy_for(argv)
+        identity = action.execution_identity(backend=backend)
+        policy = policy_module.policy_for(argv, identity=identity)
         if policy.worker_script != policy_module.WORKER_SCRIPT:
             raise policy_module.TransitionRefused(
                 f"the verification transition executes "

@@ -160,6 +160,42 @@ def _library():
     return worker
 
 
+def _identity_module():
+    """The deployment identity authority reader, from the installed tree.
+
+    Resolved the way the worker library and the backend are, and for the same
+    reason: this module decides which kernel identity this process is required
+    to be, so "which copy answered" is not a question to leave to whatever
+    `sys.path` happened to contain.
+
+    Its absence is a governed refusal rather than an `ImportError`. A host whose
+    runtime predates the authority reader cannot execute, and saying so in the
+    platform's own vocabulary is what makes that a decision rather than a crash.
+    """
+    expected = os.path.join(RUNTIME_LIBRARY_ROOT, "tools", "capability",
+                            "execution", "identity.py")
+    if not os.path.isfile(expected):
+        raise SystemExit(
+            f"the governed execution identity authority reader is not "
+            f"installed at {expected}")
+    if RUNTIME_LIBRARY_ROOT not in sys.path:
+        sys.path.insert(0, RUNTIME_LIBRARY_ROOT)
+    try:
+        from tools.capability.execution import identity
+    except ImportError as error:
+        raise SystemExit(
+            f"the governed execution identity authority reader is not "
+            f"importable from {RUNTIME_LIBRARY_ROOT}: {error}") from None
+    resolved = getattr(identity, "__file__", None)
+    if not resolved or not os.path.realpath(resolved).startswith(
+            os.path.realpath(RUNTIME_LIBRARY_ROOT) + os.sep):
+        raise SystemExit(
+            f"the execution identity authority reader resolved outside "
+            f"{RUNTIME_LIBRARY_ROOT} ({resolved}); refusing rather than "
+            "trusting it")
+    return identity
+
+
 def _backend_module():
     """The governed runtime backend from the installed tree, or refuse.
 
@@ -195,7 +231,7 @@ def _backend_module():
 
 
 def run_execution(worker, context, profile, *, backend_module, session, clock,
-                  handoff_fd, snapshot_fd, images):
+                  handoff_fd, snapshot_fd, images, environment):
     """Everything after the profile is authenticated, in the one accepted order.
 
     Factored out of `main` so it can be exercised without being the execution
@@ -226,12 +262,12 @@ def run_execution(worker, context, profile, *, backend_module, session, clock,
     # through a closed registry. An identity with no implementation has no
     # backend rather than a default one.
     backend = backend_module.backend_for(profile.adapter_identity,
-                                         environment=worker.ENVIRONMENT)
+                                         environment=environment)
 
     from tools.capability.execution import adapter as adapter_module
     execution = adapter_module.ExecutionBinding(
         cinv=profile.cinv, profile=profile,
-        argv=worker.create_argv(binding), environment=worker.ENVIRONMENT,
+        argv=worker.create_argv(binding), environment=environment,
         output_fd=os.open(binding.output, _DIR_FLAGS))
     try:
         return adapter_module.PythonPodmanAdapter(
@@ -260,11 +296,23 @@ def main(argv: list[str]) -> int:
 
     worker = _library()
 
+    # The deployment's execution principal, from root-owned authority, before
+    # any claim about which identity this process is. There is no compiled-in
+    # pair left to fall back to, so a missing or damaged authority stops the
+    # worker here rather than letting it proceed against a stale assumption.
+    identity_module = _identity_module()
+
+    try:
+        identity = identity_module.read_execution_identity()
+    except identity_module.ExecutionIdentityError as error:
+        raise SystemExit(f"refused: {error}") from None
+
     # The execution identity, confirmed by the library's own rule. Root is
     # refused there explicitly: a worker running as root would drive rootless
     # Podman into a different storage tree entirely.
     try:
-        worker.require_worker_identity(uid=os.getuid(), gid=os.getgid())
+        worker.require_worker_identity(uid=os.getuid(), gid=os.getgid(),
+                                       identity=identity)
     except worker.WorkerRefused as error:
         raise SystemExit(f"refused: {error}") from None
 
@@ -295,7 +343,8 @@ def main(argv: list[str]) -> int:
                 session=protocol.Session(_frames()),
                 clock=time.monotonic,
                 handoff_fd=handoff_fd, snapshot_fd=snapshot_fd,
-                images=image_store.RootlessImageStore())
+                images=image_store.RootlessImageStore(),
+                environment=identity_module.environment(identity))
         finally:
             os.close(snapshot_fd)
     finally:
