@@ -564,6 +564,12 @@ jobs:
       - name: Capability execution identity authority tests
         run: bash tests/test-capability-execution-identity-authority.sh
 
+      # G11-AW: the ceremony that installs those authorities. Rehearses both
+      # freeze/install programs against a disposable root and proves cross-role
+      # refusal in all four directions. Reads nothing under /etc; no sudo.
+      - name: Capability identity authority ceremony tests
+        run: bash tests/test-capability-identity-authority-ceremony.sh
+
       # G11-AT: coordinator supervision, recovery enumeration and the
       # readiness gate. Forked children and pipes only.
       - name: Capability execution supervision tests

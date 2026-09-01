@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=97
+  TOTAL_STEPS=98
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=122
+  TOTAL_STEPS=123
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -619,6 +619,13 @@ run "Capability execution supervision preconditions" \
 # only ever exercised the schai numbers would pass against a constant too.
 run "Capability execution identity authority" \
   bash tests/test-capability-execution-identity-authority.sh
+
+# ENG-0005 G11-AW. The ceremony that installs the two authorities above, as
+# opposed to the grammars that read them. Every install lands in a disposable
+# root: it reads nothing under /etc, uses no sudo, and installs no pathname a
+# production host has.
+run "Capability identity authority ceremony" \
+  bash tests/test-capability-identity-authority-ceremony.sh
 
 # ENG-0005 G11-AT. The coordinator's half of a governed execution: what it
 # authorises, what it refuses, and what it does when the worker stops talking.
