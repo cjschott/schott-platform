@@ -35,6 +35,7 @@ import sys
 # repository spells with hyphens. The mapping is data, not a guess: root
 # executes these by pathname, so a rename here would be a rename there.
 FLATTENED = {
+    "kyri_exec_launcher": "provisioning/execution/kyri-exec-launcher.py",
     "kyri_exec_podman": "provisioning/execution/kyri-exec-podman.py",
     "kyri_exec_quota": "provisioning/execution/kyri-exec-quota.py",
     "kyri_exec_transition": "provisioning/execution/kyri-exec-transition.py",
