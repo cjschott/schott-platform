@@ -564,6 +564,11 @@ jobs:
       - name: Capability execution identity authority tests
         run: bash tests/test-capability-execution-identity-authority.sh
 
+      # G11-AX.2: the ten-object helper ceremony. Host-only; reports
+      # HOST_ONLY_SKIP without an installed Generation-14 runtime to judge it.
+      - name: Capability execution helper ceremony tests
+        run: bash tests/test-capability-execution-helper-ceremony.sh
+
       # G11-AX.1: the Generation-14 readiness rule and the seven mixed helper
       # states Generation 13 accepted. Both rules loaded from reviewed git
       # objects, so this proves the defect and the fix, not just the fix.

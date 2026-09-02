@@ -165,16 +165,49 @@ run_case "the live host is wholly at one of the two declared generations" "${PRE
 # the predecessor, and a row's baseline is no longer what is on disk. What stays
 # true either way -- and is the property that matters -- is that every object is
 # at exactly one of its two declared states, and that all of them agree.
-at_base, at_target, unknown = [], [], []
+#
+# A THIRD state appears once a LATER generation supersedes one of these rows.
+# Generation 14 replaced helpers.py, so that object is now at neither this
+# generation's baseline nor its target, and it is not drift: it is a row this
+# generation no longer has the last word on. The successor's own matrix is read
+# for that, so the exception is derived rather than named here -- which is the
+# same fix the Generation-12 packaging suite needed when Generation 13 landed.
+def superseded_by_successor():
+    # Relative: every case runs from the repository root.
+    successor = Path('provisioning/execution/install-generation-14.sh')
+    if not successor.is_file():
+        return {}
+    text = successor.read_text(encoding='utf-8')
+    block = text.split('MATRIX=(', 1)[1].split(chr(10) + ')', 1)[0]
+    out = {}
+    for line in block.splitlines():
+        line = line.strip()
+        if not line.startswith(chr(34)):
+            continue
+        _, target, _, operation, _, want, _ = line.strip(chr(34)).split('|')
+        if operation == 'REPLACE':
+            # chr(36) so bash does not expand this before python sees it: the
+            # matrix text carries the literal placeholder, not its value.
+            out[target.replace(chr(36) + '{LIBRARY_ROOT}/', '')] = want
+    return out
+
+SUPERSEDED = superseded_by_successor()
+
+at_base, at_target, superseded, unknown = [], [], [], []
 for row in ROWS:
     have = installed_digest(row['target'])
-    if have == row['want']:
+    if row['target'] in SUPERSEDED and have == SUPERSEDED[row['target']]:
+        superseded.append(row['target'])
+    elif have == row['want']:
         at_target.append(row['target'])
     elif (row['op'] == 'CREATE' and have is None) or have == row['base']:
         at_base.append(row['target'])
     else:
         unknown.append((row['target'], have))
 assert not unknown, ('objects in neither declared state', unknown)
+# A superseded row is counted with the target side: reaching the successor's
+# bytes means this generation's target was installed and then moved past.
+at_target.extend(superseded)
 assert not (at_base and at_target), \
     ('the host is split between generations', len(at_base), len(at_target))
 assert len(at_base) + len(at_target) == len(ROWS)

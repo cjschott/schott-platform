@@ -41,3 +41,4 @@ test-capability-execution-generation13-installer.sh	drives the generation-13 cer
 test-capability-execution-generation13-packaging.sh	reads the installed Generation-12 runtime and installs a Generation-13 fixture from it
 test-capability-identity-authority-ceremony.sh	renders the reviewed identity candidates from this deployment's account database
 test-capability-execution-generation14-installer.sh	drives the generation-14 ceremony against a fixture built from the installed runtime
+test-capability-execution-helper-ceremony.sh	drives the ten-object helper ceremony against a fixture built from the installed Generation-14 runtime
