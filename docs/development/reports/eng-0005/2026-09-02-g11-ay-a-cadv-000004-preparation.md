@@ -1,5 +1,23 @@
 # ENG-0005 G11-AY-A — CADV-000004 preparation
 
+> **Superseded as of 2026-09-02 — the 48-hour candidate.** The reviewer replaced
+> the 48-hour ceremony ruling with **96 hours** before any freeze or Fabric
+> write, for the reason §4 of this report raised: too little room for AY-B,
+> AY-C/D, G11-AZ and G11-BA. The candidate below was **never frozen and never
+> installed** — production Fabric is byte-identical to before it was prepared —
+> and it **must not be installed now**.
+>
+> Superseded candidate, recorded so it can be recognised and refused:
+> `59c5fceeb758d0495300343362a5b73863dcf46d37374704331eb9e8b9412ba5`,
+> request digest `sha256:9e964cb1…32e888`.
+>
+> The live candidate is **[G11-AY-A2](2026-09-02-g11-ay-a2-cadv-000004-preparation-96h.md)**.
+>
+> Everything else here stands and is not restated there: the G11-AX closure
+> (§1), the live Fabric state (§2), the allocator derivation (§3), the encoding
+> and destination precedent (§5), the ceremony ordering (§9), and the five
+> validation repairs (§12) are all unchanged by the reruling.
+
 **Status: prepared, awaiting operator freeze.** No production byte was written.
 This report covers the **advertisement** only. The instance is a separate
 sub-checkpoint (AY-C/AY-D) and is deliberately not frozen here — see §9.
