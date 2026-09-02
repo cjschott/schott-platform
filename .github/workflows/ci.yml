@@ -564,6 +564,17 @@ jobs:
       - name: Capability execution identity authority tests
         run: bash tests/test-capability-execution-identity-authority.sh
 
+      # G11-AX.1: the Generation-14 readiness rule and the seven mixed helper
+      # states Generation 13 accepted. Both rules loaded from reviewed git
+      # objects, so this proves the defect and the fix, not just the fix.
+      - name: Capability generation-14 readiness tests
+        run: bash tests/test-capability-generation14-readiness.sh
+
+      # And its transaction. Host-only; reports HOST_ONLY_SKIP without an
+      # installed runtime to build the fixture from.
+      - name: Capability execution generation-14 installer tests
+        run: bash tests/test-capability-execution-generation14-installer.sh
+
       # G11-AW: the boundary between the two authorities -- cross-role refusal
       # in all four directions, and the proof that installing them cannot open
       # execution. Injected resolvers and two unrelated fixture deployments, so

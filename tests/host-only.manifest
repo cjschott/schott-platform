@@ -40,3 +40,4 @@ test-capability-supervised-execution-e2e.sh	supervises real containers from the 
 test-capability-execution-generation13-installer.sh	drives the generation-13 ceremony against a fixture built from the installed runtime
 test-capability-execution-generation13-packaging.sh	reads the installed Generation-12 runtime and installs a Generation-13 fixture from it
 test-capability-identity-authority-ceremony.sh	renders the reviewed identity candidates from this deployment's account database
+test-capability-execution-generation14-installer.sh	drives the generation-14 ceremony against a fixture built from the installed runtime

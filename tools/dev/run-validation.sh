@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=99
+  TOTAL_STEPS=101
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=124
+  TOTAL_STEPS=126
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -619,6 +619,18 @@ run "Capability execution supervision preconditions" \
 # only ever exercised the schai numbers would pass against a constant too.
 run "Capability execution identity authority" \
   bash tests/test-capability-execution-identity-authority.sh
+
+# ENG-0005 G11-AX.1. The Generation-14 readiness rule, and the seven dangerous
+# mixed helper states Generation 13 accepted. Portable: both rules are loaded
+# from their own reviewed git objects, so the RED half of the proof survives the
+# working tree moving on.
+run "Capability generation-14 readiness" \
+  bash tests/test-capability-generation14-readiness.sh
+
+# And its transaction. Host-only: the fixture is built from the installed
+# Generation-13 runtime, so it reports HOST_ONLY_SKIP without one.
+run "Capability execution generation-14 installer" \
+  bash tests/test-capability-execution-generation14-installer.sh
 
 # ENG-0005 G11-AW. The boundary between the two deployment identity authorities:
 # cross-role refusal in all four directions, and the proof that installing them
