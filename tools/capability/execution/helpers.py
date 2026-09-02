@@ -85,12 +85,32 @@ class Compatibility:
 # verification helper is deliberately absent: it is a governed alternative
 # entrypoint, not something supervision depends on.
 #
+# **The entrypoints are not the whole surface, and this table once said they
+# were.** Each entrypoint names the privileged modules it will load in its own
+# `POLICY_MODULE`, `ACTION_MODULE`, `QUOTA_MODULE` and `RECONCILE_MODULE`
+# constants, and root loads them BY NAME after it has already elevated. G11-AX
+# drove the partial-deployment matrix this module exists to defeat and found
+# seven mixed states reported `compatible`, because only the four executables
+# were declared and none of the modules underneath them were:
+#
+#   * new entrypoints beside a stale `kyri_exec_transition.py` -- the G11-AI
+#     split-generation defect, surviving inside the check written to prevent it;
+#   * a new transition beside a stale `kyri_exec_transition_action.py`, which is
+#     the layer that performs the credential drop;
+#   * a reconcile entrypoint installed without `kyri_exec_reconcile.py`, where
+#     root elevates and the worker then fails to import the module it execs for.
+#
+# So the modules are declared too. `kyri_exec_podman` is deliberately not here:
+# it is a Generation-13 runtime object and the generation ceremony keeps it
+# coherent, which the supervision suite checks against that ceremony's matrix
+# rather than against a list kept here.
+#
 # Digests are of the reviewed repository sources these objects are installed
-# from, and the mapping below names which source is which. Root executes these
-# by pathname, so a rename here would be a rename there -- which is why the
-# mapping is data rather than a guess, and why the test holds the digests to
-# the sources they name. A declaration that could drift from its own sources
-# would be a compatibility check reporting agreement with itself.
+# from, and the mapping below names which source is which. Root executes and
+# imports these by pathname, so a rename here would be a rename there -- which
+# is why the mapping is data rather than a guess, and why the test holds the
+# digests to the sources they name. A declaration that could drift from its own
+# sources would be a compatibility check reporting agreement with itself.
 HELPER_SOURCES: dict[str, str] = {
     "/usr/libexec/kyri-exec-transition":
         "provisioning/execution/kyri-exec-transition-entrypoint.py",
@@ -100,6 +120,14 @@ HELPER_SOURCES: dict[str, str] = {
         "provisioning/execution/kyri-exec-reconcile-entrypoint.py",
     "/usr/libexec/kyri-exec-reconcile-worker.py":
         "provisioning/execution/kyri-exec-reconcile-worker.py",
+    "/usr/lib/kyri/python/kyri_exec_transition.py":
+        "provisioning/execution/kyri-exec-transition.py",
+    "/usr/lib/kyri/python/kyri_exec_transition_action.py":
+        "provisioning/execution/kyri-exec-transition-action.py",
+    "/usr/lib/kyri/python/kyri_exec_reconcile.py":
+        "provisioning/execution/kyri-exec-reconcile.py",
+    "/usr/lib/kyri/python/kyri_exec_quota.py":
+        "provisioning/execution/kyri-exec-quota.py",
 }
 
 REQUIRED_HELPERS: tuple[RequiredHelper, ...] = (
@@ -119,6 +147,22 @@ REQUIRED_HELPERS: tuple[RequiredHelper, ...] = (
         path="/usr/libexec/kyri-exec-reconcile-worker.py",
         digest="b0e3c047f689ad5d1e4ef2979f771ca4acdbc80cf8109df8a7cf59a790eb8d2a",
         purpose="the unprivileged half reconciliation execs"),
+    RequiredHelper(
+        path="/usr/lib/kyri/python/kyri_exec_transition.py",
+        digest="de264c6490e08f6b7dc5f0bcddd15ffdde50278c183161fba04bf4cf1440f5a6",
+        purpose="the policy module the launch and reconcile entrypoints load"),
+    RequiredHelper(
+        path="/usr/lib/kyri/python/kyri_exec_transition_action.py",
+        digest="7703231318f7a872f80abc0b033c2462c24ec63bd8669773d6643634af1d296a",
+        purpose="the action layer that performs the credential drop"),
+    RequiredHelper(
+        path="/usr/lib/kyri/python/kyri_exec_reconcile.py",
+        digest="29175d5a71759336cc869007c83f0c13cb093023ea4bd77344b4f62cd4275a46",
+        purpose="the reconciliation implementation the reconcile worker execs for"),
+    RequiredHelper(
+        path="/usr/lib/kyri/python/kyri_exec_quota.py",
+        digest="4886d5b323c9dfdf46939c83424b087bb052f3fc90b8bd4a5ba2b4346bff9e9c",
+        purpose="the quota module the launch entrypoint loads"),
 )
 
 

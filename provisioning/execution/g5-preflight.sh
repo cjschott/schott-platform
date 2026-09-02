@@ -231,7 +231,28 @@ GENERATION_DELTA=(
 "tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
 "tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
 "tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f"
-"tools/capability/execution/helpers.py|CREATE|ABSENT|eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb"
+"tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874"
+#
+# G11-AX. `helpers.py` again, and this time as a REPLACE off its own installed
+# Generation-13 bytes rather than as a CREATE.
+#
+# The compatibility check declared the four privileged EXECUTABLES a supervised
+# execution reaches and none of the privileged MODULES they load. Root loads
+# those by name after it has already elevated, so the gap was not theoretical:
+# G11-AX drove the partial-deployment matrix and found seven mixed states
+# reported `compatible`, among them new entrypoints beside a stale
+# `kyri_exec_transition.py` -- the G11-AI split-generation defect surviving
+# inside the check written to prevent it -- and a reconcile entrypoint installed
+# without the `kyri_exec_reconcile.py` it execs for.
+#
+# The declaration now covers the closure: four executables plus the four modules
+# they name. The supervision suite derives that closure from each helper's own
+# `*_MODULE` constants and from the generation matrix, so it is checked rather
+# than remembered.
+#
+# Declared here as pending. NOT INSTALLED: the installed object is still
+# `eff6c4fd`, and publishing these bytes is a runtime generation ceremony, not a
+# helper ceremony. G11-AX is not authorised to perform one.
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

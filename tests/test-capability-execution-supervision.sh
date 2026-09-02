@@ -727,6 +727,65 @@ print('OK')
 
 # --- helper and runtime compatibility --------------------------------------------------
 
+run_case "every module a required helper loads is itself a required helper" "${PRELUDE}
+import ast
+from pathlib import Path
+from tools.capability.execution import helpers as H
+
+# THE COHERENCE CLOSURE, derived rather than listed.
+#
+# G11-AX found this open. compatibility() covered the four entrypoint and worker
+# objects and none of the privileged MODULES they load, so a host carrying new
+# entrypoints beside a stale kyri_exec_transition.py reported 'compatible' --
+# which is the G11-AI split-generation defect this module's own docstring cites,
+# surviving inside the check written to prevent it. Seven distinct mixed states
+# were accepted, including a reconcile entrypoint installed without the
+# reconcile module it execs, where root elevates and the worker then fails to
+# import.
+#
+# A list would have to be remembered. This reads each helper's own *_MODULE
+# constants -- root loads these BY NAME, so the name in the source is the
+# dependency -- and requires every one of them to be covered by something.
+LIBRARY_ROOT = '/usr/lib/kyri/python'          # prod-path-reference
+
+def declared_modules(source):
+    tree = ast.parse(Path(source).read_text(encoding='utf-8'))
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (isinstance(target, ast.Name) and target.id.endswith('_MODULE')
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)):
+                found.add(node.value.value)
+    return found
+
+# A module the RUNTIME generation governs is that ceremony's to keep coherent,
+# and is read from its matrix rather than assumed.
+ceremony = Path('provisioning/execution/install-generation-13.sh').read_text(encoding='utf-8')
+block = ceremony.split('MATRIX=(', 1)[1].split(chr(10) + ')', 1)[0]
+generation = set()
+for line in block.splitlines():
+    line = line.strip()
+    if line.startswith('\"'):
+        target = line.strip('\"').split('|')[1]
+        generation.add(target.replace('\${LIBRARY_ROOT}', LIBRARY_ROOT))
+
+covered = {helper.path for helper in H.REQUIRED_HELPERS}
+uncovered = {}
+for path, source in sorted(H.HELPER_SOURCES.items()):
+    for module in sorted(declared_modules(source)):
+        installed = LIBRARY_ROOT + '/' + module + '.py'
+        if installed in generation or installed in covered:
+            continue
+        uncovered.setdefault(installed, []).append(path)
+
+assert not uncovered, (
+    'a required helper loads a module nothing keeps coherent with it', uncovered)
+print('OK')
+"
+
 run_case "the runtime declares the helper bytes it supervises through" "${PRELUDE}
 import hashlib
 from pathlib import Path
@@ -740,11 +799,21 @@ assert set(declared) == set(H.HELPER_SOURCES), (declared, H.HELPER_SOURCES)
 for path, source in H.HELPER_SOURCES.items():
     observed = hashlib.sha256(Path(source).read_bytes()).hexdigest()
     assert declared[path] == observed, (path, source, 'the declaration is stale')
-# The whole supervised privileged surface, and nothing that is not on it.
-assert set(declared) == {
+# The whole supervised privileged surface, and nothing that is not on it. Stated
+# as the two shapes it is made of rather than as one remembered list: the
+# executables root runs, and the modules those executables load. The case below
+# proves the second half is complete; this one proves nothing else crept in.
+executables = {path for path in declared if path.startswith('/usr/libexec/')}
+modules = {path for path in declared if path.startswith('/usr/lib/kyri/python/')}
+assert executables == {
     '/usr/libexec/kyri-exec-transition', '/usr/libexec/kyri-exec-worker.py',
     '/usr/libexec/kyri-exec-reconcile',
-    '/usr/libexec/kyri-exec-reconcile-worker.py'}, declared
+    '/usr/libexec/kyri-exec-reconcile-worker.py'}, executables
+assert modules and all(path.endswith('.py') for path in modules), modules
+assert executables | modules == set(declared), declared
+# The verification surface is a governed alternative entrypoint, not something
+# supervision reaches, and must never appear here.
+assert not any('verify' in path for path in declared), declared
 print('OK')
 "
 
