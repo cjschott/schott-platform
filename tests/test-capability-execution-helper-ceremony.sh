@@ -67,11 +67,35 @@ row_target() {
   printf '%s' "${target//\$\{LIBEXEC_ROOT\}/${LIBEXEC_ROOT}}"
 }
 
+# The reviewed bytes whose digest is "$2", for repository path "$1". Searched
+# back through that path's own history, because a predecessor is reviewed data
+# and must not be read off a host that may already have moved past it.
+#
+# This suite originally copied the predecessors from the live host. That was
+# true until the ceremony ran, and then silently false: the objects became their
+# target bytes and the fixture could no longer be built. The Generation-12 and
+# Generation-13 packaging suites each learned this the same way, and G11-AX.2
+# predicted it in writing before it happened here.
+#
+# The seven predecessors resolve to exactly TWO commits -- the verify surface
+# from one, the transition surface from another. That is the G11-AI
+# split-generation defect visible in the fixture itself, and it is the state this
+# ceremony exists to end.
+predecessor_blob() {
+  local source="$1" wanted="$2" commit
+  while IFS= read -r commit; do
+    if [[ "$(git -C "${ROOT}" show "${commit}:${source}" 2>/dev/null \
+               | sha256sum | cut -d' ' -f1)" == "${wanted}" ]]; then
+      git -C "${ROOT}" show "${commit}:${source}"
+      return 0
+    fi
+  done < <(git -C "${ROOT}" log --format=%H -- "${source}")
+  return 1
+}
+
 # A pre-ceremony host: the installed Generation-14 runtime, the accepted identity
-# authorities, and the privileged surface exactly as production carries it --
-# seven stale, three absent. Predecessor bytes come from the live host because
-# that IS the reviewed predecessor state the matrix declares, and the build
-# asserts each one against that declaration rather than trusting the copy.
+# authorities, and the privileged surface exactly as the matrix declares it --
+# seven at their reviewed predecessor bytes, three absent.
 build_host() {
   local root="$1" row target predecessor
   rm -rf "${root}"
@@ -94,7 +118,8 @@ build_host() {
     if [[ "${predecessor}" == "ABSENT" ]]; then
       continue
     fi
-    cp "${target}" "${root}${target}" || return 1
+    predecessor_blob "$(row_field "${row}" 1)" "${predecessor}" \
+      > "${root}${target}" || return 1
     [[ "$(digest_of "${root}${target}")" == "${predecessor}" ]] || return 1
     chmod "$(row_field "${row}" 3)" "${root}${target}"
   done < <(matrix_rows)

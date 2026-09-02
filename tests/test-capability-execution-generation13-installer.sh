@@ -49,6 +49,29 @@ read_number() {
 }
 BASELINE_N="$(read_number EXPECTED_LIBRARY_FILES_BASELINE)"
 TARGET_N="$(read_number EXPECTED_LIBRARY_FILES_TARGET)"
+
+# The library root also carries the flattened privileged helper modules, and the
+# G11-AX ceremony creates one of those. Its presence raises every count derived
+# from the live tree by one without changing a single runtime object, so the
+# fixture's expectations are offset by however many are published rather than
+# pinned to the generation's own numbers. Read from that ceremony's matrix.
+HELPER_CEREMONY="${REPOSITORY}/provisioning/execution/install-g11-ax-helpers.sh"
+# The matrix stores this token unexpanded, so the literal is the point.
+# shellcheck disable=SC2016  # intentional: the placeholder must not expand
+HELPER_PLACEHOLDER='${LIBRARY_ROOT}/'
+HELPER_CREATES=0
+if [[ -f "${HELPER_CEREMONY}" ]]; then
+  while IFS= read -r _row; do
+    _row="${_row#\"}"; _row="${_row%\"}"
+    IFS='|' read -r _ _target _ _operation _ _ _ <<<"${_row}"
+    [[ "${_operation}" == "CREATE" ]] || continue
+    [[ "${_target}" == *"${HELPER_PLACEHOLDER}"* ]] || continue
+    HELPER_CREATES=$((HELPER_CREATES + 1))
+  done < <(sed -n '/^MATRIX=(/,/^)/p' "${HELPER_CEREMONY}" \
+             | sed -n 's/^\(".*"\)$/\1/p')
+fi
+BASELINE_N=$((BASELINE_N + HELPER_CREATES))
+TARGET_N=$((TARGET_N + HELPER_CREATES))
 GEN12_COMMIT="$(sed -n 's/^GEN12_COMMIT="\(.*\)"$/\1/p' "${CEREMONY}" | head -1)"
 
 # The matrix, read out of the ceremony rather than restated. A suite carrying

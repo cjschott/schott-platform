@@ -429,13 +429,51 @@ require_minimal_delta() {
     && ok "the reviewed commit's runtime delta is exactly the declared $(matrix_count) object"
 }
 
+
+# THE LIBRARY ROOT HOLDS TWO KINDS OF OBJECT, and only one of them is this
+# generation's.
+#
+# `/usr/lib/kyri/python` carries the runtime objects AND the flattened
+# privileged helper modules beside them. The G11-AX helper ceremony creates one
+# of those (`kyri_exec_reconcile.py`), so once it has run the file count there is
+# legitimately 79 while every runtime object is byte-identical.
+#
+# A flat count was therefore right before that ceremony and wrong after it --
+# which G11-AX.2 recorded in writing as a follow-up before it happened. The
+# expectation is now stated as the runtime objects plus however many of the
+# helper ceremony's own library-root CREATE targets are currently published,
+# read from that ceremony's matrix rather than named here.
+helper_ceremony_library_creates() {
+  local ceremony="${REPOSITORY}/provisioning/execution/install-g11-ax-helpers.sh"
+  local present=0 line target operation
+  # The matrix stores this token unexpanded, so the literal is the point.
+  # shellcheck disable=SC2016  # intentional: the placeholder must not expand
+  local _PLACEHOLDER='${LIBRARY_ROOT}/'
+  [[ -f "${ceremony}" ]] || { printf '0'; return; }
+  while IFS= read -r line; do
+    line="${line#\"}"; line="${line%\"}"
+    IFS='|' read -r _ target _ operation _ _ _ <<<"${line}"
+    [[ "${operation}" == "CREATE" ]] || continue
+    # The matrix text carries the LITERAL placeholder, so it must not expand
+    # here. Held in a variable rather than repeated as a quoted literal, which
+    # keeps the intent obvious and keeps ShellCheck from reading it as a mistake.
+    [[ "${target}" == *"${_PLACEHOLDER}"* ]] || continue
+    target="${LIBRARY_ROOT}/${target##*"${_PLACEHOLDER}"}"
+    [[ -f "${target}" ]] && present=$((present + 1))
+  done < <(sed -n '/^MATRIX=(/,/^)/p' "${ceremony}" | sed -n 's/^\(".*"\)$/\1/p')
+  printf '%s' "${present}"
+}
+
 # --- installed baseline ----------------------------------------------------
 require_baseline() {
   [[ -d "${LIBRARY_ROOT}" ]] || halt "${LIBRARY_ROOT} does not exist: this is not a Kyri host"
   local count
   count="$(find "${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)"
-  [[ "${count}" -eq "${EXPECTED_LIBRARY_FILES_BASELINE}" ]] \
-    || halt "the installed library holds ${count} objects, expected the Generation-13 ${EXPECTED_LIBRARY_FILES_BASELINE}"
+  local helpers_present expected_baseline
+  helpers_present="$(helper_ceremony_library_creates)"
+  expected_baseline=$((EXPECTED_LIBRARY_FILES_BASELINE + helpers_present))
+  [[ "${count}" -eq "${expected_baseline}" ]] \
+    || halt "the installed library holds ${count} objects, expected the Generation-13 ${EXPECTED_LIBRARY_FILES_BASELINE} plus ${helpers_present} published helper module(s)"
 
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" ]] \
     || halt "the Generation-13 library evidence at ${BASELINE_LIBRARY_EVIDENCE} is missing"
@@ -895,8 +933,11 @@ verify_installed_set() {
   done
   local count
   count="$(find "${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)"
-  [[ "${count}" -eq "${EXPECTED_LIBRARY_FILES_TARGET}" ]] \
-    || bad "the installed library holds ${count} objects, expected ${EXPECTED_LIBRARY_FILES_TARGET}"
+  local helpers_present expected_target
+  helpers_present="$(helper_ceremony_library_creates)"
+  expected_target=$((EXPECTED_LIBRARY_FILES_TARGET + helpers_present))
+  [[ "${count}" -eq "${expected_target}" ]] \
+    || bad "the installed library holds ${count} objects, expected ${EXPECTED_LIBRARY_FILES_TARGET} runtime objects plus ${helpers_present} published helper module(s)"
   (( FAILURES == 0 )) \
     && ok "the $(matrix_count) Generation-14 changed object corresponds to the reviewed commit ${COMMIT}"
 }

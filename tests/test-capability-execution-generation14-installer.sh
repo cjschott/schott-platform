@@ -258,8 +258,16 @@ check "the target keeps mode 0444" \
   "$([[ "$(stat -c '%a' "$(target_of "${INSTALL}")")" == "444" ]] && echo yes || echo no)"
 check "the journal is COMMITTED" \
   "$([[ "$(state_of "${INSTALL}")" == "COMMITTED" ]] && echo yes || echo no)"
-check "the object count did not move" \
-  "$([[ "$(find "${INSTALL}${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)" -eq 78 ]] \
+# A REPLACE-only generation moves no count. Expressed against the fixture rather
+# than against a hardcoded 78: the library root also carries the flattened helper
+# modules, and the G11-AX ceremony added one of those, so the absolute number
+# depends on what else has been installed. What this generation must not do is
+# change it.
+FIXTURE_OBJECTS="$(find "${HOST}${LIBRARY_ROOT}" -type f -name '*.py' \
+  -not -path '*__pycache__*' | wc -l)"
+check "the object count did not move (${FIXTURE_OBJECTS})" \
+  "$([[ "$(find "${INSTALL}${LIBRARY_ROOT}" -type f -name '*.py' \
+        -not -path '*__pycache__*' | wc -l)" -eq "${FIXTURE_OBJECTS}" ]] \
     && echo yes || echo no)"
 check "no transaction artefact remains" \
   "$([[ ! -e "$(target_of "${INSTALL}").kyri-gen14.new" \
@@ -272,7 +280,7 @@ check "Generation-14 evidence is written" \
   "$([[ -f "${INSTALL}/root/kyri-gen14-library-digests.txt" \
      && -f "${INSTALL}/root/kyri-gen14-helper-digests.txt" ]] && echo yes || echo no)"
 for field in "generation 14" "predecessor generation 13" "state COMMITTED" \
-             "library_objects 78" "delta REPLACE"; do
+             "library_objects ${FIXTURE_OBJECTS}" "delta REPLACE"; do
   check "the evidence pins: ${field}" \
     "$(grep -qF "${field}" "${INSTALL}/root/kyri-gen14-helper-digests.txt" \
         && echo yes || echo no)"

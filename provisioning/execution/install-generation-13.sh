@@ -620,13 +620,45 @@ require_closed_closure() {
   ok "the import closure of $(printf '%s ' "${CLOSURE_ROOTS[@]}")closes over the declared surface ($(printf '%s\n' "${computed}" | wc -l) modules)"
 }
 
+
+# THE LIBRARY ROOT HOLDS TWO KINDS OF OBJECT, and only one of them is this
+# generation's. `/usr/lib/kyri/python` carries the runtime objects AND the
+# flattened privileged helper modules beside them. The G11-AX helper ceremony
+# creates one of those, so once it has run the file count there is legitimately
+# one higher while every runtime object is byte-identical.
+#
+# A flat count was right before that ceremony and wrong after it, which
+# G11-AX.2 recorded as a follow-up before it happened. The expectation is stated
+# as the runtime objects plus however many of the helper ceremony's own
+# library-root CREATE targets are published, read from that ceremony's matrix.
+helper_ceremony_library_creates() {
+  local ceremony="${REPOSITORY}/provisioning/execution/install-g11-ax-helpers.sh"
+  local present=0 line target operation
+  # The matrix stores this token unexpanded, so the literal is the point.
+  # shellcheck disable=SC2016  # intentional: the placeholder must not expand
+  local _PLACEHOLDER='${LIBRARY_ROOT}/'
+  [[ -f "${ceremony}" ]] || { printf '0'; return; }
+  while IFS= read -r line; do
+    line="${line#\"}"; line="${line%\"}"
+    IFS='|' read -r _ target _ operation _ _ _ <<<"${line}"
+    [[ "${operation}" == "CREATE" ]] || continue
+    [[ "${target}" == *"${_PLACEHOLDER}"* ]] || continue
+    target="${LIBRARY_ROOT}/${target##*"${_PLACEHOLDER}"}"
+    [[ -f "${target}" ]] && present=$((present + 1))
+  done < <(sed -n '/^MATRIX=(/,/^)/p' "${ceremony}" | sed -n 's/^\(".*"\)$/\1/p')
+  printf '%s' "${present}"
+}
+
 # --- generation-12 baseline -------------------------------------------------
 require_baseline() {
   [[ -d "${LIBRARY_ROOT}" ]] || halt "${LIBRARY_ROOT} does not exist: this is not a Kyri host"
   local count
   count="$(find "${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)"
-  [[ "${count}" -eq "${EXPECTED_LIBRARY_FILES_BASELINE}" ]] \
-    || halt "the installed library holds ${count} objects, expected the Generation-12 ${EXPECTED_LIBRARY_FILES_BASELINE}"
+  local helpers_present expected_baseline
+  helpers_present="$(helper_ceremony_library_creates)"
+  expected_baseline=$((EXPECTED_LIBRARY_FILES_BASELINE + helpers_present))
+  [[ "${count}" -eq "${expected_baseline}" ]] \
+    || halt "the installed library holds ${count} objects, expected the Generation-12 ${EXPECTED_LIBRARY_FILES_BASELINE} plus ${helpers_present} published helper module(s)"
 
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" ]] \
     || halt "the Generation-12 library evidence at ${BASELINE_LIBRARY_EVIDENCE} is missing"
@@ -1202,8 +1234,11 @@ verify_installed_set() {
   done
   local count
   count="$(find "${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)"
-  [[ "${count}" -eq "${EXPECTED_LIBRARY_FILES_TARGET}" ]] \
-    || bad "the installed library holds ${count} objects, expected the Generation-13 ${EXPECTED_LIBRARY_FILES_TARGET}"
+  local helpers_present expected_target
+  helpers_present="$(helper_ceremony_library_creates)"
+  expected_target=$((EXPECTED_LIBRARY_FILES_TARGET + helpers_present))
+  [[ "${count}" -eq "${expected_target}" ]] \
+    || bad "the installed library holds ${count} objects, expected the Generation-13 ${EXPECTED_LIBRARY_FILES_TARGET} plus ${helpers_present} published helper module(s)"
   (( FAILURES == 0 )) \
     && ok "all $(matrix_count) Generation-13 changed objects correspond to the reviewed commit ${COMMIT}"
 }

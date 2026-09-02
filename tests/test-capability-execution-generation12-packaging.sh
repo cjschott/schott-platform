@@ -114,23 +114,36 @@ def successor_creates():
     consequence: "on Generation 13 this fails saying so". It did, exactly as
     written, the day Generation 13 was installed.
 
-    So the surface is derived rather than observed. The successor is found by
+    So the surface is derived rather than observed. The successors are found by
     name beside this installer, which keeps the derivation reviewed data all the
-    way down -- and if no successor exists yet, the live tree IS this generation
-    and nothing is subtracted.
+    way down -- and where a successor does not exist yet, the live tree IS this
+    generation and nothing is subtracted for it.
+
+    TWO KINDS OF SUCCESSOR CREATE INTO THIS DIRECTORY. The runtime generation
+    does, and so does the G11-AX helper ceremony: `/usr/lib/kyri/python` carries
+    the runtime objects AND the flattened privileged helper modules beside them.
+    G11-AX added `kyri_exec_reconcile.py`, and every count derived from the live
+    tree moved by one the moment it landed -- which G11-AX.2 predicted in writing
+    before it happened. Both ceremonies are read, and only their LIBRARY-ROOT
+    creates count: a /usr/libexec object was never part of this surface.
     """
-    successor = Path(ROOT) / "provisioning" / "execution" / "install-generation-13.sh"
-    if not successor.is_file():
-        return set()
-    text = successor.read_text(encoding="utf-8")
-    block = text.split("MATRIX=(", 1)[1].split("\n)", 1)[0]
     creates = set()
-    for line in block.splitlines():
-        line = line.strip()
-        if not line.startswith('"'):
+    for name in ("install-generation-13.sh", "install-g11-ax-helpers.sh"):
+        ceremony = Path(ROOT) / "provisioning" / "execution" / name
+        if not ceremony.is_file():
             continue
-        _, target, _, operation, _, _, _ = line.strip('"').split("|")
-        if operation == "CREATE":
+        block = ceremony.read_text(encoding="utf-8").split(
+            "MATRIX=(", 1)[1].split("\n)", 1)[0]
+        for line in block.splitlines():
+            line = line.strip()
+            if not line.startswith('"'):
+                continue
+            fields = line.strip('"').split("|")
+            target, operation = fields[1], fields[3]
+            if operation != "CREATE":
+                continue
+            if "${LIBRARY_ROOT}/" not in target:
+                continue          # a /usr/libexec object is not in this surface
             creates.add(target.replace("${LIBRARY_ROOT}/", ""))
     return creates
 

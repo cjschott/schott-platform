@@ -850,21 +850,39 @@ assert [h.state for h in mixed.helpers] == [H.STATE_CURRENT, H.STATE_STALE]
 print('OK')
 "
 
-run_case "this host is truthfully not ready to supervise" "${PRELUDE}
+run_case "this host reports its readiness truthfully, whatever it is" "${PRELUDE}
 from tools.capability.cli import _supervision_outlook
 
-# The accepted state of schai right now, reported rather than assumed: the
-# identity authorities are not installed, the helpers are stale or absent, and
-# the sudoers namespace is one this surface may not read.
+# THIS CASE USED TO PIN A SNAPSHOT. It asserted schai was not ready -- identity
+# authorities absent, helpers stale -- and that was true when it was written and
+# false the moment G11-AW installed the identities and G11-AX installed the
+# helpers. A suite that fails because the deployment progressed as designed is
+# testing the calendar.
+#
+# What must hold at every stage is that the report is INTERNALLY HONEST: that it
+# never claims readiness it did not establish, and never turns something it
+# cannot see into a verdict. That is asserted here instead, so this case keeps
+# its meaning as the host moves forward.
 report = _supervision_outlook()
-assert report['supervision_ready'] is False
-assert report['helper_compatibility'] == 'incompatible', report
-assert report['helpers_blocking'], 'nothing was named as blocking'
+
+# Readiness is exactly the conjunction of what this surface can observe --
+# never more, and never asserted independently of its own inputs.
+observable = (report['coordinator_identity_authority']
+              and report['execution_identity_authority']
+              and report['helper_compatibility'] == 'compatible')
+assert report['supervision_ready'] is observable, report
+
+# A blocking helper is named with a state and a reason, or there are none
+# because nothing is blocking.
+assert (report['helper_compatibility'] == 'compatible') == (not report['helpers_blocking']), report
 for helper in report['helpers_blocking']:
     assert helper['state'] in ('stale', 'absent', 'unreadable'), helper
     assert helper['purpose'], 'a blocking helper was named without a reason'
-# Unobservable is not false. The coordinator may not read the elevation
-# namespace, and claiming a verdict about it would be claiming to have looked.
+
+# Unobservable is not false, and readiness never implies it. The coordinator may
+# not read the elevation namespace; claiming a verdict about it would be
+# claiming to have looked. This is the one thing that must stay true even when
+# every observable gate is open, because that is exactly when it matters.
 assert report['launch_grant'] == 'unobservable'
 assert report['reconcile_grant'] == 'unobservable'
 print('OK')

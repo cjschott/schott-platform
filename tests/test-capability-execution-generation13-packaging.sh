@@ -228,8 +228,30 @@ installed = [p for p in LIBRARY_ROOT.rglob('*.py') if '__pycache__' not in p.par
 creates = [row for row in ROWS if row['op'] == 'CREATE']
 # The arithmetic is the matrix's own and holds whatever the host is at.
 assert BASELINE_N + len(creates) == TARGET_N, (BASELINE_N, len(creates), TARGET_N)
-# And the host is at one of the two counts, never between them.
-assert len(installed) in (BASELINE_N, TARGET_N), (len(installed), BASELINE_N, TARGET_N)
+# And the host is at one of the two counts, never between them -- offset by the
+# flattened privileged helper modules the G11-AX ceremony creates into this same
+# directory. Those are not runtime objects; they simply live beside them, so the
+# absolute count moved by one the day that ceremony ran without a single runtime
+# object changing. Read from that ceremony's matrix rather than named here.
+def helper_creates():
+    ceremony = Path('provisioning/execution/install-g11-ax-helpers.sh')
+    if not ceremony.is_file():
+        return 0
+    block = ceremony.read_text(encoding='utf-8').split(
+        'MATRIX=(', 1)[1].split(chr(10) + ')', 1)[0]
+    total = 0
+    for line in block.splitlines():
+        line = line.strip()
+        if not line.startswith(chr(34)):
+            continue
+        fields = line.strip(chr(34)).split('|')
+        if fields[3] == 'CREATE' and chr(36) + '{LIBRARY_ROOT}/' in fields[1]:
+            total += 1
+    return total
+
+offset = helper_creates()
+assert len(installed) in (BASELINE_N + offset, TARGET_N + offset), \
+    (len(installed), BASELINE_N, TARGET_N, offset)
 # And the operations are only the two this transaction implements.
 assert {row['op'] for row in ROWS} == {'CREATE', 'REPLACE'}, {row['op'] for row in ROWS}
 print(f'OK' if len(ROWS) == 21 else f'unexpected row count {len(ROWS)}')
