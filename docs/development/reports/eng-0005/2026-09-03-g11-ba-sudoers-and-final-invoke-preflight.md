@@ -259,13 +259,52 @@ CSEL-000002 → CINST-000003 → CPKG-0001 → CIMP-000001
 Fabric  before/after   7c53efcdffdee337fe3ca94b71a3085bf53b4474f19482a523d263feaa6c8e96   identical
 runtime before/after   f7f5c181f1bf4557ac68157335459d1c36e7c03911308a2b9a4066dd0715650f   identical
 runtime entries        17  →  17
-CINV / CRES            0 / 0        capability-invocations/ and capability-results/ still absent
+CINV / CRES            0 / 0        no record of either kind exists
 staging material       none created
 handoff entries        0
 ```
 
 `PREFLIGHT_MUTATES = NO`. No identifier was allocated — `CINV-000001` is
 *predicted*, not taken. No privileged helper ran and no container was created.
+
+**Disclosure — an earlier command in this checkpoint did mutate the store, and
+it was not the preflight.** While reconstructing state, this checkpoint ran
+
+```
+python3 -m tools.capability.cli inspect --store-root /data/kyri/capability-runtime …
+```
+
+`inspect` opens the store through the **writing** constructor, which creates the
+record and sequence directories before looking at any evidence. At
+`18:16:41` it created, under `/data/kyri/capability-runtime`:
+
+```
+d  capability-invocations/                 cschott:cschott 0700   empty
+d  capability-results/                     cschott:cschott 0700   empty
+d  sequences/                              cschott:cschott 0700
+f  sequences/invocation_identity.lock      cschott:cschott 0600   0 bytes
+```
+
+**No governed record was created and no sequence counter exists** — there is no
+`capability-invocation.seq`, both record directories are empty, and
+`PRODUCTION_CINV_COUNT` / `PRODUCTION_CRES_COUNT` remain `0`. The store would
+create these same objects for itself on its first write.
+
+This is precisely the distinction `command_preflight` documents about itself:
+*"The store is only ever read. It is opened through `open_for_read`, so an absent
+store is reported as absent rather than built and then described — which matters
+here, because the writing constructor creates the record directories and the
+sequence directory before any evidence is looked at."* The preflight honoured
+that; `inspect` does not, and this checkpoint should have used a read-only
+surface to enumerate the store. The four objects above were already present when
+the preflight ran, which is why its own before/after manifests are identical.
+
+**Left in place rather than removed.** Deleting them would be a second
+unrequested mutation of production state; they are inert and correctly owned.
+The operator may remove them with
+`rmdir …/capability-invocations …/capability-results` and
+`rm …/sequences/invocation_identity.lock && rmdir …/sequences` if a pristine
+store is wanted before the first invoke.
 
 **Two `false` fields that are correct, and are not failures:**
 
@@ -457,8 +496,8 @@ SUPERVISION_READY         true
 INVOKE_PREFLIGHT          PASS
 PREFLIGHT_MUTATES         NO
 RUNTIME_MODULE_DRIFT      YES   §7 — stale verification.py, two modules not deployed
-PRODUCTION_CINV_COUNT     0
-PRODUCTION_CRES_COUNT     0
+PRODUCTION_CINV_COUNT     0     no record; empty directory created by §6 disclosure
+PRODUCTION_CRES_COUNT     0     no record; empty directory created by §6 disclosure
 SUDOERS_CLOSED            YES   0 non-README files
 ROOT_AUTHORITY_UNMOUNTED  YES
 PRODUCTION_INVOKE_AUTHORISED  NO
