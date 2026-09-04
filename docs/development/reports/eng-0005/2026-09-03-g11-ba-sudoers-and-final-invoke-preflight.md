@@ -1,8 +1,12 @@
 # ENG-0005 G11-BA — narrow sudoers grants and the final invoke preflight
 
-**Status: prepared and reviewed. Both findings are ruled on — see §0.** Nothing
-was installed. No `CINV` or `CRES` was allocated. The production Fabric manifest
+**Status: ACCEPTED and closed — see §11.** Both findings are ruled on in §0. No
+`CINV` or `CRES` was allocated at any point, and the production Fabric manifest
 is byte-identical before and after every check.
+
+*§1–§10 record the preparation as it stood before installation and are left as
+written. §11 records the closure. Where the two disagree about whether the
+grants are installed, §11 is current.*
 
 > **Reviewer ruling recorded 2026-09-04.** Finding 1 (§7): **PROCEED** — the
 > stale verification surface does not block the first controlled invoke.
@@ -46,7 +50,7 @@ checkpoint, opened **after** the first controlled invoke and **before**
 
 **Standing boundary.** The verify entrypoint is not authorised and
 `/etc/sudoers.d/kyri-exec-verify` must remain absent. Neither install block in
-§8 creates it, and its absence is a required post-install assertion — §9.1.
+§8 creates it, and its absence is a required post-install assertion — §8.1, confirmed in §11.2.
 
 ### 0.2 Finding 2 — inspect-created scaffolding: **LEAVE IN PLACE**
 
@@ -130,9 +134,10 @@ runtime store (§6). **Neither blocks the first controlled invoke**; the
 verification surface is deferred to a separate remediation checkpoint and the
 scaffolding is now the pre-BB baseline.
 
-**The grants remain uninstalled** pending the operator's read-only image
-confirmation as the execution identity (§0.3), which the coordinator cannot
-perform.
+**At the time of writing, the grants remained uninstalled** pending the
+operator's read-only image confirmation as the execution identity (§0.3), which
+the coordinator cannot perform. That check passed and both grants are now
+installed and verified — §11.
 
 ## 2. Privileged surface, from installed bytes
 
