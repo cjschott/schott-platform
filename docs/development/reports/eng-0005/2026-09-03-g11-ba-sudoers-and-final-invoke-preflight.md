@@ -1,9 +1,13 @@
 # ENG-0005 G11-BA — narrow sudoers grants and the final invoke preflight
 
-**Status: prepared, and one finding is referred to the reviewer before any grant
-is installed.** Nothing was installed. No `CINV` or `CRES` was allocated. The
-production Fabric and capability-runtime manifests are byte-identical before and
-after every check.
+**Status: prepared and reviewed. Both findings are ruled on — see §0.** Nothing
+was installed. No `CINV` or `CRES` was allocated. The production Fabric manifest
+is byte-identical before and after every check.
+
+> **Reviewer ruling recorded 2026-09-04.** Finding 1 (§7): **PROCEED** — the
+> stale verification surface does not block the first controlled invoke.
+> Finding 2 (§6): **LEAVE IN PLACE** — the scaffolding is the pre-BB baseline.
+> The grants remain uninstalled pending the image check in §0.3.
 
 Follows **[G11-AZ-D](2026-09-03-g11-az-d-csel-000002-production-write.md)**,
 which accepted `CSEL-000002` and completed the Fabric chain renewal.
@@ -12,20 +16,119 @@ Branch `arch/eng-0005-execution-transition`, HEAD `f4a3ee2`.
 
 ---
 
+## 0. Reviewer rulings
+
+### 0.1 Finding 1 — stale verification surface: **PROCEED**
+
+```
+VERIFICATION_SURFACE_DRIFT           CONFIRMED
+FIRST_CONTROLLED_INVOKE_BLOCKED      NO
+VERIFY_SURFACE_REMEDIATION_REQUIRED  YES
+VERIFY_ENTRYPOINT_AUTHORISED         NO
+VERIFY_SUDOERS_MUST_REMAIN_ABSENT    YES
+```
+
+The ruling rests on the evidence in §7: the supervised launch and reconcile path
+does not import `verification.py`; every module that path does load imports
+cleanly; Generation-14 `compatibility()` reports the *supervised* surface
+coherent and is right to; `kyri-exec-verify` is an alternative entrypoint whose
+import failure is fail-closed; `/etc/sudoers.d/kyri-exec-verify` is absent; and
+BA grants launch and reconcile only.
+
+**`verification.py`, `result_content.py` and `contract_outcome.py` are not to be
+repaired inside G11-BA.** Remediation belongs to a separate runtime-generation
+checkpoint, opened **after** the first controlled invoke and **before**
+`kyri-exec-verify` is ever granted or relied upon.
+
+**Standing boundary.** The verify entrypoint is not authorised and
+`/etc/sudoers.d/kyri-exec-verify` must remain absent. Neither install block in
+§8 creates it, and its absence is a required post-install assertion — §9.1.
+
+### 0.2 Finding 2 — inspect-created scaffolding: **LEAVE IN PLACE**
+
+```
+CAPABILITY_RUNTIME_SCAFFOLDING_MUTATION  YES
+GOVERNED_RECORD_MUTATION                 NO
+CINV_ALLOCATED                           NO
+CRES_ALLOCATED                           NO
+SEQUENCE_ALLOCATED                       NO
+REMOVAL_REQUIRED                         NO
+```
+
+Nothing is to be deleted. The removal commands offered in §6 are **withdrawn**
+and must not be run.
+
+**The production capability-runtime store is `initialized-empty`, not pristine**,
+and is to be described that way from here on. Its exact structure and content at
+this ruling is the **pre-BB baseline**:
+
+```
+d  capability-invocations/                    cschott:cschott 0700   empty
+d  capability-results/                        cschott:cschott 0700   empty
+d  sequences/                                 cschott:cschott 0700
+f  sequences/invocation_identity.lock         cschott:cschott 0600   0 bytes
+                                              e3b0c442…7852b855  (empty-file digest)
+d  quarantine/                                cschott:cschott 0700   empty
+d  staging/                                   cschott:cschott 0700   empty
+d  execution/                                 cschott:cschott 0700
+   admin-records/ inspection-audit/ locks/ mutations/
+   quarantine-releases/ quarantine-reservations/
+   state/ transitions/                        all cschott:cschott 0700, all empty
+f  execution/cadm-counter                     cschott:cschott 0600   7 bytes   2f1ab4cf…1992bb
+f  execution/cmut-counter                     cschott:cschott 0600  13 bytes   70cad16d…a6fb4a
+```
+
+Structure-plus-content aggregate, to be compared after the first invoke:
+
+```
+36a13cd7c439952b5d9b2706215c79b1695e0783d564466f1ae3857cd5f5d1a6
+handoff root entries: 0
+no *.seq counter exists; no CINV or CRES record exists
+```
+
+### 0.3 Required before installation — image authority, as the execution identity
+
+The coordinator cannot observe the execution identity's image store (§6), so
+this is an **operator** step and must pass before §8 is run. Read-only:
+
+```bash
+cd /tmp
+
+sudo runuser -u kyri-capability -- env \
+  HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 \
+  podman images --no-trunc \
+  --format '{{.ID}} {{.Repository}}:{{.Tag}}'
+```
+
+Require the exact governed image identity:
+
+```
+5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190
+```
+
+Expected tag `localhost/kyri-capability-execution:g5`.
+
+**Do not pull, load, build, retag or otherwise mutate the image store.** If the
+digest does not appear exactly, stop — do not install the grants.
+
 ## 1. Summary
 
 Everything G11-BA set out to prepare is prepared and validated: two narrow,
 independently withdrawable sudoers candidates, and a released invoke preflight
 that passes against live production without mutating anything.
 
-**One finding stops short of handing over the install blocks as authorised.**
-The installed runtime carries a stale `tools/capability/execution/verification.py`
-that cannot be imported against the `worker.py` beside it. It is **not** on the
-supervised launch path and it is **not** one of the eight declared helpers, so
-`compatibility()` reports `compatible` and is right to. It is inherited from the
-Generation-13 baseline, and it is latent because the entrypoint that loads it
-has no grant either. Details in §7. The reviewer should rule on it before the
-grants go in.
+Two findings were referred to the reviewer and both are now ruled on in §0. The
+installed runtime carries a stale `tools/capability/execution/verification.py`
+that cannot be imported against the `worker.py` beside it (§7), and this
+checkpoint's own reconstruction created empty scaffolding in the capability
+runtime store (§6). **Neither blocks the first controlled invoke**; the
+verification surface is deferred to a separate remediation checkpoint and the
+scaffolding is now the pre-BB baseline.
+
+**The grants remain uninstalled** pending the operator's read-only image
+confirmation as the execution identity (§0.3), which the coordinator cannot
+perform.
 
 ## 2. Privileged surface, from installed bytes
 
@@ -299,12 +402,10 @@ that; `inspect` does not, and this checkpoint should have used a read-only
 surface to enumerate the store. The four objects above were already present when
 the preflight ran, which is why its own before/after manifests are identical.
 
-**Left in place rather than removed.** Deleting them would be a second
-unrequested mutation of production state; they are inert and correctly owned.
-The operator may remove them with
-`rmdir …/capability-invocations …/capability-results` and
-`rm …/sequences/invocation_identity.lock && rmdir …/sequences` if a pristine
-store is wanted before the first invoke.
+**Ruled: LEAVE IN PLACE (§0.2).** The removal commands originally offered here
+are **withdrawn** and must not be run. The store is `initialized-empty`, not
+pristine, and its exact structure and content is the pre-BB baseline recorded in
+§0.2 — `36a13cd7…d5f5d1a6`.
 
 **Two `false` fields that are correct, and are not failures:**
 
@@ -390,10 +491,18 @@ prepared and reviewed rather than authorised**, and the reviewer should rule on
 whether to remediate the runtime first or proceed to the grants and carry this
 as a tracked defect.
 
-## 8. Operator install blocks — prepared, pending the §7 ruling
+## 8. Operator install blocks — reviewed, gated on §0.3
 
-**Do not run these until the §7 finding is ruled on.** Two independent files, so
-either authority can be withdrawn alone.
+The §7 finding is ruled **PROCEED** (§0.1). These blocks are unchanged from the
+reviewed versions — the bytes below are byte-identical to the candidates
+validated in §5.
+
+**Gate: do not run either block until the §0.3 image check has returned the
+exact digest `5cee2b53…c463f5190` as the execution identity.** If it does not,
+stop.
+
+Two independent files, so either authority can be withdrawn alone. Neither block
+creates `/etc/sudoers.d/kyri-exec-verify`, which must remain absent (§0.1).
 
 ### A — launch
 
@@ -482,6 +591,64 @@ against the reviewed value **at install time**, and validates with `visudo -cf`
 before installing. Withdrawal is `sudo rm /etc/sudoers.d/kyri-exec-launch` or
 `…/kyri-exec-reconcile`, independently.
 
+## 8.1 Required post-installation verification
+
+The operator returns the complete output of the two blocks **plus** the
+following. Every line is an assertion; any failure stops before the first
+invoke.
+
+```bash
+# 1 — file identity
+sudo stat -c '%n  %U:%G  %a  %s bytes' \
+  /etc/sudoers.d/kyri-exec-launch /etc/sudoers.d/kyri-exec-reconcile
+#     require root:root 0440 on both
+
+# 2 — whole-policy validity
+sudo visudo -c
+#     require: parsed OK
+
+# 3 — exactly the two Kyri grants, and no verify grant
+sudo -l -U cschott
+ls -la /etc/sudoers.d/
+#     require kyri-exec-transition and kyri-exec-reconcile only;
+#     require /etc/sudoers.d/kyri-exec-verify ABSENT
+
+# 4 — refusals (each must be denied, none may execute)
+sudo -n /usr/libexec/kyri-exec-transition CINV-00000A
+sudo -n /usr/libexec/kyri-exec-transition CINV-000001 extra
+sudo -n /usr/libexec/kyri-exec-reconcile  CINV-1
+sudo -n /usr/bin/podman ps
+sudo -n /bin/sh -c id
+
+# 5 — supervised surface still coherent
+cd /opt/schott-platform && python3 -c "
+import sys; sys.path.insert(0,'/usr/lib/kyri/python')
+from tools.capability.execution import helpers
+c=helpers.compatibility(); print(c.verdict, len(helpers.REQUIRED_HELPERS), len(c.blocking))"
+#     require: compatible 8 0
+
+# 6 — nothing else moved
+python3 -m tools.fabric.cli validate --store-root /var/lib/kyri/fabric \
+  --expected-uid 1000 --expected-gid 1000
+python3 -m tools.trust.cli validate-store --store-root /var/lib/kyri/trust
+find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+#     require Fabric aggregate 7c53efcd…aa6c8e96, findings 0, trust valid
+
+# 7 — no invocation, no container
+find /data/kyri/capability-runtime/capability-invocations \
+     /data/kyri/capability-runtime/capability-results -mindepth 1 | wc -l
+{ find /data/kyri/capability-runtime -mindepth 1 -printf '%y %P %u:%g %m %s\n' | sort
+  find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 -r sha256sum \
+    | sed 's#/data/kyri/capability-runtime/##'; } | sha256sum
+sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman ps -a --format '{{.ID}} {{.Status}}'
+#     require 0 records; baseline 36a13cd7…d5f5d1a6 unchanged; no containers
+```
+
+**Installing the grants does not authorise an invocation.**
+`PRODUCTION_INVOKE_AUTHORISED` stays `NO` until this output is reviewed and
+accepted at G11-BB.
+
 ## 9. State at the close of this preparation
 
 ```
@@ -495,21 +662,34 @@ HELPER_CEREMONY_COHERENT  YES   all ten AX objects byte-exact
 SUPERVISION_READY         true
 INVOKE_PREFLIGHT          PASS
 PREFLIGHT_MUTATES         NO
-RUNTIME_MODULE_DRIFT      YES   §7 — stale verification.py, two modules not deployed
-PRODUCTION_CINV_COUNT     0     no record; empty directory created by §6 disclosure
-PRODUCTION_CRES_COUNT     0     no record; empty directory created by §6 disclosure
+RUNTIME_MODULE_DRIFT      YES   §7 — ruled PROCEED, remediation deferred (§0.1)
+VERIFICATION_SURFACE_DRIFT           CONFIRMED
+FIRST_CONTROLLED_INVOKE_BLOCKED      NO
+VERIFY_SURFACE_REMEDIATION_REQUIRED  YES
+VERIFY_ENTRYPOINT_AUTHORISED         NO
+VERIFY_SUDOERS_MUST_REMAIN_ABSENT    YES
+CAPABILITY_RUNTIME_STORE  initialized-empty   baseline 36a13cd7…d5f5d1a6 (§0.2)
+PRODUCTION_CINV_COUNT     0     no record; directory exists and is empty
+PRODUCTION_CRES_COUNT     0     no record; directory exists and is empty
+SEQUENCE_ALLOCATED        NO    no *.seq counter exists
 SUDOERS_CLOSED            YES   0 non-README files
+VERIFY_GRANT_PRESENT      NO
 ROOT_AUTHORITY_UNMOUNTED  YES
+IMAGE_CHECK               PENDING — operator, §0.3
 PRODUCTION_INVOKE_AUTHORISED  NO
 ```
 
 ## 10. Next
 
-1. **Reviewer rules on §7** — remediate the runtime first, or proceed and track
-   the stale `verification.py` as a known defect.
-2. Operator confirms the admitted image is present **as the execution identity**
-   (§6), which the coordinator cannot observe.
-3. Operator installs the two grants with §8 A and B and returns the complete
-   output, including `sudo -l -U cschott` and the refusal probes from §5.
-4. Independent verification of the installed grants, then **G11-BB** — the first
-   controlled production invocation, where the first `CINV`/`CRES` appear.
+1. **Operator runs the §0.3 image check** as the execution identity and returns
+   the output. It must show `5cee2b53…c463f5190`, tag
+   `localhost/kyri-capability-execution:g5`. Read-only — no pull, load, build or
+   retag. If it does not match, stop.
+2. **Only if it matches**, operator installs the two grants with §8 A and B and
+   returns the complete output **plus** every assertion in §8.1.
+3. Independent verification of the installed grants against §8.1.
+4. **G11-BB** — the first controlled production invocation, where the first
+   `CINV`/`CRES` appear, compared against the §0.2 baseline.
+5. **After the first invoke and before `kyri-exec-verify` is ever granted** — a
+   separate runtime-generation remediation checkpoint for `verification.py`,
+   `result_content.py` and `contract_outcome.py` (§0.1).
