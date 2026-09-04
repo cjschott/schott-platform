@@ -469,3 +469,107 @@ PRODUCTION_INVOKE_AUTHORISED  NO
 4. Afterwards, the deferred runtime-generation remediation for
    `verification.py`, `result_content.py` and `contract_outcome.py` (BA §0.1),
    before `kyri-exec-verify` is ever granted.
+
+---
+
+## 13. Reviewer ruling — Stage 1 only
+
+```
+BB_PREPARATION                       ACCEPTED   (2026-09-04)
+PRODUCTION_INVOKE_STAGE_1_AUTHORISED YES
+AUTHORISE_LAUNCH_AUTHORISED          NO
+EXECUTE_AUTHORISED                   NO
+```
+
+The `command_invoke` `EXIT_DENIED` behaviour is accepted as current released
+ceremony semantics for Stage 1.
+
+**Process exit status alone must not be interpreted.** Stage 1 counts as
+successful only when the structured result proves `status=prepared` and
+`reason=no_authorised_adapter` **and** exactly `CINV-000001` is allocated and
+stored. Exit `1` is expected *only* in company with that exact result and that
+exact record. Any other pairing stops the ceremony.
+
+**Do not wrap the invoke command in `set -e`.**
+
+Stage 0 may create only the reviewed operator work area. Stage 1 may perform
+only the released `invoke`. **Not to be run:** `authorise-launch`, `execute`,
+`recover`, or either privileged helper directly.
+
+### 13.1 Live re-check immediately before returning the command
+
+```
+host now                     2026-09-04T18:36:36-05:00
+CADV-000004.valid_until      2026-09-06T12:02:14-05:00   inside: True
+CINST-000003.admitted_until  2026-09-06T12:02:14-05:00   inside: True
+WINDOW_REMAINING             41h 25m   (149137 s)        expired: False
+current eligibility          true, unmet []
+CINV_NEXT (live allocator)   CINV-000001
+CINV / CRES records          0 / 0
+capability-runtime           36a13cd7…d5f5d1a6   unchanged
+fabric                       7c53efcd…aa6c8e96   unchanged
+/data/kyri/work/g11bb        absent — Stage 0 creates it
+```
+
+### 13.2 Which CINV fields Stage 1 does and does not populate
+
+Derived from `_invocation_body` in `tools/capability/evidence.py`, so the
+post-Stage-1 check demands neither too much nor too little.
+
+**Written at the prepared stage:**
+
+```
+invocation_record_id   CINV-000001
+invocation_id          g11bb-first-controlled-invoke
+request_id             g11bb-first-production-invoke
+selection_id           CSEL-000002
+instance_id            CINST-000003
+capability_package_id  CPKG-0001
+contract_id            CCON-0001
+capability_id          CAPDEF-0001
+operation              execute
+actor                  primary-platform-operator
+payload_digest         sha256:…
+binding_digest         sha256:…
+effect_class           computational
+artifact_digest        sha256:6f2282c58ad8d5bf5a463ca09b8a2c5c3f3faef31aea95e2b07100720e6c9a8e
+staged_path            /data/kyri/capability-runtime/staging/tree-sha256-6f2282c5…
+requested_at           <the instant passed>
+evidence.outcome       prepared
+```
+
+**Deliberately *not* populated at Stage 1 — do not require these yet:**
+
+- **`adapter_identity` is `null`.** `command_invoke` supplies no adapter, and
+  `_invocation_body` writes the argument through unchanged. A populated
+  `adapter_identity` is what `recover` looks for to identify an invocation whose
+  execution was authorised, so at the prepared stage it **must** be null. A
+  non-null value here would be the anomaly.
+- **`CIMP-000001` does not appear in the `CINV` at all.** The implementation is
+  bound at Stage 2, where `--cimp` is an argument to `authorise-launch`. The
+  earlier success criterion *"CINV binds … implementation=CIMP-000001"* is a
+  **post-Stage-2** property, not a Stage-1 one, and requiring it after Stage 1
+  would fail a correct record.
+- No result, no handoff, no profile or commitment digest, no lifecycle
+  authorisation.
+
+### 13.3 What Stage 1 is permitted to mutate
+
+Everything else is a finding. Compared against `PRE_BB_BASELINE`
+`36a13cd7…d5f5d1a6`:
+
+```
+CREATE   capability-invocations/CINV-000001.yaml
+CREATE   sequences/capability-invocation.seq            (none exists today)
+CREATE   staging/tree-sha256-6f2282c5…/                 the staged package tree
+TOUCH    sequences/invocation_identity.lock             taken and released; already exists
+```
+
+Required to remain **unchanged**: Fabric `7c53efcd…aa6c8e96`, Trust
+`53605e4e…7828b63f`, `CADV-000004`, `CINST-000003`, `CROUTE-0003`,
+`CSEL-000002`, libexec `489f108d…952bea86`, sudoers `f837d592…495da1a9`,
+identity authorities, runtime library.
+
+Required to remain **absent**: any `CRES`, any handoff entry, any
+`kyri-CINV-*` container, any transition/lock/state/mutation entry under
+`execution/`, any privileged helper execution.
