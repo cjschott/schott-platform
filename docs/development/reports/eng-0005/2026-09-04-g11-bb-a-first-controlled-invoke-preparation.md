@@ -1,7 +1,7 @@
 # ENG-0005 G11-BB-A — first controlled production invocation, preparation
 
-**Status: prepared, awaiting reviewer approval.** No production invocation was
-performed. No `CINV` or `CRES` exists. Nothing was mutated by this preparation —
+**Status: ACCEPTED — Stage 1 authorised, Stages 2 and 3 withheld. See §13.**
+No production invocation has been performed at the time of writing. No `CINV` or `CRES` exists. Nothing was mutated by this preparation —
 the Fabric aggregate and the capability-runtime baseline are byte-identical
 before and after every check.
 
