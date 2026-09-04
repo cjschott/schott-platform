@@ -7,7 +7,11 @@ is byte-identical before and after every check.
 > **Reviewer ruling recorded 2026-09-04.** Finding 1 (§7): **PROCEED** — the
 > stale verification surface does not block the first controlled invoke.
 > Finding 2 (§6): **LEAVE IN PLACE** — the scaffolding is the pre-BB baseline.
-> The grants remain uninstalled pending the image check in §0.3.
+>
+> **G11-BA CLOSED — ACCEPTED 2026-09-04.** The image check passed, both grants
+> are installed and independently verified, and the active policy was read back
+> from the sudoers parser. See **§11**. `PRODUCTION_INVOKE_AUTHORISED` remains
+> `NO`; authorisation belongs to G11-BB.
 
 Follows **[G11-AZ-D](2026-09-03-g11-az-d-csel-000002-production-write.md)**,
 which accepted `CSEL-000002` and completed the Fabric chain renewal.
@@ -693,3 +697,156 @@ PRODUCTION_INVOKE_AUTHORISED  NO
 5. **After the first invoke and before `kyri-exec-verify` is ever granted** — a
    separate runtime-generation remediation checkpoint for `verification.py`,
    `result_content.py` and `contract_outcome.py` (§0.1).
+
+---
+
+## 11. Closure — grants installed and independently verified
+
+**`BA_RESULT = ACCEPTED`**, 2026-09-04.
+
+### 11.1 Image authority, confirmed as the execution identity
+
+Operator ran §0.3 **before** installing the grants:
+
+```
+sha256:5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190
+localhost/kyri-capability-execution:g5
+```
+
+`IMAGE_AUTHORITY = PASS` — the exact governed identity and the expected tag. The
+store was not pulled to, loaded into, built in or retagged. This closes the gap
+§6 identified: the coordinator cannot read the execution identity's image store,
+so this could only ever be answered from that identity.
+
+### 11.2 The installed grants
+
+Read from disk by this checkpoint, not taken from the operator's transcript:
+
+```
+/etc/sudoers.d/kyri-exec-launch      root:root  0440  482 bytes
+/etc/sudoers.d/kyri-exec-reconcile   root:root  0440  487 bytes
+/etc/sudoers.d/kyri-exec-verify      ABSENT
+/etc/sudoers.d/README                root:root  0440  1068 bytes
+```
+
+```
+LAUNCH_GRANT_INSTALLED     YES
+RECONCILE_GRANT_INSTALLED  YES
+VERIFY_GRANT_PRESENT       NO
+```
+
+The grant bytes themselves are `0440 root:root` and therefore unreadable to the
+coordinator — correctly. Their *content* is verified in §11.3 through the
+sudoers parser rather than by reading the files, which is the stronger check
+anyway: it reports the policy that is in force, not the text on disk.
+
+### 11.3 Active policy, read from the sudoers parser
+
+`sudo -n -l` — the policy plugin's own answer, not an inference from file text:
+
+```
+Matching Defaults entries for cschott on schai:
+    env_reset, mail_badpass,
+    secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin,
+    use_pty
+
+User cschott may run the following commands on schai:
+    (ALL : ALL) ALL
+    (root) NOPASSWD:
+        sha256:0d9c8d8c918198ba6d07ba2e84c7bbca3a4a1c7f78d96ba79463d2617ede51a1
+        /usr/libexec/kyri-exec-transition ^CINV-[0-9]{6}$
+    (root) NOPASSWD:
+        sha256:2878fff04bb20b358cc82b2686989b7a47df7f67e99296dfa15226db75798f77
+        /usr/libexec/kyri-exec-reconcile ^CINV-[0-9]{6}$
+```
+
+**Exactly two Kyri `NOPASSWD` commands**, both digest-pinned, both carrying the
+anchored `^CINV-[0-9]{6}$`. No third Kyri rule, no verify grant, no wildcard, no
+shell, no Podman. `SUDOERS_POLICY = PASS`.
+
+`env_reset`, `secure_path` and `use_pty` are in force from the base policy, so
+the grants inherit no environment passthrough — the property G11-AA asked for,
+now confirmed rather than assumed.
+
+### 11.4 The digest pins still bind the installed bytes
+
+Re-read from disk at closure and compared to the pins in the active policy:
+
+```
+/usr/libexec/kyri-exec-transition  0d9c8d8c918198ba6d07ba2e84c7bbca3a4a1c7f78d96ba79463d2617ede51a1  MATCH
+/usr/libexec/kyri-exec-reconcile   2878fff04bb20b358cc82b2686989b7a47df7f67e99296dfa15226db75798f77  MATCH
+```
+
+A helper replaced after installation would not merely fail the pin — sudo would
+refuse to run it at all. The grant is bound to bytes, not to a path.
+
+### 11.5 Operator negative probes, recorded exactly
+
+After `sudo -k`, run non-interactively:
+
+| probe | result | rc |
+| --- | --- | --- |
+| `sudo -n /usr/libexec/kyri-exec-transition CINV-00000A` | `sudo: a password is required` | 1 |
+| `sudo -n /usr/libexec/kyri-exec-transition CINV-000001 x` | `sudo: a password is required` | 1 |
+| `sudo -n /usr/libexec/kyri-exec-transition CINV-1` | `sudo: a password is required` | 1 |
+| `sudo -n /usr/bin/podman ps` | `sudo: a password is required` | 1 |
+| `sudo -n /bin/sh -c id` | `sudo: a password is required` | 1 |
+
+**What this proves, stated precisely.** `cschott` is a member of `sudo` and the
+base policy therefore already grants `(ALL : ALL) ALL` **with** a password —
+visible in §11.3. Every probe above fell through to *that* rule, which is why
+each reports `a password is required` rather than a flat denial. That is exactly
+the evidence wanted: had any probe matched a Kyri `NOPASSWD` rule it would have
+run **without** a password and returned the helper's own output.
+
+So the correct reading is: **the Kyri `NOPASSWD` authority did not broaden** to
+malformed invocation identifiers, extra arguments, Podman, a shell, or generic
+root execution. It is not a claim that `cschott` cannot run those commands at
+all — a sudo-group member can, with a password, and that pre-existed this
+checkpoint and is untouched by it.
+
+The two **valid** forms were checked by policy listing only and were
+deliberately **not executed**:
+
+```
+/usr/libexec/kyri-exec-transition CINV-000001
+/usr/libexec/kyri-exec-reconcile  CINV-000001
+```
+
+Executing either would have been a first invocation, which is G11-BB's to
+authorise, not BA's.
+
+### 11.6 Nothing else moved
+
+```
+HELPER_COMPATIBILITY   compatible   8 declared, 0 blocking
+coordinator identity   3dec888c9efa4214d9cbc8a943818fbe21cd41fbf81ee252a1e38d5d25fd2811
+execution   identity   891beeeb35bbf0e70dad9351825f34595875e8090f831c5db83ed8f66466e373
+Fabric aggregate       7c53efcdffdee337fe3ca94b71a3085bf53b4474f19482a523d263feaa6c8e96   unchanged
+Trust                  valid: true, problems 0
+fabric validate        findings 0, counts 4 / 3 / 3 / 2
+chain heads            CADV-000004 → CINST-000003 → CROUTE-0003 → CSEL-000002
+CSEL-000002            route_id CROUTE-0003, selected_instance_id CINST-000003
+current eligibility    true, ELIG-1..12 all met
+capability-runtime     36a13cd7c439952b5d9b2706215c79b1695e0783d564466f1ae3857cd5f5d1a6   unchanged
+CINV / CRES records    0 / 0
+*.seq counters         none exist
+staging / handoff      0 / 0
+```
+
+Operator confirmed `podman ps -a` as `kyri-capability` shows only pre-existing
+`trackb-*` containers from three weeks ago. **No `kyri-CINV-*` container
+exists.** The coordinator cannot enumerate Podman and must not gain the
+authority to, so this is operator-attested by design and is re-confirmed at BB.
+
+### 11.7 Standing after closure
+
+```
+BA_RESULT                     ACCEPTED
+PRODUCTION_INVOKE_AUTHORISED  NO
+```
+
+The grants make the privileged transition *possible*. They authorise no
+invocation. The first controlled invoke is G11-BB's, and only after reviewer
+approval of the ceremony prepared in
+**[G11-BB-A](2026-09-04-g11-bb-a-first-controlled-invoke-preparation.md)**.
