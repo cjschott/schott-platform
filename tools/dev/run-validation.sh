@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=106
+  TOTAL_STEPS=107
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=131
+  TOTAL_STEPS=132
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -416,6 +416,13 @@ run "Capability execution G5 preflight" \
 # the accepted-predecessor, applied-successor and unknown-drift cases.
 run "Capability execution generation succession" \
   bash tests/test-capability-execution-generation-succession.sh
+
+# The Generation-15 runtime installation, proven against a reconstructed
+# Generation-14 baseline: verify non-mutating, install, verify-installed, the
+# CREATE and REPLACE unknown-byte refusals, and the crash matrix at every
+# publication boundary.
+run "Capability execution generation 15 installer" \
+  bash tests/test-capability-execution-generation15-installer.sh
 
 # The G11-BB anchor corrections. A governed root is opened as a traversal
 # anchor, never for read: both traverse-only production directories refuse the

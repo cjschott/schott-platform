@@ -25,6 +25,7 @@ test-capability-execution-generation10-installer.sh	drives the generation-10 ins
 test-capability-execution-generation11-installer.sh	drives the generation-11 installer pinned to /opt/schott-platform
 test-capability-execution-generation12-installer.sh	drives the generation-12 installer pinned to /opt/schott-platform
 test-capability-execution-generation12-packaging.sh	reads the installed Generation-12 runtime under /usr/lib/kyri/python
+test-capability-execution-generation15-installer.sh	reads the installed Generation-14 runtime to reconstruct the accepted baseline path set
 test-capability-execution-generation5-installer.sh	drives the generation-5 installer pinned to /opt/schott-platform
 test-capability-execution-generation6-installer.sh	drives the generation-6 installer pinned to /opt/schott-platform
 test-capability-execution-generation7-installer.sh	drives the generation-7 installer pinned to /opt/schott-platform

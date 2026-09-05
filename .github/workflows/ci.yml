@@ -411,6 +411,10 @@ jobs:
       - name: Capability execution generation succession tests
         run: bash tests/test-capability-execution-generation-succession.sh
 
+      # The Generation-15 runtime installation, fixture only.
+      - name: Capability execution generation 15 installer tests
+        run: bash tests/test-capability-execution-generation15-installer.sh
+
       # The G11-BB anchor corrections and supervised recovery discovery.
       # Unprivileged fixtures only.
       - name: Capability execution handoff root traversal tests
