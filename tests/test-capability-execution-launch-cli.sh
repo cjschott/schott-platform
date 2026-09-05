@@ -749,7 +749,21 @@ run_case "this suite runs unprivileged and touches no production root" "${FIXTUR
 assert os.getuid() != 0, 'this suite must not run privileged'
 for grant in ('/etc/sudoers.d/kyri-exec', '/etc/sudoers.d/kyri-exec-verify'):
     assert not os.path.exists(grant), grant
-assert os.listdir('/data/kyri/capability-handoff') == [], 'the live handoff changed'
+# The production handoff is NOT asserted empty. G11-BB published CINV-000001
+# there, and that record is real historical production state which this suite
+# must neither require the absence of nor disturb. Asserting emptiness encoded
+# the claim that production has never been invoked, which stopped being true the
+# moment the platform did the thing it was built to do.
+#
+# What this suite actually owes is that IT changed nothing, and that is proven
+# properly by the production snapshot taken around the whole run -- mode, owner,
+# size and both timestamps, for every production path.
+# What remains worth asserting here is narrower and still true: nothing this
+# suite creates may appear in the production handoff, because the suite works
+# only in its own fixture root.
+live_handoff = os.listdir('/data/kyri/capability-handoff')
+assert all(not name.startswith('CINV-00004') for name in live_handoff), \\
+    f'a fixture invocation reached the production handoff: {live_handoff}'
 assert not os.path.exists('/data/kyri/trust'), 'a live trust store appeared'
 assert not os.path.exists('/data/kyri/fabric'), 'a live fabric store appeared'
 assert not os.path.ismount('/mnt/kyri-root'), 'the root authority was mounted'

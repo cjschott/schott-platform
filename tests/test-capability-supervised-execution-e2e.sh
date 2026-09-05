@@ -425,6 +425,105 @@ check("and reports it as already absent", ["absent"],
       [f.disposition for f in RC.reconcile_unresolved(
           unresolved, reconciler=reconciler())])
 
+# --- PART 6: the supervised orphan, which PART 5 could not have found ---------
+#
+# PART 5 uses `adapter_identity`, which only a locally executed adapter writes.
+# THE SUPERVISED PATH NEVER WRITES IT: `command_invoke` passes no adapter and
+# no execution binding, and `CINV` is immutable afterwards. G11-BB found the
+# consequence in production -- an invocation that reached `launch_authorized`
+# and lost supervision was invisible to the surface built to find it, so a real
+# orphan would have been reported as nothing to see.
+#
+# This part is that exact shape: a null adapter identity, a real lifecycle
+# journal, and a real container left running.
+
+print("\n=== PART 6 - a supervised orphan is discovered from lifecycle authority ===")
+
+from tools.capability.execution import capacity as CAP
+from tools.capability.execution import state as ST
+from tools.capability.execution.backing_store import (
+    ObservedFilesystem, verify_backing_store)
+from tools.capability.execution.canonical_json import serialise as _serialise
+from tools.capability.execution.mutation import CMUT_COUNTER
+from tools.capability.execution.types import LifecycleState
+
+SUPERVISED = "CINV-000046"
+_UUID = "12774bf1-cf2a-4c8c-ba19-42fd9a8a0a96"
+
+_exec_base = Path(WORK) / "execution-authority"
+for _sub in ("root/mutations", "root/state", "root/" + ST.TRANSITIONS_DIRECTORY,
+             "root/" + CAP.LOCKS_DIRECTORY):
+    (_exec_base / _sub).mkdir(parents=True, exist_ok=True)
+(_exec_base / "backing-store.json").write_bytes(_serialise(
+    {"filesystem_uuid": _UUID, "filesystem_type": "xfs",
+     "mount_point": "/data"}))
+(_exec_base / "root" / CMUT_COUNTER).write_bytes(b"000000000000\n")
+
+_cfg = os.open(str(_exec_base / "backing-store.json"), os.O_RDONLY)
+_rt = os.open(str(_exec_base / "root"), os.O_RDONLY | os.O_DIRECTORY)
+try:
+    EXEC_ROOT = verify_backing_store(_cfg, _rt, observed=ObservedFilesystem(
+        filesystem_uuid=_UUID, filesystem_type="xfs",
+        mount_point="/data", device_name="/dev/sdb1"))
+finally:
+    os.close(_cfg)
+    os.close(_rt)
+
+# The journal the coordinator writes before the privileged boundary is crossed.
+CAP.reserve(EXEC_ROOT, SUPERVISED)
+ST.transition(EXEC_ROOT, SUPERVISED, LifecycleState.RESERVED,
+              LifecycleState.LAUNCH_AUTHORIZED)
+check("the journal reached launch_authorized",
+      LifecycleState.LAUNCH_AUTHORIZED, ST.all_states(EXEC_ROOT)[SUPERVISED])
+
+# A real orphan: the worker is killed while its container runs.
+supervise(SUPERVISED, SLEEPER, kill_when_started=True,
+          refuse_cleanup=True)
+check("a real container was left behind", True,
+      state(f"kyri-{SUPERVISED}") != "absent")
+
+supervised_store = Store(
+    [{"invocation_record_id": SUPERVISED, "invocation_id": SUPERVISED,
+      "adapter_identity": None}], [])
+
+# The defect, pinned: without the journal this orphan is invisible.
+check("without lifecycle authority the orphan is invisible", (),
+      RC.unresolved_invocations(supervised_store))
+
+found = RC.unresolved_invocations(supervised_store, execution_root=EXEC_ROOT)
+check("with lifecycle authority it is discovered", [SUPERVISED],
+      [item.invocation_id for item in found])
+check("and it is discovered by state, not adapter identity",
+      ("launch_authorized", None),
+      (found[0].lifecycle_state, found[0].adapter_identity))
+
+# Readiness must not become true until disposal is proven.
+blocked6 = RC.execution_safety(supervised_store, reconciler=reconciler(refuse=True),
+                               execution_root=EXEC_ROOT)
+check("readiness stays refused while disposal is unproven", RC.NOT_READY,
+      blocked6.state)
+check("the container is still running at that point", True,
+      state(f"kyri-{SUPERVISED}") != "absent")
+
+# Governed reconciliation only -- no manual podman action anywhere in this part.
+recovered = RC.execution_safety(supervised_store, reconciler=reconciler(),
+                                execution_root=EXEC_ROOT)
+check("readiness after governed reconciliation", RC.READY, recovered.state)
+check("the orphan was stopped and removed", "absent",
+      state(f"kyri-{SUPERVISED}"))
+check("no result was synthesised for it", [],
+      supervised_store.list_records("capability-result"))
+
+# A merely prepared invocation -- reserved, never launch-authorised -- is not
+# unresolved: capacity was taken, but no container could exist.
+PREPARED = "CINV-000047"
+CAP.reserve(EXEC_ROOT, PREPARED)
+prepared_store = Store(
+    [{"invocation_record_id": PREPARED, "invocation_id": PREPARED,
+      "adapter_identity": None}], [])
+check("a reserved-only invocation is not unresolved", (),
+      RC.unresolved_invocations(prepared_store, execution_root=EXEC_ROOT))
+
 print("\n=== verdict ===")
 if failures:
     print(f"SUPERVISED_E2E=FAIL ({failures})")
