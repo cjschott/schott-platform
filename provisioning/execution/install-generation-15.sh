@@ -162,37 +162,39 @@ PREPARING=0
 # argued. A host must never expose one group's Generation-15 bytes beside
 # another's Generation-14 bytes -- see require_group_coherence.
 MATRIX=(
-# --- V: the runtime-side verification surface ------------------------------
+# PUBLICATION ORDER IS A SAFETY PROPERTY, NOT A LISTING CONVENIENCE.
 #
-# Moved as ONE group because it is one surface. The installed verification.py
-# predates 03a2e90 and cannot import -- it asks worker.py for WORKER_GID and
-# WORKER_UID, which that commit removed in favour of the identity authority.
-# Replacing it alone would leave the two modules a contract already names
-# absent; creating those alone would leave the module that fails to import.
-# Neither half is a coherent state, so the group is the unit.
+# The launch and reconcile grants stay installed through this generation, so
+# something could in principle ask to execute while the transaction is in
+# flight. helpers.py is the runtime authority that decides whether the
+# installed helper bytes are current, and this generation moves it to declare
+# the CORRECTED digests. Publishing it FIRST, against predecessor helpers that
+# are still installed, turns compatibility `incompatible` and supervision_ready
+# false before any other Generation-15 object becomes observable.
 #
-# This does NOT authorise the verify entrypoint. /etc/sudoers.d/kyri-exec-verify
-# stays absent and is refused below, exactly as it was before.
+# So execution is shut by the first rename, and every later state -- partial,
+# complete, or rolling back -- is already closed. That is stronger than relying
+# on no one invoking during a root ceremony.
+#
+# ROLLBACK RESTORES IN REVERSE for the same reason: helpers.py goes back LAST,
+# so the predecessor declaration never returns while a Generation-15 object is
+# still published. `require_fail_closed_first` holds this order as a checked
+# property, so a later edit cannot quietly undo it.
+#
+# The transaction is still all-seven-or-none. Order is an additional property,
+# not a relaxation of coherence.
+#
+# source | target | mode | operation | gen14-sha256 | gen15-sha256 | group
+# --- H: the readiness authority. FIRST, so execution closes immediately. ------
+"tools/capability/execution/helpers.py|${LIBRARY_ROOT}/tools/capability/execution/helpers.py|0444|REPLACE|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874|6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07|H"
+"provisioning/execution/kyri-exec-launcher.py|${LIBRARY_ROOT}/kyri_exec_launcher.py|0444|REPLACE|269258f3a407aaea5269312dda2a3b3c78fa50c2512c8f32475840e76c9fbb5d|78c6de9093a535618b6fee54cd90c8eab388bc7ba6e4bd39d42de7f2e019bc83|H"
+# --- V: the runtime-side verification surface --------------------------------
 "tools/capability/execution/verification.py|${LIBRARY_ROOT}/tools/capability/execution/verification.py|0444|REPLACE|ed5b49ed03add16c8ba7a233d53a8c5528e5ba4d0fc23f53cdd41bb788bd2e73|7a792aaf3c59ed0bb4bd32cb55267e6fc26dfae06f5da1b8b36efff9e1efa952|V"
 "tools/capability/execution/result_content.py|${LIBRARY_ROOT}/tools/capability/execution/result_content.py|0444|CREATE|ABSENT|b1c5a89fd5b8b2a368bb8908394052c18475a36adae1b4d88d2f65cb9bcd0bba|V"
 "tools/capability/execution/contract_outcome.py|${LIBRARY_ROOT}/tools/capability/execution/contract_outcome.py|0444|CREATE|ABSENT|139b77b7065f88d05ed472bbf9de0c2665a74b29d21f132445848b0ee4dd16a5|V"
-# --- R: supervised recovery discovery ---------------------------------------
-#
-# recovery.py discovers an interrupted invocation from the lifecycle journal
-# rather than from CINV.adapter_identity, which the supervised path never
-# writes; cli.py opens the execution root and threads it in. A host with one
-# and not the other either passes a root nothing reads or reads a root nothing
-# passes, so they move together.
+# --- R: supervised recovery discovery ----------------------------------------
 "tools/capability/execution/recovery.py|${LIBRARY_ROOT}/tools/capability/execution/recovery.py|0444|REPLACE|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f|f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03|R"
 "tools/capability/cli.py|${LIBRARY_ROOT}/tools/capability/cli.py|0444|REPLACE|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295|7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1|R"
-# --- H: what the runtime declares about the privileged surface --------------
-#
-# helpers.py carries the digests of the three helper objects the separate
-# ceremony will move; kyri_exec_launcher.py is the seam that carries a helper
-# refusal back. Both are runtime objects. NEITHER IS A PRIVILEGED HELPER: this
-# generation installs no /usr/libexec object and no library-root helper module.
-"tools/capability/execution/helpers.py|${LIBRARY_ROOT}/tools/capability/execution/helpers.py|0444|REPLACE|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874|6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07|H"
-"provisioning/execution/kyri-exec-launcher.py|${LIBRARY_ROOT}/kyri_exec_launcher.py|0444|REPLACE|269258f3a407aaea5269312dda2a3b3c78fa50c2512c8f32475840e76c9fbb5d|78c6de9093a535618b6fee54cd90c8eab388bc7ba6e4bd39d42de7f2e019bc83|H"
 )
 
 # What each group is, so a coherence failure names something an operator can act
@@ -868,6 +870,24 @@ report_transaction_residue() {
 # grants may be present, and if they are they must pin the entrypoint bytes this
 # host actually carries, because a grant naming bytes that are not there is a
 # grant nobody reviewed. And no OTHER grant may appear under any name.
+# The fail-closed-first property, checked rather than commented.
+#
+# Publication follows matrix order, so "helpers.py is published first" is only
+# true while it is row one. A later edit that reordered the matrix would silently
+# reopen the mid-transaction window this ordering exists to shut, and nothing
+# else in the ceremony would notice. This refuses instead.
+FAIL_CLOSED_FIRST="tools/capability/execution/helpers.py"
+
+require_fail_closed_first() {
+  local first
+  first="$(field "${MATRIX[0]}" 0)"
+  [[ "${first}" == "${FAIL_CLOSED_FIRST}" ]] \
+    || halt "the first published object is ${first}, not ${FAIL_CLOSED_FIRST}: this transaction would leave execution open while a Generation-15 object was already published"
+  [[ "$(field "${MATRIX[0]}" 6)" == "H" ]] \
+    || halt "the readiness authority is not in coherence group H"
+  ok "the readiness authority publishes first, so execution closes before any other object is observable"
+}
+
 require_gates_closed() {
   [[ ! -e "${VERIFY_SUDOERS}" ]] \
     || halt "${VERIFY_SUDOERS} exists: the verification entrypoint is not authorised"
@@ -1192,9 +1212,14 @@ rollback() {
   local reason="$1"
   printf '\nROLLING BACK: %s\n' "${reason}" >&2
   journal_write ROLLING_BACK
-  local row target operation wanted observed removed=0
+  local row target operation wanted observed removed=0 index
 
-  for row in "${MATRIX[@]}"; do
+  # Reverse of the publication order. helpers.py is published first so execution
+  # shuts immediately; it is therefore restored LAST, so the predecessor
+  # declaration never comes back while a Generation-15 object is still
+  # published. Any other order would reopen execution against a mixed runtime.
+  for (( index = ${#MATRIX[@]} - 1; index >= 0; index-- )); do
+    row="${MATRIX[index]}"
     target="$(field "${row}" 1)"; operation="$(field "${row}" 3)"
     wanted="$(field "${row}" 5)"
 
@@ -1468,6 +1493,7 @@ case "${MODE}" in
   require_source_digests
   require_closed_closure
   require_privileged_surface_excluded
+  require_fail_closed_first
 
   # The two capabilities this generation exists to deploy, proved present in the
   # reviewed source rather than assumed from a commit message.
@@ -1501,6 +1527,7 @@ case "${MODE}" in
   require_source_digests
   require_closed_closure
   require_privileged_surface_excluded
+  require_fail_closed_first
 
   classify_all
   if (( TARGET_COUNT == ${#MATRIX[@]} )); then
@@ -1545,6 +1572,7 @@ case "${MODE}" in
   require_source_digests
   require_closed_closure
   require_privileged_surface_excluded
+  require_fail_closed_first
   require_gates_closed
 
   TRANSACTION_ID="gen15-$(date -u +%Y%m%dT%H%M%SZ)-$$"
