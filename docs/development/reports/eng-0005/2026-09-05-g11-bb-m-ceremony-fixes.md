@@ -212,7 +212,15 @@ Gen-15 focused suite   PASS   85 assertions, 0 failures
 shellcheck             clean
 provisioning suite     PASS
 developer-experience   PASS
+LOCAL_FULL             PASS   133/133
+GITHUB_CI              PASS   6/6 at 08085fe
+CLEAN_CLONE_VERIFY     PASS   clone of the pushed commit FROM THE REMOTE, 85/85
+working tree           clean; HEAD == pushed branch head
 ```
+
+The clean clone is taken from `origin`, not from the local repository, so it
+proves what the remote actually carries rather than what this working copy
+believes it pushed.
 
 ## 7. Production state
 
