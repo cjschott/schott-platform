@@ -83,7 +83,8 @@ GEN15_LIBRARY_EVIDENCE="/root/kyri-gen15-library-digests.txt"
 GEN15_HELPER_EVIDENCE="/root/kyri-gen15-helper-digests.txt"
 
 # Both grants. Neither may exist while this runs, and neither is written by it.
-SUDOERS="/etc/sudoers.d/kyri-exec"
+SUDOERS_DIR="/etc/sudoers.d"
+SUDOERS="/etc/sudoers.d/kyri-exec-launch"
 VERIFY_SUDOERS="/etc/sudoers.d/kyri-exec-verify"
 RECONCILE_SUDOERS="/etc/sudoers.d/kyri-exec-reconcile"
 
@@ -125,6 +126,7 @@ if [[ -n "${FIXTURE}" ]]; then
   BASELINE_HELPER_EVIDENCE="${FIXTURE}${BASELINE_HELPER_EVIDENCE}"
   GEN15_LIBRARY_EVIDENCE="${FIXTURE}${GEN15_LIBRARY_EVIDENCE}"
   GEN15_HELPER_EVIDENCE="${FIXTURE}${GEN15_HELPER_EVIDENCE}"
+  SUDOERS_DIR="${FIXTURE}${SUDOERS_DIR}"
   SUDOERS="${FIXTURE}${SUDOERS}"
   VERIFY_SUDOERS="${FIXTURE}${VERIFY_SUDOERS}"
   RECONCILE_SUDOERS="${FIXTURE}${RECONCILE_SUDOERS}"
@@ -714,6 +716,34 @@ helper_ceremony_library_creates() {
 }
 
 # --- generation-14 baseline -------------------------------------------------
+# The accepted digest an accepted later ceremony published for one library-root
+# object, or nothing if no such ceremony declares it.
+#
+# Read from that ceremony's own matrix rather than restated here, for the reason
+# the count check already reads it: a list maintained in two places is a list
+# that disagrees with itself, and the disagreement surfaces as a production
+# refusal at the worst moment.
+helper_ceremony_accepted_digest() {
+  local relative="$1" ceremony line target operation post
+  # shellcheck disable=SC2016  # the placeholder must not expand
+  local _PLACEHOLDER='${LIBRARY_ROOT}/'
+  # One accepted ceremony today. Held in an array so adding a second is a data
+  # change rather than a control-flow one.
+  local -a ceremonies=("${REPOSITORY}/provisioning/execution/install-g11-ax-helpers.sh")
+  for ceremony in "${ceremonies[@]}"; do
+    [[ -f "${ceremony}" ]] || continue
+    while IFS= read -r line; do
+      line="${line#\"}"; line="${line%\"}"
+      IFS='|' read -r _ target _ operation _ post _ <<<"${line}"
+      [[ "${target}" == *"${_PLACEHOLDER}"* ]] || continue
+      [[ "${target##*"${_PLACEHOLDER}"}" == "${relative}" ]] || continue
+      printf '%s' "${post}"
+      return 0
+    done < <(sed -n '/^MATRIX=(/,/^)$/p' "${ceremony}" | sed -n 's/^\(".*"\)$/\1/p')
+  done
+  return 1
+}
+
 require_baseline() {
   [[ -d "${LIBRARY_ROOT}" ]] || halt "${LIBRARY_ROOT} does not exist: this is not a Kyri host"
   local count
@@ -729,9 +759,30 @@ require_baseline() {
   [[ -f "${BASELINE_HELPER_EVIDENCE}" ]] \
     || halt "the Generation-14 helper evidence at ${BASELINE_HELPER_EVIDENCE} is missing"
 
-  local drift=0 recorded observed file relative
+  local drift=0 recorded observed file relative overlaid
   while IFS= read -r file; do
     relative="${file#"${LIBRARY_ROOT}"/}"
+
+    # THE ACCEPTED PREDECESSOR IS NOT GENERATION 14 ALONE. Ceremonies published
+    # after it legitimately changed library-root objects, so an installed object
+    # may correctly differ from -- or be absent from -- Generation-14 evidence.
+    # Its accepted digest is then the later ceremony's target, not the older
+    # evidence's record.
+    #
+    # This is not "ignore helper files". The overlay is read from an accepted
+    # ceremony's own matrix, one path at a time; an object no ceremony declares
+    # is still judged against Generation-14 evidence and still refuses.
+    # `|| true` because "no ceremony declares this object" is the common answer
+    # and not an error; without it errexit ends the run silently, which is
+    # exactly how this first went wrong.
+    overlaid="$(helper_ceremony_accepted_digest "${relative}" || true)"
+    if [[ -n "${overlaid}" ]]; then
+      observed="$(digest_of "${file}")"
+      if [[ "${observed}" == "${overlaid}" ]]; then continue; fi
+      bad "installed ${relative} is ${observed}, the accepted helper ceremony records ${overlaid}"
+      drift=$((drift + 1)); continue
+    fi
+
     recorded="$(sed -n "s#^\\([0-9a-f]\\{64\\}\\)  /usr/lib/kyri/python/${relative}\$#\\1#p" \
                   "${BASELINE_LIBRARY_EVIDENCE}" | head -1)"
     if [[ -z "${recorded}" ]]; then
@@ -794,11 +845,67 @@ report_transaction_residue() {
   fi
 }
 
+# The elevation gates, as they actually stand rather than as Generation 13 found
+# them.
+#
+# THIS ONCE REQUIRED EVERY GRANT TO BE ABSENT, and at Generation 13 that was
+# simply true: G3 was closed and no grant existed, so "absent" and "not
+# installed by anybody" were the same statement. G11-BA then installed the
+# launch and reconcile grants, and this check -- inherited unchanged -- refused
+# the production host for holding exactly the grants the accepted deployment
+# plan says it should hold.
+#
+# WHY PRESENT GRANTS ARE SAFE HERE, PROVEN RATHER THAN ASSUMED. G11-BB-J drove
+# the cross-surface matrix: this generation moves helpers.py, the rule that
+# decides whether installed helper bytes are current, to declare the CORRECTED
+# digests while the predecessor helpers are still installed. The moment it
+# lands, helper compatibility is `incompatible` and supervision_ready is false,
+# so the coordinator refuses before crossing the privilege boundary. A grant is
+# permission to ask; readiness is permission to proceed, and readiness closes.
+#
+# SO THE CHECK BECOMES PRECISE INSTEAD OF ABSOLUTE. The verify grant must still
+# be absent -- nothing has ever authorised that entrypoint. The two execution
+# grants may be present, and if they are they must pin the entrypoint bytes this
+# host actually carries, because a grant naming bytes that are not there is a
+# grant nobody reviewed. And no OTHER grant may appear under any name.
 require_gates_closed() {
-  [[ ! -e "${SUDOERS}" ]] || halt "${SUDOERS} exists: the launch grant is installed"
-  [[ ! -e "${VERIFY_SUDOERS}" ]] || halt "${VERIFY_SUDOERS} exists: the verification grant is installed"
-  [[ ! -e "${RECONCILE_SUDOERS}" ]] || halt "${RECONCILE_SUDOERS} exists: the reconcile grant is installed"
-  ok "no sudoers grant exists: every elevation gate stays closed"
+  [[ ! -e "${VERIFY_SUDOERS}" ]] \
+    || halt "${VERIFY_SUDOERS} exists: the verification entrypoint is not authorised"
+
+  local grant entrypoint pinned installed
+  for grant in "${SUDOERS}" "${RECONCILE_SUDOERS}"; do
+    [[ -e "${grant}" ]] || continue
+    case "${grant}" in
+      *kyri-exec-launch)    entrypoint="${LIBEXEC_ROOT}/kyri-exec-transition" ;;
+      *kyri-exec-reconcile) entrypoint="${LIBEXEC_ROOT}/kyri-exec-reconcile" ;;
+      *) halt "${grant} is not a grant this ceremony can account for" ;;
+    esac
+    # The digest the grant pins, read out of the grant itself.
+    pinned="$(grep -oE 'sha256:[0-9a-f]{64}' "${grant}" | head -1)"
+    pinned="${pinned#sha256:}"
+    [[ -n "${pinned}" ]] \
+      || halt "${grant} pins no digest: this ceremony cannot confirm what it authorises"
+    installed="$(digest_of "${entrypoint}")"
+    [[ "${pinned}" == "${installed}" ]] \
+      || halt "${grant} pins ${pinned}, but ${entrypoint} is ${installed:-absent}"
+  done
+
+  # Anything else under the grant directory is an elevation nobody declared.
+  local unexpected
+  unexpected="$(find "${SUDOERS_DIR}" -maxdepth 1 -type f -name 'kyri-*' \
+                  ! -name "$(basename "${SUDOERS}")" \
+                  ! -name "$(basename "${RECONCILE_SUDOERS}")" 2>/dev/null || true)"
+  [[ -z "${unexpected}" ]] \
+    || halt "an undeclared Kyri grant exists: ${unexpected}"
+
+  local present=0
+  [[ -e "${SUDOERS}" ]] && present=$((present + 1))
+  [[ -e "${RECONCILE_SUDOERS}" ]] && present=$((present + 1))
+  if (( present == 0 )); then
+    ok "no sudoers grant exists: every elevation gate stays closed"
+  else
+    ok "${present} accepted execution grant(s) present, each pinning the installed entrypoint; the verification grant is absent"
+  fi
 }
 
 # The privileged surface, fingerprinted before and after. This ceremony installs

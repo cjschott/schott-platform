@@ -55,6 +55,7 @@ host_only_requires /usr/lib/kyri/python          # prod-path-reference
 
 GEN14_COMMIT="946be553ab9f25542590eb908c42ce14a81d6ec3"
 VERIFICATION_AT="16f285e84b58585409514d90e282782b8d77d9d1"
+AX_COMMIT="7709cf0443ab11f2b84c94eefbbb60f1eb95c98c"
 
 FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }
@@ -113,9 +114,48 @@ build_fixture() {
     "${lib}/tools/capability/execution/verification.py"
 
   # The evidence the installer requires of its predecessor.
+  # Generation-14 evidence is written BEFORE the later ceremonies are overlaid,
+  # because that is what it is: a record of the Generation-14 surface, frozen and
+  # immutable. Everything applied after this line postdates it deliberately.
   ( cd "${lib}" && find . -type f -name '*.py' | sed 's|^\./||' | sort \
       | xargs sha256sum ) | sed "s|^\([0-9a-f]*\)  |\1  /usr/lib/kyri/python/|" \
       > "${root}/root/kyri-gen14-library-digests.txt"
+
+  # --- the accepted production predecessor is Generation 14 PLUS what came
+  # --- after it, and the host really is in that shape -----------------------
+  #
+  # G11-AX published four library-root objects after Generation 14: three
+  # REPLACE and one CREATE. Their installed bytes intentionally differ from, or
+  # are absent from, Generation-14 evidence. A verifier that compares the whole
+  # library against that evidence alone reports all four as drift, which is
+  # exactly what production did.
+  local axrow axsrc axtgt axmode
+  while IFS= read -r axrow; do
+    axrow="${axrow#\"}"; axrow="${axrow%\"}"
+    IFS='|' read -r axsrc axtgt axmode _ _ _ _ <<<"${axrow}"
+    # The matrix stores the placeholder literally, so it must NOT expand here.
+    # shellcheck disable=SC2016  # intentional: matching the literal placeholder
+    local _PLACEHOLDER='${LIBRARY_ROOT}/'
+    [[ "${axtgt}" == *"${_PLACEHOLDER}"* ]] || continue
+    axtgt="${lib}/${axtgt##*"${_PLACEHOLDER}"}"
+    ( cd "${ROOT}" && git show "${AX_COMMIT}:${axsrc}" ) > "${axtgt}.tmp" 2>/dev/null || continue
+    install -m "${axmode}" "${axtgt}.tmp" "${axtgt}"
+    rm -f "${axtgt}.tmp"
+  done < <(sed -n '/^MATRIX=(/,/^)$/p' "${ROOT}/provisioning/execution/install-g11-ax-helpers.sh" \
+             | grep '^"')
+
+  # G11-BA installed the launch and reconcile grants. They are still installed,
+  # unchanged, and the accepted deployment plan keeps them through Generation 15.
+  # The verify grant stays absent.
+  printf 'Cmnd_Alias KYRI_EXEC_LAUNCH = sha256:%s \\\n    /usr/libexec/kyri-exec-transition ^CINV-[0-9]{6}$\ncschott ALL=(root) NOPASSWD: KYRI_EXEC_LAUNCH\n' \
+    "$(sha256sum /usr/libexec/kyri-exec-transition | cut -d' ' -f1)" \
+    > "${root}/etc/sudoers.d/kyri-exec-launch"
+  printf 'Cmnd_Alias KYRI_EXEC_RECONCILE = sha256:%s \\\n    /usr/libexec/kyri-exec-reconcile ^CINV-[0-9]{6}$\ncschott ALL=(root) NOPASSWD: KYRI_EXEC_RECONCILE\n' \
+    "$(sha256sum /usr/libexec/kyri-exec-reconcile | cut -d' ' -f1)" \
+    > "${root}/etc/sudoers.d/kyri-exec-reconcile"
+  chmod 0440 "${root}/etc/sudoers.d/kyri-exec-launch" "${root}/etc/sudoers.d/kyri-exec-reconcile"
+  install -D -m 0555 /usr/libexec/kyri-exec-transition "${root}/usr/libexec/kyri-exec-transition"
+  install -D -m 0555 /usr/libexec/kyri-exec-reconcile  "${root}/usr/libexec/kyri-exec-reconcile"
   : > "${root}/root/kyri-gen14-helper-digests.txt"
   for object in "${staging}"/provisioning/execution/kyri-exec-*; do
     [[ -f "${object}" ]] || continue
@@ -192,6 +232,7 @@ fi
 # ===========================================================================
 
 root="${WORK}/install"; build_fixture "${root}"
+libexec_before_install="$(manifest "${root}/usr/libexec")"
 if run_installer "${root}" --install; then
   pass "--install completes"
 else
@@ -245,10 +286,13 @@ if [[ ! -e "${root}/etc/sudoers.d/kyri-exec-verify" ]]; then
 else
   fail "the installation wrote a verify grant"
 fi
-if [[ -z "$(find "${root}/usr/libexec" -type f 2>/dev/null)" ]]; then
-  pass "no /usr/libexec object was installed"
+# Not "empty" -- the production-shape fixture carries the two pinned
+# entrypoints, exactly as the host does. What matters is that this generation
+# left them alone.
+if [[ "${libexec_before_install}" == "$(manifest "${root}/usr/libexec")" ]]; then
+  pass "no /usr/libexec object changed: the privileged surface is untouched"
 else
-  fail "the installation touched /usr/libexec"
+  fail "the installation changed /usr/libexec"
 fi
 
 # ===========================================================================
@@ -280,6 +324,73 @@ if run_installer "${root}" --verify; then
   fail "unknown bytes in a carryover object were accepted"
 else
   pass "unknown bytes in a carryover object are refused"
+fi
+
+# ===========================================================================
+# E2. the accepted predecessor overlay, and its negative controls
+# ===========================================================================
+#
+# Production is Generation 14 PLUS the G11-AX library-root publications PLUS the
+# G11-BA grants. The first Generation-15 production attempt refused it on both
+# counts. These cases hold the corrected model to exactly that shape, and hold
+# the boundary that was NOT weakened to reach it.
+
+# An AX-published object at bytes no ceremony declares is still drift.
+root="${WORK}/overlay-unknown"; build_fixture "${root}"
+o="${root}/usr/lib/kyri/python/kyri_exec_transition_action.py"
+chmod u+w "${o}"; printf '\n# not the accepted ceremony bytes\n' >> "${o}"
+if run_installer "${root}" --verify; then
+  fail "an AX-governed object at undeclared bytes was accepted"
+else
+  pass "an AX-governed object at undeclared bytes is still refused"
+fi
+
+# A library-root object no ceremony governs at all is still drift.
+root="${WORK}/overlay-stranger"; build_fixture "${root}"
+printf '# nobody governs this\n' > "${root}/usr/lib/kyri/python/kyri_exec_stranger.py"
+if run_installer "${root}" --verify; then
+  fail "an ungoverned extra library-root object was accepted"
+else
+  pass "an ungoverned extra library-root object is refused"
+fi
+
+# The verify grant is still forbidden.
+root="${WORK}/grant-verify"; build_fixture "${root}"
+cp "${root}/etc/sudoers.d/kyri-exec-launch" "${root}/etc/sudoers.d/kyri-exec-verify"
+if run_installer "${root}" --verify; then
+  fail "the verification grant was accepted"
+else
+  pass "the verification grant is still refused"
+fi
+
+# A grant pinning bytes this host does not carry is a grant nobody reviewed.
+root="${WORK}/grant-altered"; build_fixture "${root}"
+sed -i 's/sha256:[0-9a-f]\{64\}/sha256:'"$(printf 'f%.0s' {1..64})"'/' \
+  "${root}/etc/sudoers.d/kyri-exec-launch"
+if run_installer "${root}" --verify; then
+  fail "a grant pinning absent bytes was accepted"
+else
+  pass "a grant pinning bytes the host does not carry is refused"
+fi
+
+# An undeclared Kyri grant is an elevation nobody accounted for.
+root="${WORK}/grant-extra"; build_fixture "${root}"
+cp "${root}/etc/sudoers.d/kyri-exec-launch" "${root}/etc/sudoers.d/kyri-exec-something"
+if run_installer "${root}" --verify; then
+  fail "an undeclared Kyri grant was accepted"
+else
+  pass "an undeclared Kyri grant is refused"
+fi
+
+# A pinned entrypoint whose bytes moved must refuse, because the grant would
+# then authorise something other than what was reviewed.
+root="${WORK}/entrypoint-moved"; build_fixture "${root}"
+chmod u+w "${root}/usr/libexec/kyri-exec-transition"
+printf '\n# moved\n' >> "${root}/usr/libexec/kyri-exec-transition"
+if run_installer "${root}" --verify; then
+  fail "a moved pinned entrypoint was accepted"
+else
+  pass "a pinned entrypoint whose bytes moved is refused"
 fi
 
 # ===========================================================================
