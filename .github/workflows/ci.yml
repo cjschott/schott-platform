@@ -406,6 +406,22 @@ jobs:
       - name: Capability execution G5 preflight tests
         run: bash tests/test-capability-execution-g5-preflight.sh
 
+      # What the generation declaration may call development, and what it must
+      # refuse. Unprivileged; drives the real classification functions.
+      - name: Capability execution generation succession tests
+        run: bash tests/test-capability-execution-generation-succession.sh
+
+      # The G11-BB anchor corrections and supervised recovery discovery.
+      # Unprivileged fixtures only.
+      - name: Capability execution handoff root traversal tests
+        run: bash tests/test-capability-execution-handoff-root-traversal.sh
+
+      - name: Capability execution authority anchor tests
+        run: bash tests/test-capability-execution-authority-anchor.sh
+
+      - name: Capability execution recovery discovery tests
+        run: bash tests/test-capability-execution-recovery-discovery.sh
+
       # The G5 ceremony and its trust boundary: pinned-object materialisation,
       # isolated execution, and each isolation property proven by attack.
       - name: Capability execution G5 ceremony tests

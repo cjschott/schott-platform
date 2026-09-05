@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=102
+  TOTAL_STEPS=106
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=127
+  TOTAL_STEPS=131
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -410,6 +410,27 @@ run "Capability execution generation-6 installer" \
 # by fixtures. Builds no image, creates no authority state, invokes no Podman.
 run "Capability execution G5 preflight" \
   bash tests/test-capability-execution-g5-preflight.sh
+
+# What that declaration may call development and what it must refuse. Drives the
+# real classification functions, extracted from the preflight by name, across
+# the accepted-predecessor, applied-successor and unknown-drift cases.
+run "Capability execution generation succession" \
+  bash tests/test-capability-execution-generation-succession.sh
+
+# The G11-BB anchor corrections. A governed root is opened as a traversal
+# anchor, never for read: both traverse-only production directories refuse the
+# read-mode open, an O_PATH anchor reaches the named child, and neither can be
+# enumerated. Unprivileged fixtures only.
+run "Capability execution handoff root traversal" \
+  bash tests/test-capability-execution-handoff-root-traversal.sh
+
+run "Capability execution authority anchor" \
+  bash tests/test-capability-execution-authority-anchor.sh
+
+# Supervised recovery discovery: an invocation whose CINV carries no adapter
+# identity is still found, from the immutable lifecycle journal.
+run "Capability execution recovery discovery" \
+  bash tests/test-capability-execution-recovery-discovery.sh
 
 # ENG-0005 G5 ceremony. The operator artifact and, above all, the trust
 # boundary it rests on: root materialises the pinned commit from git objects
