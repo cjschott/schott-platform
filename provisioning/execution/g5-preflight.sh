@@ -109,7 +109,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -230,8 +230,8 @@ GENERATION_DELTA=(
 "tools/capability/execution/protocol.py|REPLACE|613ff30d5999e47e615ac28023b2e9a6e799439154b0e353eb385888b2484cfb|c2040807fa26c349f6948b7c44ca28aeea6e2fdd8f57cb54d0e608c12c9d09c1"
 "tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
 "tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
-"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f"
-"tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874"
+"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03"
+"tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb,74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07"
 #
 # G11-AX. `helpers.py` again, and this time as a REPLACE off its own installed
 # Generation-13 bytes rather than as a CREATE.
@@ -487,15 +487,53 @@ generation_declares() {
   local file="$1" installed="$2" checkout="$3" row
   for row in "${GENERATION_DELTA[@]}"; do
     [[ "$(field "${row}" 0)" == "${file}" ]] || continue
+    # A CREATE row is handled distinctly, and only once its object exists.
+    #
+    # `ABSENT` is a CREATE's pending state and the drift loop can never reach
+    # this function for it -- that loop walks installed objects. So arriving
+    # here means the object IS installed, which means the CREATE was applied,
+    # and a further change to an applied CREATE is REPLACE-shaped against the
+    # digest that CREATE put there. The successor list already records that
+    # chain, so the check is that the host sits at an earlier declared hop than
+    # the checkout: both digests declared, and installed strictly before
+    # checkout. A pair in the wrong order is a downgrade, not development.
+    if [[ "$(field "${row}" 1)" == "CREATE" ]]; then
+      local chain here there position=0
+      chain=" $(field "${row}" 3 | tr ',' ' ') "
+      here=-1; there=-1
+      for entry in ${chain}; do
+        [[ "${entry}" == "${installed}" ]] && here="${position}"
+        [[ "${entry}" == "${checkout}" ]] && there="${position}"
+        position=$((position + 1))
+      done
+      (( here >= 0 && there > here )) && return 0
+      return 1
+    fi
     [[ "$(field "${row}" 1)" == "REPLACE" ]] || return 1
     # A row may name several installed baselines, comma-separated: a checkout
-    # can be ahead of one host by one hop and another by two. Only the
-    # installed side widens. The checkout must still be the declared bytes,
-    # so nothing unreviewed becomes admissible by naming another baseline.
-    local baselines
+    # can be ahead of one host by one hop and another by two.
+    #
+    # **Both sides widen, and both only by explicit declaration.** The checkout
+    # side was a single value until G11-BB, on the reasoning that widening it
+    # would let unreviewed bytes become admissible. That reasoning holds for a
+    # wildcard and does not hold for a list: a successor named here is as
+    # reviewed as the target it follows, because naming it *is* the review.
+    #
+    # What forced the change is that a correction cannot otherwise be expressed
+    # at all. When the checkout moves past the declared target -- which is what
+    # a reviewed, not-yet-installed correction *is* -- a single-valued row has
+    # no verdict for it but drift, so the artefact reported reviewed source as
+    # corruption and there was no way to say otherwise without rewriting the
+    # historical digest it had already accepted.
+    #
+    # Nothing is loosened. Every admissible digest, on either side, is still
+    # written down in this file and reviewed as part of it. There is no
+    # "anything newer", no "any commit after", and no derivation from git.
+    local baselines successors
     baselines=",$(field "${row}" 2),"
+    successors=",$(field "${row}" 3),"
     [[ "${baselines}" == *",${installed},"* ]] || return 1
-    [[ "${checkout}" == "$(field "${row}" 3)" ]] || return 1
+    [[ "${successors}" == *",${checkout},"* ]] || return 1
     return 0
   done
   return 1
@@ -505,15 +543,20 @@ generation_declares() {
 # difference is still pending. `satisfied` names the rows the drift loop already
 # saw as a declared difference; anything else must be provably already applied.
 generation_row_coherent() {
-  local source="$1" operation="$2" expected="$3" installed
+  local source="$1" operation="$2" expected="$3" installed successors
   installed="$(digest_of "${LIBRARY_ROOT}/${source}")"
+  # "Applied" means the installed object holds any declared successor, not only
+  # the newest. A host that took an earlier hop of a multi-hop row is applied
+  # at that hop and pending for the next, and both are coherent states of the
+  # same declaration.
+  successors=",${expected},"
   if [[ "${operation}" == "CREATE" ]]; then
     # Absent is the pending state of a CREATE, and the drift loop can never
     # report it: that loop walks installed objects, and this one is not there
     # yet. Present with the declared bytes is the applied state. Present with
     # anything else is somebody else's object.
     if [[ ! -e "${LIBRARY_ROOT}/${source}" ]]; then return 0; fi
-    [[ "${installed}" == "${expected}" ]]
+    [[ "${successors}" == *",${installed},"* ]]
     return
   fi
   # A REPLACE whose object is ABSENT from this installed tree, on a row that
@@ -532,7 +575,7 @@ generation_row_coherent() {
     [[ "${baselines}" == *",ABSENT,"* ]]
     return
   fi
-  [[ "${installed}" == "${expected}" ]]
+  [[ "${successors}" == *",${installed},"* ]]
 }
 
 # --- root-execution trust model --------------------------------------------
@@ -579,8 +622,8 @@ require_operator_source() {
     # The checkout side is absolute: whatever the installed generation is, the
     # checkout must carry exactly the bytes the row declares.
     observed="$(digest_of "${REPOSITORY}/${source}")"
-    if [[ "${observed}" != "${expected}" ]]; then
-      bad "the declared object ${source} is ${observed:-absent}, not the declared ${expected}"
+    if [[ ",${expected}," != *",${observed},"* ]]; then
+      bad "the declared object ${source} is ${observed:-absent}, which is not a declared successor (${expected})"
       drift=$((drift + 1)); complete=0
     fi
     seen=0

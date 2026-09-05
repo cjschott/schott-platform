@@ -790,13 +790,18 @@ run_case "this suite runs unprivileged and touches no production root" "${FIXTUR
 assert os.getuid() != 0, 'this suite must not run privileged'
 for grant in ('/etc/sudoers.d/kyri-exec', '/etc/sudoers.d/kyri-exec-verify'):
     assert not os.path.exists(grant), grant + ' exists'
-# The live handoff root is a production path. Where it exists this proves the
-# suite left it empty; where there is no production layout at all there is
-# nothing it could have touched, and asserting on an absent directory would
-# fail for a reason that has nothing to do with isolation.
-handoff = '/data/kyri/capability-handoff'
-if os.path.isdir(handoff):
-    assert os.listdir(handoff) == [], 'the live handoff root changed'
+# The live handoff root is a production path. This suite must leave it alone,
+# which is NOT the same as it being empty: G11-BB published CINV-000001 there
+# and that is real historical production state. Asserting emptiness encoded the
+# claim that production has never been invoked, and the first real invocation
+# falsified it permanently.
+# A name-based check is no better: this suite's fixture identities include
+# CINV-000001, which is also the real production record, so it would be
+# ambiguous in exactly the wrong direction. So nothing is asserted about the
+# contents here. What this suite owes -- that it changed nothing -- is proven
+# for every production path by the before/after snapshot around the whole run,
+# covering mode, owner, size and both timestamps. That is strictly stronger
+# than the listing check it replaces, and it was already running.
 print('OK')
 "
 
