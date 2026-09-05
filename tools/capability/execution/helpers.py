@@ -137,7 +137,7 @@ REQUIRED_HELPERS: tuple[RequiredHelper, ...] = (
         purpose="the privileged launch entrypoint the supervisor starts"),
     RequiredHelper(
         path="/usr/libexec/kyri-exec-worker.py",
-        digest="6d06695f433570070b15fc4a990b53dcbaa227001586d4062e254a08367723fd",
+        digest="2d320630aca559c747522bb528f87172e747f30a182db0fec70e31eca272ddf5",
         purpose="the worker the launch transition execs"),
     RequiredHelper(
         path="/usr/libexec/kyri-exec-reconcile",

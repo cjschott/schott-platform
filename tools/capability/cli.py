@@ -745,7 +745,15 @@ def command_recover(args) -> int:
         raise _Unusable(
             f"the capability runtime store is unusable ({error})") from None
 
-    safety = recovery.execution_safety(store, reconciler=launcher.reconcile)
+    # The lifecycle journal, so a supervised invocation is discoverable at all.
+    # `CINV` never carries an adapter identity on that path, so without this the
+    # enumeration would skip exactly the invocations this command exists for.
+    execution_root = _anchored(os.path.join(CAPABILITY_RUNTIME_ROOT, "execution"))
+    try:
+        safety = recovery.execution_safety(store, reconciler=launcher.reconcile,
+                                           execution_root=execution_root)
+    finally:
+        execution_root.close()
     _emit({
         "execution_safety": safety.state,
         "invocations_checked": safety.checked,

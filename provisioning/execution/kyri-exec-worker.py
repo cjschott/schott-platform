@@ -77,6 +77,20 @@ USAGE = ("usage: /usr/bin/python3 /usr/libexec/kyri-exec-worker.py "
 
 _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 
+# The handoff parent is opened as an *anchor* and never as a readable
+# directory. `O_RDONLY` on a directory asks for read, which the governed mode
+# withholds: design §13 sets `/data/kyri/capability-handoff` to `0711`
+# `cschott:cschott` so the execution identity may traverse to a named child and
+# may not enumerate siblings. `O_PATH` asks for exactly what `openat` needs --
+# search -- and yields a descriptor that cannot be read at all, so the
+# no-enumeration property holds by construction rather than by permission.
+#
+# Every use of this descriptor is `openat` against it and nothing else:
+# `worker.verify_handoff`, `worker.verify_execution` and
+# `snapshot.materialise`. The `scandir` calls in `snapshot` walk the published
+# package subtree and the snapshot directory, never this root.
+_ANCHOR_FLAGS = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
+
 # The protocol descriptors the transition left open. Two directions, because
 # the conversation has two: the coordinator authorises a start on descriptor 0
 # and learns what happened on descriptor 1.
@@ -375,7 +389,7 @@ def main(argv: list[str]) -> int:
 
     from tools.capability.execution import image_store, protocol, snapshot
 
-    handoff_fd = os.open(worker.HANDOFF_ROOT, _DIR_FLAGS)
+    handoff_fd = os.open(worker.HANDOFF_ROOT, _ANCHOR_FLAGS)
     try:
         snapshot_fd = snapshot.open_snapshot_root()
         try:
