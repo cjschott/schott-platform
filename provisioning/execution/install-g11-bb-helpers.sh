@@ -1,67 +1,57 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# The coherent privileged helper ceremony: ten objects, one transaction.
+# The corrected privileged helper ceremony: three objects, one transaction.
 #
-# NO PARTIAL HELPER DEPLOYMENT. The whole accepted helper set moves, or none of
-# it does. That is the invariant this ceremony exists for, and it is the one
-# G11-AI proved the cost of: a host carrying half of one commit, with the
-# verification surface byte-exact while the transition modules from the same
-# commit were not, and the consequence was live.
+# NO PARTIAL HELPER DEPLOYMENT. All three move, or none does. That is the
+# invariant this ceremony exists for, and G11-AI proved its cost: a host
+# carrying half of one commit, with the verification surface byte-exact while
+# the transition modules from the same commit were not, and the consequence was
+# live.
+#
+# WHAT THIS MOVES, AND WHY EACH
+# =============================
+#   kyri_exec_transition_action.py   the backend seam every governed root is
+#                                    opened through. It asked for READ on
+#                                    directories the deployment grants only
+#                                    TRAVERSE; it now opens an O_PATH anchor.
+#                                    That is what killed the reconcile worker
+#                                    against /etc/kyri after the credential drop.
+#   kyri_exec_quota.py               the same anchor, latent only because quota
+#                                    runs as root before the drop.
+#   kyri-exec-worker.py              the same anchor against the 0711 handoff
+#                                    root, which is what killed G11-BB Stage 3.
+#
+# No mode, owner or ACL is widened anywhere. The governed 0711 roots stay 0711;
+# what changes is that the code stops asking them for more than it needs.
 #
 # WHAT RUNS BEFORE THIS
 # =====================
-# Generation 15. G11-BB drove the partial-deployment matrix and found the
-# Generation-13 readiness rule accepting mixed states it should have refused, so
-# the rule was hardened and installed FIRST, on its own, as a runtime generation.
-# This ceremony therefore runs against a rule that was already installed and
-# already verified -- it does not install the rule it is judged by. Every
-# behavioural check below is driven through the INSTALLED Generation-15 bytes.
+# GENERATION 15, AND THIS CEREMONY REFUSES WITHOUT IT. helpers.py is a RUNTIME
+# object carrying the digests the readiness rule checks helpers against, so the
+# installed generation decides what "current" means for a helper. Generation
+# 14's copy declares the predecessors; Generation 15's declares these targets.
+# `require_runtime_generation` halts unless the Generation-15 rule is installed,
+# which makes the order a property of the code rather than a note in a runbook.
 #
-# TWO CLOSURES, AND THEY ARE NOT THE SAME
-# =======================================
-# RUNTIME READINESS CLOSURE is what `helpers.compatibility()` judges: the eight
-# objects a supervised execution reaches. Seven of the ten are in it.
+# Both intermediate states are incompatible and therefore FAIL CLOSED:
+# supervision_ready is false and the coordinator refuses before crossing the
+# privilege boundary. No intermediate can execute anything wrongly. That is why
+# no cross-surface atomic transaction is needed.
 #
-# HELPER CEREMONY COHERENCE CLOSURE is all ten. The three verification objects
-# are outside runtime readiness -- `PERMITTED_HELPERS` in the launcher is exactly
-# the transition and reconcile entrypoints, so supervision cannot reach them --
-# but `kyri-exec-verify` loads `kyri_exec_transition_action`, so replacing that
-# module while leaving the verify entrypoint stale would hand it a newer action
-# layer than it was reviewed against. That is a deployment split even though it
-# is not a readiness one, which is why this ceremony moves ten and not seven.
+# ALL THREE ARE INSIDE THE RUNTIME READINESS CLOSURE
+# ==================================================
+# Each is declared in the installed helpers.py REQUIRED_HELPERS, so unlike the
+# G11-AX ceremony there is no OUTSIDE group to publish first. The readiness
+# verdict can only turn compatible as the LAST object lands, which is the
+# property the closure column exists to make checkable rather than argued.
 #
-# PUBLICATION ORDER IS A SAFETY PROPERTY
-# ======================================
-# The three objects OUTSIDE the readiness closure publish first. Compatibility
-# depends only on the seven inside it, so ordering this way means the verdict can
-# only become `compatible` as the LAST of the ten publishes. No transient state
-# is ever runtime-ready while the ceremony is incoherent -- by construction,
-# rather than because sudoers happens to be closed.
+# WHAT THIS DELIBERATELY DOES NOT TOUCH
+# =====================================
+# Neither sudoers grant, and neither digest-pinned entrypoint. The launch and
+# reconcile entrypoints are unchanged by this delta, so the installed grants
+# keep matching by digest and no sudoers edit is required or performed.
 #
-# WHAT THIS CEREMONY DOES NOT TOUCH
-# =================================
-# No sudoers. No identity authority. No Fabric, Trust or implementation
-# authority. No CINV, no CRES, no invocation. No Generation-15 runtime object.
-#
-# That last one needs saying precisely, because four of the ten targets live
-# UNDER the runtime's own directory. `/usr/lib/kyri/python` holds the 78
-# Generation-15 runtime objects and, beside them, the flattened privileged
-# helper modules -- which belong to this ceremony. One of the ten is a CREATE
-# into that directory, so the file count there legitimately goes from 78 to 79
-# while every runtime object stays byte-identical. `require_runtime_generation`
-# states the expectation that way rather than as a flat count, and the
-# before/after fingerprint excludes this ceremony's own targets so that "a
-# runtime object changed" means what it says.
-#
-# Modes:
-#   --verify-source     the reviewed commit only; reads no installed path
-#   --verify            production preconditions; mutates nothing
-#   --install           the transaction
-#   --verify-installed  what is installed, against the reviewed commit
-#   --recover           resume or dispose of an interrupted transaction
-
-# The reviewed authority carrying all ten target byte sets.
 COMMIT="ef4f7446200b668f8dcbf34d180c5102270f19f6"
 
 # The runtime generation whose readiness rule judges this deployment. This

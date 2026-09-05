@@ -1,61 +1,61 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Generation 15: the coordinator learns what happened, deployed.
+# Generation 15: the corrected runtime, deployed.
 #
-# WHAT THIS DEPLOYS. The supervised execution path ENG-0005 G11-AS through
-# G11-AT built, as one transaction:
+# WHAT THIS DEPLOYS. Seven objects in three coherence groups, as one
+# transaction:
 #
-#   G11-AS  the execution identity becomes deployment-bound authority, and the
-#           runtime gains the reader for it.
-#   G11-AT  the coordinator supervises the governed worker protocol, concludes
-#           a terminal result from what the worker reports, enumerates
-#           executions whose supervision was lost, and refuses to call a
-#           supervision path current when the helper bytes it reaches are not.
+#   V  the runtime-side verification surface. The installed verification.py
+#      predates 03a2e90 and CANNOT IMPORT -- it asks worker.py for WORKER_GID
+#      and WORKER_UID, which that commit removed in favour of the identity
+#      authority. result_content.py and contract_outcome.py are created
+#      alongside it: a live capability contract names the first by path as its
+#      response-content authority, and the second is the declared translation
+#      between the runtime's outcome classes and a contract's failure modes.
 #
-# WHY IT IS ONE TRANSACTION AND NOT THREE. The runtime that supervises, the
-# runtime that records results, and the runtime that recovers interrupted
-# executions are the same runtime. A host carrying the new supervisor with the
-# old result writer would execute real workloads and record their outcomes under
-# a contract that predates `succeeded`; one carrying the new worker without the
-# Podman backend would fail at the moment it mattered most; one carrying
-# execution without the recovery enumeration would leave orphans nothing looks
-# for. Those are not degraded generations, they are unreviewed ones, so the
-# journal treats all twenty-one objects as a single logical state and any
-# pre-COMMITTED failure returns the host to a whole Generation 14.
+#   R  supervised recovery discovery. recovery.py finds an interrupted
+#      invocation from the lifecycle journal instead of from
+#      CINV.adapter_identity, which the supervised path never writes; cli.py
+#      opens the execution root and threads it in.
+#
+#   H  what the runtime declares about privileged bytes. helpers.py carries the
+#      digests of the three objects the separate helper ceremony moves;
+#      kyri_exec_launcher.py carries a helper's own refusal back instead of
+#      discarding it.
+#
+# WHY IT IS ONE TRANSACTION AND NOT THREE. Each group is incoherent in halves.
+# Replacing verification.py without its two modules leaves a contract naming
+# absent files; creating them without it leaves a module that fails to import.
+# A recovery surface that reads a root nobody passes, or a caller that passes a
+# root nobody reads, is neither generation. So the journal treats all seven as
+# one logical state, and any pre-COMMITTED failure returns the host to a whole
+# Generation 14.
 #
 # WHAT THIS DELIBERATELY DOES NOT DEPLOY. Not the launch helper, not the
-# reconciliation helper, not either sudoers grant, and not the two deployment
-# identity authorities. Each has its own ceremony and its own review; a runtime
-# installer that touched them would be granting privilege as a side effect of
-# packaging. They are asserted untouched on every run.
+# reconciliation helper, not the worker, not either sudoers grant, and not the
+# deployment identity authorities. Group V repairs the verification LIBRARY; it
+# does not authorise the verify entrypoint, which stays ungranted.
 #
-# INSTALLABLE IS NOT EXECUTION-READY. This generation may be installed onto a
-# host whose helpers are stale and whose identity authorities are absent -- the
-# runtime imports fine without them, because every one of those is read at
-# execution time and refused there. What such a host cannot do is execute:
-# `helpers.compatibility()` reports the supervision path incompatible, and the
-# supervised preflight reports it not ready. That is the honest split, and it is
-# why this installer does not demand future deployment files it does not need.
+# AND IT LEAVES THE HOST NOT READY TO EXECUTE, DELIBERATELY. helpers.py is the
+# rule that decides whether installed helper bytes are current, and this
+# generation moves it to declare the CORRECTED helper digests. The predecessor
+# helpers are still installed when this finishes, so helper compatibility
+# becomes `incompatible` and supervision_ready becomes false. That is the
+# proven, required intermediate state: execution stays fail-closed until the
+# separate three-object helper ceremony completes. A host reporting compatible
+# immediately after this ran would contradict the deployment matrix.
 #
-# THE CLOSURE IS COMPUTED, NOT ASSERTED. `tools/dev/runtime_closure.py` walks
-# the import graph from the roots the installed runtime is actually entered
-# through. Nothing here is whitelisted into the surface: two modules G11-AT
-# added were reached only by accident of how they were imported, and both were
-# fixed at the source rather than listed.
+# Usage:
+#   install-generation-15.sh --verify-source      reviewed bytes only; reads no installed state
+#   install-generation-15.sh --verify             is this host a Generation-14 host ready for it?
+#   install-generation-15.sh --install            the transaction
+#   install-generation-15.sh --verify-installed   is this host a whole Generation 15?
+#   install-generation-15.sh --recover            resolve an interrupted transaction
 #
-# USAGE
-#   install-generation-15.sh --verify-source     read-only: is the PACKAGE sound?
-#   install-generation-15.sh --verify            read-only: is the host at G12?
-#   install-generation-15.sh --install           the transaction (root)
-#   install-generation-15.sh --verify-installed  read-only: is the host at G13?
-#   install-generation-15.sh --recover           finish or unwind a transaction
+# Test-only:
+#   --fixture DIR   operate on a fixture tree instead of the host.
 
-# The reviewed Generation-15 authority: the accepted G11-AT report commit, which
-# carries every one of the twenty-one runtime objects below at exactly the bytes
-# this matrix pins. It is not HEAD, and it is not this installer's own commit --
-# a ceremony that installed from a moving reference would install whatever
-# happened to be there.
 COMMIT="ef4f7446200b668f8dcbf34d180c5102270f19f6"
 
 # The accepted Generation-14 source authority, and the baseline this transaction
