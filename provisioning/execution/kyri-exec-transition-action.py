@@ -79,6 +79,10 @@ PROFILE_OBJECT_NAME = "kyri-exec-profile"
 # regular file this is supposed to be.
 _READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
+
+# A governed root is opened as an anchor for `openat` and nothing else, so it
+# asks for search rather than read. See `SystemBackend.open_directory`.
+_ANCHOR_FLAGS = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 _CHUNK = 65536
 
 # One binding, to the current process rather than a named library path. There
@@ -123,14 +127,28 @@ class SystemBackend:
     """
 
     def open_directory(self, path: str) -> int:
-        """One governed root, opened no-follow as a directory.
+        """One governed root, opened no-follow as a traversal anchor.
 
         The only filesystem seam in the backend, and it opens a *root* rather
         than a target: everything beneath it is reached descriptor-relatively
         by the code above, so a replaced component is refused rather than
         followed and the path is never walked a second time.
+
+        **`O_PATH`, because an anchor is all this is.** Every caller uses the
+        descriptor solely as `dir_fd` for an `openat`, and `openat` needs
+        search on the directory, not read. Two of the three governed roots are
+        `0711` by design -- `/etc/kyri` and `/data/kyri/capability-handoff`,
+        both traverse-only so a non-owner may reach a named child without
+        enumerating siblings -- so `O_RDONLY` asked for a permission the
+        deployment deliberately withholds and refused whenever this ran after
+        the credential drop. G11-BB hit that twice: in the worker against the
+        handoff root, and here in the reconcile worker against `/etc/kyri`.
+
+        An `O_PATH` descriptor also cannot be read at all, so "no sibling
+        enumeration" stops depending on the mode and becomes a property of the
+        descriptor. Nothing is widened: the roots keep their governed modes.
         """
-        return os.open(path, _DIR_FLAGS)
+        return os.open(path, _ANCHOR_FLAGS)
 
     def close_extra_descriptors(self, allowlist: Sequence[int]) -> None:
         keep = set(allowlist)

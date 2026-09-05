@@ -63,6 +63,18 @@ RECONCILE_TIMEOUT_SECONDS = 120
 
 MAXIMUM_REPORT_BYTES = 64 * 1024
 
+# How much of a helper's own refusal text may be carried into the governed
+# refusal. The helper writes its reason to stderr and exits; without this the
+# launcher reported only that no report arrived, which named the symptom and
+# discarded the cause -- G11-BB spent a checkpoint recovering a message that had
+# already been produced and thrown away.
+#
+# Bounded and sanitised rather than passed through: this is a diagnostic from a
+# process the launcher does not trust to be structured, so it is truncated to
+# one short single-line excerpt, stripped to printable ASCII, and never parsed.
+# It informs an operator; it is not state anything acts on.
+MAXIMUM_REFUSAL_EXCERPT = 300
+
 _DIGITS = frozenset("0123456789")
 
 
@@ -88,6 +100,29 @@ def _require_cinv(value: Any) -> str:
             or not value.startswith("CINV-") or set(value[5:]) - _DIGITS:
         raise LauncherRefused(f"{value!r} is not a canonical CINV identity")
     return value
+
+
+def _excerpt(stream: Any) -> str:
+    """One bounded, printable, single-line excerpt of a helper's own refusal.
+
+    Never parsed and never trusted as structure. The helper's stderr is
+    attacker-adjacent in the sense every unstructured stream is: it may be
+    empty, enormous, binary, or full of control characters, and it may not be
+    what the helper meant to say. So it is decoded lossily, reduced to
+    printable ASCII, collapsed to one line, and truncated -- which leaves an
+    operator the sentence they need and leaves nothing that could smuggle
+    terminal control sequences into a log or a report.
+    """
+    if not isinstance(stream, (bytes, bytearray)) or not stream:
+        return ""
+    text = bytes(stream[:MAXIMUM_REFUSAL_EXCERPT * 4]).decode(
+        "utf-8", "replace")
+    printable = "".join(
+        character if " " <= character <= "~" else " " for character in text)
+    collapsed = " ".join(printable.split())
+    if len(collapsed) > MAXIMUM_REFUSAL_EXCERPT:
+        collapsed = collapsed[:MAXIMUM_REFUSAL_EXCERPT] + "..."
+    return collapsed
 
 
 def _argv(helper: str, cinv: str) -> list[str]:
@@ -254,8 +289,15 @@ class HelperLauncher:
         try:
             report = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
+            # The helper writes its report to stdout and its refusal to stderr,
+            # so an unreadable report almost always means it refused and said
+            # why. Carrying that sentence costs nothing and is the difference
+            # between "something went wrong" and the actual cause.
+            excerpt = _excerpt(done.stderr)
+            detail = f": {excerpt}" if excerpt else ""
             raise LauncherRefused(
-                "the reconciliation helper produced no readable report") from None
+                "the reconciliation helper produced no readable report"
+                f"{detail}") from None
         if not isinstance(report, dict) or report.get("invocation_id") != identity:
             raise LauncherRefused(
                 "the reconciliation report names a different invocation")

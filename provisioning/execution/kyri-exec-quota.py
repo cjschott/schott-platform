@@ -51,6 +51,19 @@ FSXATTR_FORMAT = "=IIIII8s"
 FS_XFLAG_PROJINHERIT = 0x00000200
 
 _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
+
+# The handoff parent is `0711` by design: traverse to a named child, no
+# enumeration of siblings. It is opened here only to anchor the `openat` below,
+# and `openat` needs search rather than read, so it asks for `O_PATH`.
+#
+# This one runs as root -- `quota.apply` is called before `drop_privilege` --
+# so `O_RDONLY` succeeded here where the same flags refused in the worker after
+# the drop. It was latent rather than broken. It is corrected anyway: the
+# descriptor's use is identical, and a latent instance of a defect that has
+# already cost two checkpoints should not be left waiting for the ordering to
+# change. The `CINV` child below keeps `_DIR_FLAGS` -- it is `0555`, it grants
+# read, and it is read.
+_ANCHOR_FLAGS = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 _DIGITS = frozenset("0123456789")
 
 USAGE = "usage: kyri-exec-quota CINV-nnnnnn"
@@ -148,7 +161,7 @@ def apply(cinv: str) -> int:
     identity = validate_cinv(cinv)
     project = project_id(identity)
 
-    root = os.open(HANDOFF_ROOT, _DIR_FLAGS)
+    root = os.open(HANDOFF_ROOT, _ANCHOR_FLAGS)
     try:
         invocation = os.open(identity, _DIR_FLAGS, dir_fd=root)
     finally:
