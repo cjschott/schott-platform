@@ -1,168 +1,226 @@
-# ENG-0005 G11-BB-I — Generation 15, derivation and STOP
+# ENG-0005 G11-BB-I — Generation 15, prepared
 
-**Status: STOPPED at step 1, as the ruling requires.** The mechanically derived
-Generation-15 object set **differs** from the carried-forward expectation, and
-the difference collides with a standing ruling. No installer was built.
-Production untouched. `CINV-000001` byte-identical, `CINV-000002` unspent.
+**Status: Generation 15 built and proven in fixture. Not installed.** Production
+untouched. `CINV-000001` byte-identical, `CINV-000002` unspent. No privileged
+helper, no grant, no Fabric change.
 
-Branch `arch/eng-0005-execution-transition`, HEAD `8d9160b`.
+Branch `arch/eng-0005-execution-transition`, HEAD `6f7cef1`.
+
+*This report replaces the STOP that stood at this path. The Option-C ruling
+resolved the question it stopped on; the derivation below is re-done from
+scratch against that ruling, not carried forward.*
 
 ---
 
-## 1. What the ruling asked, and what happened
+## 1. The set, re-derived
 
-> *"Do not carry forward the BB-G four-object list without proof… If the
-> mechanically derived set differs: STOP and explain why before building the
-> installer."*
-
-It differs. BB-G said four REPLACE, zero CREATE. **The derived set is five
-REPLACE**, and the fifth is an object the reviewer has separately ruled must not
-be touched in this line of work.
-
-## 2. The accounting, done the way the ruling requires
+Mechanically, from the accepted installed Generation-14 authority to reviewed
+source at `ef4f744`. **It matches the ruled Option-C set exactly**, so no second
+stop was needed.
 
 ```
-installed .py under /usr/lib/kyri/python      79
-minus the helper-ceremony-published module     1   kyri_exec_reconcile.py
-                                              ──
-governed Generation-14 runtime objects         78
+GEN15_REPLACE   5      GEN15_CREATE   2      GEN15_REMOVE   0
+GEN15_CARRYOVER 73     GEN15_OBJECTS  80 governed (81 flat, +1 helper-published)
 ```
 
-The helper-published module is identified mechanically, not assumed: it is the
-only `CREATE` into `${LIBRARY_ROOT}` in `install-g11-ax-helpers.sh`'s matrix,
-which is exactly how `install-generation-14.sh` itself computes
-`helper_ceremony_library_creates`. **Flat directory count is not generation
-count**, and the difference is that one module.
+| # | path | Gen-14 accepted | Gen-15 reviewed | op | group |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `tools/capability/execution/verification.py` | `ed5b49ed…` | `7a792aaf…` | REPLACE | V |
+| 2 | `tools/capability/execution/result_content.py` | ABSENT | `b1c5a89f…` | CREATE | V |
+| 3 | `tools/capability/execution/contract_outcome.py` | ABSENT | `139b77b7…` | CREATE | V |
+| 4 | `tools/capability/execution/recovery.py` | `a93819d1…` | `f44ada7f…` | REPLACE | R |
+| 5 | `tools/capability/cli.py` | `752951f7…` | `7b4fac3e…` | REPLACE | R |
+| 6 | `tools/capability/execution/helpers.py` | `74b84015…` | `6dd93606…` | REPLACE | H |
+| 7 | `provisioning/execution/kyri-exec-launcher.py` → `kyri_exec_launcher.py` | `269258f3…` | `78c6de90…` | REPLACE | H |
 
-## 3. The derived delta
+**Object accounting.** 79 installed `.py` minus the one helper-ceremony `CREATE`
+into the library root (`kyri_exec_reconcile.py`) gives the governed 78; two
+CREATEs make 80. Flat count is not generation count, and the installer computes
+that the same way Generation 14 does rather than counting directory entries.
 
-Every governed Generation-14 object whose bytes differ from reviewed source at
-`8d9160b`:
+**Correctly excluded.** `kyri_exec_transition_action.py` and `kyri_exec_quota.py`
+also differ, and both are **privileged helpers** belonging to Phase 8. The
+installer refuses any matrix row naming a helper, a grant or a deployment
+identity — 14 privileged objects are asserted outside this ceremony.
 
-| # | path | Gen-14 accepted | Gen-15 reviewed | op | source commit | group |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | `tools/capability/cli.py` | `752951f7…3e3d295` | `7b4fac3e…54c6b1` | REPLACE | `d11e141` | recovery |
-| 2 | `tools/capability/execution/recovery.py` | `a93819d1…0e59ab8f` | `f44ada7f…c0222a03` | REPLACE | `d11e141` | recovery |
-| 3 | `tools/capability/execution/helpers.py` | `74b84015…125874` | `6dd93606…930b8b07` | REPLACE | `b74f2fb` | helper-declaration |
-| 4 | `kyri_exec_launcher.py` | `269258f3…` | `78c6de90…` | REPLACE | `b74f2fb` | reconcile-diagnostic |
-| **5** | **`tools/capability/execution/verification.py`** | **`ed5b49ed…88bd2e73`** | **`7a792aaf…9e1efa952`** | **REPLACE** | **pre-existing** | **verification surface** |
-
-Rows 1–4 are BB-G's four and they hold. **Row 5 is new and is the reason for
-this stop.**
-
-All four correction commits are ancestors of `8d9160b`, so a
-`GEN15_SOURCE_AUTHORITY` of `8d9160b` would satisfy the ancestry requirement.
-
-### 3.1 Correctly excluded
-
-**Privileged helpers stay outside Generation 15**, as ruled. Two differ and both
-belong to Phase 8:
+## 2. Source authority
 
 ```
-kyri_exec_transition_action.py   7703231318f7… -> b11a2f19bc46…
-kyri_exec_quota.py               4886d5b323c9… -> 54a9b15c6c6e…
+GEN15_SOURCE_AUTHORITY = ef4f7446200b668f8dcbf34d180c5102270f19f6
 ```
 
-**Not CREATEs.** A naive `tools/` diff produces ~100 apparent CREATEs
-(collectors, observation, occurrence, trust CLI, provisioning). They are
-repository files that were never in the runtime closure. The governed closure at
-`8d9160b`, computed with `runtime_closure.py` over the Generation-13
-`CLOSURE_ROOTS`, is **74 objects** and contains none of them.
+Chosen, not defaulted to HEAD. It carries the exact reviewed bytes for all seven
+objects — verified row by row — and every correction commit is its ancestor:
+`d11e141` (recovery discovery), `b74f2fb` (anchors, launcher diagnostic, helper
+declaration), `606cea3`, `0f47281`. The Generation-14 authority `946be55` is
+also its ancestor, which the installer checks.
 
-`result_content.py` and `contract_outcome.py` are absent from both the installed
-tree and the closure, so they are not CREATEs either — they are the *other two*
-objects of the deferred verification surface.
+## 3. Coherence groups, derived
 
-## 4. Why row 5 stops this
+Three, and each is a group because its members are incoherent apart.
 
-`verification.py` is a **governed Generation-14 runtime object**: it is installed
-under the library root and it is not the helper-published module, so it is one of
-the 78. Deriving Generation 15 as *accepted installed Generation-14 → reviewed
-source at HEAD* — which is precisely what the ruling instructs — **necessarily
-includes it**.
+**V — the runtime-side verification surface.** The installed `verification.py`
+predates `03a2e90` and **cannot import**: it asks `worker.py` for `WORKER_GID`
+and `WORKER_UID`, which that commit removed. Replacing it alone would leave two
+modules a live contract already names absent; creating those alone would leave a
+module that fails to import. Neither half is a coherent state.
 
-But BA §0.1 ruled the opposite, and that ruling still stands:
+**R — supervised recovery discovery.** `recovery.py` discovers an interrupted
+invocation from the lifecycle journal; `cli.py` opens the execution root and
+threads it in. One without the other is either a root nothing reads or a read
+nothing passes.
 
-> *"`verification.py`, `result_content.py` and `contract_outcome.py` are not to
-> be repaired inside G11-BA. Remediation belongs to a separate runtime-generation
-> checkpoint, opened **after** the first controlled invoke and **before**
-> `kyri-exec-verify` is ever granted or relied upon."*
+**H — helper declaration and refusal reporting.** `helpers.py` carries the
+digests of the three objects Phase 8 will move; `kyri_exec_launcher.py` is the
+seam that carries a helper refusal back.
 
-So the two instructions disagree about a single object, and I am not going to
-resolve that by choosing one silently.
+## 4. Entry closure — the honest answer
 
-### 4.1 What installing row 5 would actually do
+**`result_content.py` and `contract_outcome.py` do not enter the closure
+naturally, and neither does `verification.py`.** The closure is computed from
+the production execution roots and is **73 modules**; none of the three is
+reachable from them.
 
-Stated precisely, because "deferred" does not mean "unknown":
+**They were not whitelisted into the closure.** The surplus check still refuses
+any matrix row the closure does not require. What was added is a separate,
+explicitly reasoned declaration — `OUTSIDE_EXECUTION_CLOSURE` — naming each one
+with why it is governed, and **anything not named still halts**:
 
-- The **installed** `verification.py` cannot be imported at all —
-  `ImportError: cannot import name 'WORKER_GID'`. It predates `03a2e90`, which
-  removed those constants in favour of the identity authority.
-- The **reviewed** `verification.py` at HEAD imports cleanly.
-- So Generation 15 including row 5 would **fix** a currently broken governed
-  object. It is a repair, not a regression.
-- It would be a **partial** repair of the surface: `result_content.py` and
-  `contract_outcome.py` would still be absent. Nothing imports them, so the
-  verify entrypoint would become importable — but the surface would not be whole.
-- It changes nothing reachable today: `/etc/sudoers.d/kyri-exec-verify` is
-  absent, so `kyri-exec-verify` cannot run either way.
+- **`verification.py`** — reached only from
+  `/usr/libexec/kyri-exec-verify-worker.py`, a governed *alternative* entrypoint
+  that is not a production execution root. It has been an installed governed
+  object since Generation 13 and is part of the accepted Generation-14 surface.
+- **`result_content.py`** — named **by path** as an authority in a live Fabric
+  record: `CCON-0001.response_shape.content.authority`. A contract naming a
+  module the deployment does not carry is a claim of enforcement no code
+  performs.
+- **`contract_outcome.py`** — the declared translation between the runtime's
+  `records.OUTCOME_CLASSES` and a contract's `failure_modes`. It exists so that
+  *"every failure this capability can suffer is one the contract declares"* is
+  checkable rather than asserted.
 
-### 4.2 Excluding row 5 is not free either
+Adding them to `CLOSURE_ROOTS` would have meant inventing an import the runtime
+does not perform — forging the evidence the closure check exists to read.
 
-Leaving it out means Generation 15 knowingly installs a runtime in which one
-governed object is a stale, non-importable predecessor while its neighbours move
-forward. That is the split-generation shape the whole helper-coherence apparatus
-exists to prevent, and it would have to be declared as a deliberate carryover
-with its own justification rather than passing silently.
+`GEN15_ENTRY_CLOSURE = 73 modules, PASS`.
 
-## 5. The three ways forward
+## 5. The installer
 
-I have no preference to press; this is a scope ruling.
+`provisioning/execution/install-generation-15.sh`, built from the
+**Generation-13** transaction model rather than Generation 14 — 13 already
+carries CREATE rows, coherence groups and CREATE rollback, and 14 is a
+degenerate single-REPLACE case. No new transaction framework was invented:
+`--verify-source`, `--verify`, `--install`, `--verify-installed`, `--recover`,
+PREPARE/COMMIT, journal, atomic publication by rename, predecessor bytes
+preserved for rollback.
 
-| option | Generation 15 contains | consequence |
-| --- | --- | --- |
-| **A** — include row 5 | 5 REPLACE | the deferred surface is repaired as a side effect of a runtime generation; BA §0.1's sequencing is overtaken. `result_content.py`/`contract_outcome.py` remain absent, so the surface is importable but not whole |
-| **B** — exclude row 5 | 4 REPLACE + a declared carryover | matches BB-G exactly and honours BA §0.1, at the cost of shipping a generation with one knowingly stale non-importable object, declared as such |
-| **C** — widen to the whole surface | 5 REPLACE + 2 CREATE | repairs the verification surface completely in this generation, and is the largest departure from the ruled scope |
+## 6. The fixture is reconstructed, not copied
 
-Option C's two CREATEs would be `result_content.py` (`139b77b7…`) and
-`contract_outcome.py` (`b1c5a89f…`), which would also give this generation a
-CREATE row and so make the CREATE side of the recovery and unknown-byte matrices
-testable rather than "not applicable".
+The ruling forbade copying production wholesale, and copying would have made the
+fixture agree with production by construction.
 
-## 6. What was not done
+**The path set comes from the accepted Generation-14 surface; the bytes come
+from reviewed git objects.** Every object is materialised from `946be55`
+**except `verification.py`, which is taken from `16f285e`** — because the
+installed Generation-14 runtime *does not match its own source authority* for
+that one object. That mismatch is the defect this generation repairs, and it is
+precisely why the baseline had to be reconstructed per object rather than from a
+single commit.
 
-No installer, no matrix file, no coherence-group declaration, no fixture, no
-recovery matrix, no unknown-byte injection, no installed-import run. All of that
-depends on the object set, and the object set is the open question.
-
-The G5 preflight succession work from Phase 5B is unaffected and remains green;
-it will classify whichever set is chosen, because the mechanism is the point
-rather than the digits.
-
-## 7. Production precheck
-
-Read-only, and unchanged:
+## 7. Results
 
 ```
-HOST_GENERATION              14
-installed runtime            5bf50db23f086364e594f15c8390e9aff198b2825e681ee2aca2a40b7c133b84
-governed object count        78 (+1 helper-published)
-identity authorities         3dec888c… / 891beeeb…                unchanged
-helper production bytes      489f108dfd93854023817a7339e34cc8ebc9c29b810223381d2b2343952bea86
-                             still the accepted predecessor set
-sudoers                      f837d5923a719af50944c990569a7475c21628674184d8599b262150495da1a9
-fabric                       7c53efcdffdee337fe3ca94b71a3085bf53b4474f19482a523d263feaa6c8e96
-CINV-000001                  1dcef40d…d6cfaaa                      unchanged, UNRESOLVED
-CRES                         0
+GEN15_INSTALLER                READY
+GEN15_VERIFY_NON_MUTATING      PASS   production and fixture; manifests identical, no __pycache__
+GEN15_FIXTURE_VERIFY           PASS   accepts the reconstructed 79-object baseline
+GEN15_FIXTURE_INSTALL          PASS   79 -> 81 objects
+GEN15_FIXTURE_VERIFY_INSTALLED PASS   complete target accepted
+GEN15_INSTALLED_IMPORT         PASS   the repaired verification surface imports as a whole
+GEN15_UNKNOWN_BYTES            PASS   REPLACE baseline, carryover object
+GEN15_CREATE_COLLISION_REFUSAL PASS   a pre-existing CREATE pathname is refused
+GEN15_RECOVERY                 PASS   all ten publication boundaries
+GEN15_VERIFICATION_COHERENCE   PASS
 ```
 
-Production would be eligible for a Generation-15 install on every count except
-the undecided object set. The Fabric window is irrelevant to that and was not
-renewed.
+**Recovery, at every boundary the installer can be interrupted at** — `stage`,
+`staged`, `prepared`, `precommit`, `committing`, `publish`, `verify`,
+`postcommit`, `evidence`, `cleanup`. Each leaves either the **exact
+Generation-14 library** or **every matrix row at its Generation-15 bytes**;
+never a mixed matrix. Residue appears only at `cleanup`, where the step that
+removes it is the step that failed.
 
-## 8. Next
+**`--verify` non-mutation was proved twice**, including against live production
+with a full before/after manifest of the library root: identical, and no
+bytecode created.
 
-A reviewer ruling on §5. Once the object set is fixed I can build the installer,
-the coherence groups, the fixture, the recovery matrix and the unknown-byte
-proofs against it in one pass — none of that work is blocked by anything else.
+## 8. Verify authority stays closed
+
+```
+VERIFY_GRANT_PRESENT         NO
+VERIFY_ENTRYPOINT_AUTHORISED NO
+SUDOERS_CHANGE_REQUIRED      NO
+```
+
+Asserted by the suite, not assumed: the installation writes no grant and touches
+no `/usr/libexec` object. Group V repairs the verification **library**; the
+entrypoint that would use it stays ungranted. The verify entrypoint was not
+added to any permitted-helper set and was not executed.
+
+## 9. Three things the guards caught
+
+Each was my error and each was caught by a check that already existed.
+
+1. **The fixture was too large — twice.** It first copied every `tools/*.py`
+   (186 objects), then every `provisioning/execution/kyri-exec-*.py` (86). Both
+   times the installer's own object-count check refused. The fix was to take the
+   *path set* from the accepted generation in both places.
+2. **A provisioning artefact must not be executable.** I ran `chmod +x` on the
+   installer; the provisioning suite refused. Its siblings are `0664` and are
+   invoked as `bash <path>` so they cannot be run by accident.
+3. **The suite is host-only and I had not said so.** It reads
+   `/usr/lib/kyri/python` for the path set, so CI failed on a runner with no
+   installed runtime. Now declared through `host_only_requires` and registered
+   in `tests/host-only.manifest`.
+
+Also: the first clean-clone check used `--depth 1` and the fixture could not
+reach `946be55`. Re-run with full history it passes, and CI uses
+`fetch-depth: 0`.
+
+## 10. Validation
+
+```
+Gen-15 focused suite   PASS
+LOCAL_QUICK            PASS   107/107
+LOCAL_FULL             PASS   132/132   at 6f7cef1
+GITHUB_CI              PASS   6/6 at 6f7cef1
+CLEAN_CLONE_VERIFY     PASS   full clone of the pushed commit, focused suite green
+working tree           clean; HEAD == pushed branch head
+```
+
+## 11. Production precheck
+
+```
+HOST_GENERATION   14
+runtime           5bf50db23f086364e594f15c8390e9aff198b2825e681ee2aca2a40b7c133b84  unchanged
+libexec           489f108dfd93854023817a7339e34cc8ebc9c29b810223381d2b2343952bea86  accepted predecessors
+sudoers           f837d5923a719af50944c990569a7475c21628674184d8599b262150495da1a9  unchanged
+verify grant      ABSENT
+CINV-000001       1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa  UNRESOLVED
+CRES              0
+fabric            7c53efcdffdee337fe3ca94b71a3085bf53b4474f19482a523d263feaa6c8e96  unchanged
+window remaining  22h 14m
+```
+
+Production would be eligible on every count. **The window is not a deployment
+deadline** and nothing was renewed: `CHAIN_RENEWAL_BEFORE_CINV_000002 = YES`,
+after the corrected surface is installed and accepted.
+
+Historical production state is tolerated and untouched throughout — `CINV-000001`
+exists, is unresolved, and its handoff remains published. Nothing in this
+generation encodes "production has never invoked", and generation installation
+is runtime deployment, not execution-record cleanup.
+
+## 12. Next
+
+Reviewer acceptance, then Phase 8: the three-object helper ceremony, with its
+delta re-derived rather than carried from here.
