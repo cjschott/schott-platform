@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=107
+  TOTAL_STEPS=108
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=132
+  TOTAL_STEPS=133
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -423,6 +423,12 @@ run "Capability execution generation succession" \
 # publication boundary.
 run "Capability execution generation 15 installer" \
   bash tests/test-capability-execution-generation15-installer.sh
+
+# The corrected privileged-helper ceremony and the cross-surface order it needs:
+# the coherence matrix across both surfaces, every subset of the three objects,
+# and recovery at each publication boundary.
+run "Capability execution BB helper ceremony" \
+  bash tests/test-capability-execution-bb-helper-ceremony.sh
 
 # The G11-BB anchor corrections. A governed root is opened as a traversal
 # anchor, never for read: both traverse-only production directories refuse the

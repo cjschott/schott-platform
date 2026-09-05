@@ -16,6 +16,7 @@
 # format: <suite>\t<reason>
 
 test-artifact-authority.sh	drives the artifact-authority ceremony pinned to /opt/schott-platform
+test-capability-execution-bb-helper-ceremony.sh	reads the installed helper surface and runtime to reconstruct the accepted baseline
 test-capability-execution-g5-authority.sh	drives the G5 ceremony pinned to /opt/schott-platform
 test-capability-execution-g5-build-context.sh	drives the G5 ceremony pinned to /opt/schott-platform
 test-capability-execution-g5-ceremony.sh	drives the G5 ceremony pinned to /opt/schott-platform
