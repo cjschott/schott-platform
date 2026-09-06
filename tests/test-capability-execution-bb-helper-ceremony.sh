@@ -379,6 +379,138 @@ for point in stage staged prepared precommit committing publish verify postcommi
   fi
 done
 
+# ===========================================================================
+# The operator ceremony fails fast
+# ===========================================================================
+#
+# Held to the standard BB-M set for the Generation-15 block, and for the reason
+# that block existed: an unchained list of stages reached --install after
+# --verify had already refused. It refused again, safely -- but safety came from
+# the installer, not from the ceremony. So the text is a governed artefact and
+# this suite executes it against a stub that records every invocation.
+
+OPERATOR_CEREMONY="${ROOT}/provisioning/execution/helper-operator-ceremony.txt"
+
+run_operator_ceremony() {
+  local root="$1" fail_at="${2:-}"
+  local script="${WORK}/op-ceremony.sh" stub="${WORK}/op-stub.sh"
+  : > "${WORK}/op-invocations"
+  cat > "${stub}" <<'STUB'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$1" >> "${STUB_LOG}"
+[[ "$1" != "${STUB_FAIL_AT:-}" ]] || { printf 'stub refusal at %s\n' "$1" >&2; exit 1; }
+STUB
+  sed -e "s|^sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh|bash ${stub}|" \
+      -e "s|  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh|  \&\& bash ${stub}|" \
+      -e "s|^sudo test|test|" \
+      -e "s|/root/|${root}/root/|g" \
+      -e "s|/etc/sudoers.d|${root}/etc/sudoers.d|g" \
+      -e "s|^cd /opt/schott-platform$|cd ${ROOT}|" \
+      "${OPERATOR_CEREMONY}" > "${script}"
+  STUB_LOG="${WORK}/op-invocations" STUB_FAIL_AT="${fail_at}" \
+    bash "${script}" > "${WORK}/op-ceremony.log" 2>&1
+}
+
+op_invocations_of() { grep -c -- "^${1}$" "${WORK}/op-invocations" || true; }
+
+# A host satisfying every precondition: Generation-15 evidence present, no
+# helper transaction, verification grant absent.
+build_op_host() {
+  local root="$1"
+  rm -rf "${root}"; mkdir -p "${root}/root" "${root}/etc/sudoers.d"
+  printf 'gen15 evidence\n' > "${root}/root/kyri-gen15-library-digests.txt"
+}
+
+if grep -q '^set -Eeuo pipefail$' "${OPERATOR_CEREMONY}"; then
+  pass "ceremony: the operator block sets -Eeuo pipefail"
+else
+  fail "ceremony: the operator block does not set -Eeuo pipefail"
+fi
+
+if [[ "$(grep -n 'kyri-g11-bb-helper-transaction/journal' "${OPERATOR_CEREMONY}" | head -1 | cut -d: -f1)" \
+      -lt "$(grep -n 'install-g11-bb-helpers.sh' "${OPERATOR_CEREMONY}" | head -1 | cut -d: -f1)" ]]; then
+  pass "ceremony: the journal check precedes every installer invocation"
+else
+  fail "ceremony: the journal check does not precede the installer invocations"
+fi
+
+op_root="${WORK}/op-clean"; build_op_host "${op_root}"
+if run_operator_ceremony "${op_root}"; then
+  pass "ceremony: with every stage passing, the ceremony completes"
+else
+  fail "ceremony: the all-passing run failed: $(tail -1 "${WORK}/op-ceremony.log")"
+fi
+if [[ "$(tr '\n' ' ' < "${WORK}/op-invocations")" \
+      == "--verify-source --verify --install --verify-installed " ]]; then
+  pass "ceremony: the stages run in the declared order"
+else
+  fail "ceremony: unexpected stage order: $(tr '\n' ' ' < "${WORK}/op-invocations")"
+fi
+
+op_root="${WORK}/op-verify-fails"; build_op_host "${op_root}"
+if run_operator_ceremony "${op_root}" --verify; then
+  fail "ceremony: a --verify refusal did not stop the ceremony"
+fi
+if [[ "$(op_invocations_of --install)" == 0 ]]; then
+  pass "ceremony: --verify refused -> --install invocation count is 0"
+else
+  fail "ceremony: --verify refused but --install ran $(op_invocations_of --install) time(s)"
+fi
+if [[ "$(op_invocations_of --verify-installed)" == 0 ]]; then
+  pass "ceremony: --verify refused -> --verify-installed invocation count is 0"
+else
+  fail "ceremony: --verify refused but --verify-installed still ran"
+fi
+
+op_root="${WORK}/op-source-fails"; build_op_host "${op_root}"
+if run_operator_ceremony "${op_root}" --verify-source; then
+  fail "ceremony: a --verify-source refusal did not stop the ceremony"
+fi
+if [[ "$(op_invocations_of --verify)" == 0 && "$(op_invocations_of --install)" == 0 ]]; then
+  pass "ceremony: --verify-source refused -> --verify and --install counts are both 0"
+else
+  fail "ceremony: --verify-source refused but later stages ran"
+fi
+
+# The three preconditions, each of which must stop the ceremony before any
+# installer runs at all.
+op_root="${WORK}/op-transaction"; build_op_host "${op_root}"
+mkdir -p "${op_root}/root/kyri-g11-bb-helper-transaction"
+printf 'state=COMMITTING\n' > "${op_root}/root/kyri-g11-bb-helper-transaction/journal"
+if run_operator_ceremony "${op_root}"; then
+  fail "ceremony: an unexpected helper transaction did not stop the ceremony"
+elif [[ "$(grep -c . "${WORK}/op-invocations")" == 0 ]]; then
+  pass "ceremony: an unexpected helper transaction stops it before any installer runs"
+else
+  fail "ceremony: an unexpected helper transaction still reached the installer"
+fi
+if [[ -f "${op_root}/root/kyri-g11-bb-helper-transaction/journal" ]]; then
+  pass "ceremony: the unexpected transaction is left untouched"
+else
+  fail "ceremony: the unexpected transaction was removed"
+fi
+
+op_root="${WORK}/op-no-gen15"; build_op_host "${op_root}"
+rm -f "${op_root}/root/kyri-gen15-library-digests.txt"
+if run_operator_ceremony "${op_root}"; then
+  fail "ceremony: a host without Generation-15 evidence was accepted"
+elif [[ "$(grep -c . "${WORK}/op-invocations")" == 0 ]]; then
+  pass "ceremony: absent Generation-15 evidence stops it before any installer runs"
+else
+  fail "ceremony: absent Generation-15 evidence still reached the installer"
+fi
+
+op_root="${WORK}/op-verify-grant"; build_op_host "${op_root}"
+printf 'x\n' > "${op_root}/etc/sudoers.d/kyri-exec-verify"
+if run_operator_ceremony "${op_root}"; then
+  fail "ceremony: a present verification grant was accepted"
+elif [[ "$(grep -c . "${WORK}/op-invocations")" == 0 ]]; then
+  pass "ceremony: a present verification grant stops it before any installer runs"
+else
+  fail "ceremony: a present verification grant still reached the installer"
+fi
+
 printf '\n'
 if (( FAILURES > 0 )); then
   printf 'BB helper ceremony validation FAILED: %d\n' "${FAILURES}" >&2

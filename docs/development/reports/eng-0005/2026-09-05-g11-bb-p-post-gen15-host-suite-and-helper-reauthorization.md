@@ -299,19 +299,119 @@ Every check ran, but the declared total is wrong. Fix TOTAL_STEPS.
 — which is the guard working. Both totals were corrected (quick 108 → 109, full
 133 → 134) rather than the new suite being left unregistered.
 
-## 9. What is authorized, and what is not
+## 9. The helper ceremony is authorized — and not run here
 
-Everything this checkpoint was asked to gate on is now green, and the helper
-delta re-derives to the same three objects from the live Generation-15 host.
-**This report does not install anything.** The helper ceremony remains
-unauthorized until a reviewer accepts this checkpoint.
+Every condition this checkpoint was told to gate on is met:
 
-Still prohibited: installing helpers, renewing Fabric, invoking, modifying
-sudoers, re-running or recovering the Generation-15 install, touching
-`CINV-000001`, spending `CINV-000002`.
+| condition | state |
+| --- | --- |
+| all local host validation green | 26 PASS / 3 SKIP / **0 FAIL**; quick 109/109; full 134/134 |
+| helper matrix correct | A compatible, B/C/D incompatible, E compatible; all 2³ partials refuse |
+| production exactly Gen 15 + predecessor helpers | 81 objects, Gen-15 declaration, 3 stale helpers |
+| sudoers pins still match | both entrypoints byte-identical, neither in the delta |
+| verify grant absent | absent, and the ceremony refuses if it appears |
+| no unknown bytes | `--verify-installed` PASS at BB-O; no object outside a declared state |
 
 ```
-HELPER_INSTALL_AUTHORISED  NO      PRODUCTION_INVOKE_AUTHORISED  NO
+HELPER_INSTALL_AUTHORISED = YES        (for an operator, after reviewer acceptance)
+```
+
+**This report installs nothing.** It authorizes the operator to run the ceremony
+below once this checkpoint is accepted.
+
+### 9.1 The ceremony is a governed artefact, not a fenced block
+
+`provisioning/execution/helper-operator-ceremony.txt`, held to the standard BB-M
+set after an unchained block reached `--install` following a refusal. The suite
+**executes it against a stub installer** that records every invocation:
+
+```
+PASS  ceremony: the operator block sets -Eeuo pipefail
+PASS  ceremony: the journal check precedes every installer invocation
+PASS  ceremony: with every stage passing, the ceremony completes
+PASS  ceremony: the stages run in the declared order
+PASS  ceremony: --verify refused -> --install invocation count is 0
+PASS  ceremony: --verify refused -> --verify-installed invocation count is 0
+PASS  ceremony: --verify-source refused -> --verify and --install counts are both 0
+PASS  ceremony: an unexpected helper transaction stops it before any installer runs
+PASS  ceremony: the unexpected transaction is left untouched
+PASS  ceremony: absent Generation-15 evidence stops it before any installer runs
+PASS  ceremony: a present verification grant stops it before any installer runs
+```
+
+The suite is now **42 assertions, 0 failures**.
+
+### 9.2 The ceremony, extracted verbatim
+
+Reproduced byte-for-byte from the committed artefact. Paste it as one block; the
+`set -Eeuo pipefail` and `&&` chaining are the fix.
+
+```bash
+#!/usr/bin/env bash
+# The corrected privileged-helper ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. It lives here rather than only in a report so the test suite can
+# execute it against a stub installer and prove the control flow, instead of
+# trusting that a fenced block in prose does what its prose says -- which is the
+# defect that let the Generation-15 block reach --install after a refusal.
+#
+# The property under test: no later stage can run after an earlier one refused.
+#
+# ORDER. This ceremony is second. It must run only against an installed and
+# accepted Generation 15: the installer refuses otherwise, because Generation
+# 15 carries the readiness rule that declares these corrected helper digests.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-g11-bb-helper-transaction/journal \
+  || { printf 'STOP: a helper transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-g11-bb-helper-transaction \
+  || { printf 'STOP: helper transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The runtime this ceremony is judged by. Generation 15 must already be
+# installed and accepted; the installer checks it too, and refuses.
+sudo test -e /root/kyri-gen15-library-digests.txt \
+  || { printf 'STOP: Generation-15 evidence is absent. Install and accept Generation 15 first.\n' >&2; exit 1; }
+
+# The verification entrypoint stays unauthorised through this ceremony.
+sudo test ! -e /etc/sudoers.d/kyri-exec-verify \
+  || { printf 'STOP: the verification grant exists. Nothing authorised it.\n' >&2; exit 1; }
+
+sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --verify-installed
+```
+
+### 9.3 Expected result, stated before execution
+
+```
+helper compatibility     compatible, 8 declared, 0 blocking
+supervision_ready        true          <- first time; the runtime and helper surfaces agree
+/usr/libexec entrypoints kyri-exec-transition and kyri-exec-reconcile UNCHANGED
+sudoers                  UNCHANGED, verify grant still ABSENT
+runtime                  UNCHANGED at Generation 15, 81 objects
+CINV-000001              unchanged, UNRESOLVED     CRES 0     CINV-000002 unspent
+```
+
+**If `supervision_ready` is not true after a successful ceremony — STOP.** And if
+anything under `/usr/lib/kyri/python` other than the two helper library modules
+moved, STOP: this ceremony touches three objects and nothing else.
+
+### 9.4 Still prohibited
+
+Renewing Fabric, invoking, authorising a launch, executing, modifying sudoers,
+re-running or recovering the Generation-15 install, touching `CINV-000001`,
+spending `CINV-000002`. A fresh Fabric chain (`CADV` → `CINST` → `CROUTE` →
+`CSEL`) comes after the helper ceremony is accepted, not before.
+
+```
+PRODUCTION_INVOKE_AUTHORISED      NO
 CINV_000001_FINAL_CLASSIFICATION  UNRESOLVED
 CINV_000001_RESUME_AUTHORISED     NO
 ```
