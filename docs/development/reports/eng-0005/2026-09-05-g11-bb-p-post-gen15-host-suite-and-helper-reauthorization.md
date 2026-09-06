@@ -264,7 +264,29 @@ succession primitive suite   PASS   12 assertions
 bb-helper-ceremony           PASS   31 assertions, 0 failures
 generation15-installer       PASS   103 assertions, 0 failures
 shellcheck                   clean
+LOCAL_QUICK                  PASS   109/109
+LOCAL_FULL                   PASS   134/134
 ```
+
+**Clean-clone verification, and its exact reach.** Cloned from `origin`, not
+from this working copy:
+
+```
+test-succession-lib.sh       PASS   12 assertions    portable
+bb-helper-ceremony           PASS   31 assertions
+generation15-installer       PASS   103 assertions
+generation12-packaging       PASS   53 assertions
+
+generation13-packaging       SKIP   pinned-checkout guard
+generation13-installer       SKIP   pinned-checkout guard
+generation14-installer       SKIP   pinned-checkout guard
+helper-ceremony              SKIP   pinned-checkout guard
+```
+
+Four of the seven declare `host_only_requires_pinned_checkout` and so cannot run
+from a clone at all — they drive ceremonies pinned to `/opt/schott-platform`.
+Their only proof is the local host-only run above, and a clean clone is **not**
+evidence for them. Stating that is the point of separating the two.
 
 One thing the validator caught that this checkpoint had got wrong: adding a
 suite without updating the declared step count. The run refused —
