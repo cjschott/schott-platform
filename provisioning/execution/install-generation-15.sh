@@ -725,8 +725,10 @@ helper_ceremony_library_creates() {
 # the count check already reads it: a list maintained in two places is a list
 # that disagrees with itself, and the disagreement surfaces as a production
 # refusal at the worst moment.
-helper_ceremony_accepted_digest() {
-  local relative="$1" ceremony line target operation post
+# Every library-root object an accepted post-Generation-14 ceremony governs, as
+# "<relative> <accepted-digest>" lines.
+helper_ceremony_library_rows() {
+  local ceremony line target post
   # shellcheck disable=SC2016  # the placeholder must not expand
   local _PLACEHOLDER='${LIBRARY_ROOT}/'
   # One accepted ceremony today. Held in an array so adding a second is a data
@@ -736,14 +738,59 @@ helper_ceremony_accepted_digest() {
     [[ -f "${ceremony}" ]] || continue
     while IFS= read -r line; do
       line="${line#\"}"; line="${line%\"}"
-      IFS='|' read -r _ target _ operation _ post _ <<<"${line}"
+      IFS='|' read -r _ target _ _ _ post _ <<<"${line}"
       [[ "${target}" == *"${_PLACEHOLDER}"* ]] || continue
-      [[ "${target##*"${_PLACEHOLDER}"}" == "${relative}" ]] || continue
-      printf '%s' "${post}"
-      return 0
+      printf '%s %s\n' "${target##*"${_PLACEHOLDER}"}" "${post}"
     done < <(sed -n '/^MATRIX=(/,/^)$/p' "${ceremony}" | sed -n 's/^\(".*"\)$/\1/p')
   done
+}
+
+helper_ceremony_accepted_digest() {
+  local relative="$1" path digest
+  while read -r path digest; do
+    [[ "${path}" == "${relative}" ]] || continue
+    printf '%s' "${digest}"
+    return 0
+  done < <(helper_ceremony_library_rows)
   return 1
+}
+
+# The accepted digest for one carried-over library-root object, and the
+# authority that records it: "ceremony <digest>" or "evidence <digest>".
+# Returns 1 when NO accepted authority records the object at all -- which is a
+# refusal, not a pass.
+#
+# THE ACCEPTED PREDECESSOR IS NOT GENERATION 14 ALONE. Both the pre-install
+# baseline check and the post-install carryover check ask this one function,
+# because they used to carry the same comparison twice: BB-L corrected one copy
+# and the other kept judging the whole library against Generation-14 evidence,
+# which is what refused a COMMITTED Generation-15 transaction for holding
+# exactly the bytes an accepted ceremony published. One reader is the fix for
+# that class, not just for those four objects.
+accepted_library_digest() {
+  local relative="$1" overlaid recorded
+  # `|| true` because "no ceremony declares this object" is the common answer
+  # and not an error; without it errexit ends the run silently.
+  overlaid="$(helper_ceremony_accepted_digest "${relative}" || true)"
+  if [[ -n "${overlaid}" ]]; then printf 'ceremony %s' "${overlaid}"; return 0; fi
+  recorded="$(sed -n "s#^\\([0-9a-f]\\{64\\}\\)  /usr/lib/kyri/python/${relative}\$#\\1#p" \
+                "${BASELINE_LIBRARY_EVIDENCE}" | head -1)"
+  [[ -n "${recorded}" ]] || return 1
+  printf 'evidence %s' "${recorded}"
+}
+
+# Nothing an accepted ceremony published may silently disappear. The object
+# count cannot catch this: the count expectation is itself derived from how many
+# of those objects are present, so a deletion moves both sides together.
+overlay_complete() {
+  local path digest missing=0
+  while read -r path digest; do
+    [[ -n "${path}" ]] || continue
+    [[ -f "${LIBRARY_ROOT}/${path}" ]] && continue
+    bad "the accepted helper ceremony published ${path}, which is not installed"
+    missing=$((missing + 1))
+  done < <(helper_ceremony_library_rows)
+  (( missing == 0 ))
 }
 
 require_baseline() {
@@ -761,40 +808,29 @@ require_baseline() {
   [[ -f "${BASELINE_HELPER_EVIDENCE}" ]] \
     || halt "the Generation-14 helper evidence at ${BASELINE_HELPER_EVIDENCE} is missing"
 
-  local drift=0 recorded observed file relative overlaid
+  local drift=0 accepted authority recorded observed file relative
   while IFS= read -r file; do
     relative="${file#"${LIBRARY_ROOT}"/}"
 
-    # THE ACCEPTED PREDECESSOR IS NOT GENERATION 14 ALONE. Ceremonies published
-    # after it legitimately changed library-root objects, so an installed object
-    # may correctly differ from -- or be absent from -- Generation-14 evidence.
-    # Its accepted digest is then the later ceremony's target, not the older
-    # evidence's record.
-    #
     # This is not "ignore helper files". The overlay is read from an accepted
     # ceremony's own matrix, one path at a time; an object no ceremony declares
     # is still judged against Generation-14 evidence and still refuses.
-    # `|| true` because "no ceremony declares this object" is the common answer
-    # and not an error; without it errexit ends the run silently, which is
-    # exactly how this first went wrong.
-    overlaid="$(helper_ceremony_accepted_digest "${relative}" || true)"
-    if [[ -n "${overlaid}" ]]; then
-      observed="$(digest_of "${file}")"
-      if [[ "${observed}" == "${overlaid}" ]]; then continue; fi
-      bad "installed ${relative} is ${observed}, the accepted helper ceremony records ${overlaid}"
-      drift=$((drift + 1)); continue
-    fi
-
-    recorded="$(sed -n "s#^\\([0-9a-f]\\{64\\}\\)  /usr/lib/kyri/python/${relative}\$#\\1#p" \
-                  "${BASELINE_LIBRARY_EVIDENCE}" | head -1)"
-    if [[ -z "${recorded}" ]]; then
+    if ! accepted="$(accepted_library_digest "${relative}")"; then
       bad "installed object ${relative} is absent from the Generation-14 evidence"
       drift=$((drift + 1)); continue
     fi
+    read -r authority recorded <<<"${accepted}"
     observed="$(digest_of "${file}")"
-    [[ "${observed}" == "${recorded}" ]] \
-      || { bad "installed ${relative} is ${observed}, evidence records ${recorded}"; drift=$((drift + 1)); }
+    [[ "${observed}" == "${recorded}" ]] && continue
+    if [[ "${authority}" == "ceremony" ]]; then
+      bad "installed ${relative} is ${observed}, the accepted helper ceremony records ${recorded}"
+    else
+      bad "installed ${relative} is ${observed}, evidence records ${recorded}"
+    fi
+    drift=$((drift + 1))
   done < <(find "${LIBRARY_ROOT}" -type f -name '*.py' | sort)
+
+  overlay_complete || drift=$((drift + 1))
 
   local recorded_relative
   while IFS= read -r recorded_relative; do
@@ -1451,25 +1487,38 @@ verify_excluded_absent() {
     && ok "the governed write path and every Trust decision surface are absent"
 }
 
-# Every object the Generation-14 evidence recorded must still be exactly what
-# that evidence says, except the rows this transaction declares. A CREATE adds
-# pathnames, so the created targets are legitimately absent from the predecessor
-# evidence and are the only objects permitted to be.
+# Every carried-over object must still be exactly what its accepted authority
+# says, except the rows this transaction declares. A CREATE adds pathnames, so
+# the created targets are legitimately absent from the predecessor evidence and
+# are the only objects permitted to be.
+#
+# The accepted authority is Generation 14 PLUS what accepted ceremonies
+# published after it -- the same overlay model `require_baseline` uses, through
+# the same reader. Carrying a second, overlay-blind copy of this comparison is
+# what refused a COMMITTED Generation-15 transaction: the four G11-AX
+# library-root objects were reported as drift for holding exactly the bytes
+# that ceremony was accepted for.
 verify_unchanged_surface() {
-  local drift=0 recorded observed file relative
+  local drift=0 accepted authority recorded observed file relative
   while IFS= read -r file; do
     is_target "${file}" && continue
     relative="${file#"${LIBRARY_ROOT}"/}"
-    recorded="$(sed -n "s#^\\([0-9a-f]\\{64\\}\\)  /usr/lib/kyri/python/${relative}\$#\\1#p" \
-                  "${BASELINE_LIBRARY_EVIDENCE}" | head -1)"
-    if [[ -z "${recorded}" ]]; then
-      bad "installed object ${relative} is not accounted for by the Generation-14 evidence and is not a declared Generation-15 target"
+    if ! accepted="$(accepted_library_digest "${relative}")"; then
+      bad "installed object ${relative} is not accounted for by the Generation-14 evidence or any accepted ceremony, and is not a declared Generation-15 target"
       drift=$((drift + 1)); continue
     fi
+    read -r authority recorded <<<"${accepted}"
     observed="$(digest_of "${file}")"
-    [[ "${observed}" == "${recorded}" ]] \
-      || { bad "${relative} changed: ${observed} but Generation-14 evidence records ${recorded}"; drift=$((drift + 1)); }
+    [[ "${observed}" == "${recorded}" ]] && continue
+    if [[ "${authority}" == "ceremony" ]]; then
+      bad "${relative} changed: ${observed} but the accepted helper ceremony records ${recorded}"
+    else
+      bad "${relative} changed: ${observed} but Generation-14 evidence records ${recorded}"
+    fi
+    drift=$((drift + 1))
   done < <(find "${LIBRARY_ROOT}" -type f -name '*.py' | sort)
+
+  overlay_complete || drift=$((drift + 1))
 
   local recorded_relative
   while IFS= read -r recorded_relative; do
@@ -1479,7 +1528,7 @@ verify_unchanged_surface() {
   done < <(sed -n 's#^[0-9a-f]\{64\}  /usr/lib/kyri/python/##p' "${BASELINE_LIBRARY_EVIDENCE}")
 
   (( drift == 0 )) \
-    && ok "every carried-over runtime object is exactly its accepted Generation-14 baseline, and nothing was removed"
+    && ok "every carried-over runtime object is exactly its accepted predecessor -- Generation 14, plus the $(helper_ceremony_library_rows | wc -l) object(s) an accepted ceremony published after it -- and nothing was removed"
 }
 
 # ===========================================================================

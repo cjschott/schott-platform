@@ -83,6 +83,40 @@ for helper in mod.REQUIRED_HELPERS:
 HELPERPY
 }
 
+# The Generation-15 CREATE rows, by library-root-relative pathname. Read from
+# the installer's matrix so the fixture and the ceremony cannot disagree.
+gen15_creates() {
+  local relative="$1" row src tgt _mode op
+  # shellcheck disable=SC2016  # the placeholder must not expand
+  local ph='${LIBRARY_ROOT}/'
+  while IFS= read -r row; do
+    row="${row#\"}"; row="${row%\"}"
+    IFS='|' read -r src tgt _mode op _ _ _ <<<"${row}"
+    [[ "${op}" == "CREATE" ]] || continue
+    [[ "${tgt}" == *"${ph}"* ]] || continue
+    [[ "${tgt##*"${ph}"}" == "${relative}" ]] && return 0
+  done < <(sed -n '/^MATRIX=(/,/^)$/p' "${INSTALLER}" | grep '^"')
+  return 1
+}
+
+# One row of the accepted G11-AX matrix, by library-root-relative pathname:
+# "<operation> <pre-digest> <post-digest>", or nothing if AX does not govern it.
+ax_row() {
+  local relative="$1" row src tgt _mode op pre post
+  # shellcheck disable=SC2016  # the placeholder must not expand
+  local ph='${LIBRARY_ROOT}/'
+  while IFS= read -r row; do
+    row="${row#\"}"; row="${row%\"}"
+    IFS='|' read -r src tgt _mode op pre post _ <<<"${row}"
+    [[ "${tgt}" == *"${ph}"* ]] || continue
+    [[ "${tgt##*"${ph}"}" == "${relative}" ]] || continue
+    printf '%s %s %s' "${op}" "${pre}" "${post}"
+    return 0
+  done < <(sed -n '/^MATRIX=(/,/^)$/p' "${ROOT}/provisioning/execution/install-g11-ax-helpers.sh" \
+             | grep '^"')
+  return 1
+}
+
 build_fixture() {
   local root="$1"
   rm -rf "${root}"
@@ -105,9 +139,17 @@ build_fixture() {
   # the content from git is what makes this a reconstruction rather than a copy:
   # a fixture built by copying production would agree with production by
   # construction and prove nothing about the declared baseline.
+  #
+  # The live path set is filtered by this generation's own CREATE rows. Those
+  # pathnames exist on the host only once Generation 15 is installed, and a
+  # Generation-14 fixture must not carry them however far the host has moved.
+  # Without this the suite silently reconstructs a DIFFERENT generation as soon
+  # as production advances -- it read 81 objects where it declares 79 -- and a
+  # suite whose baseline follows the host cannot hold the host to a baseline.
   local object
   while IFS= read -r object; do
     [[ -f "${staging}/${object}" ]] || continue
+    gen15_creates "${object}" && continue
     install -D -m 0444 "${staging}/${object}" "${lib}/${object}"
   done < <( cd /usr/lib/kyri/python && find tools -type f -name '*.py' \
               ! -path '*__pycache__*' | sort )
@@ -132,12 +174,35 @@ build_fixture() {
     "${lib}/tools/capability/execution/verification.py"
 
   # The evidence the installer requires of its predecessor.
-  # Generation-14 evidence is written BEFORE the later ceremonies are overlaid,
-  # because that is what it is: a record of the Generation-14 surface, frozen and
-  # immutable. Everything applied after this line postdates it deliberately.
-  ( cd "${lib}" && find . -type f -name '*.py' | sed 's|^\./||' | sort \
-      | xargs sha256sum ) | sed "s|^\([0-9a-f]*\)  |\1  /usr/lib/kyri/python/|" \
-      > "${root}/root/kyri-gen14-library-digests.txt"
+  # Generation-14 evidence records the Generation-14 surface, frozen and
+  # immutable; everything a later ceremony published postdates it deliberately.
+  #
+  # Hashing the built tree is NOT enough to produce that, and quietly produced
+  # the opposite. The repository at 946be55 already carries G11-AX's CORRECTED
+  # sources, so the four AX library-root objects are materialised here at their
+  # AX *post* bytes. Hashing them would write AX's targets into a file labelled
+  # "Generation 14", the overlay applied below would then be a no-op, and the
+  # four objects that broke production would be invisible to this fixture --
+  # which is exactly what happened, and why --verify-installed passed here while
+  # refusing on the host.
+  #
+  # So the AX rows are written from the AX matrix's own PRE column, and its
+  # CREATE row is omitted entirely, because that is what Generation-14 evidence
+  # actually contains: the bytes that were there before AX ran, and no row at
+  # all for a pathname AX had not yet created.
+  local evidence="${root}/root/kyri-gen14-library-digests.txt"
+  : > "${evidence}"
+  local relative digest axinfo axop axpre
+  while IFS= read -r relative; do
+    digest="$(sha256sum "${lib}/${relative}" | cut -d' ' -f1)"
+    if axinfo="$(ax_row "${relative}")"; then
+      read -r axop axpre _ <<<"${axinfo}"
+      # A pathname AX created postdates this evidence entirely: no row.
+      [[ "${axop}" == "CREATE" ]] && continue
+      digest="${axpre}"
+    fi
+    printf '%s  /usr/lib/kyri/python/%s\n' "${digest}" "${relative}" >> "${evidence}"
+  done < <( cd "${lib}" && find . -type f -name '*.py' | sed 's|^\./||' | sort )
 
   # --- the accepted production predecessor is Generation 14 PLUS what came
   # --- after it, and the host really is in that shape -----------------------
@@ -720,6 +785,130 @@ if [[ -f "${root}/root/kyri-gen15-transaction/journal" ]]; then
 else
   fail "ceremony: the unexpected transaction was removed"
 fi
+
+# ===========================================================================
+# E5. the POST-INSTALL verifier, against the committed production shape
+# ===========================================================================
+#
+# Section E2 holds the overlay model for --verify, the PRE-install check. That
+# is the half BB-L corrected, and correcting only that half is what let a
+# COMMITTED Generation-15 transaction fail its own final verification: the
+# post-install carryover check carried a second, overlay-blind copy of the same
+# comparison and reported the four accepted G11-AX objects as drift.
+#
+# So every case here runs --verify-installed against an INSTALLED Generation 15,
+# not --verify against a Generation-14 host. Same boundaries, other surface.
+
+# One installed Generation-15 fixture, reused read-only by the accept cases.
+installed_root="${WORK}/postinstall"; build_fixture "${installed_root}"
+run_installer "${installed_root}" --install > /dev/null 2>&1 || true
+
+if run_installer "${installed_root}" --verify-installed; then
+  pass "post-install: --verify-installed accepts the committed production shape"
+else
+  fail "post-install: --verify-installed refused the committed shape: $(grep -m3 '^FAIL' "${WORK}/last-run.log" | tr '\n' ' ')"
+fi
+
+if [[ "$(library_count "${installed_root}")" == "81" ]]; then
+  pass "post-install: the flat library holds 81 objects"
+else
+  fail "post-install: the flat library holds $(library_count "${installed_root}")"
+fi
+
+# The four accepted overlay objects are still exactly what AX published. This is
+# the positive half of the fix: they are ACCEPTED, not ignored.
+while read -r axpath axdigest; do
+  observed="$(sha256sum "${installed_root}/usr/lib/kyri/python/${axpath}" 2>/dev/null | cut -d' ' -f1)"
+  if [[ "${observed}" == "${axdigest}" ]]; then
+    pass "post-install: the accepted overlay object ${axpath} is exact"
+  else
+    fail "post-install: ${axpath} is ${observed:-absent}, accepted ${axdigest}"
+  fi
+done < <(sed -n '/^MATRIX=(/,/^)$/p' "${ROOT}/provisioning/execution/install-g11-ax-helpers.sh" \
+           | grep '^"' | while IFS= read -r r; do
+               r="${r#\"}"; r="${r%\"}"
+               IFS='|' read -r _ t _ _ _ p _ <<<"${r}"
+               # shellcheck disable=SC2016  # the placeholder must not expand
+               ph='${LIBRARY_ROOT}/'
+               [[ "${t}" == *"${ph}"* ]] && printf '%s %s\n' "${t##*"${ph}"}" "${p}"
+             done)
+
+if [[ "$(fixture_verdict "${installed_root}")" == "incompatible" ]] \
+   && [[ "$(fixture_blocking "${installed_root}" | grep -c .)" == 3 ]]; then
+  pass "post-install: helper compatibility is incompatible with 3 blocking, so supervision_ready is false"
+else
+  fail "post-install: verdict $(fixture_verdict "${installed_root}"), $(fixture_blocking "${installed_root}" | grep -c .) blocking"
+fi
+
+if [[ ! -e "${installed_root}/etc/sudoers.d/kyri-exec-verify" ]] \
+   && [[ -f "${installed_root}/etc/sudoers.d/kyri-exec-launch" ]] \
+   && [[ -f "${installed_root}/etc/sudoers.d/kyri-exec-reconcile" ]]; then
+  pass "post-install: the verify grant is absent and both execution grants remain"
+else
+  fail "post-install: the grant set is not what the ceremony left"
+fi
+
+# --- the boundaries that must NOT be weakened to reach that verdict ----------
+#
+# Each perturbs the installed shape and requires --verify-installed to refuse.
+# "Accept the accepted overlay" must not have become "ignore helper files".
+
+# Each case copies the installed fixture and applies ONE mutation. Every mutator
+# restores the mode it had to relax, because the installed set is verified for
+# mode as well as bytes: a blanket `chmod -R u+w` here would make every case
+# refuse for mode drift instead of for the thing it is meant to catch, and nine
+# controls would pass while proving nothing. Section E5.1 checks that each case
+# is actually load-bearing rather than trusting this comment.
+postinstall_refuses() {                      # <case> <description> <mutator...>
+  local name="$1" description="$2"; shift 2
+  local root="${WORK}/pi-${name}"
+  rm -rf "${root}"; cp -a "${installed_root}" "${root}"
+  "$@" "${root}"
+  if run_installer "${root}" --verify-installed; then
+    fail "post-install: ${description} was accepted"
+  else
+    pass "post-install: ${description} is refused"
+  fi
+}
+
+# Append to a 0444 object and put the mode back exactly as it was.
+append_keeping_mode() {
+  local file="$1" text="$2" mode
+  mode="$(stat -c '%a' "${file}")"
+  chmod u+w "${file}"; printf '%s' "${text}" >> "${file}"; chmod "${mode}" "${file}"
+}
+
+mutate_target()   { append_keeping_mode "$1/usr/lib/kyri/python/tools/capability/execution/recovery.py" $'\n# not the reviewed bytes\n'; }
+mutate_overlay()  { append_keeping_mode "$1/usr/lib/kyri/python/kyri_exec_transition_action.py" $'\n# not the accepted ceremony bytes\n'; }
+mutate_carryover(){ append_keeping_mode "$1/usr/lib/kyri/python/tools/capability/execution/snapshot.py" $'\n# drift\n'; }
+add_stranger()    { install -m 0444 /dev/null "$1/usr/lib/kyri/python/tools/capability/execution/stranger.py"; }
+remove_overlay()  { rm -f "$1/usr/lib/kyri/python/kyri_exec_reconcile.py"; }
+grant_verify()    { printf 'cschott ALL=(root) NOPASSWD: /usr/libexec/kyri-exec-verify\n' > "$1/etc/sudoers.d/kyri-exec-verify"; chmod 0440 "$1/etc/sudoers.d/kyri-exec-verify"; }
+repin_grant()     { chmod u+w "$1/etc/sudoers.d/kyri-exec-launch"; sed -i 's/sha256:[0-9a-f]\{64\}/sha256:'"$(printf 'b%.0s' {1..64})"'/' "$1/etc/sudoers.d/kyri-exec-launch"; chmod 0440 "$1/etc/sudoers.d/kyri-exec-launch"; }
+move_entrypoint() { append_keeping_mode "$1/usr/libexec/kyri-exec-transition" $'\n# moved\n'; }
+odd_journal()     { printf 'state=COMMITTING\n' > "$1/root/kyri-gen15-transaction/journal"; }
+
+# E5.1 The copy itself must be clean, or every case below passes for the wrong
+# reason. An earlier draft relaxed modes across the whole tree before mutating,
+# and the installed set is verified for MODE as well as bytes -- so all nine
+# refused on mode drift and none of them tested what it named. This is the
+# control that catches that class.
+root="${WORK}/pi-control"; rm -rf "${root}"; cp -a "${installed_root}" "${root}"
+if run_installer "${root}" --verify-installed; then
+  pass "post-install control: an unmutated copy of the installed fixture still verifies"
+else
+  fail "post-install control: the copy alone refuses, so the cases below prove nothing: $(grep -m2 '^FAIL' "${WORK}/last-run.log" | tr '\n' ' ')"
+fi
+
+postinstall_refuses target    "an unknown byte in a Generation-15 target"      mutate_target
+postinstall_refuses overlay   "an unknown byte in an accepted overlay object"  mutate_overlay
+postinstall_refuses carryover "an unknown byte in a carried-over object"       mutate_carryover
+postinstall_refuses stranger  "an ungoverned extra library-root object"        add_stranger
+postinstall_refuses missing   "a missing accepted overlay object"              remove_overlay
+postinstall_refuses verify    "the verification grant present"                 grant_verify
+postinstall_refuses repin     "a grant pinning bytes the host does not carry"  repin_grant
+postinstall_refuses moved     "a pinned entrypoint whose bytes moved"          move_entrypoint
+postinstall_refuses journal   "a transaction journal that is not COMMITTED"    odd_journal
 
 # ===========================================================================
 # F. crash and recovery at every publication boundary
