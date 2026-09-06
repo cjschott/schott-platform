@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=108
+  TOTAL_STEPS=109
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=133
+  TOTAL_STEPS=134
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -416,6 +416,12 @@ run "Capability execution G5 preflight" \
 # the accepted-predecessor, applied-successor and unknown-drift cases.
 run "Capability execution generation succession" \
   bash tests/test-capability-execution-generation-succession.sh
+
+# The generation-succession primitive every host-only fixture rewinds through:
+# that it restores from governed matrix data and a named commit, leaves objects
+# no ceremony declares alone, and refuses rather than half-restores.
+run "Succession primitive" \
+  bash tests/test-succession-lib.sh
 
 # The Generation-15 runtime installation, proven against a reconstructed
 # Generation-14 baseline: verify non-mutating, install, verify-installed, the

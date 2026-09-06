@@ -27,6 +27,8 @@ CEREMONY="${REPOSITORY}/provisioning/execution/install-generation-13.sh"
 
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
+# shellcheck source=tests/lib/succession.sh
+. "${SCRIPT_DIR}/lib/succession.sh"
 host_only_requires_pinned_checkout "${CEREMONY}"
 
 LIBRARY_ROOT=/usr/lib/kyri/python
@@ -134,6 +136,22 @@ build_host() {
            "${root}/usr/libexec" "${root}/etc/kyri"
   ( cd "${LIBRARY_ROOT}" && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
     | ( cd "${LIBRARY_ROOT}" && xargs -0 -I{} cp --parents {} "${root}${LIBRARY_ROOT}/" )
+
+  # The copy is of the LIVE host, several generations on. The loop below rewinds
+  # every row THIS generation declares, which undoes a later generation that only
+  # REPLACED those rows -- but a later CREATE leaves a pathname no rewind here
+  # reaches, and the ceremony counts objects. Generation 15's two CREATEs are why
+  # this fixture presented 73 where the ceremony expects 70 + 1.
+  #
+  # The G11-AX create stays: its module is the "+1 published helper module" the
+  # ceremony's own expectation already carries.
+  local later
+  while IFS= read -r later; do
+    [[ -n "${later}" ]] || continue
+    rm -f "${root}${LIBRARY_ROOT}/${later}"
+  done < <(succession_created_by \
+             "${REPOSITORY}/provisioning/execution/install-generation-14.sh" \
+             "${REPOSITORY}/provisioning/execution/install-generation-15.sh")
 
   local row target source base
   while IFS= read -r row; do

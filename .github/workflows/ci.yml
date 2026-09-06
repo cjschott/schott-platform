@@ -411,6 +411,10 @@ jobs:
       - name: Capability execution generation succession tests
         run: bash tests/test-capability-execution-generation-succession.sh
 
+      # The succession primitive the host-only fixtures rewind through.
+      - name: Succession primitive tests
+        run: bash tests/test-succession-lib.sh
+
       # The Generation-15 runtime installation, fixture only.
       - name: Capability execution generation 15 installer tests
         run: bash tests/test-capability-execution-generation15-installer.sh

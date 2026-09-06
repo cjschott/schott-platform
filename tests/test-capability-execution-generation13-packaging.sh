@@ -25,6 +25,8 @@ CEREMONY="${REPOSITORY}/provisioning/execution/install-generation-13.sh"
 
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
+# shellcheck source=tests/lib/succession.sh
+. "${SCRIPT_DIR}/lib/succession.sh"
 host_only_requires_pinned_checkout "${CEREMONY}"
 
 LIBRARY_ROOT=/usr/lib/kyri/python
@@ -174,21 +176,28 @@ run_case "the live host is wholly at one of the two declared generations" "${PRE
 # same fix the Generation-12 packaging suite needed when Generation 13 landed.
 def superseded_by_successor():
     # Relative: every case runs from the repository root.
-    successor = Path('provisioning/execution/install-generation-14.sh')
-    if not successor.is_file():
-        return {}
-    text = successor.read_text(encoding='utf-8')
-    block = text.split('MATRIX=(', 1)[1].split(chr(10) + ')', 1)[0]
+    #
+    # EVERY later generation, not just the next one. Reading only Generation 14
+    # left this correct until Generation 15 landed and replaced five more of
+    # these rows -- at which point they were neither baseline nor target and
+    # were reported as drift. A later generation wins over an earlier one, so
+    # the chain is applied in order.
     out = {}
-    for line in block.splitlines():
-        line = line.strip()
-        if not line.startswith(chr(34)):
+    for name in ('install-generation-14.sh', 'install-generation-15.sh'):
+        successor = Path('provisioning/execution') / name
+        if not successor.is_file():
             continue
-        _, target, _, operation, _, want, _ = line.strip(chr(34)).split('|')
-        if operation == 'REPLACE':
-            # chr(36) so bash does not expand this before python sees it: the
-            # matrix text carries the literal placeholder, not its value.
-            out[target.replace(chr(36) + '{LIBRARY_ROOT}/', '')] = want
+        text = successor.read_text(encoding='utf-8')
+        block = text.split('MATRIX=(', 1)[1].split(chr(10) + ')', 1)[0]
+        for line in block.splitlines():
+            line = line.strip()
+            if not line.startswith(chr(34)):
+                continue
+            _, target, _, operation, _, want, _ = line.strip(chr(34)).split('|')
+            if operation == 'REPLACE':
+                # chr(36) so bash does not expand this before python sees it:
+                # the matrix text carries the literal placeholder, not its value.
+                out[target.replace(chr(36) + '{LIBRARY_ROOT}/', '')] = want
     return out
 
 SUPERSEDED = superseded_by_successor()
@@ -233,20 +242,27 @@ assert BASELINE_N + len(creates) == TARGET_N, (BASELINE_N, len(creates), TARGET_
 # directory. Those are not runtime objects; they simply live beside them, so the
 # absolute count moved by one the day that ceremony ran without a single runtime
 # object changing. Read from that ceremony's matrix rather than named here.
+#
+# Later RUNTIME generations create into this directory too -- Generation 15
+# creates two -- so the offset is every library-root CREATE published after this
+# generation, not the helper ceremony's alone. Counting only the helper ceremony
+# left this arithmetic right until the next generation that created anything.
 def helper_creates():
-    ceremony = Path('provisioning/execution/install-g11-ax-helpers.sh')
-    if not ceremony.is_file():
-        return 0
-    block = ceremony.read_text(encoding='utf-8').split(
-        'MATRIX=(', 1)[1].split(chr(10) + ')', 1)[0]
     total = 0
-    for line in block.splitlines():
-        line = line.strip()
-        if not line.startswith(chr(34)):
+    for name in ('install-g11-ax-helpers.sh', 'install-generation-14.sh',
+                 'install-generation-15.sh'):
+        ceremony = Path('provisioning/execution') / name
+        if not ceremony.is_file():
             continue
-        fields = line.strip(chr(34)).split('|')
-        if fields[3] == 'CREATE' and chr(36) + '{LIBRARY_ROOT}/' in fields[1]:
-            total += 1
+        block = ceremony.read_text(encoding='utf-8').split(
+            'MATRIX=(', 1)[1].split(chr(10) + ')', 1)[0]
+        for line in block.splitlines():
+            line = line.strip()
+            if not line.startswith(chr(34)):
+                continue
+            fields = line.strip(chr(34)).split('|')
+            if fields[3] == 'CREATE' and chr(36) + '{LIBRARY_ROOT}/' in fields[1]:
+                total += 1
     return total
 
 offset = helper_creates()
@@ -359,6 +375,24 @@ build_gen12_root() {
            "${root}/usr/libexec" "${root}/etc/kyri"
   ( cd "${LIBRARY_ROOT}" && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
     | ( cd "${LIBRARY_ROOT}" && xargs -0 -I{} cp --parents {} "${root}${LIBRARY_ROOT}/" )
+
+  # The copy is of the LIVE host, which is several generations on. The loop
+  # below rewinds every row Generation 13 declares, so a later generation that
+  # only REPLACED those rows is undone by it -- but a later generation that
+  # CREATED a pathname leaves an object no rewind here touches, and the count
+  # this fixture must present is the Generation-12 one. Generation 15's two
+  # CREATEs are why this read 73 where the ceremony expects 71.
+  #
+  # The G11-AX create is deliberately NOT removed: its module belongs to the
+  # helper surface that lives beside the runtime, and every count in this suite
+  # already accounts for it.
+  local later
+  while IFS= read -r later; do
+    [[ -n "${later}" ]] || continue
+    rm -f "${root}${LIBRARY_ROOT}/${later}"
+  done < <(succession_created_by \
+             "${REPOSITORY}/provisioning/execution/install-generation-14.sh" \
+             "${REPOSITORY}/provisioning/execution/install-generation-15.sh")
 
   local row target source base
   while IFS= read -r row; do

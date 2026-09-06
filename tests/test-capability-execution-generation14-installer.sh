@@ -31,6 +31,8 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
+# shellcheck source=tests/lib/succession.sh
+. "${SCRIPT_DIR}/lib/succession.sh"
 host_only_requires /usr/lib/kyri/python
 host_only_requires_pinned_checkout "${ROOT}/provisioning/execution/install-generation-14.sh"
 
@@ -72,6 +74,14 @@ build_host() {
            "${root}/var/lib/kyri/implementation-authority"
   ( cd "${LIBRARY_ROOT}" && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
     | ( cd "${LIBRARY_ROOT}" && xargs -0 -I{} cp --parents {} "${root}${LIBRARY_ROOT}/" )
+
+  # This generation moves ONE row, so restoring that row was enough to keep the
+  # fixture a Generation-13 host -- until Generation 15 landed and moved seven
+  # more. Five of its REPLACE rows and both its CREATEs are rewound here, from
+  # the Generation-13 authority, or this reads 81 objects where the ceremony
+  # expects 78 + 1 and every assertion below judges the wrong host.
+  succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN13_COMMIT}" \
+    "${ROOT}/provisioning/execution/install-generation-15.sh" || return 1
 
   # The installed objects are 0444, so the copies are too. Remove before writing
   # rather than relaxing the mode: the fixture should carry the modes a real

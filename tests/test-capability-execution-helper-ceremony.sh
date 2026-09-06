@@ -33,6 +33,8 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
+# shellcheck source=tests/lib/succession.sh
+. "${SCRIPT_DIR}/lib/succession.sh"
 host_only_requires /usr/lib/kyri/python /etc/kyri/coordinator-identity.json
 host_only_requires_pinned_checkout "${ROOT}/provisioning/execution/install-g11-ax-helpers.sh"
 
@@ -41,6 +43,9 @@ LIBRARY_ROOT="/usr/lib/kyri/python"          # prod-path-reference
 LIBEXEC_ROOT="/usr/libexec"
 COMMIT="7709cf0443ab11f2b84c94eefbbb60f1eb95c98c"
 RUNTIME_HELPERS_SHA="74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874"
+# The generation whose readiness rule RUNTIME_HELPERS_SHA names, so the fixture
+# can be rewound to it from a host that has moved past it.
+GEN14_COMMIT="946be553ab9f25542590eb908c42ce14a81d6ec3"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
@@ -106,6 +111,15 @@ build_host() {
 
   ( cd "${LIBRARY_ROOT}" && find . -type f -name '*.py' -not -path '*__pycache__*' -print0 ) \
     | ( cd "${LIBRARY_ROOT}" && xargs -0 -I{} cp --parents {} "${root}${LIBRARY_ROOT}/" )
+
+  # The copy is of the LIVE host, which is at Generation 15. This ceremony is
+  # judged by the readiness rule the RUNTIME carries, so the fixture has to be
+  # rewound to the runtime generation this suite states it reconstructs --
+  # RUNTIME_HELPERS_SHA, which is Generation 14's rule. Rewinding is what keeps
+  # that a reconstruction; bumping the constant to whatever the host now holds
+  # would make the assertion below vacuous.
+  succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN14_COMMIT}" \
+    "${ROOT}/provisioning/execution/install-generation-15.sh" || return 1
   [[ "$(digest_of "${root}${LIBRARY_ROOT}/tools/capability/execution/helpers.py")" \
       == "${RUNTIME_HELPERS_SHA}" ]] || return 1
 

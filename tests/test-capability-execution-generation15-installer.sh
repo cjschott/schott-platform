@@ -51,6 +51,8 @@ INSTALLER="${ROOT}/provisioning/execution/install-generation-15.sh"
 # has nothing to reconstruct against on a machine with no installed runtime.
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
+# shellcheck source=tests/lib/succession.sh
+. "${SCRIPT_DIR}/lib/succession.sh"
 host_only_requires /usr/lib/kyri/python          # prod-path-reference
 
 GEN14_COMMIT="946be553ab9f25542590eb908c42ce14a81d6ec3"
@@ -84,18 +86,13 @@ HELPERPY
 }
 
 # The Generation-15 CREATE rows, by library-root-relative pathname. Read from
-# the installer's matrix so the fixture and the ceremony cannot disagree.
+# the installer's matrix through the shared succession reader, so the fixture,
+# the ceremony and every other host-only suite share one spelling of it.
 gen15_creates() {
-  local relative="$1" row src tgt _mode op
-  # shellcheck disable=SC2016  # the placeholder must not expand
-  local ph='${LIBRARY_ROOT}/'
-  while IFS= read -r row; do
-    row="${row#\"}"; row="${row%\"}"
-    IFS='|' read -r src tgt _mode op _ _ _ <<<"${row}"
-    [[ "${op}" == "CREATE" ]] || continue
-    [[ "${tgt}" == *"${ph}"* ]] || continue
-    [[ "${tgt##*"${ph}"}" == "${relative}" ]] && return 0
-  done < <(sed -n '/^MATRIX=(/,/^)$/p' "${INSTALLER}" | grep '^"')
+  local relative="$1" created
+  while IFS= read -r created; do
+    [[ "${created}" == "${relative}" ]] && return 0
+  done < <(succession_created_by "${INSTALLER}")
   return 1
 }
 

@@ -126,9 +126,15 @@ def successor_creates():
     tree moved by one the moment it landed -- which G11-AX.2 predicted in writing
     before it happened. Both ceremonies are read, and only their LIBRARY-ROOT
     creates count: a /usr/libexec object was never part of this surface.
+
+    EVERY successor is read, not just the immediate one. Generation 15 CREATEs
+    two objects and is three generations on from this one; listing only the next
+    ceremony would leave this suite correct exactly until the generation after
+    that, which is the failure it has already had twice.
     """
     creates = set()
-    for name in ("install-generation-13.sh", "install-g11-ax-helpers.sh"):
+    for name in ("install-generation-13.sh", "install-generation-15.sh",
+                 "install-g11-ax-helpers.sh"):
         ceremony = Path(ROOT) / "provisioning" / "execution" / name
         if not ceremony.is_file():
             continue

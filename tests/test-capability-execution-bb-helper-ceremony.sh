@@ -51,6 +51,8 @@ AUTHORITY="ef4f7446200b668f8dcbf34d180c5102270f19f6"
 # the accepted installed surface, and only its bytes come from git.
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
+# shellcheck source=tests/lib/succession.sh
+. "${SCRIPT_DIR}/lib/succession.sh"
 host_only_requires /usr/lib/kyri/python /usr/libexec/kyri-exec-worker.py   # prod-path-reference
 
 FAILURES=0
@@ -77,9 +79,23 @@ build_runtime() {
   ( cd "${ROOT}" && git archive --format=tar "${GEN14_COMMIT}" tools provisioning/execution ) \
     | tar -x -C "${staging}"
 
+  # The path set is the live host's, so it must be rewound past every generation
+  # installed since the one being reconstructed. Generation 15 CREATEs two
+  # objects that 946be55 also carries as SOURCE, so without this they land in a
+  # fixture that calls itself Generation 14 -- and then `run_gen15 --install`
+  # below refuses (81 objects, and both CREATE pathnames already taken), leaves
+  # the fixture at Generation 14, and every case in this suite silently judges
+  # the wrong runtime. That is exactly how B and E came out inverted.
   local object
+  local -a gen15_created=()
+  mapfile -t gen15_created < <(succession_created_by "${GEN15}")
   while IFS= read -r object; do
     [[ -f "${staging}/${object}" ]] || continue
+    local created skip=''
+    for created in "${gen15_created[@]}"; do
+      [[ "${object}" == "${created}" ]] && { skip=1; break; }
+    done
+    [[ -n "${skip}" ]] && continue
     install -D -m 0444 "${staging}/${object}" "${lib}/${object}"
   done < <( cd /usr/lib/kyri/python && find tools -type f -name '*.py' \
               ! -path '*__pycache__*' | sort )
