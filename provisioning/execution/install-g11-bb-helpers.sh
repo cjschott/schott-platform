@@ -75,7 +75,12 @@ LIBEXEC_ROOT="/usr/libexec"
 TRANSACTION_ROOT="/root/kyri-g11-bb-helper-transaction"
 HELPER_EVIDENCE="/root/kyri-g11-bb-helper-digests.txt"
 
-SUDOERS="/etc/sudoers.d/kyri-exec"
+SUDOERS_DIR="/etc/sudoers.d"
+# G11-BA installed the launch grant as `kyri-exec-launch`. This ceremony looked
+# for `kyri-exec`, a pathname no ceremony ever created, so its launch check
+# passed vacuously against every host that has existed since -- and the refusal
+# an operator saw named the reconcile grant while the launch grant went unread.
+SUDOERS="/etc/sudoers.d/kyri-exec-launch"
 VERIFY_SUDOERS="/etc/sudoers.d/kyri-exec-verify"
 RECONCILE_SUDOERS="/etc/sudoers.d/kyri-exec-reconcile"
 
@@ -115,6 +120,7 @@ if [[ -n "${FIXTURE}" ]]; then
   LIBEXEC_ROOT="${FIXTURE}${LIBEXEC_ROOT}"
   TRANSACTION_ROOT="${FIXTURE}${TRANSACTION_ROOT}"
   HELPER_EVIDENCE="${FIXTURE}${HELPER_EVIDENCE}"
+  SUDOERS_DIR="${FIXTURE}${SUDOERS_DIR}"
   SUDOERS="${FIXTURE}${SUDOERS}"
   VERIFY_SUDOERS="${FIXTURE}${VERIFY_SUDOERS}"
   RECONCILE_SUDOERS="${FIXTURE}${RECONCILE_SUDOERS}"
@@ -508,11 +514,64 @@ require_no_transaction_residue() {
   ok "no transaction residue at any of the $(matrix_count) target pathnames"
 }
 
+# The accepted grant state this ceremony runs against, checked exactly.
+#
+# This check used to require all three grants ABSENT. At G11-AX that was simply
+# a true statement about the host: nothing had ever been granted, so "absent"
+# and "not installed by anybody" were the same claim. G11-BA then installed the
+# launch and reconcile grants, the accepted deployment plan keeps them through
+# Phase 8, and this inherited check refused production for holding exactly the
+# grants it is supposed to hold. That is the same stale model BB-L corrected in
+# the Generation-15 ceremony; this is the other copy of it.
+#
+# No stronger reason requires their absence. This ceremony moves three helper
+# OBJECTS and neither digest-pinned entrypoint: `require_entrypoints_unmoved`
+# asserts the pinned bytes do not change, and a grant is permission to ask while
+# readiness is permission to proceed. Readiness is what stays shut until the
+# last helper lands.
+#
+# So the model is precise rather than absolute, and it is stricter than the
+# Generation-15 one: by Phase 8 both grants MUST be present, because a host
+# missing them is not the accepted host this ceremony was derived against.
 require_gates_closed() {
-  [[ ! -e "${SUDOERS}" ]] || halt "${SUDOERS} exists: the launch grant is installed"
-  [[ ! -e "${VERIFY_SUDOERS}" ]] || halt "${VERIFY_SUDOERS} exists: the verification grant is installed"
-  [[ ! -e "${RECONCILE_SUDOERS}" ]] || halt "${RECONCILE_SUDOERS} exists: the reconcile grant is installed"
-  ok "no sudoers grant exists: this ceremony installs helpers, not authority to run them"
+  [[ ! -e "${VERIFY_SUDOERS}" ]] \
+    || halt "${VERIFY_SUDOERS} exists: the verification entrypoint is not authorised"
+
+  local grant entrypoint pinned installed
+  for grant in "${SUDOERS}" "${RECONCILE_SUDOERS}"; do
+    case "${grant}" in
+      *kyri-exec-launch)    entrypoint="${LIBEXEC_ROOT}/kyri-exec-transition" ;;
+      *kyri-exec-reconcile) entrypoint="${LIBEXEC_ROOT}/kyri-exec-reconcile" ;;
+      *) halt "${grant} is not a grant this ceremony can account for" ;;
+    esac
+    [[ -e "${grant}" ]] \
+      || halt "${grant} is missing: this ceremony expects the accepted G11-BA execution grants to be installed"
+    # The digest the grant pins, read out of the grant itself.
+    pinned="$(grep -oE 'sha256:[0-9a-f]{64}' "${grant}" | head -1 || true)"
+    pinned="${pinned#sha256:}"
+    [[ -n "${pinned}" ]] \
+      || halt "${grant} pins no digest: this ceremony cannot confirm what it authorises"
+    installed="$(digest_of "${entrypoint}")"
+    [[ "${pinned}" == "${installed}" ]] \
+      || halt "${grant} pins ${pinned}, but ${entrypoint} is ${installed:-absent}"
+    # A grant that pins the right bytes at the wrong command is a grant nobody
+    # reviewed, so the command path is checked too rather than inferred. The
+    # grant text names the PRODUCTION path even when this runs under --fixture,
+    # so the fixture prefix comes off before the comparison.
+    local commanded="${entrypoint#"${FIXTURE}"}"
+    grep -q -- "${commanded}" "${grant}" \
+      || halt "${grant} does not name ${commanded} as its command"
+  done
+
+  # Anything else under the grant directory is an elevation nobody declared.
+  local unexpected
+  unexpected="$(find "${SUDOERS_DIR}" -maxdepth 1 -type f -name 'kyri-*' \
+                  ! -name "$(basename "${SUDOERS}")" \
+                  ! -name "$(basename "${RECONCILE_SUDOERS}")" 2>/dev/null || true)"
+  [[ -z "${unexpected}" ]] \
+    || halt "an undeclared Kyri grant exists: ${unexpected}"
+
+  ok "both accepted execution grants are present, each pinning the installed entrypoint by digest and command; the verification grant is absent"
 }
 
 require_identity_authorities() {

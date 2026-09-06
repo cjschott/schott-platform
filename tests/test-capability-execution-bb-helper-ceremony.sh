@@ -133,6 +133,20 @@ for h in H.REQUIRED_HELPERS: print(h.path)' )
     > "${root}/root/kyri-gen14-library-digests.txt"
   : > "${root}/root/kyri-gen14-helper-digests.txt"
 
+  # G11-BA installed the launch and reconcile grants and the accepted deployment
+  # plan keeps them through this ceremony. The fixture carried an EMPTY
+  # sudoers.d, so every gate assertion here passed against a host shape that has
+  # not existed since G11-BA -- which is why the stale all-grants-absent gate
+  # survived to a production console. Each grant pins the entrypoint bytes this
+  # fixture actually carries. The verify grant stays absent.
+  printf 'Cmnd_Alias KYRI_EXEC_LAUNCH = sha256:%s \\\n    /usr/libexec/kyri-exec-transition ^CINV-[0-9]{6}$\ncschott ALL=(root) NOPASSWD: KYRI_EXEC_LAUNCH\n' \
+    "$(sha256sum "${root}/usr/libexec/kyri-exec-transition" | cut -d' ' -f1)" \
+    > "${root}/etc/sudoers.d/kyri-exec-launch"
+  printf 'Cmnd_Alias KYRI_EXEC_RECONCILE = sha256:%s \\\n    /usr/libexec/kyri-exec-reconcile ^CINV-[0-9]{6}$\ncschott ALL=(root) NOPASSWD: KYRI_EXEC_RECONCILE\n' \
+    "$(sha256sum "${root}/usr/libexec/kyri-exec-reconcile" | cut -d' ' -f1)" \
+    > "${root}/etc/sudoers.d/kyri-exec-reconcile"
+  chmod 0440 "${root}/etc/sudoers.d/kyri-exec-launch" "${root}/etc/sudoers.d/kyri-exec-reconcile"
+
   printf '{"coordinator_account":"cschott","coordinator_uid":1000,"schema_version":1}\n' \
     > "${root}/etc/kyri/coordinator-identity.json"                # prod-path-reference
   printf '{"execution_account":"kyri-capability","execution_gid":987,"execution_uid":999,"schema_version":1}\n' \
@@ -350,6 +364,76 @@ if run_ceremony "${root}" --verify; then
   fail "unknown bytes at a REPLACE predecessor were accepted"
 else
   pass "unknown bytes at a REPLACE predecessor are refused"
+fi
+
+# ===========================================================================
+# I2. the sudoers gate, exactly
+# ===========================================================================
+#
+# The ceremony refused production for holding the launch and reconcile grants
+# that G11-BA installed and the accepted plan keeps. The corrected model is
+# precise, NOT permissive: it is not "grants may exist". Both accepted grants
+# must be present, each pinning the installed entrypoint by digest AND naming it
+# as its command; the verification grant must be absent; and no other kyri-*
+# grant may exist.
+#
+# Every case below perturbs one thing about that state and requires --verify to
+# refuse. The control immediately after them is what stops these passing for an
+# unrelated reason.
+
+gate_root="${WORK}/gates"; build_runtime "${gate_root}"; publish_helpers "${gate_root}" pre
+run_gen15 "${gate_root}" --install || true
+
+if run_ceremony "${gate_root}" --verify; then
+  pass "gates: the accepted two-grant production state is accepted"
+else
+  fail "gates: the accepted state was refused: $(grep -m1 '^STOP' "${WORK}/last.log")"
+fi
+
+gate_refuses() {                       # <case> <description> <mutator>
+  local name="$1" description="$2" mutator="$3"
+  local root="${WORK}/gate-${name}"
+  rm -rf "${root}"; cp -a "${gate_root}" "${root}"
+  chmod -R u+w "${root}/etc/sudoers.d"
+  "${mutator}" "${root}"
+  if run_ceremony "${root}" --verify; then
+    fail "gates: ${description} was accepted"
+  else
+    pass "gates: ${description} is refused"
+  fi
+}
+
+drop_launch()     { rm -f "$1/etc/sudoers.d/kyri-exec-launch"; }
+drop_reconcile()  { rm -f "$1/etc/sudoers.d/kyri-exec-reconcile"; }
+repin_launch()    { sed -i "s/sha256:[0-9a-f]\{64\}/sha256:$(printf 'a%.0s' {1..64})/" "$1/etc/sudoers.d/kyri-exec-launch"; }
+repin_reconcile() { sed -i "s/sha256:[0-9a-f]\{64\}/sha256:$(printf 'b%.0s' {1..64})/" "$1/etc/sudoers.d/kyri-exec-reconcile"; }
+wrong_command()   { sed -i 's|/usr/libexec/kyri-exec-transition|/usr/libexec/kyri-exec-somethingelse|' "$1/etc/sudoers.d/kyri-exec-launch"; }
+add_verify()      { printf 'cschott ALL=(root) NOPASSWD: /usr/libexec/kyri-exec-verify\n' > "$1/etc/sudoers.d/kyri-exec-verify"; chmod 0440 "$1/etc/sudoers.d/kyri-exec-verify"; }
+add_undeclared()  { printf 'cschott ALL=(root) NOPASSWD: /usr/libexec/kyri-exec-anything\n' > "$1/etc/sudoers.d/kyri-exec-extra"; chmod 0440 "$1/etc/sudoers.d/kyri-exec-extra"; }
+move_entrypoint() {
+  local f="$1/usr/libexec/kyri-exec-transition" mode
+  mode="$(stat -c '%a' "${f}")"
+  chmod u+w "${f}"; printf '\n# moved\n' >> "${f}"; chmod "${mode}" "${f}"
+}
+
+gate_refuses launch-missing    "a missing launch grant"                      drop_launch
+gate_refuses reconcile-missing "a missing reconcile grant"                   drop_reconcile
+gate_refuses launch-digest     "a launch grant pinning bytes the host does not carry"    repin_launch
+gate_refuses reconcile-digest  "a reconcile grant pinning bytes the host does not carry" repin_reconcile
+gate_refuses wrong-command     "a grant naming a command the host does not run"          wrong_command
+gate_refuses verify-present    "the verification grant present"              add_verify
+gate_refuses undeclared        "an undeclared kyri-* grant"                  add_undeclared
+gate_refuses entrypoint-moved  "a pinned entrypoint whose bytes moved"       move_entrypoint
+
+# The control. An unmutated copy must still verify, or the eight cases above
+# prove nothing about what they name -- the trap an earlier draft of the
+# Generation-15 controls fell into by relaxing modes tree-wide before mutating.
+gate_control="${WORK}/gate-control"
+rm -rf "${gate_control}"; cp -a "${gate_root}" "${gate_control}"
+if run_ceremony "${gate_control}" --verify; then
+  pass "gates control: an unmutated copy of the accepted state still verifies"
+else
+  fail "gates control: the copy alone refuses, so the cases above prove nothing: $(grep -m1 '^STOP' "${WORK}/last.log")"
 fi
 
 # ===========================================================================
