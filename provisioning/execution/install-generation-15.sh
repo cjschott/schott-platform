@@ -727,13 +727,40 @@ helper_ceremony_library_creates() {
 # refusal at the worst moment.
 # Every library-root object an accepted post-Generation-14 ceremony governs, as
 # "<relative> <accepted-digest>" lines.
+# AN OBJECT MAY BE AT EITHER SIDE OF A CEREMONY THAT RUNS AFTER THIS GENERATION.
+#
+# A single "current" digest cannot be right, because this check runs at two
+# moments that disagree. Immediately after --install the helper surface has NOT
+# moved, so kyri_exec_transition_action.py is legitimately at G11-AX's target;
+# once the Phase-8 ceremony is accepted the same object is legitimately at
+# G11-BB's. Both are accepted bytes and neither is drift.
+#
+# So the accepted set for an object is:
+#
+#   the ONE state it holds before this generation installs
+#     -- the last ceremony accepted BEFORE Generation 15 that governs it,
+#        or Generation-14 evidence when none does
+#   PLUS the target of every ceremony accepted AFTER Generation 15 that governs it
+#
+# That is deliberately not "any digest it ever had". A pre-G11-AX state is
+# superseded and still refuses, because G11-AX ran before this generation and is
+# not optional. Only a ceremony that runs after this generation creates a second
+# legitimate answer, and only until it is run.
+CEREMONIES_BEFORE_THIS_GENERATION=(
+  "provisioning/execution/install-g11-ax-helpers.sh"
+)
+CEREMONIES_AFTER_THIS_GENERATION=(
+  "provisioning/execution/install-g11-bb-helpers.sh"
+)
+
 helper_ceremony_library_rows() {
-  local ceremony line target post
+  local ceremony line target post relative_ceremony
   # shellcheck disable=SC2016  # the placeholder must not expand
   local _PLACEHOLDER='${LIBRARY_ROOT}/'
-  # One accepted ceremony today. Held in an array so adding a second is a data
-  # change rather than a control-flow one.
-  local -a ceremonies=("${REPOSITORY}/provisioning/execution/install-g11-ax-helpers.sh")
+  local -a ceremonies=()
+  for relative_ceremony in "$@"; do
+    ceremonies+=("${REPOSITORY}/${relative_ceremony}")
+  done
   for ceremony in "${ceremonies[@]}"; do
     [[ -f "${ceremony}" ]] || continue
     while IFS= read -r line; do
@@ -745,38 +772,51 @@ helper_ceremony_library_rows() {
   done
 }
 
-helper_ceremony_accepted_digest() {
-  local relative="$1" path digest
+# Every digest an accepted ceremony declares for one library-root object, in
+# chain order. Empty output means no ceremony in that chain governs it.
+helper_ceremony_accepted_digests() {
+  local relative="$1"; shift
+  local path digest
   while read -r path digest; do
     [[ "${path}" == "${relative}" ]] || continue
-    printf '%s' "${digest}"
-    return 0
-  done < <(helper_ceremony_library_rows)
+    printf '%s\n' "${digest}"
+  done < <(helper_ceremony_library_rows "$@")
+}
+
+# True when the observed bytes are one of the accepted states.
+matches_accepted_state() {
+  local observed="$1" candidate
+  shift
+  for candidate in $1; do
+    [[ "${observed}" == "${candidate}" ]] && return 0
+  done
   return 1
 }
 
-# The accepted digest for one carried-over library-root object, and the
-# authority that records it: "ceremony <digest>" or "evidence <digest>".
-# Returns 1 when NO accepted authority records the object at all -- which is a
-# refusal, not a pass.
-#
-# THE ACCEPTED PREDECESSOR IS NOT GENERATION 14 ALONE. Both the pre-install
-# baseline check and the post-install carryover check ask this one function,
-# because they used to carry the same comparison twice: BB-L corrected one copy
-# and the other kept judging the whole library against Generation-14 evidence,
-# which is what refused a COMMITTED Generation-15 transaction for holding
-# exactly the bytes an accepted ceremony published. One reader is the fix for
-# that class, not just for those four objects.
 accepted_library_digest() {
-  local relative="$1" overlaid recorded
-  # `|| true` because "no ceremony declares this object" is the common answer
-  # and not an error; without it errexit ends the run silently.
-  overlaid="$(helper_ceremony_accepted_digest "${relative}" || true)"
-  if [[ -n "${overlaid}" ]]; then printf 'ceremony %s' "${overlaid}"; return 0; fi
-  recorded="$(sed -n "s#^\\([0-9a-f]\\{64\\}\\)  /usr/lib/kyri/python/${relative}\$#\\1#p" \
-                "${BASELINE_LIBRARY_EVIDENCE}" | head -1)"
-  [[ -n "${recorded}" ]] || return 1
-  printf 'evidence %s' "${recorded}"
+  local relative="$1"
+  local before after recorded authority='evidence' states=''
+
+  # The state this object holds before this generation installs.
+  before="$(helper_ceremony_accepted_digests "${relative}" \
+              "${CEREMONIES_BEFORE_THIS_GENERATION[@]}" | tail -1)"
+  if [[ -n "${before}" ]]; then
+    states="${before}"; authority='ceremony'
+  else
+    recorded="$(sed -n "s#^\\([0-9a-f]\\{64\\}\\)  /usr/lib/kyri/python/${relative}\$#\\1#p" \
+                  "${BASELINE_LIBRARY_EVIDENCE}" | head -1)"
+    states="${recorded}"
+  fi
+
+  # Plus whatever a ceremony accepted AFTER this generation declares for it.
+  after="$(helper_ceremony_accepted_digests "${relative}" \
+             "${CEREMONIES_AFTER_THIS_GENERATION[@]}")"
+  if [[ -n "${after}" ]]; then
+    states="${states:+${states} }${after//$'\n'/ }"; authority='ceremony'
+  fi
+
+  [[ -n "${states}" ]] || return 1
+  printf '%s %s' "${authority}" "${states}"
 }
 
 # Nothing an accepted ceremony published may silently disappear. The object
@@ -789,7 +829,7 @@ overlay_complete() {
     [[ -f "${LIBRARY_ROOT}/${path}" ]] && continue
     bad "the accepted helper ceremony published ${path}, which is not installed"
     missing=$((missing + 1))
-  done < <(helper_ceremony_library_rows)
+  done < <(helper_ceremony_library_rows "$@")
   (( missing == 0 ))
 }
 
@@ -821,16 +861,16 @@ require_baseline() {
     fi
     read -r authority recorded <<<"${accepted}"
     observed="$(digest_of "${file}")"
-    [[ "${observed}" == "${recorded}" ]] && continue
+    if matches_accepted_state "${observed}" "${recorded}"; then continue; fi
     if [[ "${authority}" == "ceremony" ]]; then
-      bad "installed ${relative} is ${observed}, the accepted helper ceremony records ${recorded}"
+      bad "installed ${relative} is ${observed}, the accepted helper ceremon(ies) record ${recorded}"
     else
       bad "installed ${relative} is ${observed}, evidence records ${recorded}"
     fi
     drift=$((drift + 1))
   done < <(find "${LIBRARY_ROOT}" -type f -name '*.py' | sort)
 
-  overlay_complete || drift=$((drift + 1))
+  overlay_complete "${CEREMONIES_BEFORE_THIS_GENERATION[@]}" "${CEREMONIES_AFTER_THIS_GENERATION[@]}" || drift=$((drift + 1))
 
   local recorded_relative
   while IFS= read -r recorded_relative; do
@@ -1509,16 +1549,16 @@ verify_unchanged_surface() {
     fi
     read -r authority recorded <<<"${accepted}"
     observed="$(digest_of "${file}")"
-    [[ "${observed}" == "${recorded}" ]] && continue
+    if matches_accepted_state "${observed}" "${recorded}"; then continue; fi
     if [[ "${authority}" == "ceremony" ]]; then
-      bad "${relative} changed: ${observed} but the accepted helper ceremony records ${recorded}"
+      bad "${relative} changed: ${observed} but the accepted helper ceremon(ies) record ${recorded}"
     else
       bad "${relative} changed: ${observed} but Generation-14 evidence records ${recorded}"
     fi
     drift=$((drift + 1))
   done < <(find "${LIBRARY_ROOT}" -type f -name '*.py' | sort)
 
-  overlay_complete || drift=$((drift + 1))
+  overlay_complete "${CEREMONIES_BEFORE_THIS_GENERATION[@]}" "${CEREMONIES_AFTER_THIS_GENERATION[@]}" || drift=$((drift + 1))
 
   local recorded_relative
   while IFS= read -r recorded_relative; do
@@ -1528,7 +1568,7 @@ verify_unchanged_surface() {
   done < <(sed -n 's#^[0-9a-f]\{64\}  /usr/lib/kyri/python/##p' "${BASELINE_LIBRARY_EVIDENCE}")
 
   (( drift == 0 )) \
-    && ok "every carried-over runtime object is exactly its accepted predecessor -- Generation 14, plus the $(helper_ceremony_library_rows | wc -l) object(s) an accepted ceremony published after it -- and nothing was removed"
+    && ok "every carried-over runtime object is exactly its accepted predecessor -- Generation 14, plus the $(helper_ceremony_library_rows "${CEREMONIES_BEFORE_THIS_GENERATION[@]}" "${CEREMONIES_AFTER_THIS_GENERATION[@]}" | wc -l) object(s) an accepted ceremony published after it -- and nothing was removed"
 }
 
 # ===========================================================================

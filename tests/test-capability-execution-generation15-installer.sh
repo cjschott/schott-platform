@@ -114,6 +114,21 @@ ax_row() {
   return 1
 }
 
+# The reviewed bytes that hash to a declared digest, found in this repository's
+# own history. Digest-pinned, so it cannot return anything but what was declared.
+blob_by_digest() {
+  local source="$1" wanted="$2" commit
+  while IFS= read -r commit; do
+    [[ -n "${commit}" ]] || continue
+    if [[ "$(git -C "${ROOT}" show "${commit}:${source}" 2>/dev/null \
+               | sha256sum | cut -d' ' -f1)" == "${wanted}" ]]; then
+      git -C "${ROOT}" show "${commit}:${source}"
+      return 0
+    fi
+  done < <(git -C "${ROOT}" log --format=%H -- "${source}")
+  return 1
+}
+
 build_fixture() {
   local root="$1"
   rm -rf "${root}"
@@ -243,6 +258,28 @@ build_fixture() {
     [[ "${helper}" == /usr/libexec/* ]] || continue
     install -D -m 0555 "${helper}" "${root}${helper}"   # prod-path-reference
   done < <(declared_helper_paths)
+
+  # Those come from the LIVE host, which has since run the Phase-8 helper
+  # ceremony. This fixture is a Generation-14 host, where the helper surface is
+  # at G11-BB's PREDECESSOR bytes -- so every object that ceremony moves is
+  # rewound to the digest it declares as its predecessor, found by digest in
+  # reviewed history rather than copied off a host that has moved on.
+  local bbrow bbsrc bbtgt bbmode bbpre
+  while IFS= read -r bbrow; do
+    bbrow="${bbrow#\"}"; bbrow="${bbrow%\"}"
+    IFS='|' read -r bbsrc bbtgt bbmode _ bbpre _ _ <<<"${bbrow}"
+    # shellcheck disable=SC2016  # the matrix carries the literal placeholders
+    bbtgt="${bbtgt/\$\{LIBRARY_ROOT\}/${root}/usr/lib/kyri/python}"
+    # shellcheck disable=SC2016
+    bbtgt="${bbtgt/\$\{LIBEXEC_ROOT\}/${root}/usr/libexec}"
+    [[ "${bbtgt}" == "${root}"* ]] || continue
+    blob_by_digest "${bbsrc}" "${bbpre}" > "${bbtgt}.tmp" || {
+      printf 'FIXTURE: no reviewed bytes hash to %s for %s\n' "${bbpre}" "${bbsrc}" >&2
+      rm -f "${bbtgt}.tmp"; return 1; }
+    install -D -m "${bbmode}" "${bbtgt}.tmp" "${bbtgt}"
+    rm -f "${bbtgt}.tmp"
+  done < <(sed -n '/^MATRIX=(/,/^)$/p' \
+             "${ROOT}/provisioning/execution/install-g11-bb-helpers.sh" | grep '^"')
   : > "${root}/root/kyri-gen14-helper-digests.txt"
   for object in "${staging}"/provisioning/execution/kyri-exec-*; do
     [[ -f "${object}" ]] || continue

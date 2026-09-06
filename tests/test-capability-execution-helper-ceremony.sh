@@ -138,9 +138,27 @@ build_host() {
     chmod "$(row_field "${row}" 3)" "${root}${target}"
   done < <(matrix_rows)
 
-  # The quota pair: inside the readiness closure, already at reviewed bytes, and
-  # not this ceremony's to move.
-  cp "${LIBRARY_ROOT}/kyri_exec_quota.py" "${root}${LIBRARY_ROOT}/kyri_exec_quota.py" 2>/dev/null || true
+  # The quota pair: inside the readiness closure and not this ceremony's to move.
+  # It is taken at the bytes THIS ceremony's era carried, not the live host's:
+  # G11-BB has since moved kyri_exec_quota.py, and copying the host would put a
+  # successor object into a fixture whose runtime declaration predates it -- the
+  # readiness rule would then call the complete AX target set incompatible for a
+  # reason that has nothing to do with what is under test.
+  local quota_pre
+  quota_pre="$(sed -n '/^MATRIX=(/,/^)$/p' \
+                 "${ROOT}/provisioning/execution/install-g11-bb-helpers.sh" \
+               | grep '^"' | grep 'kyri_exec_quota\.py' \
+               | sed 's/^"//; s/"$//' | cut -d'|' -f5)"
+  if [[ -n "${quota_pre}" ]]; then
+    # The copy that may already be there is 0444, so write beside it and install.
+    predecessor_blob "provisioning/execution/kyri-exec-quota.py" "${quota_pre}" \
+      > "${root}${LIBRARY_ROOT}/kyri_exec_quota.py.tmp" || return 1
+    install -D -m 0444 "${root}${LIBRARY_ROOT}/kyri_exec_quota.py.tmp" \
+      "${root}${LIBRARY_ROOT}/kyri_exec_quota.py"
+    rm -f "${root}${LIBRARY_ROOT}/kyri_exec_quota.py.tmp"
+  else
+    cp "${LIBRARY_ROOT}/kyri_exec_quota.py" "${root}${LIBRARY_ROOT}/kyri_exec_quota.py" 2>/dev/null || true
+  fi
   cp "${LIBEXEC_ROOT}/kyri-exec-quota" "${root}${LIBEXEC_ROOT}/kyri-exec-quota" 2>/dev/null || true
 
   cp /etc/kyri/coordinator-identity.json "${root}/etc/kyri/" || return 1   # prod-path-reference

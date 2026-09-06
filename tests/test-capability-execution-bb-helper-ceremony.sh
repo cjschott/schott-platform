@@ -156,6 +156,22 @@ for h in H.REQUIRED_HELPERS: print(h.path)' )
 
 # Publish the helper objects at a chosen generation. `which` is a matrix column
 # index: 4 is the predecessor digest, 5 is the target.
+# The reviewed bytes that hash to a declared digest, found in this repository's
+# own history. Digest-pinned, so it cannot return anything but the declared
+# predecessor -- and it does not consult the live host at all.
+predecessor_blob() {
+  local source="$1" wanted="$2" commit
+  while IFS= read -r commit; do
+    [[ -n "${commit}" ]] || continue
+    if [[ "$(git -C "${ROOT}" show "${commit}:${source}" 2>/dev/null \
+               | sha256sum | cut -d' ' -f1)" == "${wanted}" ]]; then
+      git -C "${ROOT}" show "${commit}:${source}"
+      return 0
+    fi
+  done < <(git -C "${ROOT}" log --format=%H -- "${source}")
+  return 1
+}
+
 publish_helpers() {
   local root="$1" which="$2" only="${3:-}"
   local lib="${root}/usr/lib/kyri/python" libexec="${root}/usr/libexec"
@@ -180,9 +196,16 @@ publish_helpers() {
     if [[ "${want}" == "${post}" ]]; then
       install -D -m "${mode}" "${staging}/${source}" "${target}"
     else
-      # The predecessor bytes are whatever the live host carries for that object.
-      local live="${target/${root}/}"
-      install -D -m "${mode}" "${live}" "${target}"
+      # The predecessor bytes come from reviewed history, found BY DIGEST, not
+      # from the live host. They used to be copied off the host, which was true
+      # only until this ceremony was accepted -- after which "predecessor" and
+      # "successor" became the same bytes and cases A, D and E silently inverted.
+      # Same host-following class the succession work removed elsewhere.
+      predecessor_blob "${source}" "${pre}" > "${target}.tmp" \
+        || { printf 'FIXTURE: no reviewed bytes hash to %s for %s\n' "${pre}" "${source}" >&2
+             rm -f "${target}.tmp"; return 1; }
+      install -D -m "${mode}" "${target}.tmp" "${target}"
+      rm -f "${target}.tmp"
     fi
   done < <(sed -n '/^MATRIX=(/,/^)$/p' "${CEREMONY}" | grep '^"')
   rm -rf "${staging}"
