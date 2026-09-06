@@ -172,7 +172,7 @@ Both entrypoint digests equal the constants the ceremony pins, so
 Listing the execution account's containers requires
 `sudo runuser -u kyri-capability`, and its container store is `Permission
 denied` to the coordinator. **I did not verify it and do not claim it.** The
-operator command is in §10.
+operator command is in §11.
 
 ## 7. Runtime, Fabric and Trust
 
