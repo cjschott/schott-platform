@@ -88,6 +88,39 @@ AUTHORITY_ROOT="/var/lib/kyri/implementation-authority"
 FABRIC_ROOT="/var/lib/kyri/fabric"
 TRUST_ROOT="/var/lib/kyri/trust"
 
+# THE CAPABILITY RUNTIME STORE. A second plane, with its own root, its own
+# identifier space and its own sequences: invocations and results have never
+# lived under the Fabric or the implementation authority, and never will --
+# `CINV`/`CRES` are not Fabric kinds. The check below used to scan those two
+# roots for them, so it could not fail, and said so anyway.
+RUNTIME_STORE="/data/kyri/capability-runtime"
+
+# THE INVOCATION HISTORY THIS CEREMONY WAS REVIEWED AGAINST, by identity and by
+# digest -- the same shape as the identity authorities above, and for the same
+# reason: what the reviewer looked at is named, so a host carrying something
+# else is a host nobody reviewed.
+#
+# It is NOT "expects none". That was a G11-AX-era statement about a host on
+# which nothing had ever been invoked, and it is the third instance of one
+# defect: BB-L found it in the Generation-15 preflight, BB-Q in the sudoers
+# gate, and BB-R here. `CINV-000001` is accepted, immutable, permanently
+# UNRESOLVED history (G11-BB-D; resume NOT authorised), so a ceremony requiring
+# zero invocation records would refuse the accepted host forever.
+#
+# A `CINV` is immutable pre-execution evidence, so pinning a declared record's
+# digest is durable -- it can never legitimately change. What is NOT durable is
+# pinning the SIZE of the history, because the platform is built to invoke and
+# the next controlled invocation is expected. So freshness -- "the host has not
+# moved past the review" -- is asserted by the PREFLIGHT only. The post-install
+# attestation requires the reviewed history to be intact and the store to be
+# sound, and tolerates governed history written after this ceremony was
+# accepted. Otherwise an accepted deployment would start reporting FAIL the
+# moment the platform did the thing it exists for.
+ACCEPTED_INVOCATION_HISTORY=(
+  "CINV-000001 1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa"
+)
+ACCEPTED_RESULT_HISTORY=()
+
 COORDINATOR_IDENTITY="/etc/kyri/coordinator-identity.json"
 EXECUTION_IDENTITY="/etc/kyri/execution-identity.json"
 COORDINATOR_IDENTITY_SHA256="3dec888c9efa4214d9cbc8a943818fbe21cd41fbf81ee252a1e38d5d25fd2811"
@@ -129,6 +162,28 @@ if [[ -n "${FIXTURE}" ]]; then
   TRUST_ROOT="${FIXTURE}${TRUST_ROOT}"
   COORDINATOR_IDENTITY="${FIXTURE}${COORDINATOR_IDENTITY}"
   EXECUTION_IDENTITY="${FIXTURE}${EXECUTION_IDENTITY}"
+  RUNTIME_STORE="${FIXTURE}${RUNTIME_STORE}"
+  # A fixture is a DIFFERENT HOST, and production's pin names production's
+  # records. So the fixture declares its own accepted history beside the other
+  # evidence files this ceremony already reads out of the fixture's /root, and
+  # a fixture that declares none is a host on which nothing was ever invoked.
+  # This is not a production override: under --fixture every root above is
+  # rebound too, so no production path is read for state either way.
+  ACCEPTED_INVOCATION_HISTORY=()
+  ACCEPTED_RESULT_HISTORY=()
+  ACCEPTED_HISTORY_DECLARATION="${FIXTURE}/root/kyri-accepted-invocation-history.txt"
+  if [[ -f "${ACCEPTED_HISTORY_DECLARATION}" ]]; then
+    while read -r _kind _identifier _digest _rest; do
+      [[ -z "${_kind}" || "${_kind}" == \#* ]] && continue
+      [[ -n "${_identifier}" && -n "${_digest}" && -z "${_rest}" ]] \
+        || { printf 'ERROR malformed accepted-history row: %s\n' "${_kind}" >&2; exit 2; }
+      case "${_kind}" in
+        CINV) ACCEPTED_INVOCATION_HISTORY+=("${_identifier} ${_digest}") ;;
+        CRES) ACCEPTED_RESULT_HISTORY+=("${_identifier} ${_digest}") ;;
+        *) printf 'ERROR unknown accepted-history kind: %s\n' "${_kind}" >&2; exit 2 ;;
+      esac
+    done < "${ACCEPTED_HISTORY_DECLARATION}"
+  fi
 fi
 
 JOURNAL="${TRANSACTION_ROOT}/journal"
@@ -591,14 +646,174 @@ require_root_authority_unmounted() {
   ok "no Root Authority mount is present"
 }
 
-require_no_invocation_records() {
-  local root count=0
-  for root in "${FABRIC_ROOT}" "${AUTHORITY_ROOT}"; do
-    [[ -d "${root}" ]] || continue
-    count=$((count + $(find "${root}" -maxdepth 4 \( -name 'CINV-*' -o -name 'CRES-*' \) 2>/dev/null | wc -l)))
+# --- the governed invocation history ---------------------------------------
+#
+# Read through the PLATFORM'S OWN readers, exactly as `runtime_verdict` takes
+# the readiness rule from the installed runtime rather than carrying a copy:
+# the store class, its validator, and the identifier model all come from
+# ${LIBRARY_ROOT}. Nothing here is a second interpretation of the store.
+#
+# The store's expected ownership is not guessed and not taken from the store
+# itself, which would be circular. It comes from the coordinator identity
+# authority -- whose bytes `require_identity_authorities` has already pinned --
+# resolved through the platform's own account resolver.
+#
+# Emits one fact per line and judges nothing; every refusal below is bash's.
+invocation_history_report() {
+  python3 - "${LIBRARY_ROOT}" "${RUNTIME_STORE}" "${COORDINATOR_IDENTITY}" <<'HISTORYPY'
+import json, pathlib, sys
+
+library, store_root, identity_path = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path = [p for p in sys.path if p not in ('', '.', '/opt/schott-platform')]
+sys.path.insert(0, library)
+
+root = pathlib.Path(store_root)
+if not root.is_dir():
+    print("STORE absent")
+    raise SystemExit(0)
+try:
+    account = json.loads(
+        pathlib.Path(identity_path).read_text(encoding="utf-8"))["coordinator_account"]
+except Exception as error:                       # noqa: BLE001 - reported, not raised
+    print(f"STORE unusable the coordinator identity authority is unreadable ({error})")
+    raise SystemExit(0)
+try:
+    from tools.capability import inspection
+    from tools.capability.identifiers import ID_FIELDS
+    from tools.capability.store import CapabilityStore
+    from tools.capability.execution.identity import resolve_account
+except ImportError as error:
+    print(f"STORE unusable {error}")
+    raise SystemExit(0)
+try:
+    uid, gid = resolve_account(account)
+    store = CapabilityStore.open_for_read(str(root), expected_uid=uid, expected_gid=gid)
+except Exception as error:                       # noqa: BLE001 - reported, not raised
+    print(f"STORE unusable {error}")
+    raise SystemExit(0)
+
+print("STORE ok")
+report = inspection.validate_store(store)
+if report.status != inspection.STATUS_REPORTED:
+    print(f"FINDING the store reports status {report.status}")
+for finding in report.findings:
+    print(f"FINDING {finding}")
+
+for kind, label in (("capability-invocation", "INVOCATION"),
+                    ("capability-result", "RESULT")):
+    directory = root / store.record_dirs[kind]
+    for entry in sorted(path.name for path in directory.iterdir()):
+        print(f"ENTRY {label} {entry}")
+    for record in store.list_records(kind):
+        identifier = record.get(ID_FIELDS[kind])
+        print(f"RECORD {label} {identifier} {store.path_for(kind, identifier)}")
+    # The counter itself, not the identity derived from it: an identity skips
+    # names a record already occupies, so it cannot tell a counter that
+    # disagrees with the record set from one that agrees.
+    raw = ""
+    try:
+        raw = (root / "sequences" / f"{kind}.seq").read_text(encoding="utf-8").strip()
+    except OSError:
+        raw = ""
+    print(f"SEQUENCE {label} {raw if raw.isdigit() else 0}")
+    print(f"NEXT {label} {store.peek_next_id(kind)}")
+HISTORYPY
+}
+
+# The accepted invocation history, checked against the store that actually
+# holds it. `freshness` is `reviewed` for the preflight -- the history must be
+# EXACTLY the reviewed one -- and `installed` for the post-install attestation,
+# which requires the reviewed history intact and the store sound but tolerates
+# governed history written after this ceremony was accepted. See the
+# declaration above for why those are different questions.
+require_accepted_invocation_history() {
+  local freshness="$1" line kind identifier digest observed
+  local -a findings=() entries=() records=() declared=()
+  local -A sequence=() next=() path_of=()
+  local store_state=""
+
+  while IFS= read -r line; do
+    case "${line}" in
+      "STORE "*)    store_state="${line#STORE }" ;;
+      "FINDING "*)  findings+=("${line#FINDING }") ;;
+      "ENTRY "*)    entries+=("${line#ENTRY }") ;;
+      "RECORD "*)   read -r kind identifier observed <<<"${line#RECORD }"
+                    records+=("${kind} ${identifier}")
+                    path_of["${kind} ${identifier}"]="${observed}" ;;
+      "SEQUENCE "*) read -r kind observed <<<"${line#SEQUENCE }"
+                    sequence["${kind}"]="${observed}" ;;
+      "NEXT "*)     read -r kind observed <<<"${line#NEXT }"
+                    next["${kind}"]="${observed}" ;;
+    esac
+  done < <(invocation_history_report)
+
+  for line in "${ACCEPTED_INVOCATION_HISTORY[@]}"; do declared+=("INVOCATION ${line}"); done
+  for line in "${ACCEPTED_RESULT_HISTORY[@]}";     do declared+=("RESULT ${line}"); done
+
+  # FAIL CLOSED. An absent or unreadable store is a refusal whenever anything
+  # was reviewed, and never a quiet pass -- which is the whole of what was
+  # wrong here.
+  if [[ "${store_state}" != "ok" ]]; then
+    (( ${#declared[@]} == 0 )) \
+      || halt "the invocation history at ${RUNTIME_STORE} could not be read (${store_state:-no report}), and ${#declared[@]} record(s) were reviewed"
+    ok "no capability runtime store exists at ${RUNTIME_STORE} and none was reviewed"
+    return 0
+  fi
+
+  local finding
+  for finding in "${findings[@]}"; do bad "invocation store: ${finding}"; done
+  (( ${#findings[@]} == 0 )) \
+    || halt "the invocation store at ${RUNTIME_STORE} is not sound; operator disposition required"
+
+  # Nothing in a record directory but the records themselves. The validator
+  # names a partial write; an object of any other shape is one nobody declared.
+  local entry expected found
+  for entry in "${entries[@]}"; do
+    read -r kind identifier <<<"${entry}"
+    found=""
+    for line in "${records[@]}"; do
+      [[ "${line}" == "${kind} "* ]] || continue
+      [[ "${identifier}" == "${line#* }.yaml" ]] && { found=1; break; }
+    done
+    [[ -n "${found}" ]] \
+      || halt "${RUNTIME_STORE} holds ${identifier}, which is not a governed ${kind,,} record"
   done
-  (( count == 0 )) || halt "${count} invocation record(s) exist; this ceremony expects none"
-  ok "no production CINV or CRES exists"
+
+  # Every reviewed record, present and byte-identical. A CINV is immutable
+  # pre-execution evidence; a CRES is a terminal outcome. Neither may move.
+  for line in "${declared[@]}"; do
+    read -r kind identifier digest <<<"${line}"
+    expected="${path_of["${kind} ${identifier}"]:-}"
+    [[ -n "${expected}" ]] \
+      || halt "the reviewed ${identifier} is absent from ${RUNTIME_STORE}"
+    observed="$(digest_of "${expected}")"
+    [[ "${observed}" == "${digest}" ]] \
+      || halt "the reviewed ${identifier} is ${observed:-unreadable}, expected ${digest}: immutable evidence was rewritten"
+  done
+
+  # The record set and its own counter must agree, per kind. A counter ahead of
+  # the records means an identity was spent and its record never landed; a
+  # counter behind them means a record exists that no allocation produced.
+  for kind in INVOCATION RESULT; do
+    found=0
+    for line in "${records[@]}"; do [[ "${line}" == "${kind} "* ]] && found=$((found + 1)); done
+    [[ "${sequence[${kind}]:-0}" == "${found}" ]] \
+      || halt "${RUNTIME_STORE} holds ${found} ${kind,,} record(s) and a sequence at ${sequence[${kind}]:-0}: the store disagrees with its own counter"
+  done
+
+  local invocations=0 results=0
+  for line in "${records[@]}"; do
+    [[ "${line}" == "INVOCATION "* ]] && invocations=$((invocations + 1))
+    [[ "${line}" == "RESULT "* ]] && results=$((results + 1))
+  done
+
+  if [[ "${freshness}" == "reviewed" ]]; then
+    (( invocations == ${#ACCEPTED_INVOCATION_HISTORY[@]} && results == ${#ACCEPTED_RESULT_HISTORY[@]} )) \
+      || halt "the invocation history has moved past the reviewed one (${invocations} invocation(s), ${results} result(s) against ${#ACCEPTED_INVOCATION_HISTORY[@]} and ${#ACCEPTED_RESULT_HISTORY[@]} reviewed); re-review before installing"
+    ok "the invocation history at ${RUNTIME_STORE} is exactly the reviewed one: ${invocations} invocation(s), ${results} result(s), ${next[INVOCATION]:-?} unspent"
+  else
+    ok "the invocation history at ${RUNTIME_STORE} carries all ${#declared[@]} reviewed record(s) unchanged; ${invocations} invocation(s), ${results} result(s), ${next[INVOCATION]:-?} unspent"
+  fi
 }
 
 # The runtime, MINUS this ceremony's own targets. Four of the ten flattened
@@ -1072,7 +1287,7 @@ case "${MODE}" in
   require_runtime_generation
   require_identity_authorities
   require_gates_closed
-  require_no_invocation_records
+  require_accepted_invocation_history reviewed
   require_predecessor_state
   require_no_transaction_residue
   require_same_filesystem
@@ -1182,7 +1397,7 @@ case "${MODE}" in
   report_ceremony_coherence || bad "ceremony coherence is incomplete"
   require_identity_authorities
   require_gates_closed
-  require_no_invocation_records
+  require_accepted_invocation_history installed
   report_transaction_residue
   printf '\n'
   report_runtime_readiness

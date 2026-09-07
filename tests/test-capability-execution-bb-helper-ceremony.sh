@@ -460,6 +460,316 @@ else
 fi
 
 # ===========================================================================
+# I3. the invocation-history gate, exactly
+# ===========================================================================
+#
+# BB-R found this check reporting `ok "no production CINV or CRES exists"` while
+# scanning the Fabric and implementation-authority roots, which structurally
+# never hold a CINV or a CRES. It could not fail, so it established nothing --
+# and its "expects none" policy was separately stale, because CINV-000001 is
+# accepted immutable UNRESOLVED history and a correctly scoped zero-history rule
+# would have refused the accepted host for holding it.
+#
+# The corrected rule has two halves, and every case below perturbs exactly one
+# thing about one of them:
+#
+#   OBSERVATION  the store it reads is /data/kyri/capability-runtime, through
+#                the platform's own reader and validator.
+#   POLICY       the reviewed history must be intact and nothing ungoverned may
+#                exist -- NOT that the history is empty.
+#
+# The fixture host declares its own accepted history, because a fixture is a
+# different host: production's pin names production's records.
+
+STALE_AT="96653199be7084c080516bc3c789aac39ce25bb8"   # the pre-correction bytes
+
+runtime_store_of() { printf '%s/data/kyri/capability-runtime' "$1"; }
+
+# A governed Capability Runtime store, built from the platform's OWN record
+# model rather than from a hand-copied literal -- so a record-shape change
+# surfaces here instead of silently making every case below pass.
+#
+# <root> <invocations> <results> <declared-invocations> <declared-results>
+build_invocation_store() {
+  local root="$1" invocations="$2" results="$3"
+  local declared_invocations="$4" declared_results="$5"
+  ( cd "${ROOT}" && PYTHONDONTWRITEBYTECODE=1 python3 - \
+      "$(runtime_store_of "${root}")" "${root}/root/kyri-accepted-invocation-history.txt" \
+      "${invocations}" "${results}" "${declared_invocations}" "${declared_results}" <<'STOREPY'
+import hashlib, pathlib, sys
+sys.path.insert(0, ".")
+import yaml
+from tools.capability.evidence import OUTCOME_PREPARED
+from tools.capability.execution.profile import ADAPTER_IDENTITY
+from tools.capability.records import (INVOCATION_FIELDS, INVOCATION_KIND,
+                                      INVOCATION_SCHEMA_VERSION, RESULT_FIELDS,
+                                      RESULT_KIND, RESULT_SCHEMA_VERSION)
+
+store = pathlib.Path(sys.argv[1])
+declaration = pathlib.Path(sys.argv[2])
+invocations, results = int(sys.argv[3]), int(sys.argv[4])
+declared_invocations, declared_results = int(sys.argv[5]), int(sys.argv[6])
+
+inv_dir = store / "capability-invocations"
+res_dir = store / "capability-results"
+seq_dir = store / "sequences"
+for directory in (inv_dir, res_dir, seq_dir):
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+def invocation(n, resolved):
+    # An invocation that carries a terminal result must also carry the
+    # execution mechanism that result came from. Without it the platform's own
+    # validator reports `result-without-execution-authority` -- correctly -- and
+    # every case built on this fixture would refuse for that instead of for
+    # what it names.
+    record = {
+        "invocation_record_id": f"CINV-{n:06d}",
+        "invocation_id": f"fixture-invoke-{n:06d}",
+        "request_id": f"fixture-request-{n:06d}",
+        "selection_id": "CSEL-000002",
+        "instance_id": "CINST-000003",
+        "capability_package_id": "CPKG-0001",
+        "contract_id": "CCON-0001",
+        "capability_id": "CAPDEF-0001",
+        "operation": "execute",
+        "actor": "fixture-operator",
+        "payload_digest": "sha256:" + "0" * 64,
+        "binding_digest": "sha256:" + "1" * 64,
+        "effect_class": "computational",
+        "artifact_digest": "sha256:" + "2" * 64,
+        "staged_path": f"{store}/staging/fixture-{n:06d}",
+        "adapter_identity": ADAPTER_IDENTITY if resolved else None,
+        "requested_at": "2026-09-04 19:30:54-05:00",
+        "kind": INVOCATION_KIND,
+        "schema_version": INVOCATION_SCHEMA_VERSION,
+        "evidence": {"actor": "fixture-operator", "outcome": OUTCOME_PREPARED,
+                     "request_id": f"fixture-request-{n:06d}",
+                     "selection_id": "CSEL-000002"},
+    }
+    assert set(record) == set(INVOCATION_FIELDS), sorted(
+        set(record) ^ set(INVOCATION_FIELDS))
+    return record
+
+
+def result(n):
+    record = {
+        "capability_result_id": f"CRES-{n:06d}",
+        "invocation_record_id": f"CINV-{n:06d}",
+        "attempt_number": 1,
+        "outcome_class": "completed",
+        "reason": None,
+        "result_digest": "sha256:" + "3" * 64,
+        "result_artifact_reference": None,
+        "started_at": "2026-09-04 19:31:00-05:00",
+        "ended_at": "2026-09-04 19:31:05-05:00",
+        "recorded_at": "2026-09-04 19:31:06-05:00",
+        "kind": RESULT_KIND,
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "evidence": {"actor": "fixture-operator", "outcome": "completed"},
+    }
+    assert set(record) == set(RESULT_FIELDS), sorted(
+        set(record) ^ set(RESULT_FIELDS))
+    return record
+
+
+rows = []
+for n in range(1, invocations + 1):
+    path = inv_dir / f"CINV-{n:06d}.yaml"
+    path.write_text(yaml.safe_dump(invocation(n, n <= results)), encoding="utf-8")
+    path.chmod(0o600)
+    if n <= declared_invocations:
+        rows.append(f"CINV CINV-{n:06d} "
+                    f"{hashlib.sha256(path.read_bytes()).hexdigest()}")
+for n in range(1, results + 1):
+    path = res_dir / f"CRES-{n:06d}.yaml"
+    path.write_text(yaml.safe_dump(result(n)), encoding="utf-8")
+    path.chmod(0o600)
+    if n <= declared_results:
+        rows.append(f"CRES CRES-{n:06d} "
+                    f"{hashlib.sha256(path.read_bytes()).hexdigest()}")
+
+(seq_dir / "capability-invocation.seq").write_text(f"{invocations}\n",
+                                                   encoding="utf-8")
+if results:
+    (seq_dir / "capability-result.seq").write_text(f"{results}\n",
+                                                   encoding="utf-8")
+declaration.parent.mkdir(parents=True, exist_ok=True)
+declaration.write_text("".join(f"{row}\n" for row in rows), encoding="utf-8")
+STOREPY
+  )
+}
+
+# The accepted host: Generation 15 installed, predecessor helpers, and exactly
+# the reviewed invocation history -- one prepared invocation, no result.
+history_root="${WORK}/history"
+build_runtime "${history_root}"; publish_helpers "${history_root}" pre
+run_gen15 "${history_root}" --install || true
+build_invocation_store "${history_root}" 1 0 1 0
+
+if run_ceremony "${history_root}" --verify; then
+  pass "history: the accepted host -- one reviewed CINV, no CRES -- is accepted"
+else
+  fail "history: the accepted host was refused: $(grep -m1 '^STOP' "${WORK}/last.log")"
+fi
+
+# The evidence line must name what was actually established. The pre-correction
+# ceremony printed "no production CINV or CRES exists", which was false on this
+# host and on production.
+if grep -q 'invocation history' "${WORK}/last.log" \
+   && ! grep -q 'no production CINV or CRES exists' "${WORK}/last.log"; then
+  pass "history: the ceremony reports the history it verified, not an empty one"
+else
+  fail "history: the ceremony still claims an empty invocation history: $(grep -i 'CINV' "${WORK}/last.log" | head -2)"
+fi
+
+# The store it actually reads. A ceremony scanning the Fabric and authority
+# roots for CINV/CRES cannot see any of the cases below.
+if grep -q "$(runtime_store_of "${history_root}")" "${WORK}/last.log"; then
+  pass "history: the ceremony names the capability-runtime store it read"
+else
+  fail "history: the ceremony did not name the capability-runtime store"
+fi
+
+history_refuses() {                    # <case> <description> <mutator>
+  local name="$1" description="$2" mutator="$3"
+  local root="${WORK}/history-${name}"
+  rm -rf "${root}"; cp -a "${history_root}" "${root}"
+  chmod -R u+w "$(runtime_store_of "${root}")"
+  "${mutator}" "${root}"
+  if run_ceremony "${root}" --verify; then
+    fail "history: ${description} was accepted"
+  elif grep -qEi 'invocation (history|store)|reviewed CINV-|not a governed |capability runtime store|disagrees with its own counter' \
+         "${WORK}/last.log"; then
+    pass "history: ${description} is refused"
+  else
+    fail "history: ${description} was refused for an unrelated reason: $(grep -m1 -E '^(STOP|FAIL)' "${WORK}/last.log")"
+  fi
+}
+
+extra_invocation() {                   # an invocation nobody reviewed
+  build_invocation_store "$1" 2 0 1 0
+}
+undeclared_result() {                  # a result nobody reviewed
+  build_invocation_store "$1" 1 1 1 0
+}
+changed_invocation() {                 # the immutable record, rewritten
+  local path
+  path="$(runtime_store_of "$1")/capability-invocations/CINV-000001.yaml"
+  printf 'actor: someone-else\n' >> "${path}"
+}
+missing_invocation() {                 # the reviewed record, removed
+  rm -f "$(runtime_store_of "$1")/capability-invocations/CINV-000001.yaml"
+}
+spent_sequence() {                     # the next identity spent, no record for it
+  printf '2\n' > "$(runtime_store_of "$1")/sequences/capability-invocation.seq"
+}
+malformed_record() {                   # a record whose meaning nobody reviewed
+  local path
+  path="$(runtime_store_of "$1")/capability-invocations/CINV-000002.yaml"
+  printf 'invocation_record_id: CINV-000002\nkind: capability-invocation\n' > "${path}"
+  printf '2\n' > "$(runtime_store_of "$1")/sequences/capability-invocation.seq"
+}
+write_residue() {                      # an interrupted write, left behind
+  printf 'partial\n' \
+    > "$(runtime_store_of "$1")/capability-invocations/.CINV-000002.tmp"
+}
+unexpected_object() {                  # an object no record kind accounts for
+  printf 'notes\n' > "$(runtime_store_of "$1")/capability-invocations/README.txt"
+}
+absent_store() {                       # declared history with no store at all
+  rm -rf "$(runtime_store_of "$1")"
+}
+
+history_refuses extra-cinv    "an invocation record nobody reviewed"        extra_invocation
+history_refuses extra-cres    "a result record nobody reviewed"             undeclared_result
+history_refuses changed-cinv  "the reviewed CINV rewritten"                 changed_invocation
+history_refuses missing-cinv  "the reviewed CINV removed"                   missing_invocation
+history_refuses spent-seq     "the next invocation identity spent"          spent_sequence
+history_refuses malformed     "a malformed invocation record"               malformed_record
+history_refuses residue       "a partial write left in the record store"    write_residue
+history_refuses unexpected    "an unexpected object in the record store"    unexpected_object
+history_refuses no-store      "declared history with no runtime store"      absent_store
+
+# The control. Without it the nine cases above prove nothing about what they
+# name.
+history_control="${WORK}/history-control"
+rm -rf "${history_control}"; cp -a "${history_root}" "${history_control}"
+if run_ceremony "${history_control}" --verify; then
+  pass "history control: an unmutated copy of the accepted host still verifies"
+else
+  fail "history control: the copy alone refuses: $(grep -m1 '^STOP' "${WORK}/last.log")"
+fi
+
+# The freshness half belongs to the PREFLIGHT, not to the post-install
+# attestation. A host whose invocation history legitimately advanced after this
+# ceremony was accepted must not make an installed, accepted deployment start
+# reporting FAIL -- that is the BB-L / BB-Q / BB-R staleness class, one grain
+# finer. So --verify refuses an advanced history and --verify-installed does not.
+advanced="${WORK}/history-advanced"
+rm -rf "${advanced}"; cp -a "${history_root}" "${advanced}"
+run_ceremony "${advanced}" --install || true
+build_invocation_store "${advanced}" 2 2 1 0
+if run_ceremony "${advanced}" --verify-installed; then
+  pass "history: --verify-installed accepts a history that legitimately advanced"
+else
+  fail "history: --verify-installed refused an advanced history: $(grep -m1 '^STOP' "${WORK}/last.log")"
+fi
+# The preflight half of the same pair. It is asserted on a host whose helper
+# surface is still the predecessor, so the refusal cannot come from coherence or
+# readiness -- which is what made an earlier draft of this case pass for a
+# reason that had nothing to do with the invocation history.
+advanced_pre="${WORK}/history-advanced-pre"
+rm -rf "${advanced_pre}"; cp -a "${history_root}" "${advanced_pre}"
+chmod -R u+w "$(runtime_store_of "${advanced_pre}")"
+build_invocation_store "${advanced_pre}" 2 2 1 0
+if run_ceremony "${advanced_pre}" --verify; then
+  fail "history: --verify accepted a host that moved past the reviewed history"
+elif grep -q 'moved past the reviewed one' "${WORK}/last.log"; then
+  pass "history: --verify refuses a host that moved past the reviewed history"
+else
+  fail "history: --verify refused an advanced history for an unrelated reason: $(grep -m1 '^STOP' "${WORK}/last.log")"
+fi
+# ... and the reviewed record must still be intact even then.
+chmod -R u+w "$(runtime_store_of "${advanced}")"
+printf 'actor: someone-else\n' \
+  >> "$(runtime_store_of "${advanced}")/capability-invocations/CINV-000001.yaml"
+if run_ceremony "${advanced}" --verify-installed; then
+  fail "history: --verify-installed accepted a rewritten reviewed record"
+else
+  pass "history: --verify-installed refuses a rewritten reviewed record"
+fi
+
+# THE SECOND DEFECT, PROVED AGAINST THE HISTORICAL BYTES.
+#
+# BB-R's ruling was that the two defects cancelled: scoped correctly, the stale
+# "expects none" policy would have REFUSED the accepted host. This runs the
+# pre-correction function verbatim out of ${STALE_AT} against the store it
+# should always have been reading, and requires exactly that refusal -- so the
+# claim is executed rather than asserted in prose.
+stale_probe="${WORK}/stale-probe.sh"
+{
+  printf 'set -Eeuo pipefail\n'
+  # shellcheck disable=SC2016  # the probe's own body, emitted verbatim
+  printf 'halt() { printf "STOP: %%s\\n" "$1" >&2; exit 1; }\n'
+  # shellcheck disable=SC2016  # the probe's own body, emitted verbatim
+  printf 'ok() { printf "ok       %%s\\n" "$1"; }\n'
+  git -C "${ROOT}" show \
+    "${STALE_AT}:provisioning/execution/install-g11-bb-helpers.sh" \
+    | sed -n '/^require_no_invocation_records() {$/,/^}$/p'
+  printf 'require_no_invocation_records\n'
+} > "${stale_probe}"
+if [[ "$(grep -c 'invocation record(s) exist' "${stale_probe}")" -ne 1 ]]; then
+  fail "history: the pre-correction function was not recovered from ${STALE_AT}"
+elif FABRIC_ROOT="$(runtime_store_of "${history_root}")" \
+     AUTHORITY_ROOT="$(runtime_store_of "${history_root}")" \
+     bash "${stale_probe}" >/dev/null 2>&1; then
+  fail "history: the stale zero-history policy accepted the accepted host, so BB-R's second defect is misstated"
+else
+  pass "history: the stale zero-history policy, scoped correctly, refuses the accepted host (BB-R defect 2)"
+fi
+
+# ===========================================================================
 # J. ceremony recovery at every publication boundary
 # ===========================================================================
 

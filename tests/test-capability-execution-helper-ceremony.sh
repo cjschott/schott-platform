@@ -252,6 +252,20 @@ check "--verify wrote nothing at all" \
     && echo yes || echo no)"
 check "--verify left no __pycache__ behind" \
   "$([[ "$(find "${VERIFY}" -name '__pycache__' | wc -l)" -eq 0 ]] && echo yes || echo no)"
+# TWO OF THESE LINES ARE PINS ON HISTORICAL TEXT, NOT ENDORSEMENTS.
+#
+# `no sudoers grant exists` (BB-Q) and `no production CINV or CRES exists`
+# (BB-R) are stale claims: the first was falsified by G11-BA installing the
+# launch and reconcile grants, the second was vacuous -- it scanned two roots
+# that structurally cannot hold a CINV or a CRES. Both were corrected in the
+# G11-BB ceremony, which is this one's successor.
+#
+# They are NOT corrected here, and this suite still pins them, because the
+# G11-AX ceremony is HISTORICAL: it has already run, it is superseded, and it
+# cannot reach either check on the accepted host -- `require_runtime_generation`
+# pins the Generation-14 readiness rule, which Generation 15 replaced, and it
+# runs before both. Rewriting a superseded ceremony's console text would edit
+# evidence of what actually ran. See the G11-BB-S report's defect-class sweep.
 for expected in "the installed runtime is Generation 14" \
                 "both deployment identity authorities are the accepted G11-AW bytes" \
                 "no sudoers grant exists" \
