@@ -211,6 +211,138 @@ check("outcome for the absent CINV", R.OUTCOME_ABSENT, elsewhere["outcome"])
 check("the other container survives", "created", state(other))
 reap()
 
+print("\n=== PART 4b - the whole recovery path, on a real orphan ===")
+#
+# G11-BB-Z. Everything above drives `R.reconcile` directly with a CINV already
+# in hand. What went wrong on production was upstream of that: the coordinator
+# decided WHICH invocations to reconcile, and it decided none. So this part
+# runs the governed enumeration -- `execution_safety` -- against a real
+# orphaned container, with the production record shape:
+#
+#   invocation_record_id  CINV-000044          <- what the journal is keyed by
+#   invocation_id         g11bbz-opaque-invoke <- what the operator supplied
+#   adapter_identity      None                 <- the supervised path never writes it
+#
+# and the REAL reconciler, not a stub.
+import os as _os
+
+from tools.capability.execution import recovery as _recovery
+from tools.capability.execution import capacity as _capacity
+from tools.capability.execution import state as _state
+from tools.capability.execution.backing_store import (
+    verify_backing_store as _verify, ObservedFilesystem as _Observed)
+from tools.capability.execution.canonical_json import serialise as _serialise
+from tools.capability.execution.mutation import CMUT_COUNTER as _CMUT
+from tools.capability.execution.state import TRANSITIONS_DIRECTORY as _TRANS
+from tools.capability.execution.capacity import LOCKS_DIRECTORY as _LOCKS
+from tools.capability.execution.types import LifecycleState as _State
+
+_UUID = "12774bf1-cf2a-4c8c-ba19-42fd9a8a0a96"
+_E2E_CINV = "CINV-000044"
+_E2E_OPAQUE = "g11bbz-opaque-invoke"
+
+
+class _Store:
+    def __init__(self, invocations, results=()):
+        self._i, self._r = list(invocations), list(results)
+
+    def list_records(self, kind):
+        return self._i if kind == "capability-invocation" else self._r
+
+
+_base = f"{WORK}/exec"
+for _sub in ("root/mutations", "root/state", f"root/{_TRANS}", f"root/{_LOCKS}"):
+    _os.makedirs(_os.path.join(_base, _sub), exist_ok=True)
+with open(_os.path.join(_base, "backing-store.json"), "wb") as _h:
+    _h.write(_serialise({"filesystem_uuid": _UUID, "filesystem_type": "xfs",
+                         "mount_point": "/data"}))
+with open(_os.path.join(_base, "root", _CMUT), "wb") as _h:
+    _h.write(b"000000000000\n")
+_cfg = _os.open(_os.path.join(_base, "backing-store.json"), _os.O_RDONLY)
+_rt = _os.open(_os.path.join(_base, "root"), _os.O_RDONLY | _os.O_DIRECTORY)
+try:
+    _root = _verify(_cfg, _rt, observed=_Observed(
+        filesystem_uuid=_UUID, filesystem_type="xfs",
+        mount_point="/data", device_name="/dev/sdb1"))
+finally:
+    _os.close(_cfg)
+    _os.close(_rt)
+
+# The journal, keyed by the CINV -- exactly as `authorise_launch` writes it.
+_capacity.reserve(_root, _E2E_CINV)
+_state.transition(_root, _E2E_CINV, _State.RESERVED, _State.LAUNCH_AUTHORIZED)
+check("journal keyed by the CINV", _State.LAUNCH_AUTHORIZED,
+      _state.all_states(_root).get(_E2E_CINV))
+
+_store = _Store([{"invocation_record_id": _E2E_CINV,
+                  "invocation_id": _E2E_OPAQUE,
+                  "adapter_identity": None}])
+
+# A real orphan: created, running, and nobody supervising it.
+create(_E2E_CINV, SLEEPER)
+podman("start", W.container_name(_E2E_CINV))
+check("a real orphan is running", "running", state(W.container_name(_E2E_CINV)))
+
+_asked = []
+
+
+def _governed(cinv):
+    _asked.append(cinv)
+    return R.reconcile(cinv, backend=backend())
+
+
+# 1. It is DISCOVERED, despite the opaque invocation_id.
+_found = _recovery.unresolved_invocations(_store, execution_root=_root)
+check("discovered by record id", [_E2E_CINV],
+      [f.invocation_record_id for f in _found])
+check("carried for reconciliation as the CINV", [_E2E_CINV],
+      [f.invocation_id for f in _found])
+
+# 2. Readiness is BLOCKED while disposal is UNPROVEN.
+#
+#    `execution_safety` is not a passive report: it proves absence by
+#    reconciling. So "blocked" is the state when reconciliation cannot prove
+#    it -- a refusal, an ambiguity, or a report that does not establish
+#    absence. Driven here with a reconciler that refuses, against the real
+#    running orphan, and the container must survive untouched.
+_refused = []
+
+
+def _refusing(cinv):
+    _refused.append(cinv)
+    raise RuntimeError("the reconciliation helper refused")
+
+
+_blocked = _recovery.execution_safety(_store, reconciler=_refusing,
+                                      execution_root=_root)
+check("an unproven orphan is inspected, not skipped", [_E2E_CINV], _refused)
+check("readiness blocked while disposal is unproven",
+      _recovery.NOT_READY, _blocked.state)
+check("and it is reported as blocking", [_E2E_CINV],
+      [f.invocation_record_id for f in _blocked.unresolved])
+check("a refusal disposes of nothing", "running",
+      state(W.container_name(_E2E_CINV)))
+
+# 3. The REAL governed reconciler proves absence. That this one is accepted at
+#    all also proves the identity handed to it is a canonical CINV -- an opaque
+#    invocation_id would have been refused before it reached Podman.
+_after = _recovery.execution_safety(_store, reconciler=_governed,
+                                    execution_root=_root)
+check("the real reconciler was asked about the CINV", [_E2E_CINV], _asked)
+check("the orphan was stopped and removed", "absent",
+      state(W.container_name(_E2E_CINV)))
+check("readiness returns after governed cleanup", _recovery.READY, _after.state)
+check("having checked the invocation, not skipped it", 1, _after.checked)
+check("nothing is left blocking", (), _after.unresolved)
+
+# 4. Running it again proves the same thing and changes nothing.
+_again = _recovery.execution_safety(_store, reconciler=_governed,
+                                    execution_root=_root)
+check("a second pass is idempotent", _recovery.READY, _again.state)
+check("and still inspected the invocation", 1, _again.checked)
+_os.close(_root.fd)
+reap()
+
 print("\n=== PART 5 - the input is one CINV and nothing else ===")
 for bad in ("cinv-000042", "CINV-00042", "CINV-0000042", "kyri-CINV-000042",
             "CINV-000042 ", "../CINV-000042", "CINV-000042; rm -rf /",

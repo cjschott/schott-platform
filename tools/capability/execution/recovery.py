@@ -150,8 +150,26 @@ class ExecutionSafety:
 
 
 def _invocation_identity(record: Any) -> Any:
-    """The `CINV` reconciliation takes, as the record itself names it."""
-    return record.get("invocation_id") or record.get("invocation_record_id")
+    """The `CINV` reconciliation takes, and the lifecycle journal is keyed by.
+
+    **The record identity, not the opaque one.** A record carries two: the
+    `invocation_record_id` the store allocated, and the `invocation_id` the
+    operator supplied to describe the attempt. They are different strings on
+    every real invocation -- `CINV-000002` against
+    `g11bb2-second-controlled-invoke`.
+
+    Two downstream facts settle which belongs here, and both want the record's.
+    `authorise_launch` transitions on the `CINV`, so the journal this identity
+    is looked up in is keyed by it. And `reconcile_unresolved` hands this value
+    to the reconciler, which validates `^CINV-[0-9]{6}$` -- the same shape the
+    sudo grant pins -- so an opaque identity could not be reconciled even if it
+    were found.
+
+    G11-BB-Z: preferring the opaque one made `states.get(...)` miss on every
+    supervised invocation, so the signature added to find lost executions never
+    fired, and `execution_safety` reported ready having inspected nothing.
+    """
+    return record.get("invocation_record_id") or record.get("invocation_id")
 
 
 def _lifecycle_states(execution_root: Any) -> dict[str, LifecycleState]:

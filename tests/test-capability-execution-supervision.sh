@@ -611,8 +611,12 @@ class Store:
         self.writes += 1
         raise AssertionError('recovery wrote a record')
 
-def invocation(record_id, cinv, adapter='python-podman-v1'):
-    return {'invocation_record_id': record_id, 'invocation_id': cinv,
+def invocation(record_id, opaque, adapter='python-podman-v1'):
+    # Two identities, and they are NOT interchangeable. record_id is the CINV
+    # the store allocated; opaque is the descriptive one the operator supplied.
+    # The second parameter was named 'cinv' here, which is how the assertions
+    # below came to expect the opaque value where a CINV belongs (G11-BB-Z).
+    return {'invocation_record_id': record_id, 'invocation_id': opaque,
             'adapter_identity': adapter}
 
 def result(record_id):
@@ -628,7 +632,9 @@ store = Store(
     [result('CINV-000002')])
 found = RC.unresolved_invocations(store)
 assert [u.invocation_record_id for u in found] == ['CINV-000001'], found
-assert found[0].invocation_id == 'inv-1'
+# The identity carried onward is the CINV, because that is what the reconciler
+# and the lifecycle journal are keyed by -- not the opaque 'inv-1'.
+assert found[0].invocation_id == 'CINV-000001', found[0].invocation_id
 assert store.writes == 0
 print('OK')
 "
@@ -638,7 +644,10 @@ store = Store([invocation('CINV-000001', 'inv-1'),
                invocation('CINV-000004', 'inv-4')], [])
 clean = reconciler(outcome='absent')
 findings = RC.reconcile_unresolved(store, reconciler=clean)
-assert clean.calls == ['inv-1', 'inv-4'], clean.calls
+# BY CINV ALONE, as this case is named. launcher.reconcile validates the
+# canonical CINV shape and the sudo grant pins the same one, so handing it
+# the opaque 'inv-1' could never have reconciled anything.
+assert clean.calls == ['CINV-000001', 'CINV-000004'], clean.calls
 assert all(f.final_absent for f in findings)
 assert all(f.interrupted for f in findings), 'a lost execution was resolved'
 assert {f.disposition for f in findings} == {'absent'}

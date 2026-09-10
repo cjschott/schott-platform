@@ -118,9 +118,23 @@ class FakeStore:
                 else self._results)
 
 
-def invocation(cinv, adapter_identity=None):
-    return {"invocation_record_id": cinv, "invocation_id": cinv,
+def invocation(cinv, adapter_identity=None, invocation_id=None):
+    """One invocation record.
+
+    `invocation_id` is the OPAQUE, operator-supplied identity and is a different
+    thing from `invocation_record_id`. It defaults to the `CINV` only because
+    most cases here do not care; the production shape is the two differing, and
+    the cases that turn on that pass it explicitly. A fixture that always made
+    them equal is what let the G11-BB-Z defect survive this suite.
+    """
+    return {"invocation_record_id": cinv,
+            "invocation_id": cinv if invocation_id is None else invocation_id,
             "adapter_identity": adapter_identity}
+
+
+# The real shape, taken from production: the operator names the invocation and
+# the store names the record, and they are not the same string.
+OPAQUE = "g11bb2-second-controlled-invoke"
 
 
 work = tempfile.mkdtemp()
@@ -177,6 +191,78 @@ try:
           "capability_result_id": "CRES-000001"}])
     check("an invocation with a terminal result is not discovered",
           recovery.unresolved_invocations(resolved, execution_root=root) == ())
+
+    # --- 6. THE PRODUCTION SHAPE: an opaque invocation_id ------------------
+    #
+    # G11-BB-Z. The lifecycle journal is keyed by the CINV record id, because
+    # that is what `authorise_launch` transitions on. Discovery looked the state
+    # up by the OPAQUE `invocation_id`, so the lookup missed on every real
+    # invocation and the supervised signature never fired. Both production
+    # invocations sat at launch_authorized with no result and neither was
+    # returned.
+    #
+    # Every case above used a fixture whose opaque id equalled the CINV, which
+    # is the one shape the broken lookup handled -- so this suite passed while
+    # the defect it exists to prevent was live.
+    opaque = FakeStore([invocation("CINV-000001", invocation_id=OPAQUE)], [])
+    found = recovery.unresolved_invocations(opaque, execution_root=root)
+    check("a supervised invocation with an OPAQUE invocation_id is discovered",
+          [item.invocation_record_id for item in found] == ["CINV-000001"])
+    check("and it is reported at its journal lifecycle state",
+          bool(found) and found[0].lifecycle_state == "launch_authorized")
+
+    # What the reconciler is handed must be the CINV. `launcher.reconcile`
+    # validates `^CINV-[0-9]{6}$` and the sudo grant pins the same shape, so an
+    # opaque identity could never be reconciled -- it would refuse, the finding
+    # would stay unresolved, and the invocation could never be cleared.
+    check("the identity carried for reconciliation is the CINV, not the opaque id",
+          bool(found) and found[0].invocation_id == "CINV-000001")
+
+    handed = []
+    findings = recovery.reconcile_unresolved(
+        opaque,
+        reconciler=lambda cinv: (handed.append(cinv) or
+                                 {"invocation_id": cinv, "outcome": "absent",
+                                  "final_absent": True}),
+        execution_root=root)
+    check("reconciliation is asked about the CINV", handed == ["CINV-000001"])
+    check("and the reconciled invocation stops blocking",
+          len(findings) == 1 and findings[0].final_absent is True)
+
+    # --- 7. the safety gate must not pass vacuously ------------------------
+    #
+    # A gate that discovers nothing reports READY for the same reason an empty
+    # store does, and cannot tell the two apart. With the opaque shape it
+    # reported READY while an invocation sat at launch_authorized unproven.
+    seen = []
+
+    def refusing(cinv):
+        seen.append(cinv)
+        raise RuntimeError("the reconciliation helper refused")
+
+    verdict = recovery.execution_safety(opaque, reconciler=refusing,
+                                        execution_root=root)
+    check("an unproven supervised invocation is INSPECTED, not skipped",
+          seen == ["CINV-000001"])
+    check("and blocks readiness until disposal is proven",
+          verdict.state == recovery.NOT_READY and verdict.checked == 1
+          and [f.invocation_record_id for f in verdict.unresolved] == ["CINV-000001"])
+
+    proven = recovery.execution_safety(
+        opaque,
+        reconciler=lambda cinv: {"invocation_id": cinv, "outcome": "absent",
+                                 "final_absent": True},
+        execution_root=root)
+    check("readiness returns only after the invocation was actually checked",
+          proven.state == recovery.READY and proven.checked == 1
+          and proven.unresolved == ())
+
+    # An empty store is ready too -- but for a different reason, and the count
+    # is what distinguishes a real check from a vacuous one.
+    empty = recovery.execution_safety(
+        FakeStore([], []), reconciler=refusing, execution_root=root)
+    check("an empty store is ready with nothing checked",
+          empty.state == recovery.READY and empty.checked == 0)
 
     # --- 5. the gate still writes nothing ----------------------------------
     transitions = os.path.join(base, "root", TRANSITIONS_DIRECTORY)
