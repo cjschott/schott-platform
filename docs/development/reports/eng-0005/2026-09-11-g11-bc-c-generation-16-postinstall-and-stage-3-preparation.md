@@ -697,6 +697,17 @@ re-pointed at whatever the host now holds — which the helper-ceremony suite's 
 comment warns is the tempting wrong fix: *"bumping the constant to whatever the
 host now holds would make the assertion below vacuous."*
 
+### 10.3 GitHub CI
+
+```
+GITHUB_CI  PASS  6/6 — CI, ShellCheck, Semgrep, CodeQL, Trivy, Gitleaks
+```
+
+CI does not exercise any of the suites in §10.2: every one is host-only and
+reports `HOST_ONLY_SKIP` on a runner, which is why this failure could only
+surface in local validation. **For that surface the local host result is the
+authority**, and it is green at 135/135.
+
 ## 11. Production remains unexecuted
 
 ```
