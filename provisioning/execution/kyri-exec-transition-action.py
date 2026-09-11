@@ -62,6 +62,7 @@ import dataclasses
 import fcntl
 import hashlib
 import os
+import stat as stat_module
 import sys
 from typing import Any, NoReturn, Sequence
 
@@ -84,6 +85,19 @@ _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 # asks for search rather than read. See `SystemBackend.open_directory`.
 _ANCHOR_FLAGS = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 _CHUNK = 65536
+
+# Where a dropped process may always stand. Compiled in, with no parameter, no
+# environment variable and no policy field a coordinator could populate: a
+# working directory a caller could name is a working directory a caller could
+# aim. `/` is `root:root 0755` on any host this runs on, it is traversable by
+# every identity by construction, and it holds no state this boundary touches.
+SAFE_WORKING_DIRECTORY = "/"
+
+# The mode §13 fixes for the writable leaf. Checked before the transfer and
+# again after it, because a transfer that also changed the mode would be
+# publishing a different object than the one that was verified.
+OUTPUT_DIRECTORY_NAME = "out"
+OUTPUT_DIRECTORY_MODE = 0o700
 
 # One binding, to the current process rather than a named library path. There
 # is nothing here for a caller to influence and no second symbol to reach.
@@ -149,6 +163,20 @@ class SystemBackend:
         descriptor. Nothing is widened: the roots keep their governed modes.
         """
         return os.open(path, _ANCHOR_FLAGS)
+
+    def fchown(self, handle: int, uid: int, gid: int) -> None:
+        """Give one ALREADY-OPEN directory away, by descriptor.
+
+        The descriptor form and not the pathname form. The object being
+        transferred is the one this layer opened no-follow and verified, so
+        there is no name for a coordinator to swap between the check and the
+        transfer -- the same reason every other governed object here is reached
+        descriptor-relatively.
+        """
+        os.fchown(handle, uid, gid)
+
+    def chdir(self, path: str) -> None:
+        os.chdir(path)
 
     def close_extra_descriptors(self, allowlist: Sequence[int]) -> None:
         keep = set(allowlist)
@@ -576,6 +604,94 @@ def verify_profile_descriptor(descriptor: int, digest: str) -> None:
         raise refused("the profile descriptor does not hold the authorised bytes")
 
 
+def transfer_output_leaf(policy: Any, *, backend: Any) -> None:
+    """Hand the writable output leaf to the execution identity, or refuse.
+
+    **The step §13 declared and nobody wrote.** The design fixes
+    ``…/<CINV>/out/`` at ``kyri-capability:kyri-capability 0700``, and three
+    modules are written against that state: `worker.verify_handoff` opens it
+    ``O_RDONLY|O_DIRECTORY`` and requires mode ``0700``, the worker binds it
+    read-write under ``keep-id`` so "the worker-owned 0700 output directory
+    appears inside as owned by the governed identity", and
+    `SnapshotBinding` keeps it in the handoff because it is "already
+    worker-owned". Nothing established it. `handoff.py` declines the job by
+    name -- *"Transferring the writable leaf to the execution identity is the
+    privileged transition's job, and doing it here would need authority this
+    module must not have"* -- and the privileged transition never took it up.
+    Stage 3 for CINV-000002 refused with ``the handoff 'out' is unusable:
+    [Errno 13] Permission denied``, which is that gap reaching production.
+
+    **Why here and not at publication.** Publication runs as the coordinator,
+    which cannot create a directory owned by another uid; only a privileged
+    step can transfer it, and this is the only privileged step between
+    publication and the drop.
+
+    **Why not creation by the worker instead.** §34 makes establishing the XFS
+    project on ``out/`` a mandatory step *before* the credential drop, so the
+    directory must already exist when the worker starts. Creation-time
+    ownership -- the mechanism §12 prefers over chowning -- is therefore not
+    available for this object, and a transfer is what remains.
+
+    **The transfer is descriptor-based and verified on both sides.** The leaf
+    is reached descriptor-relatively from the governed root, opened no-follow,
+    checked for type and mode, transferred, and re-checked. A pathname never
+    crosses, so there is nothing for a coordinator to swap between the check
+    and the transfer; and the mode is re-read afterwards because a transfer
+    that changed it would hand over a different object than the one verified.
+
+    Idempotent by construction: a leaf already owned by the execution identity
+    is transferred to the identity it already has.
+    """
+    module = _policy()
+    refused = module.TransitionRefused
+    _require_policy(policy, module)
+
+    try:
+        root = backend.open_directory(module.HANDOFF_ROOT)
+    except OSError as error:
+        raise refused(f"the handoff root is unusable: {error}") from None
+    try:
+        invocation = os.open(policy.cinv, _DIR_FLAGS, dir_fd=root)
+    except OSError as error:
+        raise refused(
+            f"the handoff for {policy.cinv} is unusable: {error}") from None
+    finally:
+        os.close(root)
+
+    try:
+        try:
+            leaf = os.open(OUTPUT_DIRECTORY_NAME, _DIR_FLAGS, dir_fd=invocation)
+        except OSError as error:
+            raise refused(
+                f"the output leaf for {policy.cinv} is unusable: {error}"
+            ) from None
+        try:
+            before = os.fstat(leaf)
+            if not stat_module.S_ISDIR(before.st_mode):
+                raise refused("the output leaf is not a directory")
+            if stat_module.S_IMODE(before.st_mode) != OUTPUT_DIRECTORY_MODE:
+                raise refused(
+                    f"the output leaf is mode "
+                    f"{oct(stat_module.S_IMODE(before.st_mode))}, and §13 fixes "
+                    f"it at {oct(OUTPUT_DIRECTORY_MODE)}")
+            try:
+                backend.fchown(leaf, policy.worker_uid, policy.worker_gid)
+            except OSError as error:
+                raise refused(
+                    f"the output leaf could not be transferred: {error}"
+                ) from None
+            after = os.fstat(leaf)
+            if (after.st_uid, after.st_gid) != (policy.worker_uid,
+                                                policy.worker_gid):
+                raise refused("the output leaf transfer did not take effect")
+            if stat_module.S_IMODE(after.st_mode) != OUTPUT_DIRECTORY_MODE:
+                raise refused("the output leaf changed mode during transfer")
+        finally:
+            os.close(leaf)
+    finally:
+        os.close(invocation)
+
+
 def drop_privilege(policy: Any, *, backend: Any) -> None:
     """Become the policy's identity, permanently and provably, or refuse.
 
@@ -583,6 +699,18 @@ def drop_privilege(policy: Any, *, backend: Any) -> None:
     ``setuid``, because each step spends privilege the next one needs; and
     ``no_new_privs`` after the drop rather than before, because setting it while
     still root would be setting it on the wrong process.
+
+    **cwd is part of the drop, because identity is what makes a cwd reachable.**
+    A working directory is inherited across the privilege boundary while the
+    identity is not, so a process that becomes the execution identity can be
+    left holding a cwd only the coordinator could reach. G11-BC-D: the operator
+    ran the Stage-3 command from ``/opt/schott-platform``, which is
+    ``0750 cschott``, and rootless Podman's re-exec refused with *"cannot chdir
+    to /opt/schott-platform: Permission denied"* -- the reconciliation could not
+    read container state for a reason that had nothing to do with containers.
+    Closing it here rather than at the Podman call means every process on the
+    far side of ``execve`` inherits a reachable cwd, including ones that do not
+    reach Podman at all.
 
     **The drop is verified in every component**, not just the effective one. A
     process that kept a saved uid can take privilege back, so a check of
@@ -599,6 +727,14 @@ def drop_privilege(policy: Any, *, backend: Any) -> None:
     """
     module = _policy()
     refused = module.TransitionRefused
+
+    # Before the identity changes, so a refusal here is still one that excludes
+    # execution, and so no step below ever runs from an unreachable directory.
+    try:
+        backend.chdir(SAFE_WORKING_DIRECTORY)
+    except OSError as error:
+        raise refused(
+            f"the working directory could not be closed: {error}") from None
 
     try:
         backend.setgroups((policy.worker_gid,))
@@ -722,6 +858,12 @@ def perform_transition(policy: Any, *, launch_authorisation: Any, backend: Any,
         raise refused(
             f"the output quota established project {established}, and "
             f"{policy.cinv} derives {expected}")
+
+    # The ownership transfer §13 requires and nothing performed, immediately
+    # after the quota that also acts on this directory and while privilege is
+    # still held. It must precede the drop because only root can give a
+    # directory away, and a refusal here is still one that excludes execution.
+    transfer_output_leaf(policy, backend=backend)
 
     # The whole profile transport happens here, while privilege is still held
     # and before anything is closed: authenticate the coordinator's bytes,

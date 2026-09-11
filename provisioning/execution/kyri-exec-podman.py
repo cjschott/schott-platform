@@ -46,6 +46,14 @@ from typing import Any, Mapping, Sequence
 # a runtime resolved through the environment is a runtime an attacker can aim.
 PODMAN = "/usr/bin/podman"
 
+# Where this process stands while it runs the runtime. Compiled in, with no
+# parameter and no environment variable: a working directory a caller could
+# name is a working directory a caller could aim. `/` is traversable by every
+# identity by construction, which is the whole requirement -- the runtime
+# re-execs itself into a user namespace and restores cwd, and a cwd the mapped
+# identity cannot reach fails that re-exec before any container is inspected.
+SAFE_WORKING_DIRECTORY = "/"
+
 # Every subcommand the accepted protocol needs, and nothing else. `ps` is here
 # because reconciliation must be able to ask whether a container is still
 # active without inspecting one that may have been removed.
@@ -271,6 +279,23 @@ class PodmanBackend:
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 env=dict(self._environment),
+                # STATED, like every other property here. cwd was the one this
+                # boundary inherited, and G11-BC-D is what that cost: the
+                # operator ran the Stage-3 command from a directory readable
+                # only by the coordinator, the process became the execution
+                # identity, and the rootless runtime's re-exec then refused to
+                # restore a working directory that identity cannot reach --
+                # "cannot chdir to …: Permission denied", reported as a refusal
+                # to read container state.
+                #
+                # The credential drop closes cwd too, so on the production path
+                # this is already true by the time anything gets here. It is
+                # stated anyway: this function's contract is that every property
+                # of the process is decided here rather than inherited from
+                # wherever a caller happened to stand, and an invariant that
+                # holds only because something upstream did it is not one this
+                # function can promise.
+                cwd=SAFE_WORKING_DIRECTORY,
                 timeout=self._timeout,
                 check=False,
             )
@@ -405,8 +430,8 @@ class PodmanBackend:
             subprocess.run(  # noqa: S603 - argv vector, never a shell
                 argv, executable=PODMAN, shell=False,
                 stdin=subprocess.DEVNULL, capture_output=True,
-                env=dict(self._environment), timeout=self._timeout,
-                check=False)
+                env=dict(self._environment), cwd=SAFE_WORKING_DIRECTORY,
+                timeout=self._timeout, check=False)
         except subprocess.TimeoutExpired:
             # The client stopped waiting; the container has not been stopped.
             # Saying so is the whole point -- reconciliation is the caller's,
@@ -485,7 +510,8 @@ class PodmanBackend:
             completed = subprocess.run(  # noqa: S603 - argv vector, never a shell
                 argv, executable=PODMAN, shell=False,
                 stdin=subprocess.DEVNULL, capture_output=True,
-                env=dict(self._environment), timeout=self._timeout, check=False)
+                env=dict(self._environment), cwd=SAFE_WORKING_DIRECTORY,
+                timeout=self._timeout, check=False)
         except subprocess.TimeoutExpired:
             raise PodmanBackendRefused(
                 f"the runtime did not answer within {self._timeout}s") from None

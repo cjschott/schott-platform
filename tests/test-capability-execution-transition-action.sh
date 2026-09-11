@@ -35,8 +35,23 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # production code pins, so this suite runs only as that identity.
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
-host_only_requires_identity "$(sed -n 's/^COORDINATOR_UID = \([0-9]*\)$/\1/p' \
-  "${ROOT}/provisioning/execution/kyri-exec-transition.py" | head -1)"
+# THIS SUITE WAS SILENTLY SKIPPING. It used to read a compiled-in
+# `COORDINATOR_UID` out of the policy module, and f9d94ce removed that constant
+# in favour of the deployment coordinator identity authority. The `sed` then
+# matched nothing, `host_only_requires_identity ""` compared "" against the real
+# uid, and every run since reported HOST_ONLY_SKIP -- on the production host
+# too, where this is the suite that proves the privileged credential sequence.
+# A skip that can be produced by a stale extraction is worse than a failure,
+# because it reads as "not applicable here" rather than "nobody checked".
+#
+# So the uid comes from the authority production itself reads, and a host that
+# cannot answer skips for a stated reason instead of an empty string.
+host_only_requires /etc/kyri/coordinator-identity.json   # prod-path-reference
+host_only_requires_identity "$(python3 -c '
+import json, sys
+with open("/etc/kyri/coordinator-identity.json", encoding="utf-8") as handle:  # prod-path-reference
+    print(json.load(handle)["coordinator_uid"])
+' 2>/dev/null)"
 ACTION="provisioning/execution/kyri-exec-transition-action.py"
 POLICY="provisioning/execution/kyri-exec-transition.py"
 
@@ -71,9 +86,16 @@ FORBIDDEN_IMPORTS = {
     "subprocess", "multiprocessing", "importlib", "runpy", "socket", "http",
     "urllib", "requests", "asyncio", "docker", "podman", "pty", "shlex",
     "time", "datetime", "random", "secrets", "tempfile", "shutil", "glob",
-    "logging", "signal", "threading", "concurrent", "ssl", "getpass", "pwd",
-    "grp", "pathlib",
+    "logging", "signal", "threading", "concurrent", "ssl", "getpass",
+    "pathlib",
 }
+# `pwd` and `grp` are the account database, and they are DELIBERATELY here in
+# the action layer. The policy module is the pure decision layer and the T10
+# backstop forbids them to it -- "The account database is a syscall dependency,
+# so it lives with the other syscall dependencies in the action layer, and the
+# binding still happens inside that parser". `resolve_account` is that
+# dependency. This list forbade them until G11-BC-D, and nobody noticed because
+# this suite was skipping (see the identity note at the top).
 # Exactly the privileged operations the accepted transition needs, and no
 # others. Anything absent from this set is forbidden.
 #
@@ -84,18 +106,47 @@ FORBIDDEN_IMPORTS = {
 # proving the copy (pread), and fixing its descriptor number (dup2,
 # get_inheritable). Nothing here can create, remove, rename, or change the mode
 # of anything -- those calls remain forbidden below.
+#
+# G11-BC-D WIDENS THIS LIST BY EXACTLY TWO SYMBOLS, AND A REVIEWER SHOULD READ
+# WHY BEFORE ACCEPTING IT.
+#
+#   os.fchown  -- §13 requires `…/<CINV>/out/` to be
+#                 `kyri-capability:kyri-capability 0700`, and NOTHING in the
+#                 tree produced that state. Publication runs as the coordinator
+#                 and cannot create a directory owned by another uid; §34 fixes
+#                 the quota step on `out/` BEFORE the credential drop, so the
+#                 worker cannot create it either. handoff.py already names the
+#                 owner of this job -- "Transferring the writable leaf to the
+#                 execution identity is the privileged transition's job" -- so
+#                 this is the step that was declared and never written, and
+#                 Stage 3 for CINV-000002 refused on exactly its absence.
+#
+#                 Path-based `chown` stays FORBIDDEN. Only the descriptor form
+#                 is permitted, so the object being given away is the one this
+#                 layer already opened no-follow and verified, and there is no
+#                 pathname for a coordinator to swap underneath it.
+#
+#   os.chdir    -- the credential drop changes identity and left cwd alone, so
+#                 the process ended up with a working directory its new identity
+#                 cannot reach. Rootless Podman's re-exec then refused with
+#                 "cannot chdir to /opt/schott-platform: Permission denied".
+#                 Closing cwd belongs with the other things this boundary closes.
+#
+# Both remain forbidden to every OTHER module the backstop covers.
 PERMITTED_OS = {
     "setgroups", "setgid", "setuid", "getgroups", "getresuid", "getresgid",
     "getuid", "geteuid", "getgid", "getegid", "execve", "closerange",
     "close", "set_inheritable", "get_inheritable", "fstat", "error",
     "open", "read", "write", "pread", "lseek", "dup2", "memfd_create",
+    "fchown", "chdir",
     "O_RDONLY", "O_NOFOLLOW", "O_CLOEXEC", "O_DIRECTORY", "O_NONBLOCK",
+    "O_PATH",
     "MFD_CLOEXEC", "MFD_ALLOW_SEALING", "SEEK_SET",
 }
 FORBIDDEN_CALLS = {
     "system", "popen", "spawnv", "spawnl", "posix_spawn", "posix_spawnp",
     "fork", "forkpty", "exec", "eval", "compile", "__import__", "getenv",
-    "putenv", "unsetenv", "chroot", "chdir", "mount", "umount", "unshare",
+    "putenv", "unsetenv", "chroot", "mount", "umount", "unshare",
     "setns", "capset", "chmod", "chown", "mkdir", "makedirs", "remove",
     "unlink", "rename", "rmdir", "symlink", "link", "mkfifo", "mknod",
     "kill", "killpg", "now", "today", "monotonic", "uuid1", "uuid4",
@@ -300,8 +351,57 @@ policy_mod = load('kyri_exec_transition',
 action = load('kyri_exec_transition_action',
               'provisioning/execution/kyri-exec-transition-action.py')
 
-POLICY = policy_mod.policy_for(['prog', 'CINV-000042'])
+# The execution identity is REQUIRED by policy_for and has no default, so that
+# an unpoliced identity is not a path anyone could forget. It is built here the
+# way production builds it -- through the policy module's own parser, with the
+# account resolver injected -- rather than by constructing the token-guarded
+# record directly, which the type deliberately forbids.
+#
+# The numbers are the deployment's, and the resolver is injected so this asserts
+# against the fixture rather than against the host's account database.
+# The policy module requires the identity record to be root-owned and
+# unwritable by anyone else -- correctly, since it names the identity root
+# becomes. A fixture cannot manufacture that without privilege, so the REAL
+# provisioned authority is read: it is root-owned, world-readable, and is the
+# object production itself reads. Only the account RESOLVER is injected, so the
+# suite still does not depend on this host's account database agreeing.
+# (No backticks in this block: the prelude is a double-quoted bash string.)
+def _identity():
+    path = '/etc/kyri/execution-identity.json'   # prod-path-reference
+    with open(path, 'rb') as handle:
+        document = handle.read()
+    record = json.loads(document.decode('utf-8'))
+    return policy_mod.load_execution_identity(
+        document, os.lstat(path),
+        resolve=lambda account: (record['execution_uid'],
+                                 record['execution_gid']))
+
+EXECUTION_IDENTITY = _identity()
+POLICY = policy_mod.policy_for(['prog', 'CINV-000042'],
+                               identity=EXECUTION_IDENTITY)
+
+# The same governed policy with the deployment's identity replaced by this
+# process's own. It is still a TransitionPolicy, which is why the policy guard
+# accepts it, and it is the only way an unprivileged suite can drive the
+# output-leaf transfer all the way through its post-transfer verification: the
+# kernel permits giving an object you own to yourself and nothing else. Used
+# ONLY where the transfer has to actually take effect; every ordering and
+# argument assertion uses the real deployment identity.
+SELF_POLICY = dataclasses.replace(POLICY, worker_uid=os.getuid(),
+                                  worker_gid=os.getgid())
 WORK = os.environ['WORKDIR']
+
+def self_pair(**kwargs):
+    '''A recorder whose reported credentials match SELF_POLICY.
+
+    The drop is verified against the policy in every component, so a recorder
+    reporting the deployment identity while the policy names this process would
+    refuse for a reason that is about the fixture rather than the code.
+    '''
+    kwargs.setdefault('uid', os.getuid())
+    kwargs.setdefault('gid', os.getgid())
+    kwargs.setdefault('groups', (os.getgid(),))
+    return Recorder(**kwargs)
 
 # Deliberately not a real ExecutionProfile. Root is opaque to what these bytes
 # say, so a fixture that handed it a parseable profile would be testing a
@@ -328,6 +428,16 @@ def scene(cinv='CINV-000042'):
         handle.write(PROFILE_BYTES)
     os.chmod(published, 0o444)
 
+    # The writable output leaf, in the shape publication really leaves it:
+    # 0700 and owned by whoever published, which on production is the
+    # COORDINATOR. handoff.py declares the mode and explicitly declines to set
+    # the owner -- 'Transferring the writable leaf to the execution identity is
+    # the privileged transition's job' -- so this fixture is that state, and the
+    # transition is what has to move it.
+    output = os.path.join(invocation, 'out')
+    os.makedirs(output)
+    os.chmod(output, 0o700)
+
     document = {
         'cinv': cinv, 'cimp': 'CIMP-000001', 'profile_digest': PROFILE_DIGEST,
         'handoff_root': policy_mod.HANDOFF_ROOT, 'profile_schema_version': 1,
@@ -339,8 +449,16 @@ def scene(cinv='CINV-000042'):
     os.chmod(record, 0o600)
     os.chmod(invocation, 0o555)
 
+    # The two deployment authority directories are NOT redirected. Both records
+    # must be root-owned and unwritable by anyone else -- the policy module
+    # refuses otherwise, correctly, since between them they name the publisher
+    # root recognises and the identity root becomes. A fixture cannot
+    # manufacture that without privilege, and redirecting them to a
+    # fixture-owned copy would test a check that production does not make. They
+    # are root-owned, readable, and traversable, so the real ones are used.
     return {policy_mod.EXECUTION_ROOT: os.path.join(base, 'execution'),
-            policy_mod.HANDOFF_ROOT: os.path.join(base, 'handoff')}
+            policy_mod.HANDOFF_ROOT: os.path.join(base, 'handoff'),
+            '/etc/kyri': '/etc/kyri'}   # prod-path-reference
 
 class Recorder:
     '''A backend that records what it was asked to do and does none of it.
@@ -367,11 +485,17 @@ class Recorder:
             raise OSError(1, f'{name} refused')
 
     def open_directory(self, path):
+        # The SAME flags production uses. O_PATH is not a detail here: two of
+        # the three governed roots are 0711 traverse-only by design, so O_RDONLY
+        # asks for a permission the deployment withholds and refuses -- which is
+        # the G11-BB defect SystemBackend.open_directory documents. A recorder
+        # that opened them more permissively than production would be a fixture
+        # that only works because it is weaker than the thing it stands for.
         self.calls.append(('open_directory', path))
         target = self.roots.get(path)
         if target is None:
             raise OSError(2, 'no such governed root', path)
-        return os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+        return os.open(target, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
                        | os.O_DIRECTORY)
 
     def close_extra_descriptors(self, allowlist):
@@ -403,6 +527,21 @@ class Recorder:
         if self._fail_at == 'get_no_new_privs':
             raise OSError(1, 'refused')
         return self._nnp
+
+    def fchown(self, handle, uid, gid):
+        # Records, and then performs ONLY the one transfer an unprivileged
+        # process is allowed to make: giving an object it already owns to
+        # itself. Recording alone would leave the production post-transfer
+        # verification unexercised, and that verification is the part that
+        # turns 'the syscall was issued' into 'the leaf really moved'. A test
+        # still cannot give anything to another identity -- the kernel refuses,
+        # which is exactly the guarantee wanted here.
+        self._step('fchown', uid, gid)
+        if (uid, gid) == (os.getuid(), os.getgid()):
+            os.fchown(handle, uid, gid)
+
+    def chdir(self, path):
+        self._step('chdir', path)
 
     def execve(self, path, argv, environment):
         self.calls.append(('execve', path, tuple(argv), tuple(environment)))
@@ -533,12 +672,19 @@ print('OK')
 # --- the exact sequence ---------------------------------------------------------
 
 run_case "the accepted credential sequence runs in exactly the accepted order" "${PRELUDE}
-recorder = Recorder()
-assert run(recorder) == 'executed'
+recorder = self_pair()
+assert run(recorder, policy=SELF_POLICY) == 'executed'
 assert steps(recorder) == [
-    'close_extra_descriptors', 'setgroups', 'setgid', 'setuid', 'credentials',
+    'fchown', 'close_extra_descriptors', 'chdir',
+    'setgroups', 'setgid', 'setuid', 'credentials',
     'set_no_new_privs', 'get_no_new_privs', 'credentials', 'execve'
 ], steps(recorder)
+# G11-BC-D added the first and third entries, and where they sit is the point.
+# The transfer gives the output leaf away and needs root, so it precedes every
+# credential step. The chdir closes the inherited working directory and sits
+# inside the drop, before the identity changes -- a process that becomes the
+# execution identity must not be left standing somewhere only the coordinator
+# could reach.
 # The whole profile transport happens before the first privileged step: the
 # governed roots are read while root is still held and while a refusal can
 # still prove nothing ran.
@@ -547,24 +693,33 @@ print('OK')
 "
 
 run_case "the fixed identity values are exactly 999, 987 and the group set" "${PRELUDE}
-recorder = Recorder()
-run(recorder)
+# The REAL deployment policy: these are the deployment's numbers, and
+# asserting them against the self-owned fixture would assert nothing.
+# The run refuses at the transfer post-check -- an unprivileged process cannot
+# actually give the leaf to 999:987 -- but the recorded credential arguments
+# are what this case is about and they are recorded before that.
+# The numbers are the POLICY's, and the policy is where they are decided --
+# asserting them against a self-owned fixture would assert the fixture.
+assert (POLICY.worker_uid, POLICY.worker_gid) == (999, 987), POLICY
+# And the drop really passes the policy's numbers through, whatever they are.
+recorder = self_pair()
+run(recorder, policy=SELF_POLICY)
 calls = dict((c[0], c[1:]) for c in recorder.calls if len(c) > 1)
-assert calls['setgroups'] == ((987,),), calls['setgroups']
-assert calls['setgid'] == (987,), calls['setgid']
-assert calls['setuid'] == (999,), calls['setuid']
+assert calls['setgroups'] == ((SELF_POLICY.worker_gid,),), calls['setgroups']
+assert calls['setgid'] == (SELF_POLICY.worker_gid,), calls['setgid']
+assert calls['setuid'] == (SELF_POLICY.worker_uid,), calls['setuid']
 print('OK')
 "
 
 run_case "setgroups precedes setgid, which precedes setuid" "${PRELUDE}
-recorder = Recorder(); run(recorder)
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
 order = steps(recorder)
 assert order.index('setgroups') < order.index('setgid') < order.index('setuid')
 print('OK')
 "
 
 run_case "no_new_privs is set after the permanent drop, not before" "${PRELUDE}
-recorder = Recorder(); run(recorder)
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
 order = steps(recorder)
 assert order.index('setuid') < order.index('set_no_new_privs'), order
 assert order.index('set_no_new_privs') < order.index('get_no_new_privs')
@@ -575,9 +730,12 @@ print('OK')
 "
 
 run_case "descriptors are closed before any credential change" "${PRELUDE}
-recorder = Recorder(); run(recorder)
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
 order = steps(recorder)
-assert order[0] == 'close_extra_descriptors', order
+# The transfer precedes it -- root is required to give the leaf away, and the
+# descriptor cleanup is the last step that could disturb what follows.
+assert order[0] == 'fchown', order
+assert order[1] == 'close_extra_descriptors', order
 assert order.index('close_extra_descriptors') < order.index('setgroups')
 calls = dict((c[0], c[1:]) for c in recorder.calls if len(c) > 1)
 # vNext: the sealed profile object crosses on descriptor 3, so the inherited
@@ -625,7 +783,7 @@ print('OK')
 # --- exec ---------------------------------------------------------------------------
 
 run_case "execve receives the fixed interpreter, script, argv and closed environment" "${PRELUDE}
-recorder = Recorder(); run(recorder)
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
 call = [c for c in recorder.calls if c[0] == 'execve'][0]
 _, path, argv, environment = call
 assert path == '/usr/bin/python3', path
@@ -642,7 +800,7 @@ print('OK')
 "
 
 run_case "there is no PATH search, shell, -m, or alternate interpreter" "${PRELUDE}
-recorder = Recorder(); run(recorder)
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
 _, path, argv, environment = [c for c in recorder.calls if c[0] == 'execve'][0]
 assert path.startswith('/')
 assert '-m' not in argv and '-c' not in argv
@@ -653,8 +811,8 @@ print('OK')
 "
 
 run_case "execve happens exactly once and is never retried" "${PRELUDE}
-recorder = Recorder(exec_error=OSError(2, 'No such file or directory'))
-outcome = run(recorder)
+recorder = self_pair(exec_error=OSError(2, 'No such file or directory'))
+outcome = run(recorder, policy=SELF_POLICY)
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
 assert names(recorder).count('execve') == 1, names(recorder)
 import ast, pathlib
@@ -694,8 +852,8 @@ print('OK')
 "
 
 run_case "a conclusively failed execve still excludes execution" "${PRELUDE}
-recorder = Recorder(exec_error=OSError(2, 'No such file or directory'))
-outcome = run(recorder)
+recorder = self_pair(exec_error=OSError(2, 'No such file or directory'))
+outcome = run(recorder, policy=SELF_POLICY)
 assert outcome.execution_excluded is True
 from tools.capability.execution.types import Classification
 assert outcome.classification is Classification.TRANSITION_FAILED_BEFORE_EXECUTION
@@ -714,8 +872,28 @@ print('OK')
 # --- structural absences -------------------------------------------------------------
 
 run_case "the privileged layer never mentions Podman or a container runtime" "${PRELUDE}
-import pathlib
-code = pathlib.Path('provisioning/execution/kyri-exec-transition-action.py').read_text().lower()
+import ast, pathlib
+# CODE, not commentary. Read raw, this case failed on the module's own sentence
+# 'Podman is not reachable from here' -- prose stating the property being
+# tested. Docstrings are stripped the same way the T11 backstop strips them, so
+# what is asserted is that the layer has no runtime COUPLING.
+tree = ast.parse(pathlib.Path(
+    'provisioning/execution/kyri-exec-transition-action.py').read_text())
+for node in ast.walk(tree):
+    body = getattr(node, 'body', None)
+    if not isinstance(body, list) or not body:
+        continue
+    if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+        continue
+    first = body[0]
+    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+            and isinstance(first.value.value, str):
+        body.pop(0)
+        if not body:
+            body.append(ast.Pass())
+ast.fix_missing_locations(tree)
+code = ast.unparse(tree).lower()
 for banned in ('podman', 'docker', 'containerd', 'crun', 'runc', '.sock',
                'socket', 'subprocess', 'setpriv'):
     assert banned not in code, banned
@@ -774,12 +952,13 @@ print('OK')
 # --- the output quota is established before any privilege is spent ----------
 
 run_case "the quota is established before the credential drop" "${PRELUDE}
-recorder = Recorder()
+recorder = self_pair()
 quota = Quota()
-assert run(recorder, quota=quota) == 'executed'
-assert quota.calls == [('apply', POLICY.cinv)], quota.calls
-# Before close_extra_descriptors, and therefore before setgroups/setgid/setuid.
-assert steps(recorder)[0] == 'close_extra_descriptors', steps(recorder)
+assert run(recorder, policy=SELF_POLICY, quota=quota) == 'executed'
+assert quota.calls == [('apply', SELF_POLICY.cinv)], quota.calls
+# Before the descriptor cleanup, and therefore before every credential step.
+assert steps(recorder).index('close_extra_descriptors') < steps(
+    recorder).index('setgroups'), steps(recorder)
 print('OK')
 "
 
@@ -851,6 +1030,138 @@ source = inspect.getsource(action.perform_transition)
 for token in ('bhard', 'ihard', 'projid', 'ioctl', 'FS_IOC', 'xfs_quota',
               '/data/'):
     assert token not in source, token
+print('OK')
+"
+
+# --- G11-BC-D: the writable output leaf is handed to the execution identity ----
+#
+# THE DEFECT THIS PINS. Stage 3 for CINV-000002 refused with
+#
+#   WorkerRefused: the handoff 'out' is unusable: [Errno 13] Permission denied
+#
+# because `out` was 0700 and owned by the COORDINATOR, while the worker runs as
+# the execution identity. Three modules independently state that it should be
+# worker-owned -- handoff.py ('Transferring the writable leaf to the execution
+# identity is the privileged transition's job'), worker.py ('the worker-owned
+# 0700 output directory'), snapshot.py ('the writable output leaf is already
+# worker-owned') -- and no code anywhere performed the transfer. The mode was
+# never wrong; the owner was never set.
+
+run_case "the output leaf is transferred to the execution identity" "${PRELUDE}
+# Deployment policy: the leaf must be handed to 999:987, which is the whole
+# point. An unprivileged fixture cannot make that transfer take effect, so the
+# run then refuses -- and the refusal is itself the post-transfer verification
+# doing its job. Both facts are asserted.
+recorder = Recorder()
+outcome = run(recorder)
+calls = [c for c in recorder.calls if c[0] == 'fchown']
+assert calls == [('fchown', 999, 987)], calls
+assert isinstance(outcome, policy_mod.TransitionRefused), outcome
+assert 'did not take effect' in str(outcome), str(outcome)
+
+# And with a policy naming an identity the fixture CAN transfer to, the same
+# code path completes -- so the refusal above is the verification working, not
+# the transfer being unimplemented.
+ok = self_pair()
+assert run(ok, policy=SELF_POLICY) == 'executed'
+assert [c for c in ok.calls if c[0] == 'fchown'] == [
+    ('fchown', os.getuid(), os.getgid())]
+print('OK')
+"
+
+run_case "the transfer happens while privilege is still held" "${PRELUDE}
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
+order = steps(recorder)
+assert 'fchown' in order, order
+# Root is needed to give a directory away, so it must precede every credential
+# step. After setuid the process could not do it at all.
+assert order.index('fchown') < order.index('setgroups'), order
+assert order.index('fchown') < order.index('setgid'), order
+assert order.index('fchown') < order.index('setuid'), order
+print('OK')
+"
+
+run_case "a refused transfer prevents the drop and the exec" "${PRELUDE}
+recorder = Recorder(fail_at='fchown')
+outcome = run(recorder)
+assert isinstance(outcome, policy_mod.TransitionRefused), outcome
+order = steps(recorder)
+assert 'execve' not in order, order
+for later in ('setgroups', 'setgid', 'setuid'):
+    assert later not in order, (later, order)
+print('OK')
+"
+
+run_case "the transfer names no path and takes no identity from a caller" "${PRELUDE}
+import inspect
+source = inspect.getsource(action)
+# The uid/gid come from the authenticated policy, never from an argument.
+assert 'def transfer_output_leaf' in source, 'the transfer is not implemented'
+body = source.split('def transfer_output_leaf', 1)[1].split(chr(10) + 'def ', 1)[0]
+for banned in ('/data/', 'argv', 'environ', 'input('):
+    assert banned not in body, (banned, 'is reachable in the transfer')
+assert 'policy.worker_uid' in body and 'policy.worker_gid' in body, body
+print('OK')
+"
+
+# --- G11-BC-D: cwd is closed at the credential boundary -------------------------
+#
+# THE SECOND DEFECT. Reconciliation refused with
+#
+#   the runtime refused: cannot chdir to /opt/schott-platform: Permission denied
+#
+# The coordinator's cwd is inherited all the way across the privilege boundary.
+# /opt/schott-platform is 0750 cschott, so once the process becomes the
+# execution identity its own cwd is unreachable, and rootless Podman's re-exec
+# cannot restore it. cwd was the one inherited property this boundary never
+# closed: the launcher states env, descriptors, argv and shell, and the Podman
+# backend documents that 'every property of it is stated here' -- and neither
+# stated cwd.
+
+run_case "the credential drop closes cwd as well as credentials" "${PRELUDE}
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
+order = steps(recorder)
+assert 'chdir' in order, order
+calls = [c for c in recorder.calls if c[0] == 'chdir']
+assert calls == [('chdir', '/')], calls
+print('OK')
+"
+
+run_case "cwd is closed before the identity changes, so no step runs unreachable" "${PRELUDE}
+recorder = self_pair(); run(recorder, policy=SELF_POLICY)
+order = steps(recorder)
+assert order.index('chdir') < order.index('setuid'), order
+print('OK')
+"
+
+run_case "a refused chdir prevents the drop and the exec" "${PRELUDE}
+recorder = Recorder(fail_at='chdir')
+outcome = run(recorder)
+assert isinstance(outcome, policy_mod.TransitionRefused), outcome
+order = steps(recorder)
+assert 'execve' not in order, order
+assert 'setuid' not in order, order
+print('OK')
+"
+
+run_case "the safe cwd is a compiled-in invariant, not a caller's value" "${PRELUDE}
+import inspect
+source = inspect.getsource(action)
+assert 'SAFE_WORKING_DIRECTORY' in source, 'the safe cwd is not declared'
+assert action.SAFE_WORKING_DIRECTORY == '/', action.SAFE_WORKING_DIRECTORY
+# Nothing may aim it: no argument, no environment variable, no policy field a
+# coordinator could populate.
+body = inspect.getsource(action.drop_privilege)
+assert 'environ' not in body and 'argv' not in body, body
+print('OK')
+"
+
+run_case "reconciliation drops through the same sequence, so it closes cwd too" "${PRELUDE}
+import inspect
+# drop_privilege is shared by both transitions on purpose, so the cwd closure
+# is not something the reconciliation path can be missing.
+assert 'drop_privilege(policy, backend=backend)' in inspect.getsource(
+    action.perform_reconciliation)
 print('OK')
 "
 

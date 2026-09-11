@@ -154,9 +154,18 @@ runs = [n for n in ast.walk(tree)
 assert runs, 'the backend starts no process'
 for call in runs:
     keywords = {k.arg for k in call.keywords}
+    # cwd joins the list at G11-BC-D. It was the one process property this
+    # boundary inherited instead of stating, and the cost was a reconciliation
+    # that refused because it could not chdir to the caller's directory -- that
+    # directory was unreadable to the execution identity, so the
+    # rootless runtime's re-exec failed before it could inspect anything.
     for required in ('stdin', 'capture_output', 'timeout', 'env', 'shell',
-                     'executable'):
+                     'executable', 'cwd'):
         assert required in keywords, (required, ast.unparse(call)[:120])
+# And it is the compiled-in invariant, not a caller's value.
+assert B.SAFE_WORKING_DIRECTORY == '/', B.SAFE_WORKING_DIRECTORY
+assert code.count('cwd=SAFE_WORKING_DIRECTORY') == len(runs), (
+    code.count('cwd=SAFE_WORKING_DIRECTORY'), len(runs))
 assert code.count('stdin=subprocess.DEVNULL') == len(runs), (
     code.count('stdin=subprocess.DEVNULL'), len(runs))
 print('OK')
