@@ -732,7 +732,68 @@ shellcheck   clean (0.9.0, the version CI runs)
 
 LOCAL_QUICK  PASS  110/110 steps
 LOCAL_FULL   PASS  135/135 steps
+GITHUB_CI    PASS  6/6 jobs — CI, ShellCheck, Semgrep, CodeQL, Trivy, Gitleaks
+CLEAN_CLONE  PASS
 ```
+
+### 10.0 The prepared ceremony, run against the real repository
+
+With the tree clean, `--verify-source` was run for real. It reads no installed
+state and writes nothing:
+
+```
+ok  repository at arch/eng-0005-execution-transition, reviewed authority
+    91cb1b601972ab43cc4c8b3335ed5022cd50158b present and an ancestor of HEAD
+ok  1 Generation-16 source object match the reviewed commit
+ok  the import closure of tools.capability.cli … closes over the declared
+    surface (73 modules)
+ok  no matrix row names a helper, a grant or a deployment identity: 14
+    privileged objects are outside this ceremony
+ok  one object, one group, one rename: publication is atomic and has no mixed
+    intermediate state
+ok  1 coherence-group carryover(s) are byte-identical at the reviewed commit and
+    are not republished by this transaction
+ok  the reviewed source keys recovery discovery by the canonical
+    invocation_record_id
+ok  the G11-AT recovery surface is intact around the correction
+
+Generation 16 source verification: all checks passed.
+1 object(s) would change (1 REPLACE, 0 CREATE).
+```
+
+### 10.2 Clean clone
+
+Freshly cloned from `origin` at `d7e540c`:
+
+```
+tools/capability/execution/recovery.py             fdad3cec…  MATCH
+tools/capability/cli.py                            7b4fac3e…  MATCH
+provisioning/execution/install-generation-16.sh    5b06a533…  byte-identical
+tests/…generation16-installer.sh                   bb65e83f…  byte-identical
+provisioning/execution/gen16-operator-ceremony.txt 8f6060a3…  byte-identical
+
+Generation-16 installer validation passed.   (run from the clean clone)
+```
+
+The G5 preflight suite correctly reports `HOST_ONLY_SKIP` there — it drives a
+ceremony pinned to `/opt/schott-platform`, so a different checkout would have it
+reading a different repository. **The local host run is the authority for that
+surface, and it is green (§6.1).**
+
+### 10.3 What CI does and does not prove here
+
+```
+Static validation → Capability execution generation 16 installer tests
+  HOST_ONLY_SKIP  test-capability-execution-generation16-installer.sh  /usr/lib/kyri/python
+```
+
+**CI does not exercise the Generation-16 ceremony, and says so rather than
+passing quietly.** A runner has no installed runtime to reconstruct a baseline
+from. The suite is enumerated in `tests/host-only.manifest`, and
+`test-static.sh` asserts that manifest matches the suites that actually source
+`tests/lib/host-only.sh` in both directions, so it could not have become
+host-only silently. The same is true of the G5 preflight suite. For both, the
+local host result above is the evidence.
 
 ### 10.1 Two registration defects the validator caught, and I fixed rather than worked around
 
