@@ -80,8 +80,16 @@ build_host() {
   # more. Five of its REPLACE rows and both its CREATEs are rewound here, from
   # the Generation-13 authority, or this reads 81 objects where the ceremony
   # expects 78 + 1 and every assertion below judges the wrong host.
+  # Generation 16 is named even though it moves only recovery.py, which
+  # Generation 15 also moves and this rewind therefore already restored. That
+  # coincidence is not the property being relied on: a rewind list must name
+  # every ceremony accepted after the generation being reconstructed, or a
+  # successor touching an object no earlier ceremony touched would leave the
+  # fixture silently carrying that successor's bytes while claiming to be this
+  # host. A silently wrong fixture is worse than a loud failure.
   succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN13_COMMIT}" \
-    "${ROOT}/provisioning/execution/install-generation-15.sh" || return 1
+    "${ROOT}/provisioning/execution/install-generation-15.sh" \
+    "${ROOT}/provisioning/execution/install-generation-16.sh" || return 1
 
   # The installed objects are 0444, so the copies are too. Remove before writing
   # rather than relaxing the mode: the fixture should carry the modes a real

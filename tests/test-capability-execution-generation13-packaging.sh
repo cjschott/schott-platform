@@ -182,8 +182,17 @@ def superseded_by_successor():
     # these rows -- at which point they were neither baseline nor target and
     # were reported as drift. A later generation wins over an earlier one, so
     # the chain is applied in order.
+    #
+    # It happened a THIRD time at G11-BC-C. Generation 16 replaced recovery.py,
+    # a row this generation CREATEd, so the installed object was at neither
+    # ABSENT nor a93819d1 nor Generation 15's f44ada7f, and a correctly
+    # installed host was reported as drift. Adding the ceremony is the fix; the
+    # list is the suite's statement of which successors it accounts for, and a
+    # list that stops short of the installed generation is incomplete by its own
+    # definition rather than merely out of date.
     out = {}
-    for name in ('install-generation-14.sh', 'install-generation-15.sh'):
+    for name in ('install-generation-14.sh', 'install-generation-15.sh',
+                 'install-generation-16.sh'):
         successor = Path('provisioning/execution') / name
         if not successor.is_file():
             continue
@@ -250,7 +259,7 @@ assert BASELINE_N + len(creates) == TARGET_N, (BASELINE_N, len(creates), TARGET_
 def helper_creates():
     total = 0
     for name in ('install-g11-ax-helpers.sh', 'install-generation-14.sh',
-                 'install-generation-15.sh'):
+                 'install-generation-15.sh', 'install-generation-16.sh'):
         ceremony = Path('provisioning/execution') / name
         if not ceremony.is_file():
             continue
@@ -392,7 +401,8 @@ build_gen12_root() {
     rm -f "${root}${LIBRARY_ROOT}/${later}"
   done < <(succession_created_by \
              "${REPOSITORY}/provisioning/execution/install-generation-14.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-15.sh")
+             "${REPOSITORY}/provisioning/execution/install-generation-15.sh" \
+             "${REPOSITORY}/provisioning/execution/install-generation-16.sh")
 
   local row target source base
   while IFS= read -r row; do

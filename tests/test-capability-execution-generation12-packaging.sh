@@ -134,7 +134,7 @@ def successor_creates():
     """
     creates = set()
     for name in ("install-generation-13.sh", "install-generation-15.sh",
-                 "install-g11-ax-helpers.sh"):
+                 "install-generation-16.sh", "install-g11-ax-helpers.sh"):
         ceremony = Path(ROOT) / "provisioning" / "execution" / name
         if not ceremony.is_file():
             continue

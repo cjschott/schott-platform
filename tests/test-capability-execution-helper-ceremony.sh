@@ -118,8 +118,12 @@ build_host() {
   # RUNTIME_HELPERS_SHA, which is Generation 14's rule. Rewinding is what keeps
   # that a reconstruction; bumping the constant to whatever the host now holds
   # would make the assertion below vacuous.
+  # Generation 16 too: the rewind list names every ceremony accepted after the
+  # generation this reconstructs, not just the ones that happen to move an
+  # object this suite reads.
   succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN14_COMMIT}" \
-    "${ROOT}/provisioning/execution/install-generation-15.sh" || return 1
+    "${ROOT}/provisioning/execution/install-generation-15.sh" \
+    "${ROOT}/provisioning/execution/install-generation-16.sh" || return 1
   [[ "$(digest_of "${root}${LIBRARY_ROOT}/tools/capability/execution/helpers.py")" \
       == "${RUNTIME_HELPERS_SHA}" ]] || return 1
 
