@@ -470,9 +470,20 @@ FOCUSED
   reconciliation     PASS
   shellcheck         clean
 
-LOCAL_FULL   RED at the supervision suite, for the reason in §8.2
+LOCAL_FULL   RED at step 105, the supervision suite, for the reason in §8.2
 LOCAL_QUICK  RED at the same suite
+
+GITHUB_CI    5/6 — ShellCheck, Semgrep, CodeQL, Trivy, Gitleaks all green
+             CI: FAILURE, at exactly one assertion:
+               FAIL: the runtime declares the helper bytes it supervises through
+               Capability execution supervision validation FAILED: 1
+CLEAN_CLONE  not run — it would reproduce the same declared refusal, which is a
+             property of the declaration rather than of the checkout
 ```
+
+**The same single assertion fails locally and in CI, and nothing else does.**
+That suite is not host-only, so CI exercises it in full — the red is the
+deployment rule, not a portability artefact.
 
 **Local validation is RED and this checkpoint does not claim otherwise.** The one
 failing assertion is the runtime refusing to declare helper bytes it was not
