@@ -230,7 +230,7 @@ GENERATION_DELTA=(
 "tools/capability/execution/protocol.py|REPLACE|613ff30d5999e47e615ac28023b2e9a6e799439154b0e353eb385888b2484cfb|c2040807fa26c349f6948b7c44ca28aeea6e2fdd8f57cb54d0e608c12c9d09c1"
 "tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
 "tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
-"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03"
+"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03,fdad3cecdf72eeb7b00c21f0ba04ee9bbc4ca3ebd6d6c4a571037518c2c567f0"
 "tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb,74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07"
 #
 # G11-AX. `helpers.py` again, and this time as a REPLACE off its own installed
@@ -253,6 +253,35 @@ GENERATION_DELTA=(
 # Declared here as pending. NOT INSTALLED: the installed object is still
 # `eff6c4fd`, and publishing these bytes is a runtime generation ceremony, not a
 # helper ceremony. G11-AX is not authorised to perform one.
+#
+# G11-BC-B. Generation 16: `recovery.py` gains one more declared successor,
+# `fdad3cec`.
+#
+# `_invocation_identity` preferred the OPAQUE `invocation_id` over the record's
+# `invocation_record_id`. The lifecycle journal is keyed by the CINV, so
+# `states.get(identity)` missed on every real invocation, `unresolved_invocations`
+# returned nothing, and `execution_safety` reported READY having inspected
+# nothing. G11-BC-A corrected it; `fdad3cec` is those bytes.
+#
+# THIS ROW IS WHY THAT CORRECTION COULD NOT SIMPLY BE COMMITTED AND FORGOTTEN.
+# The checkout side of a declaration is absolute -- `require_operator_source`
+# refuses a declared object carrying anything but a declared successor -- so
+# from the moment G11-BC-A landed, this preflight refused the branch. That
+# refusal is the deployment rule working: a generation-declared runtime object
+# cannot be corrected in the repository without a generation declaring the
+# successor.
+#
+# ADDING THE DIGEST IS NOT WIDENING THE RULE. No check is relaxed, no comparison
+# becomes a wildcard, and nothing is derived from git. One more reviewed digest
+# is written down, and every byte sequence that is not one of these three is
+# refused exactly as before -- including, per requirement 10, on any other row.
+# The predecessors stay listed because the rows are cumulative and a host at an
+# earlier hop must still classify.
+#
+# Declared here as pending. NOT INSTALLED: the installed object is `f44ada7f`,
+# and publishing `fdad3cec` is what
+# `provisioning/execution/install-generation-16.sh` exists to do, under its own
+# operator ceremony.
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

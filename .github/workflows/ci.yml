@@ -419,6 +419,12 @@ jobs:
       - name: Capability execution generation 15 installer tests
         run: bash tests/test-capability-execution-generation15-installer.sh
 
+      # The Generation-16 recovery-discovery correction, fixture only. Host-only:
+      # it reconstructs its baseline from the installed runtime, so on a runner
+      # it reports HOST_ONLY_SKIP and the local validator is the authority.
+      - name: Capability execution generation 16 installer tests
+        run: bash tests/test-capability-execution-generation16-installer.sh
+
       # The corrected privileged-helper ceremony, fixture only.
       - name: Capability execution BB helper ceremony tests
         run: bash tests/test-capability-execution-bb-helper-ceremony.sh

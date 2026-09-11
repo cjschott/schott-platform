@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=109
+  TOTAL_STEPS=110
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=134
+  TOTAL_STEPS=135
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -429,6 +429,14 @@ run "Succession primitive" \
 # publication boundary.
 run "Capability execution generation 15 installer" \
   bash tests/test-capability-execution-generation15-installer.sh
+
+# The Generation-16 recovery-discovery correction, proven against a
+# reconstructed Generation-15 baseline. A one-row generation, so this carries
+# what a multi-row one got for free: the group-R carryover is preserved and
+# still judged, publication is atomic and refuses a second row, and execution
+# readiness is unchanged across the transaction.
+run "Capability execution generation 16 installer" \
+  bash tests/test-capability-execution-generation16-installer.sh
 
 # The corrected privileged-helper ceremony and the cross-surface order it needs:
 # the coherence matrix across both surfaces, every subset of the three objects,
