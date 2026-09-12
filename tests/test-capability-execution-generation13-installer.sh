@@ -152,7 +152,8 @@ build_host() {
   done < <(succession_created_by \
              "${REPOSITORY}/provisioning/execution/install-generation-14.sh" \
              "${REPOSITORY}/provisioning/execution/install-generation-15.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-16.sh")
+             "${REPOSITORY}/provisioning/execution/install-generation-16.sh" \
+             "${REPOSITORY}/provisioning/execution/install-generation-17.sh")
 
   local row target source base
   while IFS= read -r row; do

@@ -643,6 +643,59 @@ else
   fail "history: the ceremony did not name the capability-runtime store"
 fi
 
+# G11-BC-F: THE PRODUCTION REFUSAL, REPRODUCED EXACTLY.
+#
+# The ceremony refused the real host with
+#
+#   the invocation history has moved past the reviewed one
+#   (2 invocation(s), 0 result(s) against 1 and 0 reviewed)
+#
+# because its ACCEPTED_INVOCATION_HISTORY was inherited verbatim from the
+# G11-BB ceremony, which was reviewed when CINV-000001 was the whole history.
+# CINV-000002 has existed since 2026-09-09.
+#
+# THE SUITE COULD NOT HAVE CAUGHT IT. Under --fixture the ceremony EMPTIES the
+# compiled-in arrays and reads the fixture's own declaration file instead, so
+# the production pin is unreachable from any fixture case. That is the same
+# shape as the G11-BB-Z recovery defect: a fixture that supplies its own version
+# of the thing under test cannot see the real one being wrong. §J closes it.
+history_stale="${WORK}/history-stale-review"
+build_runtime "${history_stale}"; publish_helpers "${history_stale}" pre
+run_gen17 "${history_stale}" --install || true
+# Two invocations on the host, one declared reviewed: the production shape.
+build_invocation_store "${history_stale}" 2 0 1 0
+if run_ceremony "${history_stale}" --verify; then
+  fail "history: a host that moved past the reviewed history was accepted"
+elif grep -q '2 invocation(s), 0 result(s) against 1 and 0 reviewed' "${WORK}/last.log"; then
+  pass "history: the production refusal reproduces exactly, word for word"
+else
+  fail "history: refused, but not with the production message: $(grep -m1 '^STOP' "${WORK}/last.log")"
+fi
+
+# And with the history re-derived for THIS ceremony, the same host is accepted.
+# This is the correction: the policy is unchanged, the reviewed data is current.
+history_current="${WORK}/history-current-review"
+build_runtime "${history_current}"; publish_helpers "${history_current}" pre
+run_gen17 "${history_current}" --install || true
+build_invocation_store "${history_current}" 2 0 2 0
+if run_ceremony "${history_current}" --verify; then
+  pass "history: the same host is accepted once the reviewed history names both records"
+else
+  fail "history: the corrected review still refuses: $(grep -m1 '^STOP' "${WORK}/last.log")"
+fi
+
+# The freshness gate is NOT weakened: a THIRD invocation still refuses, because
+# it is a host the reviewer did not look at.
+history_third="${WORK}/history-third"
+build_runtime "${history_third}"; publish_helpers "${history_third}" pre
+run_gen17 "${history_third}" --install || true
+build_invocation_store "${history_third}" 3 0 2 0
+if run_ceremony "${history_third}" --verify; then
+  fail "history: a host with an unreviewed third invocation was accepted"
+else
+  pass "history: an unreviewed third invocation still refuses -- freshness is intact"
+fi
+
 history_refuses() {                    # <case> <description> <mutator>
   local name="$1" description="$2" mutator="$3"
   local root="${WORK}/history-${name}"
@@ -702,6 +755,49 @@ history_refuses malformed     "a malformed invocation record"               malf
 history_refuses residue       "a partial write left in the record store"    write_residue
 history_refuses unexpected    "an unexpected object in the record store"    unexpected_object
 history_refuses no-store      "declared history with no runtime store"      absent_store
+
+# G11-BC-F: THE SAME CONTROLS AGAINST THE SECOND REVIEWED RECORD.
+#
+# The production declaration now names TWO records, so a control that only ever
+# perturbs the first would leave half the reviewed history unguarded. These run
+# against a two-record host, which is the shape production is in.
+history_two_refuses() {                # <case> <description> <mutator>
+  local name="$1" description="$2" mutator="$3"
+  local root="${WORK}/history2-${name}"
+  rm -rf "${root}"; cp -a "${history_current}" "${root}"
+  chmod -R u+w "$(runtime_store_of "${root}")"
+  "${mutator}" "${root}"
+  if run_ceremony "${root}" --verify; then
+    fail "history: ${description} was accepted"
+  elif grep -qEi 'invocation (history|store)|reviewed CINV-|not a governed |capability runtime store|disagrees with its own counter' \
+         "${WORK}/last.log"; then
+    pass "history: ${description} is refused"
+  else
+    fail "history: ${description} was refused for an unrelated reason: $(grep -m1 -E '^(STOP|FAIL)' "${WORK}/last.log")"
+  fi
+}
+
+changed_second()  { printf 'actor: someone-else\n' \
+  >> "$(runtime_store_of "$1")/capability-invocations/CINV-000002.yaml"; }
+missing_second()  { rm -f "$(runtime_store_of "$1")/capability-invocations/CINV-000002.yaml"; }
+changed_first_of_two() { printf 'actor: someone-else\n' \
+  >> "$(runtime_store_of "$1")/capability-invocations/CINV-000001.yaml"; }
+counter_behind()  { printf '1\n' \
+  > "$(runtime_store_of "$1")/sequences/capability-invocation.seq"; }
+synthetic_cres()  {
+  # A CRES-000001 that no execution produced. The one record Stage 3 was
+  # forbidden to write, appearing anyway.
+  local dir; dir="$(runtime_store_of "$1")/capability-results"
+  mkdir -p "${dir}"
+  printf 'capability_result_id: CRES-000001\nkind: capability-result\n' \
+    > "${dir}/CRES-000001.yaml"
+}
+
+history_two_refuses changed-cinv2  "CINV-000002 rewritten"                     changed_second
+history_two_refuses missing-cinv2  "CINV-000002 removed"                       missing_second
+history_two_refuses changed-cinv1  "CINV-000001 rewritten on a two-record host" changed_first_of_two
+history_two_refuses seq-behind     "the counter behind the durable history"    counter_behind
+history_two_refuses synthetic-cres "a synthetic CRES-000001 nobody produced"   synthetic_cres
 
 # The control. Without it the nine cases above prove nothing about what they
 # name.
@@ -766,6 +862,67 @@ fi
 # it against this ceremony's own fixture: a legitimately advanced history is
 # accepted, a host that moved past the reviewed history is refused, and a
 # rewritten reviewed record is refused.
+
+# ===========================================================================
+# J-0. the PRODUCTION declaration, against the LIVE store
+# ===========================================================================
+#
+# Every case above runs under --fixture, where the ceremony empties its
+# compiled-in history and reads the fixture's declaration instead. That makes
+# the production pin unreachable from all of them -- which is exactly how it
+# came to name a history that was two records out of date and refuse the real
+# host at the operator's console.
+#
+# This case reads the SHIPPED declaration and compares it against the live
+# capability-runtime store. It is the only case here that can fail for the
+# reason the production ceremony actually failed.
+
+declared_history() {                   # <array-name>
+  sed -n "/^$1=(/,/^)\$/p" "${CEREMONY}" \
+    | sed -n 's/^ *"\([A-Z]*-[0-9]*\) \([0-9a-f]\{64\}\)"$/\1 \2/p'
+}
+
+live_records() {                       # <directory> <extension>
+  local dir="$1"
+  [[ -d "${dir}" ]] || return 0
+  local file
+  while IFS= read -r file; do
+    printf '%s %s\n' "$(basename "${file}" .yaml)" \
+      "$(sha256sum "${file}" | cut -d' ' -f1)"
+  done < <(find "${dir}" -maxdepth 1 -type f -name '*.yaml' | sort)
+}
+
+PRODUCTION_STORE=/data/kyri/capability-runtime      # prod-path-reference
+declared_cinv="$(declared_history ACCEPTED_INVOCATION_HISTORY)"
+live_cinv="$(live_records "${PRODUCTION_STORE}/capability-invocations")"
+if [[ "${declared_cinv}" == "${live_cinv}" ]]; then
+  pass "production: the shipped invocation history is exactly the live store"
+else
+  fail "production: the shipped invocation history is not the live store.
+    declared: $(printf '%s' "${declared_cinv}" | tr '\n' ';')
+    live    : $(printf '%s' "${live_cinv}" | tr '\n' ';')"
+fi
+
+declared_cres="$(declared_history ACCEPTED_RESULT_HISTORY)"
+live_cres="$(live_records "${PRODUCTION_STORE}/capability-results")"
+if [[ "${declared_cres}" == "${live_cres}" ]]; then
+  pass "production: the shipped result history is exactly the live store (both empty)"
+else
+  fail "production: the shipped result history is not the live store.
+    declared: $(printf '%s' "${declared_cres}" | tr '\n' ';')
+    live    : $(printf '%s' "${live_cres}" | tr '\n' ';')"
+fi
+
+# And the counter agrees with the record set it names, so a declaration listing
+# the right records against a store that spent an identity it never wrote is
+# still caught.
+live_seq="$(cat "${PRODUCTION_STORE}/sequences/capability-invocation.seq" 2>/dev/null || echo 0)"
+declared_n="$(printf '%s' "${declared_cinv}" | grep -c . || true)"
+if [[ "${live_seq}" == "${declared_n}" ]]; then
+  pass "production: the invocation counter (${live_seq}) agrees with the declared record count"
+else
+  fail "production: the counter is ${live_seq} against ${declared_n} declared record(s)"
+fi
 
 # ===========================================================================
 # J. ceremony recovery at every publication boundary

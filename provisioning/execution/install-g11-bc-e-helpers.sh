@@ -134,8 +134,43 @@ RUNTIME_STORE="/data/kyri/capability-runtime"
 # sound, and tolerates governed history written after this ceremony was
 # accepted. Otherwise an accepted deployment would start reporting FAIL the
 # moment the platform did the thing it exists for.
+#
+# G11-BC-F: THIS LIST WAS INHERITED AND WRONG, AND THE CEREMONY REFUSED THE REAL
+# HOST FOR IT.
+#
+# This ceremony was derived from `install-g11-bb-helpers.sh`. Everything that
+# identifies it was re-derived -- the reviewed commit, the required runtime
+# generation, the matrix, the transaction namespace -- but this list was carried
+# over verbatim. It named `CINV-000001` alone, which was the whole invocation
+# history when G11-BB was reviewed on 2026-09-06. `CINV-000002` has existed
+# since 2026-09-09, so the preflight halted with
+#
+#   the invocation history has moved past the reviewed one
+#   (2 invocation(s), 0 result(s) against 1 and 0 reviewed)
+#
+# THE REFUSAL WAS CORRECT. The freshness gate says "the host is the one the
+# reviewer looked at", and the host was not -- because this declaration
+# described a review that happened for a different ceremony. The fix is to
+# state what the G11-BC-E reviewer is actually looking at, not to relax the gate.
+#
+# WHY NO TEST CAUGHT IT. Under `--fixture` the block below EMPTIES these arrays
+# and reads the fixture's own declaration file instead, so the production pin is
+# structurally unreachable from every fixture case. A suite that supplies its
+# own version of the thing under test cannot see the real one being wrong --
+# the same shape as the G11-BB-Z recovery defect. The suite now carries a
+# host-only case that compares THIS declaration against the live store.
+#
+# BOTH RECORDS ARE IMMUTABLE PRE-EXECUTION EVIDENCE, so pinning their digests
+# stays durable: neither can legitimately change again.
+#
+#   CINV-000001  permanently UNRESOLVED historical invocation; resume forbidden
+#                (G11-BB-D). Present, unchanged, and it must stay that way.
+#   CINV-000002  launch_authorized; Stage 3 attempted once and returned
+#                unresolved, writing nothing (G11-BC-D). No result exists, and
+#                the empty result history below is what asserts that.
 ACCEPTED_INVOCATION_HISTORY=(
   "CINV-000001 1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa"
+  "CINV-000002 923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa"
 )
 ACCEPTED_RESULT_HISTORY=()
 

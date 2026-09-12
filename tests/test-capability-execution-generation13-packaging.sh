@@ -192,7 +192,7 @@ def superseded_by_successor():
     # definition rather than merely out of date.
     out = {}
     for name in ('install-generation-14.sh', 'install-generation-15.sh',
-                 'install-generation-16.sh'):
+                 'install-generation-16.sh', 'install-generation-17.sh'):
         successor = Path('provisioning/execution') / name
         if not successor.is_file():
             continue
@@ -259,7 +259,8 @@ assert BASELINE_N + len(creates) == TARGET_N, (BASELINE_N, len(creates), TARGET_
 def helper_creates():
     total = 0
     for name in ('install-g11-ax-helpers.sh', 'install-generation-14.sh',
-                 'install-generation-15.sh', 'install-generation-16.sh'):
+                 'install-generation-15.sh', 'install-generation-16.sh',
+                 'install-generation-17.sh'):
         ceremony = Path('provisioning/execution') / name
         if not ceremony.is_file():
             continue
@@ -402,7 +403,8 @@ build_gen12_root() {
   done < <(succession_created_by \
              "${REPOSITORY}/provisioning/execution/install-generation-14.sh" \
              "${REPOSITORY}/provisioning/execution/install-generation-15.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-16.sh")
+             "${REPOSITORY}/provisioning/execution/install-generation-16.sh" \
+             "${REPOSITORY}/provisioning/execution/install-generation-17.sh")
 
   local row target source base
   while IFS= read -r row; do
