@@ -41,6 +41,16 @@ import subprocess
 from typing import Any, Sequence
 
 SUDO = "/usr/bin/sudo"
+
+# Where a spawned helper starts. Compiled in, with no parameter and no
+# environment variable. The helper begins as root and can reach any directory,
+# so this is not what fixes G11-BC-D -- the credential drop is. It is here
+# because this launcher states every other property of the processes it creates
+# (argv, environment, descriptors, shell) and cwd was the one it inherited from
+# wherever the operator happened to stand. An inherited cwd is also the one
+# property that can make Popen fail outright: a coordinator whose working
+# directory has been removed cannot spawn a helper at all, as root or otherwise.
+SAFE_WORKING_DIRECTORY = "/"
 TRANSITION_HELPER = "/usr/libexec/kyri-exec-transition"
 RECONCILE_HELPER = "/usr/libexec/kyri-exec-reconcile"
 
@@ -259,7 +269,7 @@ class HelperLauncher:
                 _argv(TRANSITION_HELPER, identity),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=None, bufsize=0, shell=False, close_fds=True,
-                env=self._environment)
+                env=self._environment, cwd=SAFE_WORKING_DIRECTORY)
         except OSError as error:
             raise LauncherRefused(
                 f"the transition helper could not be started: {error}") from None
@@ -279,7 +289,8 @@ class HelperLauncher:
                 _argv(RECONCILE_HELPER, identity),
                 stdin=subprocess.DEVNULL, capture_output=True,
                 timeout=RECONCILE_TIMEOUT_SECONDS, shell=False,
-                check=False, env=self._environment)
+                check=False, env=self._environment,
+                cwd=SAFE_WORKING_DIRECTORY)
         except (OSError, subprocess.SubprocessError) as error:
             raise LauncherRefused(
                 f"the reconciliation helper did not complete: {error}") from None

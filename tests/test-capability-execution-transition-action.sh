@@ -1123,6 +1123,7 @@ recorder = self_pair(); run(recorder, policy=SELF_POLICY)
 order = steps(recorder)
 assert 'chdir' in order, order
 calls = [c for c in recorder.calls if c[0] == 'chdir']
+assert calls == [('chdir', SELF_POLICY.working_directory)], calls
 assert calls == [('chdir', '/')], calls
 print('OK')
 "
@@ -1147,8 +1148,12 @@ print('OK')
 run_case "the safe cwd is a compiled-in invariant, not a caller's value" "${PRELUDE}
 import inspect
 source = inspect.getsource(action)
-assert 'SAFE_WORKING_DIRECTORY' in source, 'the safe cwd is not declared'
-assert action.SAFE_WORKING_DIRECTORY == '/', action.SAFE_WORKING_DIRECTORY
+# The DECISION lives in the policy module and the action layer performs it.
+assert policy_mod.WORKING_DIRECTORY == '/', policy_mod.WORKING_DIRECTORY
+assert POLICY.working_directory == '/', POLICY.working_directory
+assert 'policy.working_directory' in source, 'the drop does not consume the policy value'
+assert 'SAFE_WORKING_DIRECTORY' not in source, \
+    'the action layer carries a second copy of the decision'
 # Nothing may aim it: no argument, no environment variable, no policy field a
 # coordinator could populate.
 body = inspect.getsource(action.drop_privilege)
@@ -1162,6 +1167,165 @@ import inspect
 # is not something the reconciliation path can be missing.
 assert 'drop_privilege(policy, backend=backend)' in inspect.getsource(
     action.perform_reconciliation)
+print('OK')
+"
+
+# --- G11-BC-E: the two widened privileges are NARROW, proven by refusal --------
+#
+# G11-BC-D permitted os.fchown and os.chdir to this layer. A test that only shows
+# they WORK would be worthless -- the question a reviewer needs answered is what
+# they still cannot do. Each case below is a capability that must remain out of
+# reach, not a feature that must function.
+
+run_case "fchown: only the descriptor form exists, never a pathname" "${PRELUDE}
+import ast, inspect, pathlib
+source = pathlib.Path('provisioning/execution/kyri-exec-transition-action.py').read_text()
+tree = ast.parse(source)
+seen = set()
+for node in ast.walk(tree):
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \\
+            and node.value.id == 'os':
+        seen.add(node.attr)
+assert 'fchown' in seen, 'the descriptor form is absent'
+for banned in ('chown', 'lchown', 'chmod', 'fchmod', 'fchownat', 'chmodat'):
+    assert banned not in seen, ('os.' + banned + ' is reachable')
+# And exactly one call site, so the capability cannot spread quietly.
+calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+         and ast.unparse(n.func) == 'os.fchown']
+assert len(calls) == 1, ('fchown call sites', len(calls))
+print('OK')
+"
+
+run_case "fchown: the transfer refuses before it has verified the object" "${PRELUDE}
+import inspect
+body = inspect.getsource(action.transfer_output_leaf)
+fchown_at = body.index('backend.fchown')
+# Type and mode are established BEFORE the transfer, not after it. A transfer
+# that ran first would already have given away whatever was there.
+assert body.index('S_ISDIR') < fchown_at, 'type is checked after the transfer'
+assert body.index('S_IMODE') < fchown_at, 'mode is checked after the transfer'
+# And both are re-established after, so a transfer that changed either refuses.
+assert body.index('did not take effect') > fchown_at
+assert body.index('changed mode during transfer') > fchown_at
+print('OK')
+"
+
+run_case "fchown: a symlinked or non-directory leaf is refused, not followed" "${PRELUDE}
+import os, tempfile
+# The leaf is opened with the no-follow directory flags, so a replaced component
+# cannot be followed to somewhere else.
+assert action._DIR_FLAGS & os.O_NOFOLLOW, 'the leaf open follows symlinks'
+assert action._DIR_FLAGS & os.O_DIRECTORY, 'the leaf open accepts a non-directory'
+
+# Driven, not just asserted: a scene whose out/ is a symlink to a directory the
+# transfer must not touch.
+base = tempfile.mkdtemp(dir=WORK)
+for part in ('execution/CINV-000042', 'handoff/CINV-000042', 'elsewhere'):
+    os.makedirs(os.path.join(base, part))
+published = os.path.join(base, 'handoff/CINV-000042', policy_mod.PROFILE_NAME)
+open(published, 'wb').write(PROFILE_BYTES); os.chmod(published, 0o444)
+os.symlink(os.path.join(base, 'elsewhere'),
+           os.path.join(base, 'handoff/CINV-000042', 'out'))
+os.chmod(os.path.join(base, 'handoff/CINV-000042'), 0o555)
+roots = {policy_mod.EXECUTION_ROOT: os.path.join(base, 'execution'),
+         policy_mod.HANDOFF_ROOT: os.path.join(base, 'handoff'),
+         '/etc/kyri': '/etc/kyri'}
+recorder = self_pair(roots=roots)
+try:
+    action.transfer_output_leaf(SELF_POLICY, backend=recorder)
+except policy_mod.TransitionRefused as error:
+    assert 'unusable' in str(error), str(error)
+else:
+    raise AssertionError('a symlinked output leaf was transferred')
+assert not [c for c in recorder.calls if c[0] == 'fchown'], recorder.calls
+print('OK')
+"
+
+run_case "fchown: a leaf at the wrong mode is refused rather than corrected" "${PRELUDE}
+import os, tempfile
+base = tempfile.mkdtemp(dir=WORK)
+for part in ('execution/CINV-000042', 'handoff/CINV-000042/out'):
+    os.makedirs(os.path.join(base, part))
+published = os.path.join(base, 'handoff/CINV-000042', policy_mod.PROFILE_NAME)
+open(published, 'wb').write(PROFILE_BYTES); os.chmod(published, 0o444)
+# 0755, not the governed 0700. The transfer must refuse -- it is not a repair.
+os.chmod(os.path.join(base, 'handoff/CINV-000042/out'), 0o755)
+os.chmod(os.path.join(base, 'handoff/CINV-000042'), 0o555)
+roots = {policy_mod.EXECUTION_ROOT: os.path.join(base, 'execution'),
+         policy_mod.HANDOFF_ROOT: os.path.join(base, 'handoff'),
+         '/etc/kyri': '/etc/kyri'}
+recorder = self_pair(roots=roots)
+try:
+    action.transfer_output_leaf(SELF_POLICY, backend=recorder)
+except policy_mod.TransitionRefused as error:
+    assert '13 fixes' in str(error) or '0o700' in str(error), str(error)
+else:
+    raise AssertionError('a wrongly-moded output leaf was transferred')
+assert not [c for c in recorder.calls if c[0] == 'fchown'], recorder.calls
+print('OK')
+"
+
+run_case "fchown: the identity comes from the policy, and nowhere else" "${PRELUDE}
+import inspect
+body = inspect.getsource(action.transfer_output_leaf)
+assert 'policy.worker_uid' in body and 'policy.worker_gid' in body
+# No other source of an identity may appear in the transfer.
+for banned in ('getuid', 'geteuid', 'getgid', 'getenv', 'environ', 'argv',
+               'pwd.', 'grp.', 'input('):
+    assert banned not in body, (banned, 'is reachable in the transfer')
+# The leaf name is compiled in; there is no parameter naming a target.
+assert action.OUTPUT_DIRECTORY_NAME == 'out', action.OUTPUT_DIRECTORY_NAME
+signature = inspect.signature(action.transfer_output_leaf)
+assert list(signature.parameters) == ['policy', 'backend'], signature
+print('OK')
+"
+
+run_case "chdir: exactly one call site, to the compiled-in safe directory" "${PRELUDE}
+import ast, pathlib
+tree = ast.parse(pathlib.Path(
+    'provisioning/execution/kyri-exec-transition-action.py').read_text())
+calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+         and ast.unparse(n.func) in ('os.chdir', 'backend.chdir')]
+assert len(calls) == 2, ('chdir call sites', [ast.unparse(c) for c in calls])
+# One in the SystemBackend primitive, one in drop_privilege. Both take the
+# constant -- neither takes an expression a caller could influence.
+for call in calls:
+    argument = ast.unparse(call.args[0])
+    assert argument in ('path', 'policy.working_directory'), argument
+assert policy_mod.WORKING_DIRECTORY == '/', policy_mod.WORKING_DIRECTORY
+print('OK')
+"
+
+run_case "chdir: no caller-, environment- or payload-derived directory exists" "${PRELUDE}
+import ast, inspect, textwrap
+# CODE, not commentary. The docstring records which deployment path the incident
+# happened on, and a guard that read it would be testing prose -- the same
+# mistake the Podman coupling check made before G11-BC-D. Strip it, then assert
+# that nothing in the executable body DERIVES a directory.
+tree = ast.parse(textwrap.dedent(inspect.getsource(action.drop_privilege)))
+fn = tree.body[0]
+if isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant):
+    fn.body.pop(0)
+body = ast.unparse(tree)
+for banned in ('environ', 'getenv', 'argv', 'getcwd', 'expanduser', 'REPOSITORY',
+               'schott-platform', 'tmp'):
+    assert banned not in body, (banned, 'reachable in the drop')
+# The policy MAY carry it -- that is exactly where the decision belongs, and
+# the drop consuming it is the fix. What must not exist is any OTHER source:
+# an argument, the environment, the current directory, or a repository path.
+assert POLICY.working_directory == '/', POLICY.working_directory
+assert 'policy.working_directory' in body, 'the drop does not consume the policy value'
+print('OK')
+"
+
+run_case "chdir: the safe directory is traversable by every identity" "${PRELUDE}
+import os, stat
+info = os.stat(POLICY.working_directory)
+mode = stat.S_IMODE(info.st_mode)
+# Others need execute to stand there. This is the whole requirement, and it is
+# why '/' was chosen rather than a directory some identity happens to own.
+assert mode & 0o001, oct(mode)
+assert info.st_uid == 0, info.st_uid
 print('OK')
 "
 

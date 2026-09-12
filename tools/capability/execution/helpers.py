@@ -153,7 +153,7 @@ REQUIRED_HELPERS: tuple[RequiredHelper, ...] = (
         purpose="the policy module the launch and reconcile entrypoints load"),
     RequiredHelper(
         path="/usr/lib/kyri/python/kyri_exec_transition_action.py",
-        digest="b11a2f19bc469ae4494fbcb08798e02124f2ceced7f9d0d239fad600822be315",
+        digest="d40f5121a3a358ee4351ac760c2bcc7f259b229c4190635e832814672c0c21de",
         purpose="the action layer that performs the credential drop"),
     RequiredHelper(
         path="/usr/lib/kyri/python/kyri_exec_reconcile.py",

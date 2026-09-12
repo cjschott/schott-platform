@@ -86,13 +86,6 @@ _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 _ANCHOR_FLAGS = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 _CHUNK = 65536
 
-# Where a dropped process may always stand. Compiled in, with no parameter, no
-# environment variable and no policy field a coordinator could populate: a
-# working directory a caller could name is a working directory a caller could
-# aim. `/` is `root:root 0755` on any host this runs on, it is traversable by
-# every identity by construction, and it holds no state this boundary touches.
-SAFE_WORKING_DIRECTORY = "/"
-
 # The mode §13 fixes for the writable leaf. Checked before the transfer and
 # again after it, because a transfer that also changed the mode would be
 # publishing a different object than the one that was verified.
@@ -708,9 +701,18 @@ def drop_privilege(policy: Any, *, backend: Any) -> None:
     ``0750 cschott``, and rootless Podman's re-exec refused with *"cannot chdir
     to /opt/schott-platform: Permission denied"* -- the reconciliation could not
     read container state for a reason that had nothing to do with containers.
-    Closing it here rather than at the Podman call means every process on the
-    far side of ``execve`` inherits a reachable cwd, including ones that do not
-    reach Podman at all.
+    Closing it here rather than at the far end means every process beyond
+    ``execve`` inherits a reachable cwd, including ones that never start a
+    runtime at all.
+
+    **The directory comes from the policy, which had already decided it.**
+    ``WORKING_DIRECTORY`` and the ``working_directory`` field have been in the
+    policy module since T10 and nothing ever read them -- declared and never
+    wired, exactly like the output-leaf transfer above. G11-BC-D first added a
+    second constant here; that would have been two copies of one decision in the
+    two layers whose whole separation is that one decides and the other
+    performs. This consumes the governed value instead, so a deployment needing
+    a different safe directory changes it in the layer allowed to choose.
 
     **The drop is verified in every component**, not just the effective one. A
     process that kept a saved uid can take privilege back, so a check of
@@ -731,7 +733,7 @@ def drop_privilege(policy: Any, *, backend: Any) -> None:
     # Before the identity changes, so a refusal here is still one that excludes
     # execution, and so no step below ever runs from an unreachable directory.
     try:
-        backend.chdir(SAFE_WORKING_DIRECTORY)
+        backend.chdir(policy.working_directory)
     except OSError as error:
         raise refused(
             f"the working directory could not be closed: {error}") from None
