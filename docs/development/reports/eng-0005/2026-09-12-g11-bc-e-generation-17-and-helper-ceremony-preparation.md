@@ -484,6 +484,11 @@ FOCUSED
 
 LOCAL_FULL   PASS  137/137 steps
 LOCAL_QUICK  PASS  112/112 steps
+GITHUB_CI    PASS  6/6 — CI, ShellCheck, Semgrep, CodeQL, Trivy, Gitleaks
+CLEAN_CLONE  PASS  all six ceremony artefacts byte-identical; both new suites
+                   pass from a fresh clone
+HOST_ONLY    both new suites are host-only and report HOST_ONLY_SKIP in CI, so
+             the local host result is the authority for them
 ```
 
 ### 13.1 Two governed refusals had to be resolved, not suppressed
