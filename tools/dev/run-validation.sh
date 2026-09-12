@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=110
+  TOTAL_STEPS=112
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=135
+  TOTAL_STEPS=137
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -437,6 +437,18 @@ run "Capability execution generation 15 installer" \
 # readiness is unchanged across the transaction.
 run "Capability execution generation 16 installer" \
   bash tests/test-capability-execution-generation16-installer.sh
+
+# Generation 17: three objects in two coherence groups, and the ordering that
+# makes the cross-surface deployment safe. helpers.py publishes first and closes
+# execution; the suite refuses a matrix that publishes it late, and walks every
+# interruption point requiring no mixed-and-executable state.
+run "Capability execution generation 17 installer" \
+  bash tests/test-capability-execution-generation17-installer.sh
+
+# The G11-BC-E helper ceremony, which must run AFTER Generation 17 and refuses
+# otherwise. Drives the four-state cross-surface matrix that derives the order.
+run "Capability execution BC-E helper ceremony" \
+  bash tests/test-capability-execution-bc-e-helper-ceremony.sh
 
 # The corrected privileged-helper ceremony and the cross-surface order it needs:
 # the coherence matrix across both surfaces, every subset of the three objects,

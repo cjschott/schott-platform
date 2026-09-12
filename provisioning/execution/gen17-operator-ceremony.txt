@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# The Generation-17 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. The test suite executes it against a stub installer to prove the
+# control flow, rather than trusting that a fenced block does what it says.
+#
+# THIS IS STAGE ONE OF TWO. Generation 17 closes execution on purpose: it
+# declares the corrected privileged action module while the predecessor is still
+# installed, so helper compatibility becomes `incompatible` and
+# supervision_ready false. That is the required intermediate state. Execution
+# stays closed until the SEPARATE G11-BC-E helper ceremony runs, and that
+# ceremony refuses unless this one has already completed.
+#
+# Do NOT run Stage 3 between the two. Do NOT run the helper ceremony first.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen17-transaction/journal \
+  || { printf 'STOP: a Generation-17 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen17-transaction \
+  || { printf 'STOP: Generation-17 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 16 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 16 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen16-library-digests.txt
+sudo test -f /root/kyri-gen16-helper-digests.txt
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-17.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-17.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-17.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-17.sh --verify-installed
+
+# EXPECTED AFTER THIS CEREMONY, and it is not a fault:
+#   helper compatibility  incompatible
+#   helpers blocking      1  (kyri_exec_transition_action.py)
+#   supervision_ready     false
+# Return that output. The helper ceremony is a separate authorisation.

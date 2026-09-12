@@ -108,6 +108,13 @@ class Recorder:
     def close_extra_descriptors(self, allowlist):
         self._step('close_extra_descriptors', tuple(allowlist))
 
+    def chdir(self, path):
+        # G11-BC-E: the drop closes the inherited working directory as well as
+        # the credentials, because a cwd becomes unreachable precisely when the
+        # identity changes. Recorded here so the reconciliation path proves it
+        # too -- this is the transition whose failure the correction came from.
+        self._step('chdir', path)
+
     def setgroups(self, groups):
         self._step('setgroups', tuple(groups))
 
@@ -206,11 +213,16 @@ for account, uid, gid in DEPLOYMENTS:
     recorder, error = drive(account, uid, gid)
     assert error is None, error
     steps = order(recorder)
-    for step in ('close_extra_descriptors', 'setgroups', 'setgid', 'setuid',
-                 'set_no_new_privs', 'get_no_new_privs', 'execve'):
+    for step in ('close_extra_descriptors', 'chdir', 'setgroups', 'setgid',
+                 'setuid', 'set_no_new_privs', 'get_no_new_privs', 'execve'):
         assert step in steps, (step, steps)
     # Each step spends privilege the next one needs, so the order is the rule.
     assert steps.index('close_extra_descriptors') < steps.index('setgroups')
+    # cwd is closed before the identity changes: a process that becomes the
+    # execution identity must not be left standing where only the coordinator
+    # could reach. This is the reconciliation path, which is where the
+    # unreachable-cwd failure actually surfaced.
+    assert steps.index('chdir') < steps.index('setuid'), steps
     assert steps.index('setgroups') < steps.index('setgid')
     assert steps.index('setgid') < steps.index('setuid')
     # The drop is verified before no_new_privs is set, and no_new_privs is set
@@ -265,7 +277,7 @@ for creds, why in (
 recorder, error = drive('fixture-b', uid, gid, nnp=0)
 assert error is not None and 'execve' not in order(recorder)
 # And a failure at any primitive stops before the exec.
-for step in ('close_extra_descriptors', 'setgroups', 'setgid', 'setuid',
+for step in ('close_extra_descriptors', 'chdir', 'setgroups', 'setgid', 'setuid',
              'set_no_new_privs', 'get_no_new_privs'):
     recorder, error = drive('fixture-b', uid, gid, fail_at=step)
     assert error is not None, step

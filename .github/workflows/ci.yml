@@ -425,6 +425,15 @@ jobs:
       - name: Capability execution generation 16 installer tests
         run: bash tests/test-capability-execution-generation16-installer.sh
 
+      # Generation 17 and the helper ceremony that must follow it. Host-only:
+      # both reconstruct their baseline from the installed runtime, so on a
+      # runner they report HOST_ONLY_SKIP and the local validator is authority.
+      - name: Capability execution generation 17 installer tests
+        run: bash tests/test-capability-execution-generation17-installer.sh
+
+      - name: Capability execution BC-E helper ceremony tests
+        run: bash tests/test-capability-execution-bc-e-helper-ceremony.sh
+
       # The corrected privileged-helper ceremony, fixture only.
       - name: Capability execution BB helper ceremony tests
         run: bash tests/test-capability-execution-bb-helper-ceremony.sh

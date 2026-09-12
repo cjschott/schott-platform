@@ -231,7 +231,7 @@ GENERATION_DELTA=(
 "tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
 "tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
 "tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03,fdad3cecdf72eeb7b00c21f0ba04ee9bbc4ca3ebd6d6c4a571037518c2c567f0"
-"tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb,74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07"
+"tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb,74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07,78da8519db99fa06e809755808397fe36bb8c83872deab142987c98308b38a4f"
 #
 # G11-AX. `helpers.py` again, and this time as a REPLACE off its own installed
 # Generation-13 bytes rather than as a CREATE.
@@ -282,6 +282,35 @@ GENERATION_DELTA=(
 # and publishing `fdad3cec` is what
 # `provisioning/execution/install-generation-16.sh` exists to do, under its own
 # operator ceremony.
+#
+# G11-BC-E. Generation 17: `helpers.py` gains one more declared successor,
+# `78da8519`, and `6dd93606` joins its BASELINE list.
+#
+# Stage 3 for CINV-000002 returned unresolved on two defects. The fixes live in
+# the privileged action module and the two runtime-side process-creation sites,
+# and `helpers.py` has to move because it is the rule that declares which
+# privileged bytes the runtime expects -- it now names the CORRECTED action
+# module. That is what makes Generation 17 and the G11-BC-E helper ceremony one
+# ordered pair rather than two independent changes.
+#
+# BOTH SIDES WIDEN, AND BOTH ONLY BY DECLARATION. `6dd93606` moves into the
+# baseline list because it is what the host installed at Generation 15 and is
+# therefore a legitimate predecessor to move FROM; `78da8519` joins the
+# successor list because it is the reviewed bytes to move TO. No check is
+# relaxed and nothing is derived from git -- three digests are written down on
+# the baseline side and three on the successor side, and every other byte
+# sequence is refused exactly as before.
+#
+# The other two Generation-17 objects are NOT here and do not need to be: both
+# are flattened `kyri_exec_*` modules living at the library root, and this
+# declaration's drift loop walks `tools/` only. They are governed by their
+# ceremony's own matrix.
+#
+# Declared here as pending. NOT INSTALLED: the installed object is `6dd93606`,
+# and publishing `78da8519` is what
+# `provisioning/execution/install-generation-17.sh` exists to do, under its own
+# operator ceremony -- which must run BEFORE the helper ceremony that publishes
+# the action module the new declaration names.
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
