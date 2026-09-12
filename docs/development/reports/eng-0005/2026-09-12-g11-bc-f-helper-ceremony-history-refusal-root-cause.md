@@ -389,6 +389,13 @@ FOCUSED
 
 LOCAL_FULL   PASS  137/137 steps
 LOCAL_QUICK  PASS  112/112 steps
+GITHUB_CI    PASS  6/6 — CI, ShellCheck, Semgrep, CodeQL, Trivy, Gitleaks
+CLEAN_CLONE  PASS  the corrected declaration and both files reproduce
+                   byte-identically; the suite passes from a fresh clone, and
+                   the four deployment digests are unchanged
+HOST_ONLY    the helper-ceremony suite is host-only and reports HOST_ONLY_SKIP
+             in CI, so the local host run is the authority for it -- including
+             the new production-declaration case, which CI cannot execute
 ```
 
 ## 11. Production non-mutation
