@@ -289,11 +289,26 @@ run_installer() {
 # What the fixture's own runtime says about helper compatibility. Generation 17
 # must not move it, which is the opposite of what Generation 16 required.
 fixture_verdict() {
-  ( cd "$1/usr/lib/kyri/python" && PYTHONDONTWRITEBYTECODE=1 python3 -c '
-import sys
+  # THE PATHS IN REQUIRED_HELPERS ARE COMPILED-IN AND ABSOLUTE, so a bare
+  # `helpers.compatibility()` judges the LIVE host no matter which tree the
+  # module was imported from. That made this assertion silently about
+  # production: it held only while the live helper surface still matched this
+  # generation's declaration, and inverted the moment the G11-BC-E ceremony
+  # moved the action module (G11-BC-G).
+  #
+  # The question this case asks is "what does THIS FIXTURE report", so the
+  # declared paths are rebased onto the fixture root and passed in explicitly.
+  # `compatibility()` takes `required` for exactly this reason.
+  ( cd "$1/usr/lib/kyri/python" && FIXTURE_ROOT="$1" \
+      PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import os, sys
 sys.path.insert(0, ".")
 from tools.capability.execution import helpers
-print(helpers.compatibility().verdict)
+root = os.environ["FIXTURE_ROOT"]
+rebased = tuple(
+    helpers.RequiredHelper(path=root + h.path, digest=h.digest, purpose=h.purpose)
+    for h in helpers.REQUIRED_HELPERS)
+print(helpers.compatibility(required=rebased).verdict)
 ' 2>/dev/null ) || printf 'unavailable'
 }
 

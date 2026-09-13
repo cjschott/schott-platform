@@ -91,7 +91,17 @@ LIBEXEC_ROOT="/usr/libexec"
 # interrupted independently, and a shared transaction root would let one
 # recovery dispose of the other's state.
 TRANSACTION_ROOT="/root/kyri-g11-bc-e-helper-transaction"
-HELPER_EVIDENCE="/root/kyri-g11-bb-helper-digests.txt"
+# G11-BC-G: THIS NAMED G11-BB'S FILE AND OVERWROTE IT.
+#
+# Carried over verbatim when this ceremony was derived from
+# install-g11-bb-helpers.sh -- the same class as the reviewed-history
+# declaration G11-BC-F corrected, and the second field of that kind the
+# derivation missed. The completed run wrote BC-E's evidence over G11-BB's,
+# destroying the durable record of what that ceremony installed.
+#
+# `require_namespace_isolation` did not catch it because it only compared
+# TRANSACTION_ROOT. It now compares this path too.
+HELPER_EVIDENCE="/root/kyri-g11-bc-e-helper-digests.txt"
 
 SUDOERS_DIR="/etc/sudoers.d"
 # G11-BA installed the launch grant as `kyri-exec-launch`. This ceremony looked
@@ -432,6 +442,20 @@ require_namespace_isolation() {
   done
   [[ "${TRANSACTION_ROOT}" == *"g11-bc-e-helper"* ]] \
     || halt "the helper transaction root is not in this ceremony's namespace"
+
+  # THE EVIDENCE FILE IS PART OF THE NAMESPACE, and this guard used to ignore
+  # it. A ceremony writing its evidence over a predecessor's destroys the
+  # durable record of what that predecessor installed -- which is exactly what
+  # happened here before G11-BC-G. Every earlier ceremony's evidence pathname is
+  # named, so a derivation that forgets to re-namespace this one halts.
+  local earlier_evidence
+  for earlier_evidence in g11-ax g11-bb; do
+    [[ "${HELPER_EVIDENCE}" != "${FIXTURE}/root/kyri-${earlier_evidence}-helper-digests.txt" ]] \
+      || halt "this ceremony would write its evidence over the ${earlier_evidence} ceremony's"
+  done
+  [[ "${HELPER_EVIDENCE}" == *"g11-bc-e-helper-digests"* ]] \
+    || halt "the helper evidence path is not in this ceremony's namespace"
+  ok "the evidence pathname is this ceremony's own and overwrites no predecessor's"
   ok "the transaction namespace is this ceremony's own and collides with no runtime generation"
 }
 
@@ -1253,10 +1277,12 @@ write_evidence() {
   local row verdict
   verdict="$(runtime_verdict | cut -d' ' -f1)"
   {
-    printf 'ceremony g11-bb-helpers\n'
+    # Both of these were inherited too, and both were false for this run: it
+    # is not the g11-bb ceremony and it did not run against Generation 14.
+    printf 'ceremony g11-bc-e-helpers\n'
     printf 'commit %s\n' "${COMMIT}"
     printf 'runtime_commit %s\n' "${RUNTIME_COMMIT}"
-    printf 'runtime_generation 14\n'
+    printf 'runtime_generation 17\n'
     printf 'transaction %s\n' "${TRANSACTION_ID}"
     printf 'state COMMITTED\n'
     printf 'objects %s\n' "$(matrix_count)"
