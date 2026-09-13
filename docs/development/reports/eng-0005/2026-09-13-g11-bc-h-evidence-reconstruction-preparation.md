@@ -344,20 +344,33 @@ Registered in `tools/dev/run-validation.sh` (`TOTAL_STEPS` 112→113 quick,
 
 ## 11. Production non-mutation
 
-Verified unchanged this checkpoint, from installed bytes:
+Measured directly this checkpoint, unprivileged, from installed bytes:
 
 | item | value |
 | --- | --- |
-| `HOST_GENERATION` | 17 |
-| `helpers.py` | `78da8519db99fa06e809755808397fe36bb8c83872deab142987c98308b38a4f` |
-| launcher | `152038b1…` |
-| podman adapter | `04205c53…` |
+| `tools/capability/execution/helpers.py` | `78da8519db99fa06e809755808397fe36bb8c83872deab142987c98308b38a4f` |
 | `kyri_exec_transition_action.py` | `d40f5121a3a358ee4351ac760c2bcc7f259b229c4190635e832814672c0c21de` |
-| compatibility | `compatible`, blocking 0, `supervision_ready true` |
-| CINV-000002 | `923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa`, `launch_authorized` |
-| `INVOCATION_SEQ` / `CRES_COUNT` | 2 / 0 |
-| Fabric / Trust | `3fa32b83…` / `53605e4e…` |
-| handoff `out/` | `cschott:cschott 0700` |
+| `kyri_exec_launcher.py` | `152038b198c112c3f5f042114eb6e7f4ffa3a9caeb431908bfe7f208b136447d` |
+| `kyri_exec_podman.py` | `04205c53ec0e10bef13099dd3a84c483e43ed9441335805665f957a5bbdd896b` |
+| `helpers.compatibility()` | verdict `compatible`, `compatible True`, blocking 0 |
+
+All match Generation 17 as accepted at G11-BC-G.
+
+**Carried forward from G11-BC-G, NOT re-measured here.** `/var/lib/kyri` is
+`drwx--x--x root:root` and `/root` is unreadable, so this session cannot read
+the capability store without privilege — and acquiring privilege to read it was
+outside this checkpoint's authority:
+
+| item | last measured value | last measured |
+| --- | --- | --- |
+| CINV-000002 | `923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa`, `launch_authorized` | G11-BC-G |
+| `INVOCATION_SEQ` / `CRES_COUNT` | 2 / 0 | G11-BC-G |
+| Fabric / Trust | `3fa32b83…` / `53605e4e…` | G11-BC-G |
+| handoff `out/` | `cschott:cschott 0700` | G11-BC-G |
+
+Nothing this checkpoint could have changed them: no privileged command was run,
+and every test is fixture-bound. The §9 pre-resume operator block in the
+G11-BC-G report remains the read-only way to confirm them before any resume.
 
 Nothing under `/root` was written. Stage 3 remains unauthorised.
 
