@@ -434,6 +434,12 @@ jobs:
       - name: Capability execution BC-E helper ceremony tests
         run: bash tests/test-capability-execution-bc-e-helper-ceremony.sh
 
+      # The G11-BC-G evidence remediation. Host-only: the fixture carries the
+      # installed helper objects the remediation verifies against, so on a
+      # runner it reports HOST_ONLY_SKIP and the local validator is authority.
+      - name: Capability execution evidence remediation tests
+        run: bash tests/test-capability-execution-evidence-remediation.sh
+
       # The corrected privileged-helper ceremony, fixture only.
       - name: Capability execution BB helper ceremony tests
         run: bash tests/test-capability-execution-bb-helper-ceremony.sh

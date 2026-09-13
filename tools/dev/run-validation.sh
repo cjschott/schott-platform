@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=112
+  TOTAL_STEPS=113
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=137
+  TOTAL_STEPS=138
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -449,6 +449,12 @@ run "Capability execution generation 17 installer" \
 # otherwise. Drives the four-state cross-surface matrix that derives the order.
 run "Capability execution BC-E helper ceremony" \
   bash tests/test-capability-execution-bc-e-helper-ceremony.sh
+
+# The G11-BC-G evidence remediation: the G11-BC-E ceremony wrote its evidence
+# over G11-BB's artifact, so this drives the archive-and-reconstruct repair.
+# Weighted toward refusals, because its product is a claim about the past.
+run "Capability execution evidence remediation" \
+  bash tests/test-capability-execution-evidence-remediation.sh
 
 # The corrected privileged-helper ceremony and the cross-surface order it needs:
 # the coherence matrix across both surfaces, every subset of the three objects,
