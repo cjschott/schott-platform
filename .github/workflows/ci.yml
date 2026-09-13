@@ -511,6 +511,12 @@ jobs:
       - name: Capability execution verification package tests
         run: bash tests/test-capability-execution-verification-package.sh
 
+      # The CINV-000002 provider-error: the governed payload named the Fabric
+      # scope verb in the field the capability reads. RED and GREEN over the
+      # exact reviewed bytes. Fixture-only; no store, handoff or container.
+      - name: Capability execution payload operation contract tests
+        run: bash tests/test-capability-execution-payload-operation-contract.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests

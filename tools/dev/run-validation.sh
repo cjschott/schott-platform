@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=113
+  TOTAL_STEPS=114
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=138
+  TOTAL_STEPS=139
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -547,6 +547,15 @@ run "Capability execution contract outcome" \
 # no CPKG record.
 run "Capability execution verification package" \
   bash tests/test-capability-execution-verification-package.sh
+
+# The CINV-000002 provider-error, held in place. `operation` is spelled in two
+# closed vocabularies that share no member -- the Fabric scope's `execute` and
+# the capability's `verify-execution-boundary` -- and the governed payload
+# carried the first in the field the second is read from. RED and GREEN over the
+# exact reviewed bytes, plus the proof that the coordinator admits the defective
+# document and the capability is the only thing that refuses it.
+run "Capability execution payload operation contract" \
+  bash tests/test-capability-execution-payload-operation-contract.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,
