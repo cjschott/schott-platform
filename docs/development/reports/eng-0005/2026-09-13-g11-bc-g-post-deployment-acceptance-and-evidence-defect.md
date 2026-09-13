@@ -517,6 +517,12 @@ FOCUSED
 
 LOCAL_FULL   PASS  137/137 steps
 LOCAL_QUICK  PASS  112/112 steps
+GITHUB_CI    PASS  6/6 — CI, ShellCheck, Semgrep, CodeQL, Trivy, Gitleaks
+CLEAN_CLONE  PASS  the corrected evidence namespace, self-identification and
+                   generation reproduce byte-identically; both suites pass from
+                   a fresh clone; the deployment digest is unchanged
+HOST_ONLY    the ceremony and installer suites are host-only and report
+             HOST_ONLY_SKIP in CI, so the local host run is the authority
 ```
 
 ## 13. Production non-mutation
