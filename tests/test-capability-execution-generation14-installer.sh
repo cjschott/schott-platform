@@ -90,7 +90,8 @@ build_host() {
   succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN13_COMMIT}" \
     "${ROOT}/provisioning/execution/install-generation-15.sh" \
     "${ROOT}/provisioning/execution/install-generation-16.sh" \
-    "${ROOT}/provisioning/execution/install-generation-17.sh" || return 1
+    "${ROOT}/provisioning/execution/install-generation-17.sh" \
+    "${ROOT}/provisioning/execution/install-generation-18.sh" || return 1
 
   # The installed objects are 0444, so the copies are too. Remove before writing
   # rather than relaxing the mode: the fixture should carry the modes a real

@@ -124,7 +124,8 @@ build_host() {
   succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN14_COMMIT}" \
     "${ROOT}/provisioning/execution/install-generation-15.sh" \
     "${ROOT}/provisioning/execution/install-generation-16.sh" \
-    "${ROOT}/provisioning/execution/install-generation-17.sh" || return 1
+    "${ROOT}/provisioning/execution/install-generation-17.sh" \
+    "${ROOT}/provisioning/execution/install-generation-18.sh" || return 1
   [[ "$(digest_of "${root}${LIBRARY_ROOT}/tools/capability/execution/helpers.py")" \
       == "${RUNTIME_HELPERS_SHA}" ]] || return 1
 

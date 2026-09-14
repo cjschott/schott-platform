@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=115
+  TOTAL_STEPS=116
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=140
+  TOTAL_STEPS=141
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -444,6 +444,14 @@ run "Capability execution generation 16 installer" \
 # interruption point requiring no mixed-and-executable state.
 run "Capability execution generation 17 installer" \
   bash tests/test-capability-execution-generation17-installer.sh
+
+# Generation 18: two objects in ONE coherence group, and the order is a
+# different property from Generation 17's. Nothing here closes execution -- the
+# defining module publishes before the module that imports it, because the
+# reverse intermediate is an ImportError on every CLI command including
+# `recover`. Measured against all four mixes, not inherited.
+run "Capability execution generation 18 installer" \
+  bash tests/test-capability-execution-generation18-installer.sh
 
 # The G11-BC-E helper ceremony, which must run AFTER Generation 17 and refuses
 # otherwise. Drives the four-state cross-surface matrix that derives the order.

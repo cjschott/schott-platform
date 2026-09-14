@@ -431,6 +431,12 @@ jobs:
       - name: Capability execution generation 17 installer tests
         run: bash tests/test-capability-execution-generation17-installer.sh
 
+      # Generation 18. Host-only: it reconstructs its baseline path set from the
+      # installed runtime, so on a runner it reports HOST_ONLY_SKIP and the
+      # local validator is the authority.
+      - name: Capability execution generation 18 installer tests
+        run: bash tests/test-capability-execution-generation18-installer.sh
+
       - name: Capability execution BC-E helper ceremony tests
         run: bash tests/test-capability-execution-bc-e-helper-ceremony.sh
 

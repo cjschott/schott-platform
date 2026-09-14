@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# The Generation-18 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. The test suite executes it against a stub installer to prove the
+# control flow, rather than trusting that a fenced block does what it says.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# THIS IS ONE STAGE, NOT TWO. Generation 17 was stage one of a pair because it
+# closed execution and needed the G11-BC-E helper ceremony to reopen it.
+# NOTHING OF THAT APPLIES HERE. This generation moves no helper object and no
+# readiness authority: helper compatibility stays `compatible`, blocking stays
+# 0, supervision_ready stays true, and there is no second ceremony to follow.
+#
+# WHAT IT DEPLOYS. Two objects in one coherence group -- `evidence.py` then
+# `coordinator.py` -- so that a re-execute of an invocation that already has a
+# terminal result refuses BEFORE the privileged helper is launched, instead of
+# after the provider has already run.
+#
+# Do NOT run Stage 3 after this. Do NOT write the Fabric renewal yet. Neither is
+# authorised by this ceremony, and the Fabric chain starts a four-day lease that
+# should not begin until execution is actually permitted.
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen18-transaction/journal \
+  || { printf 'STOP: a Generation-18 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen18-transaction \
+  || { printf 'STOP: Generation-18 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 17 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 17 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen17-library-digests.txt
+sudo test -f /root/kyri-gen17-helper-digests.txt
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-18.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-18.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-18.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-18.sh --verify-installed
+
+# EXPECTED AFTER THIS CEREMONY:
+#   helper compatibility  compatible      (UNCHANGED -- nothing here moves it)
+#   helpers blocking      0               (UNCHANGED)
+#   supervision_ready     true            (UNCHANGED)
+#   CINV sequence         2               CRES sequence  1
+#   CINV-000002           923ff0d7...     CRES-000001    18ba4c34...
+#
+# An `incompatible` verdict here is a FAULT, not an expected intermediate: it
+# would mean something outside this matrix moved. Return the output either way.
+#
+# If the run is interrupted, do NOT rerun --install. Run:
+#   sudo bash /opt/schott-platform/provisioning/execution/install-generation-18.sh --recover
+# and return its output. Do not delete the transaction directory.
