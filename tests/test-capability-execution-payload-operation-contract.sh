@@ -233,7 +233,80 @@ with TemporaryDirectory() as tmp:
 "
 
 # ===========================================================================
-# E. this suite left the governed tree alone
+# E. the payload prepared for CINV-000003
+# ===========================================================================
+#
+# The corrected ceremony payload, pinned here so the value the operator freezes
+# is a checked fact rather than a number in a report. It carries the CAPABILITY
+# verb; the invocation record it will be bound to carries the FABRIC verb
+# `execute`, from CINST-000005.effective_scope.permitted_operations. Both are
+# correct at the same time, and that is the whole distinction.
+
+PREPARED_CANONICAL_DIGEST="be85d58fc410c9de2e501e4721a524b92b4a83865eb4be34db38346262b60749"
+
+run_case "the prepared CINV-000003 payload canonicalises to the digest the ceremony pins" "${PRELUDE}
+prepared = {
+    'operation': 'verify-execution-boundary',
+    'arguments': {'count': 1,
+                  'label': 'g11bcj-third-controlled-production-invoke'},
+    'note': ('ENG-0005 G11-BC-J: the third controlled production invocation, '
+             'CINV-000003, on the CADV-000006 / CINST-000005 / CROUTE-0005 / '
+             'CSEL-000004 chain. Corrected provider operation after CRES-000001 '
+             'returned provider-error.'),
+}
+body = canonical_json.serialise(prepared)
+digest = hashlib.sha256(body).hexdigest()
+assert digest == '${PREPARED_CANONICAL_DIGEST}', digest
+assert len(body) == 343, len(body)
+"
+
+run_case "the prepared payload satisfies the provider contract end to end" "${PRELUDE}
+module = entry_module()
+prepared = {
+    'operation': 'verify-execution-boundary',
+    'arguments': {'count': 1,
+                  'label': 'g11bcj-third-controlled-production-invoke'},
+    'note': ('ENG-0005 G11-BC-J: the third controlled production invocation, '
+             'CINV-000003, on the CADV-000006 / CINST-000005 / CROUTE-0005 / '
+             'CSEL-000004 chain. Corrected provider operation after CRES-000001 '
+             'returned provider-error.'),
+}
+body = canonical_json.serialise(prepared)
+with TemporaryDirectory() as tmp:
+    payload_path, result_path = scene(tmp, body)
+    module.PAYLOAD_PATH = payload_path
+    module.RESULT_PATH = result_path
+    assert module.main() == 0
+    document = json.loads(Path(result_path).read_bytes())
+    result_content.validate_result_content(document)
+    # The result binds the payload that produced it, so this is also the
+    # digest the collector would admit for CINV-000003.
+    assert document['payload_digest'] == '${PREPARED_CANONICAL_DIGEST}', document['payload_digest']
+"
+
+# The Fabric verb stays the Fabric verb. Nothing in this preparation may weaken
+# permitted_operations semantics by teaching the provider to accept `execute`.
+run_case "the provider still refuses the Fabric verb after the correction" "${PRELUDE}
+module = entry_module()
+prepared = {
+    'operation': 'execute',
+    'arguments': {'count': 1,
+                  'label': 'g11bcj-third-controlled-production-invoke'},
+}
+body = canonical_json.serialise(prepared)
+with TemporaryDirectory() as tmp:
+    payload_path, result_path = scene(tmp, body)
+    try:
+        module.verify(payload_path, result_path)
+    except module.VerificationRefused:
+        pass
+    else:
+        raise AssertionError('the provider accepted the Fabric verb')
+    assert not Path(result_path).exists()
+"
+
+# ===========================================================================
+# F. this suite left the governed tree alone
 # ===========================================================================
 #
 # Not a formality: an earlier draft of this file loaded the entrypoint without
