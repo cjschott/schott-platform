@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=114
+  TOTAL_STEPS=115
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=139
+  TOTAL_STEPS=140
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -671,6 +671,15 @@ run "Capability execution worker binding" \
 # Hermetic -- constructed outcomes, temporary stores, no container.
 run "Capability terminal result contract" \
   bash tests/test-capability-result-contract.sh
+
+# ENG-0005 G11-BC-K. The duplicate-result gate and the boundary it sits in front
+# of. `supervisor.execute` launches the privileged helper on its first line, so
+# the guard that refuses a second terminal result has to run before it, not
+# after the workload. A recording launcher makes "refused before any side
+# effect" a measurement rather than a claim. Hermetic -- temporary stores,
+# stub launcher, no container.
+run "Capability execution duplicate-result gate" \
+  bash tests/test-capability-execution-duplicate-result-gate.sh
 
 # ENG-0005 G11-AO. The execution mechanism bound to an invocation before the
 # adapter runs, and what an invocation with no result therefore means:

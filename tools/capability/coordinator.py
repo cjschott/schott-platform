@@ -24,7 +24,7 @@ from typing import Any
 
 from .errors import CapabilityError
 from .evidence import (STATUS_PREFLIGHT, STATUS_PREPARED, record_invocation,
-                       record_terminal_result)
+                       record_terminal_result, require_no_terminal_result)
 from .fabric_evidence import verify_selected_evidence
 from .invocation_identity import bind, payload_digest
 from .package_resolution import resolve_and_stage_package
@@ -153,6 +153,18 @@ def prepare_invocation(store, *, fabric_root: Any, fabric_expected_uid: Any,
 
     if decision.status == STATUS_PREPARED:
         if adapter is not None and execution_binding is not None:
+            # THE SAME GATE, on the locally executed path.
+            #
+            # No released caller reaches here -- `command_invoke` supplies
+            # neither an adapter nor a binding, which is why `adapter_identity`
+            # is always null -- so this is latent rather than live. It is the
+            # same defect regardless: normally the CINV above was just
+            # allocated and has no result, but a REPLAYED invocation identity
+            # resolves to an existing CINV, and that one may already be
+            # resolved. Answering after `adapter.execute` would be answering
+            # after the workload ran.
+            require_no_terminal_result(store, decision.invocation_record_id)
+
             # The record above is already durable. What comes back is carried,
             # never reinterpreted: the outcome class was concluded by T13 and
             # copied through the adapter, and this module adds no judgement of
@@ -229,6 +241,24 @@ def execute_supervised(store, *, invocation_record_id: Any, invocation_id: Any,
     if supervisor is None or binding is None:
         raise CapabilityError(
             "a supervised execution needs both a supervisor and a binding")
+
+    # THE GATE, BEFORE THE PRIVILEGE BOUNDARY.
+    #
+    # `supervisor.execute` launches the privileged helper on its first line, and
+    # everything after that -- the transition action, the container, the handoff
+    # ownership transfer, the provider itself -- is a side effect nothing can
+    # take back. `record_terminal_result` has always refused a second result,
+    # but it runs after all of that: a re-execute would run the workload again
+    # and only then decline to write it down, which is an execution that
+    # happened and was never recorded. G11-BC-I found it; this is where it is
+    # answered instead.
+    #
+    # It reads the authoritative runtime store and nothing else. Not the
+    # caller, not the handoff, not the container list, not the lifecycle
+    # journal: a terminal result is the only thing that means "resolved", and
+    # it is the thing recovery already keys on.
+    require_no_terminal_result(store, invocation_record_id)
+
     outcome = supervisor.execute(binding)
     return record_terminal_result(
         store, invocation_record_id=invocation_record_id, outcome=outcome,

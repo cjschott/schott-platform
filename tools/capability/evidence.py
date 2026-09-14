@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 
+from ..common.immutable_store import StoreError
 from .errors import CapabilityError
 from .execution.profile import ADAPTER_IDENTITY
 from .rehearsal import is_rehearsing
@@ -248,6 +249,74 @@ def require_execution_success(value: Any) -> bool:
     return value
 
 
+class TerminalResultExists(CapabilityError):
+    """This invocation already has a governed terminal result."""
+
+
+def existing_terminal_result(store, invocation_record_id: Any):
+    """The terminal result already recorded for this invocation, or ``None``.
+
+    **One reader, two callers, on purpose.** The pre-execution gate in
+    `execute_supervised` and the recording guard below must answer the same
+    question the same way; two spellings of "does a result exist" would
+    eventually disagree, and the disagreement would be a second execution.
+
+    **It fails closed on a damaged result namespace.** `list_records` skips a
+    file that is not a mapping so that listing stays usable, which is right for
+    listing and wrong here: a corrupted `CRES` would simply vanish and this
+    would answer "no result" for an invocation that has one. So the files are
+    counted as well as read, and a shortfall is refused rather than stepped
+    over.
+
+    **A result naming this invocation blocks it whatever its attempt_number.**
+    The recording guard used to require ``attempt_number == 1``, which meant a
+    result carrying an unusable one would not block anything -- fail-open in the
+    one place that must not be. The number is reported, never used to dismiss.
+    """
+    # The record directory itself, through the store's own guarded resolver, so
+    # the count below is taken over exactly the files `list_records` reads.
+    try:
+        directory = store._directory(RESULT_KIND)          # noqa: SLF001
+        on_disk = sorted(directory.glob("*.yaml"))
+    except (CapabilityError, StoreError, OSError) as error:
+        raise CapabilityError(
+            f"the result namespace could not be read: {error}") from None
+    try:
+        stored = store.list_records(RESULT_KIND)
+    except (CapabilityError, StoreError) as error:
+        raise CapabilityError(
+            f"the result namespace could not be read: {error}") from None
+    if len(stored) != len(on_disk):
+        raise CapabilityError(
+            f"{len(on_disk) - len(stored)} result record(s) are unreadable; "
+            f"whether {invocation_record_id} already has a terminal result "
+            f"cannot be established")
+
+    matched = [record for record in stored
+               if record.get("invocation_record_id") == invocation_record_id]
+    if len(matched) > 1:
+        raise CapabilityError(
+            f"{len(matched)} terminal results name {invocation_record_id}; "
+            f"the store is corrupt and this adapter performs one attempt")
+    return matched[0] if matched else None
+
+
+def require_no_terminal_result(store, invocation_record_id: Any) -> None:
+    """Refuse if this invocation is already resolved.
+
+    Raised before anything runs. The message names the result, because an
+    operator seeing this needs to know which record closed the invocation.
+    """
+    existing = existing_terminal_result(store, invocation_record_id)
+    if existing is None:
+        return
+    raise TerminalResultExists(
+        f"a terminal result already exists for {invocation_record_id} "
+        f"({existing.get('capability_result_id')}, "
+        f"outcome {existing.get('outcome_class')}); "
+        f"this adapter performs one attempt")
+
+
 def record_terminal_result(store, *, invocation_record_id: Any, outcome: Any,
                            result_digest: Any = None,
                            result_artifact_reference: Any = None,
@@ -307,12 +376,11 @@ def record_terminal_result(store, *, invocation_record_id: Any, outcome: Any,
     # the execution: a capability that runs for its full timeout must not block
     # every other invocation-identity operation for that long.
     with store.invocation_critical_section(invocation_id or invocation_record_id):
-        for existing in store.list_records(RESULT_KIND):
-            if (existing.get("invocation_record_id") == invocation_record_id
-                    and existing.get("attempt_number") == 1):
-                raise CapabilityError(
-                    f"a terminal result already exists for "
-                    f"{invocation_record_id}; this adapter performs one attempt")
+        # Still checked here, and still inside the critical section. The
+        # pre-execution gate stops a second run; this stops a second RECORD,
+        # which is a different race -- two callers past the gate concurrently
+        # would both reach this, and only one may write.
+        require_no_terminal_result(store, invocation_record_id)
         identity = store.allocate_id(RESULT_KIND)
         store.write_atomic(
             store.path_for(RESULT_KIND, identity),

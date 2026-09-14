@@ -601,6 +601,11 @@ jobs:
       - name: Capability terminal result contract tests
         run: bash tests/test-capability-result-contract.sh
 
+      # G11-BC-K: the duplicate-result gate must refuse before the privileged
+      # helper is launched. Hermetic; a recording launcher proves the ordering.
+      - name: Capability execution duplicate-result gate tests
+        run: bash tests/test-capability-execution-duplicate-result-gate.sh
+
       # G11-AO: adapter identity on the invocation record, and interrupted
       # semantics that depend on it. Hermetic.
       - name: Capability adapter binding tests

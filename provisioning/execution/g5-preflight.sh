@@ -119,7 +119,7 @@ GENERATION_DELTA=(
 "tools/common/trusted_source.py|REPLACE|e0f32e1f5372dbdb24ebf22e35cfa7d3a52af570f87a3160f634dae2fffea4f8|d1e8ac5933834deb7b7aa07a847312ac10d8c4e3f0c0d2d93400c6eafe04865f"
 "tools/capability/execution/package_contract.py|REPLACE|812dc878cb7b7082b42086a9adce714a152617e718536c039ed759b12d3e511a|79a9f7d4befb490833c5c5b764a03c02696ab3555e8081a89af92f5f79a4dc13"
 "tools/capability/package_resolution.py|REPLACE|678bcabd341f8a76fa7000cfe0f66174b443c4ca5b2782846bed7baf94681f6c,0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b|2124005cb97309f7417543f5765a92a5857bf979a6df4798ee2a6b600909bd14"
-"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e,394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7,d2429646966462508fb27e4c6b96d1a0f698cf93fa841d66f0640bd344232426|25f65bd345efc84faadfefff635d50b850df9362ae20130f47b55fc9cf8588b8"
+"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e,394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7,d2429646966462508fb27e4c6b96d1a0f698cf93fa841d66f0640bd344232426,25f65bd345efc84faadfefff635d50b850df9362ae20130f47b55fc9cf8588b8|25f65bd345efc84faadfefff635d50b850df9362ae20130f47b55fc9cf8588b8,a571ad02ace56dbb93a5cc9385a4b2cca4e5c1922fa16bfa9f59848a25a386f6"
 # Generation 12, ENG-0005 G11-X. Per-invocation operation authority: the
 # invocation boundary now names the action being requested and checks it,
 # with the capability, the classification, and the node identity, against
@@ -129,7 +129,7 @@ GENERATION_DELTA=(
 "tools/capability/fabric_evidence.py|REPLACE|e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742,e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742|e51d893936ba5e465fa94893a46a3f85c66ad4904a29970f66dc00f63fb67e67"
 "tools/capability/invocation_identity.py|REPLACE|617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2,617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2|3a01471a43c1f0b27aac987c77941446368e17ba293cfaf0451191a587c5def8"
 "tools/capability/records.py|REPLACE|563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31,a6744501a1f58eafb926f128fec1eadcc2ccced9ebb601718c8cc55a4b1da38e|90312ba3096aad7f3c09628536f5a17d594d4f70d63c6147570f8ed65616e27e"
-"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea|b72e7e2576095c96ffd5b4a3a48acc2fed7c1852b631a5f6f7d691e0bf8603c0"
+"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea,b72e7e2576095c96ffd5b4a3a48acc2fed7c1852b631a5f6f7d691e0bf8603c0|b72e7e2576095c96ffd5b4a3a48acc2fed7c1852b631a5f6f7d691e0bf8603c0,acb80cb93084b2b196d6b806b278128458be8947a9575eac7c7c509e9f045585"
 # Generation 13 candidate, ENG-0005 G11-AB. `invoke --preflight`: the rehearsal
 # every other governed write in this platform already had. G11-AA proved the
 # cost of its absence -- the only way to learn whether an invocation would be
@@ -311,6 +311,41 @@ GENERATION_DELTA=(
 # `provisioning/execution/install-generation-17.sh` exists to do, under its own
 # operator ceremony -- which must run BEFORE the helper ceremony that publishes
 # the action module the new declaration names.
+#
+# G11-BC-K. Generation 18: `evidence.py` and `coordinator.py` each gain one
+# declared successor, and each moves its Generation-17 digest into the baseline
+# list.
+#
+# The guard that refuses a second terminal result ran AFTER the workload.
+# `ExecutionSupervisor.execute` launches the privileged helper on its first
+# line, so a re-execute of an invocation that already has a `CRES` would run the
+# transition, the container and the provider, and only then decline to write the
+# result down -- an execution that happened and was never recorded. G11-BC-I
+# found it on CINV-000002; the correction moves the check in front of
+# `supervisor.execute` and gives both callers one shared reader.
+#
+# THE TWO ARE ONE COHERENCE GROUP AND MOVE TOGETHER. `coordinator.py` imports
+# `require_no_terminal_result` at module load, so publishing it against the old
+# `evidence.py` fails every invocation with `ImportError`; publishing
+# `evidence.py` alone leaves the gate defined and never called, which is a host
+# that looks corrected and is not. Publication order is `evidence.py` first --
+# the provider of the symbol -- then `coordinator.py`.
+#
+# BOTH SIDES WIDEN, AND BOTH ONLY BY DECLARATION, exactly as at G11-BC-E.
+# `25f65bd3` and `b72e7e25` move into the baseline lists because they are what
+# the host installed at Generation 17 and are therefore legitimate predecessors
+# to move FROM; the two new digests join the successor lists because they are
+# the reviewed bytes to move TO. No check is relaxed, no comparison becomes a
+# wildcard, and nothing is derived from git.
+#
+# Neither object is in `helpers.REQUIRED_HELPERS`, so `helpers.compatibility()`
+# is unaffected and NO HELPER CEREMONY is required -- this is a library-only
+# generation, unlike the 17/BC-E pair.
+#
+# Declared here as pending. NOT INSTALLED: the installed objects are still
+# `25f65bd3` and `b72e7e25`, and publishing the successors is a runtime
+# generation ceremony that G11-BC-K is not authorised to perform and has not
+# written.
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
