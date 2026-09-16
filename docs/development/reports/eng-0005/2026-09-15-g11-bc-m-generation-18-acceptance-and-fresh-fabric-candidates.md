@@ -445,19 +445,51 @@ FREEZE_CADV
 Expected: `would_accept true`, `mutated false`, `predicted_record_id
 CADV-000006`, `destination_exists false`, `request_digest sha256:ab8ba799…`.
 
-### 12.3 CINST-000005, CROUTE-0005, CSEL-000004
+### 12.3 CINST-000005 — committed as its own artifact
 
-Identical shape. Each substitutes its own destination, reviewed digest, byte
-count, body and CLI call, and names its own refusals:
+**Corrected after review.** This section originally gave CINST, CROUTE and CSEL
+as a table of digests rather than as literal bodies and executable blocks. A
+digest without the bytes it names is not a reviewable artifact: the 1269 bytes
+existed nowhere in the repository, so nobody could re-render them and the freeze
+block's own `test "${ACTUAL}" = "${REVIEWED}"` had nothing to check against.
+
+The CINST-000005 body and its complete block are now committed at
+
+```
+provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt
+```
+
+and `tests/test-fabric-cinst-000005-freeze-artifact.sh` renders the committed
+heredoc and asserts the digest (`850af136…`), the byte count (1269), every
+accepted authority field, and that both named refusals are distinct from the
+reviewed body — so "the committed block produces the accepted body" is a checked
+fact in CI rather than a claim here. 23 assertions.
+
+The candidate itself is unchanged: same timestamps, same `request_id`, same
+digest, same request digest. Rehearsed against scratch copies of the **current**
+production Fabric and Trust — the ones with CADV-000006 written — returning
+`predicted_record_id CINST-000005` and
+`request_digest sha256:be0daf49…`.
+
+One value did have to move. The block pins `/var/lib/kyri/fabric` unchanged at
+**`e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b`**, not the
+`3fa32b83…` in §12.2: CADV-000006 has since been written, and pinning the
+pre-CADV aggregate would have made the block refuse every time.
+
+### 12.4 CROUTE-0005 and CSEL-000004
+
+Still tabular, and deliberately so — they are steps 7 and 10 of §13 and their
+freeze blocks are re-derived against the store as it stands **after** the
+preceding record is written, which has not happened yet. Each will be committed
+as its own artifact in the same shape as §12.3 when its step is reached:
 
 | block | `DEST` | `REVIEWED` | bytes | superseded BC-J | accepted predecessor |
 | --- | --- | --- | --- | --- | --- |
-| CINST | `/etc/kyri/fabric/cinst-000005.json` | `850af136…fda8da` | 1269 | `a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b` | `5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c` |
 | CROUTE | `/etc/kyri/fabric/croute-0005.json` | `6d8311e5…3f713a` | 678 | `77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3` | `bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda` |
 | CSEL | `/etc/kyri/fabric/csel-000004.json` | `60857d68…80dffd` | 605 | `0f2b38d360adc17bec48d8b4c6558eb0d4daf461ebcfad518c078025b2fdef93` | `700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e` |
 
-The CINST and CSEL preflights add `--trust-store-root /var/lib/kyri/trust`. The
-CSEL block additionally pins, independently of the request digest:
+The CSEL preflight adds `--trust-store-root /var/lib/kyri/trust` and pins,
+independently of the request digest:
 
 ```bash
 SELECTED="$(… --preflight | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_instance_id"])')"

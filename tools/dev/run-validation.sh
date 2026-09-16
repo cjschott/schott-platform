@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=116
+  TOTAL_STEPS=117
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=141
+  TOTAL_STEPS=142
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -564,6 +564,14 @@ run "Capability execution verification package" \
 # document and the capability is the only thing that refuses it.
 run "Capability execution payload operation contract" \
   bash tests/test-capability-execution-payload-operation-contract.sh
+
+# The committed CINST-000005 freeze artifact. G11-BC-M shipped the reviewed
+# body's DIGEST in a prose table and not the 1269 bytes it names, so nobody
+# could re-render it and the block's own check had nothing to check against.
+# This renders the committed heredoc and asserts the digest, the byte count,
+# the accepted authority fields and the named refusals.
+run "Fabric CINST-000005 freeze artifact" \
+  bash tests/test-fabric-cinst-000005-freeze-artifact.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,
