@@ -565,13 +565,14 @@ run "Capability execution verification package" \
 run "Capability execution payload operation contract" \
   bash tests/test-capability-execution-payload-operation-contract.sh
 
-# The committed CINST-000005 freeze artifact. G11-BC-M shipped the reviewed
-# body's DIGEST in a prose table and not the 1269 bytes it names, so nobody
-# could re-render it and the block's own check had nothing to check against.
-# This renders the committed heredoc and asserts the digest, the byte count,
-# the accepted authority fields and the named refusals.
-run "Fabric CINST-000005 freeze artifact" \
-  bash tests/test-fabric-cinst-000005-freeze-artifact.sh
+# The committed Fabric freeze artifacts. G11-BC-M shipped the reviewed bodies'
+# DIGESTS in a prose table and not the bytes they name, so nobody could
+# re-render them and each block's own check had nothing to check against. This
+# renders every committed heredoc and asserts the digest, the byte count, the
+# named refusals and the step-specific baseline pin. A new record is a table
+# row here rather than a copy of this file.
+run "Fabric freeze artifacts" \
+  bash tests/test-fabric-freeze-artifacts.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,

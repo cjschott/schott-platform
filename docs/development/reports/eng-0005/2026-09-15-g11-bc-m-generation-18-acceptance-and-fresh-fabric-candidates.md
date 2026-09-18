@@ -476,19 +476,43 @@ One value did have to move. The block pins `/var/lib/kyri/fabric` unchanged at
 `3fa32b83…` in §12.2: CADV-000006 has since been written, and pinning the
 pre-CADV aggregate would have made the block refuse every time.
 
-### 12.4 CROUTE-0005 and CSEL-000004
+### 12.4 CROUTE-0005 — committed as its own artifact
 
-Still tabular, and deliberately so — they are steps 7 and 10 of §13 and their
-freeze blocks are re-derived against the store as it stands **after** the
-preceding record is written, which has not happened yet. Each will be committed
-as its own artifact in the same shape as §12.3 when its step is reached:
+Committed once CINST-000005 was written and accepted, in the same shape as
+§12.3:
+
+```
+provisioning/fabric/g11-bc-m-croute-0005-freeze.txt
+```
+
+The candidate is unchanged — `recorded_at 2026-09-15T06:30:00-05:00`,
+`route_version 5`, `candidate_instances ["CINST-000005"]`, digest
+`6d8311e5…` at 678 bytes, request digest `sha256:c2ded2c5…`. Rehearsed against a
+scratch copy of the current stores: `predicted_record_id CROUTE-0005`,
+`request_digest sha256:c2ded2c5…`, store unchanged.
+
+Its baseline pin is **`712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c`**
+— the aggregate with CADV-000006 and CINST-000005 written and CROUTE-0005 not.
+That is a different value from the CINST block's `e542651a…`, and necessarily
+so: each block pins the store as it stands when that step runs. This is why the
+artifacts are committed one step at a time rather than all at once, and the
+suite now asserts that no two artifacts share a baseline.
+
+Current eligibility was reconfirmed against the **live** Fabric at the route's
+own reviewed instant, with the accepted CADV-000006 and CINST-000005 in place:
+`eligible: True`, `unmet: []`, 12 of 12 conditions met.
+
+### 12.5 CSEL-000004
+
+Still tabular. It is step 10, and its baseline pin does not exist until
+CROUTE-0005 is written — pinning anything now would bake in a value already
+known to be wrong. It gets the same treatment when its step is reached:
 
 | block | `DEST` | `REVIEWED` | bytes | superseded BC-J | accepted predecessor |
 | --- | --- | --- | --- | --- | --- |
-| CROUTE | `/etc/kyri/fabric/croute-0005.json` | `6d8311e5…3f713a` | 678 | `77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3` | `bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda` |
 | CSEL | `/etc/kyri/fabric/csel-000004.json` | `60857d68…80dffd` | 605 | `0f2b38d360adc17bec48d8b4c6558eb0d4daf461ebcfad518c078025b2fdef93` | `700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e` |
 
-The CSEL preflight adds `--trust-store-root /var/lib/kyri/trust` and pins,
+The CSEL preflight adds `--trust-store-root /var/lib/kyri/trust` and will pin,
 independently of the request digest:
 
 ```bash
@@ -587,6 +611,25 @@ Generation 18 replaced, and no successor in its lists declared them.
 No Fabric write, no Trust write, no `execute`, no `recover`, no image change, no
 sudoers change, no handoff change, no Podman call. Every mutating engine call
 ran against a copy under the session scratch directory.
+
+---
+
+## 15.1 The lease, as it stands
+
+```
+now                 2026-09-18T07:17:37-05:00
+CADV-000006 / CINST-000005 expire   2026-09-19T06:00:00-05:00
+remaining           22h 42m
+```
+
+Not extended and not rewritten by this checkpoint. Everything still ahead — this
+freeze, the route write and its acceptance, the CSEL freeze/write/acceptance,
+and CINV-000003 Stages 0 to 3 — has to fit inside that. It is workable at the
+cadence the chain has been moving, and it is no longer comfortable.
+
+If the window closes first, the correct response is a fresh renewal, not an
+extension: the records are immutable and the lease is the thing that says how
+long the reviewer's judgement stands.
 
 ---
 

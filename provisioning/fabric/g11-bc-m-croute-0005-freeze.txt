@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# The CROUTE-0005 freeze, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# STEP 7 OF THE G11-BC-M WRITE PLAN. CADV-000006 and CINST-000005 are written
+# and accepted. This freezes CROUTE-0005 and runs a READ-ONLY preflight; the
+# create-route WRITE is a separate authorisation and is not in this block.
+#
+# It writes exactly one file, into /etc/kyri/fabric. It does not touch
+# /var/lib/kyri/fabric, and proves so.
+#
+# THE BASELINE PIN IS STEP-SPECIFIC, AND THAT IS THE WHOLE REASON THIS ARTIFACT
+# COULD NOT BE COMMITTED EARLIER. The CINST-000005 block pins the Fabric
+# aggregate at e542651a…, which was correct with CADV-000006 written and
+# CINST-000005 not. Writing CINST-000005 moved it to 712730063d90…, which is
+# what this block pins. A freeze block carrying its predecessor's aggregate
+# refuses on every run; one carrying no aggregate proves nothing about the store
+# it preflighted against.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE_CROUTE'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/croute-0005.json
+REVIEWED=6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a
+REVIEWED_BYTES=678
+
+# The Fabric store as it stands with CADV-000006 and CINST-000005 written and
+# CROUTE-0005 not. Pinned so the preflight below cannot be read as proof against
+# a store that moved underneath it.
+FABRIC_BEFORE=712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c
+
+# Bodies that are NOT this one, refused BY NAME rather than by a generic
+# mismatch. The first is the G11-BC-J candidate, superseded for lease age; the
+# Fabric engine accepts it, so this block is the only thing between a stale
+# paste and an immutable record nobody reviewed.
+SUPERSEDED_BCJ=77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3
+ACCEPTED_CROUTE4=bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda
+
+printf '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+# The destination must not exist.
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+
+# And its predecessor in the chain must. This route names CINST-000005 as its
+# only candidate; freezing it against an instance whose own frozen input is
+# absent would mean routing to a binding root nobody can re-render.
+sudo test -f /etc/kyri/fabric/cinst-000005.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cinst-000005.json is absent; CINST-000005 must be frozen and written first"; exit 1; }
+
+TMP="$(mktemp)"
+cat > "${TMP}" <<'BODY'
+{
+  "request_id": "g11bcm-create-route-capdef-0001-ccon-0001-cinst-000005-supersedes-croute-0004",
+  "actor": "primary-platform-operator",
+  "approving_authority": "primary-platform-operator",
+  "recorded_at": "2026-09-15T06:30:00-05:00",
+  "capability_id": "CAPDEF-0001",
+  "contract_id": "CCON-0001",
+  "accepted_contract_versions": [
+    "1.0.0"
+  ],
+  "locality": "local-only",
+  "candidate_instances": [
+    "CINST-000005"
+  ],
+  "data_classification": "internal",
+  "route_version": 5,
+  "supersedes": "CROUTE-0004",
+  "provenance": {
+    "class": "declared",
+    "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
+    "recorded_at": "2026-09-15"
+  }
+}
+BODY
+
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+case "${ACTUAL}" in
+  "${SUPERSEDED_BCJ}")
+    echo "REFUSE: this is the SUPERSEDED G11-BC-J route candidate (lease age)"
+    rm -f "${TMP}"; exit 1 ;;
+  "${ACCEPTED_CROUTE4}")
+    echo "REFUSE: this is the already-accepted CROUTE-0004 input"
+    rm -f "${TMP}"; exit 1 ;;
+esac
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf '\n--- read-only preflight (NO Fabric write) ---\n'
+cd /opt/schott-platform
+PREFLIGHT="$(python3 -m tools.fabric.cli create-route \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
+  --input-file croute-0005.json --approved-directory /etc/kyri/fabric --preflight)"
+printf '%s\n' "${PREFLIGHT}"
+
+# The two facts pinned SEPARATELY. `would_accept` alone says a body is well
+# formed; it does not say the engine resolved it to the record this ceremony is
+# authorised to create.
+PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["predicted_record_id"])')"
+DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
+test "${PREDICTED}" = "CROUTE-0005" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CROUTE-0005"; exit 1; }
+test "${DIGEST}" = "sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed one"; exit 1; }
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+
+printf '\n--- production Fabric must be byte-identical to before ---\n'
+AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+printf '%s\n' "${AFTER}"
+test "${AFTER}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the freeze (${AFTER}, expected ${FABRIC_BEFORE})"; exit 1; }
+printf 'ok  /var/lib/kyri/fabric unchanged at %s\n' "${FABRIC_BEFORE}"
+
+printf '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+FREEZE_CROUTE
+
+# EXPECTED:
+#   frozen input   6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a
+#                  /etc/kyri/fabric/croute-0005.json  root:cschott  640  678 bytes
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CROUTE-0005,
+#                  request_digest sha256:c2ded2c5…
+#   fabric         712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c
+#
+# Return this output. The create-route WRITE is a separate authorisation.
+#
+# THE LEASE. CADV-000006 and CINST-000005 expire 2026-09-19T06:00:00-05:00.
+# Everything still to come -- this freeze, the route write and its acceptance,
+# the CSEL freeze/write/acceptance, and CINV-000003 Stages 0 to 3 -- has to fit
+# inside that. This block does not extend it and must not be used to.
