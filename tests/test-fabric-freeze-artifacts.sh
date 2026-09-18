@@ -31,10 +31,17 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # name | artifact | reviewed sha256 | bytes | request digest | subcommand |
 #   record id | destination | required predecessor input | superseded BC-J |
-#   accepted predecessor body | fabric baseline pin
+#   accepted predecessor body | fabric baseline pin | selected instance
+#
+# The last field is the instance the route must resolve to, or "-" where the
+# operation does not resolve one. A selection is the only record whose
+# correctness is not settled by its own identity: it can accept, match its
+# request digest, and still have chosen the wrong instance. Where it is set,
+# the block must pin it and must name the Trust store the judgement reads.
 ARTIFACTS=(
-"CINST-000005|provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|1269|sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b|admit-instance|CINST-000005|/etc/kyri/fabric/cinst-000005.json|/etc/kyri/fabric/cadv-000006.json|a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b"
-"CROUTE-0005|provisioning/fabric/g11-bc-m-croute-0005-freeze.txt|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|678|sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb|create-route|CROUTE-0005|/etc/kyri/fabric/croute-0005.json|/etc/kyri/fabric/cinst-000005.json|77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c"
+"CINST-000005|provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|1269|sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b|admit-instance|CINST-000005|/etc/kyri/fabric/cinst-000005.json|/etc/kyri/fabric/cadv-000006.json|a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b|-"
+"CROUTE-0005|provisioning/fabric/g11-bc-m-croute-0005-freeze.txt|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|678|sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb|create-route|CROUTE-0005|/etc/kyri/fabric/croute-0005.json|/etc/kyri/fabric/cinst-000005.json|77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c|-"
+"CSEL-000004|provisioning/fabric/g11-bc-m-csel-000004-freeze.txt|60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd|605|sha256:86bd92d17cc06271b904be6db2355baa0434bfae7484f1afe10842430df2e479|select|CSEL-000004|/etc/kyri/fabric/csel-000004.json|/etc/kyri/fabric/croute-0005.json|0f2b38d360adc17bec48d8b4c6558eb0d4daf461ebcfad518c078025b2fdef93|700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e|8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add|CINST-000005"
 )
 
 field() { IFS='|' read -r -a _f <<<"$1"; printf '%s' "${_f[$2]}"; }
@@ -59,6 +66,7 @@ for row in "${ARTIFACTS[@]}"; do
   superseded="$(field "${row}" 9)"
   accepted_prev="$(field "${row}" 10)"
   baseline="$(field "${row}" 11)"
+  selected="$(field "${row}" 12)"
 
   printf '\n--- %s ---\n' "${name}"
 
@@ -172,6 +180,25 @@ for row in "${ARTIFACTS[@]}"; do
     pass "${name}: predicted_record_id and request_digest are pinned separately"
   else
     fail "${name}: the two preflight facts are not pinned separately"
+  fi
+
+  # A selection resolves an instance, and that is a THIRD fact: a block can
+  # predict the right record and match the reviewed request digest while the
+  # route resolved to something else entirely. Where the table names an
+  # instance, the block must pin it, and must name the Trust store whose
+  # judgement decided it -- an exclusion the selection cannot see is an
+  # exclusion it cannot honour.
+  if [[ "${selected}" != "-" ]]; then
+    if grep -q "test \"\${SELECTED}\" = \"${selected}\"" "${artifact}"; then
+      pass "${name}: pins selected_instance_id ${selected} independently"
+    else
+      fail "${name}: does not pin selected_instance_id ${selected}"
+    fi
+    if grep -qF -- "--trust-store-root /var/lib/kyri/trust" "${artifact}"; then
+      pass "${name}: carries --trust-store-root /var/lib/kyri/trust"
+    else
+      fail "${name}: is missing --trust-store-root /var/lib/kyri/trust"
+    fi
   fi
 
   # And the store is proved unchanged against the pinned baseline.

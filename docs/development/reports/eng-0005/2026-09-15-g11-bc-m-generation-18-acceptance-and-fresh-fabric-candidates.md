@@ -502,26 +502,58 @@ Current eligibility was reconfirmed against the **live** Fabric at the route's
 own reviewed instant, with the accepted CADV-000006 and CINST-000005 in place:
 `eligible: True`, `unmet: []`, 12 of 12 conditions met.
 
-### 12.5 CSEL-000004
+### 12.5 CSEL-000004 — committed as its own artifact
 
-Still tabular. It is step 10, and its baseline pin does not exist until
-CROUTE-0005 is written — pinning anything now would bake in a value already
-known to be wrong. It gets the same treatment when its step is reached:
+Committed once CROUTE-0005 was written and accepted, in the same shape as §12.3
+and §12.4:
 
-| block | `DEST` | `REVIEWED` | bytes | superseded BC-J | accepted predecessor |
-| --- | --- | --- | --- | --- | --- |
-| CSEL | `/etc/kyri/fabric/csel-000004.json` | `60857d68…80dffd` | 605 | `0f2b38d360adc17bec48d8b4c6558eb0d4daf461ebcfad518c078025b2fdef93` | `700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e` |
+```
+provisioning/fabric/g11-bc-m-csel-000004-freeze.txt
+```
 
-The CSEL preflight adds `--trust-store-root /var/lib/kyri/trust` and will pin,
-independently of the request digest:
+The candidate is unchanged — `recorded_at` and `evaluated_at`
+`2026-09-15T06:45:00-05:00`, digest `60857d68…` at 605 bytes, request digest
+`sha256:86bd92d1…`. Re-rendered from the G11-BC-M preparation inputs and
+verified byte for byte, then rehearsed against a scratch copy of the current
+stores: `predicted_record_id CSEL-000004`, `request_digest sha256:86bd92d1…`,
+`selected_instance_id CINST-000005`, store unchanged.
+
+Its baseline pin is **`8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add`**
+— the aggregate with CADV-000006, CINST-000005 and CROUTE-0005 written and
+CSEL-000004 not. Three artifacts now carry three different pins — `e542651a…`,
+`712730063d90…`, `8f1df4b7…` — and the suite asserts they stay distinct.
+
+**A selection is the one record whose identity does not settle its
+correctness.** An advertisement, an instance and a route are right when they
+are the record they claim to be. A selection can be the right record, match its
+reviewed request digest, and still have resolved to the wrong instance — and
+that record is immutable once written. So the block pins a **third** fact, and
+the suite now requires it wherever the table names an instance:
 
 ```bash
 SELECTED="$(… --preflight | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_instance_id"])')"
-test "${SELECTED}" = "CINST-000005" || { echo "REFUSE: the selection resolved to ${SELECTED}"; exit 1; }
+test "${SELECTED}" = "CINST-000005" || { echo "REFUSE: the route resolved to ${SELECTED}, not CINST-000005"; exit 1; }
 ```
 
-The bodies are exactly those rehearsed in §5–§8; the digests above are what
-`sha256sum` returns for them.
+It also requires `--trust-store-root /var/lib/kyri/trust` on any block that
+pins a selected instance: the exclusions are judged against Trust, and a
+selection that cannot read the store that excludes a candidate cannot honour
+the exclusion.
+
+Selection resolution was reconfirmed against **live** production state at the
+reviewed instant, read-only, by observing what the engine itself computed
+during the rehearsal rather than by re-deriving it:
+
+```
+route_id              CROUTE-0005
+route_version         5
+considered_candidates ['CINST-000005']
+excluded_candidates   []
+selected              CINST-000005
+```
+
+Current eligibility of CINST-000005, against the live Fabric at that same
+instant: `eligible: True`, `unmet: []`, 12 of 12 conditions met.
 
 ---
 
@@ -617,15 +649,21 @@ ran against a copy under the session scratch directory.
 ## 15.1 The lease, as it stands
 
 ```
-now                 2026-09-18T07:17:37-05:00
+now                 2026-09-18T10:27:05-05:00
 CADV-000006 / CINST-000005 expire   2026-09-19T06:00:00-05:00
-remaining           22h 42m
+remaining           19h 32m
 ```
 
-Not extended and not rewritten by this checkpoint. Everything still ahead — this
-freeze, the route write and its acceptance, the CSEL freeze/write/acceptance,
-and CINV-000003 Stages 0 to 3 — has to fit inside that. It is workable at the
-cadence the chain has been moving, and it is no longer comfortable.
+Not extended and not rewritten by this checkpoint. CROUTE-0005 has since been
+written and accepted, so what remains inside the window is this CSEL freeze,
+the selection write and its acceptance, and CINV-000003 Stages 0 to 3. Three
+hours of the window went to the checkpoint that committed the CROUTE artifact
+and this one; the remaining work is shorter than what has already been done,
+and the margin is still real.
+
+If the window closes first, the correct response is a fresh renewal, not an
+extension: the records are immutable and the lease is the thing that says how
+long the reviewer's judgement stands.
 
 If the window closes first, the correct response is a fresh renewal, not an
 extension: the records are immutable and the lease is the thing that says how
