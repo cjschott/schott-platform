@@ -30,19 +30,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # name | artifact | reviewed sha256 | bytes | request digest | subcommand |
-#   record id | destination | required predecessor input | superseded BC-J |
-#   accepted predecessor body | fabric baseline pin | selected instance
+#   record id | destination | required predecessor input | superseded body |
+#   accepted predecessor body | fabric baseline pin | selected instance |
+#   current-time gate valid_until | current-eligibility instance
 #
-# The last field is the instance the route must resolve to, or "-" where the
-# operation does not resolve one. A selection is the only record whose
-# correctness is not settled by its own identity: it can accept, match its
-# request digest, and still have chosen the wrong instance. Where it is set,
-# the block must pin it and must name the Trust store the judgement reads.
+# Field 12 is the instance the route must resolve to, or "-". A selection is
+# the only record whose correctness is not settled by its own identity: it can
+# accept, match its request digest, and still have chosen the wrong instance.
+#
+# Fields 13 and 14 are the CURRENT-TIME gate. The Fabric engine judges every
+# request at the instant the request names and never at a clock -- correct for
+# an append-only store, and the reason the withdrawn G11-BC-M CSEL artifact
+# still accepted after its authority expired. Nothing inside the engine will
+# tell an operator that the window they are about to act in has closed, so a
+# time-bound artifact carries that check itself, ahead of its install. Field 13
+# is the valid_until/admitted_until the block must gate on; field 14 is the
+# instance whose eligibility it must recompute at the current clock, where one
+# exists to compute.
 ARTIFACTS=(
-"CINST-000005|provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|1269|sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b|admit-instance|CINST-000005|/etc/kyri/fabric/cinst-000005.json|/etc/kyri/fabric/cadv-000006.json|a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b|-"
-"CROUTE-0005|provisioning/fabric/g11-bc-m-croute-0005-freeze.txt|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|678|sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb|create-route|CROUTE-0005|/etc/kyri/fabric/croute-0005.json|/etc/kyri/fabric/cinst-000005.json|77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c|-"
-"CSEL-000004|provisioning/fabric/g11-bc-m-csel-000004-freeze.txt|60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd|605|sha256:86bd92d17cc06271b904be6db2355baa0434bfae7484f1afe10842430df2e479|select|CSEL-000004|/etc/kyri/fabric/csel-000004.json|/etc/kyri/fabric/croute-0005.json|0f2b38d360adc17bec48d8b4c6558eb0d4daf461ebcfad518c078025b2fdef93|700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e|8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add|CINST-000005"
+"CINST-000005|provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|1269|sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b|admit-instance|CINST-000005|/etc/kyri/fabric/cinst-000005.json|/etc/kyri/fabric/cadv-000006.json|a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b|-|-|-"
+"CROUTE-0005|provisioning/fabric/g11-bc-m-croute-0005-freeze.txt|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|678|sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb|create-route|CROUTE-0005|/etc/kyri/fabric/croute-0005.json|/etc/kyri/fabric/cinst-000005.json|77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c|-|-|-"
+"CADV-000007|provisioning/fabric/g11-bc-n-cadv-000007-freeze.txt|962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d|673|sha256:f3fe5fa5960f0a623e7da2cd2be860136b039676f1536a4805fec38f2328de62|register-advertisement|CADV-000007|/etc/kyri/fabric/cadv-000007.json|/etc/kyri/fabric/cadv-000006.json|ee862cc2d9d946df895962fe6f165e610554813f0d712b5c1dbac67c83cd09ad|223d6ec3dbcfa686d32be07d4b6d5b01613de04a14b6bb563f845442ab7348ec|8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add|-|2026-09-23T06:00:00-05:00|-"
 )
+
+# The withdrawn G11-BC-M CSEL-000004 artifact is deliberately NOT a row here.
+# It is a tombstone, asserted separately below. Its reviewed bytes remain
+# recoverable at the commit named in WITHDRAWN_HISTORICAL_COMMIT.
+WITHDRAWN_CSEL_ARTIFACT="provisioning/fabric/g11-bc-m-csel-000004-freeze.txt"
+WITHDRAWN_CSEL_DIGEST=60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd
+WITHDRAWN_HISTORICAL_COMMIT=77670b71749cd051cb1a0825ca93163dda04b982
+
+# The CINV-000003 payload, committed as bytes rather than as a digest in prose.
+# The lost Option-B payload is why: its digests were recorded and its body was
+# not, and it could not be re-rendered from anything in the repository.
+PAYLOAD_ARTIFACT="provisioning/execution/g11-bc-n-cinv-000003-payload.json"
+PAYLOAD_RAW_SHA256=d01faccc67b83c60051348422861c121211a4079f7748572bad0a4882575a569
+PAYLOAD_RAW_BYTES=300
+PAYLOAD_CANONICAL_DIGEST=591d4b0d9c81fd5cbb56f7a08a8e9b14ef116c8625b16b19311f75d27d3c59b3
+PAYLOAD_CANONICAL_BYTES=271
+PAYLOAD_OPERATION=verify-execution-boundary
 
 field() { IFS='|' read -r -a _f <<<"$1"; printf '%s' "${_f[$2]}"; }
 
@@ -67,6 +93,8 @@ for row in "${ARTIFACTS[@]}"; do
   accepted_prev="$(field "${row}" 10)"
   baseline="$(field "${row}" 11)"
   selected="$(field "${row}" 12)"
+  gate_until="$(field "${row}" 13)"
+  gate_instance="$(field "${row}" 14)"
 
   printf '\n--- %s ---\n' "${name}"
 
@@ -106,7 +134,7 @@ for row in "${ARTIFACTS[@]}"; do
   for pin in "the reviewed digest|${reviewed}" \
              "the reviewed byte count|${bytes}" \
              "the reviewed request digest|${request_digest}" \
-             "the superseded G11-BC-J body|${superseded}" \
+             "the superseded body|${superseded}" \
              "the accepted predecessor body|${accepted_prev}" \
              "the production Fabric baseline|${baseline}"; do
     label="${pin%%|*}"; value="${pin##*|}"
@@ -201,6 +229,61 @@ for row in "${ARTIFACTS[@]}"; do
     fi
   fi
 
+  # ---- the current-time gate ----------------------------------------------
+  #
+  # The engine cannot do this. It judges at the instant the request names, so
+  # an artifact whose authority lapsed yesterday still preflights clean today.
+  # The gate is the operator's only warning, and it must come BEFORE the
+  # install -- a refusal after the file is in /etc/kyri/fabric has already left
+  # a stale frozen input occupying the destination.
+  if [[ "${gate_until}" != "-" ]]; then
+    if grep -qF -- "${gate_until}" "${artifact}"; then
+      pass "${name}: pins the gated window end ${gate_until}"
+    else
+      fail "${name}: does not pin the gated window end ${gate_until}"
+    fi
+    gate_ok=1
+    # shellcheck disable=SC2016  # these are literal text in the artifact
+    grep -q 'now = datetime.now().astimezone()' "${artifact}" || gate_ok=0
+    grep -q 'if now < observed:' "${artifact}" || gate_ok=0
+    grep -q 'if now >= expires:' "${artifact}" || gate_ok=0
+    if (( gate_ok )); then
+      pass "${name}: gates observed_at <= now < valid_until against the operator clock"
+    else
+      fail "${name}: has no current-time freshness gate"
+    fi
+
+    # Read out of the rendered body, never restated: a gate carrying its own
+    # copy of the window can drift from the bytes it guards.
+    # shellcheck disable=SC2016  # literal text in the artifact
+    if grep -q 'observed = datetime.fromisoformat(body\["observed_at"\])' "${artifact}" \
+       && grep -q 'expires = datetime.fromisoformat(body\["valid_until"\])' "${artifact}"; then
+      pass "${name}: the gate reads the window out of the rendered body"
+    else
+      fail "${name}: the gate does not read the window from the rendered body"
+    fi
+
+    gate_line="$(grep -n 'current-time freshness gate' "${artifact}" | tail -1 | cut -d: -f1)"
+    inst_line="$(grep -n 'install -o root -g cschott' "${artifact}" | head -1 | cut -d: -f1)"
+    if [[ -n "${gate_line}" && -n "${inst_line}" ]] && (( gate_line < inst_line )); then
+      pass "${name}: the current-time gate precedes the install"
+    else
+      fail "${name}: the current-time gate does not precede the install"
+    fi
+  fi
+
+  # Where an instance exists to judge, the block must recompute its eligibility
+  # at the current clock too -- the window being open does not mean the
+  # instance is still admitted.
+  if [[ "${gate_instance}" != "-" ]]; then
+    if grep -qF -- "compute-eligibility" "${artifact}" \
+       && grep -qF -- "${gate_instance}" "${artifact}"; then
+      pass "${name}: recomputes current eligibility for ${gate_instance}"
+    else
+      fail "${name}: does not recompute current eligibility for ${gate_instance}"
+    fi
+  fi
+
   # And the store is proved unchanged against the pinned baseline.
   # shellcheck disable=SC2016  # the pattern is literal text in the artifact
   if grep -q 'test "${AFTER}" = "${FABRIC_BEFORE}"' "${artifact}"; then
@@ -221,6 +304,201 @@ if [[ "$(printf '%s' "${baselines}" | sort -u | grep -c .)" \
   pass "every artifact pins a distinct Fabric baseline, as the write order requires"
 else
   fail "two artifacts pin the same Fabric baseline; one of them is stale"
+fi
+
+# ---- the withdrawn G11-BC-M CSEL artifact ----------------------------------
+#
+# It is a tombstone, and the point of a tombstone is that running it does
+# nothing. The original block accepted cleanly after its authority expired, so
+# "it will refuse on its own" was exactly the assumption that failed.
+
+printf '\n--- withdrawn G11-BC-M CSEL-000004 ---\n'
+withdrawn="${ROOT}/${WITHDRAWN_CSEL_ARTIFACT}"
+if [[ -f "${withdrawn}" ]]; then
+  pass "withdrawn: the tombstone is present at ${WITHDRAWN_CSEL_ARTIFACT}"
+else
+  fail "withdrawn: ${WITHDRAWN_CSEL_ARTIFACT} is missing"
+fi
+
+# Executing it must refuse, nonzero, and say so on stderr.
+if tomb_out="$(bash "${withdrawn}" 2>&1)"; then
+  fail "withdrawn: executing the tombstone succeeded; it must refuse"
+else
+  pass "withdrawn: executing the tombstone exits nonzero"
+fi
+for phrase in "REFUSE" "expired" "MUST NOT be used" "${WITHDRAWN_HISTORICAL_COMMIT}"; do
+  if printf '%s' "${tomb_out}" | grep -qF -- "${phrase}"; then
+    pass "withdrawn: the refusal states '${phrase}'"
+  else
+    fail "withdrawn: the refusal does not state '${phrase}'"
+  fi
+done
+
+# No renderable body may remain in it. This is the whole reason it was
+# replaced: a stale body that still renders is a stale body someone can paste.
+tomb_body="${WORK}/withdrawn.json"
+sed -n "/^cat > \"\${TMP}\" <<'BODY'\$/,/^BODY\$/p" "${withdrawn}" | sed '1d;$d' > "${tomb_body}"
+if [[ ! -s "${tomb_body}" ]]; then
+  pass "withdrawn: the tombstone carries no renderable body"
+else
+  fail "withdrawn: the tombstone still renders a body"
+fi
+
+# The reviewed bytes stay attributable, and the tombstone says where.
+if grep -qF -- "${WITHDRAWN_CSEL_DIGEST}" "${withdrawn}" \
+   && grep -qF -- "${WITHDRAWN_HISTORICAL_COMMIT}" "${withdrawn}"; then
+  pass "withdrawn: the historical digest remains attributable to ${WITHDRAWN_HISTORICAL_COMMIT}"
+else
+  fail "withdrawn: the historical attribution is incomplete"
+fi
+
+# ---- nothing under provisioning/fabric may still render the stale body ------
+stale_found=0
+while IFS= read -r candidate; do
+  rendered_stale="${WORK}/stale.json"
+  sed -n "/^cat > \"\${TMP}\" <<'BODY'\$/,/^BODY\$/p" "${candidate}" | sed '1d;$d' > "${rendered_stale}"
+  [[ -s "${rendered_stale}" ]] || continue
+  if [[ "$(sha256sum "${rendered_stale}" | cut -d' ' -f1)" == "${WITHDRAWN_CSEL_DIGEST}" ]]; then
+    fail "stale body still renders from ${candidate}"
+    stale_found=1
+  fi
+done < <(find "${ROOT}/provisioning/fabric" -type f)
+if (( stale_found == 0 )); then
+  pass "no artifact under provisioning/fabric renders the withdrawn CSEL body"
+fi
+
+# ---- every G11-BC-N artifact is gated --------------------------------------
+#
+# A new artifact must not be able to join the chain without the clock check.
+while IFS= read -r bcn; do
+  rel="${bcn#"${ROOT}/"}"
+  row_gate=""
+  for row in "${ARTIFACTS[@]}"; do
+    [[ "$(field "${row}" 1)" == "${rel}" ]] && row_gate="$(field "${row}" 13)"
+  done
+  if [[ -z "${row_gate}" ]]; then
+    fail "${rel} is a G11-BC-N artifact but is not in the table"
+  elif [[ "${row_gate}" == "-" ]]; then
+    fail "${rel} is a G11-BC-N artifact with no current-time gate"
+  else
+    pass "${rel} is a G11-BC-N artifact and is gated at ${row_gate}"
+  fi
+done < <(find "${ROOT}/provisioning/fabric" -type f -name 'g11-bc-n-*')
+
+# ---- the CINV-000003 payload, as bytes -------------------------------------
+#
+# The Option-B payload was reviewed, pinned by digest, and never committed; it
+# could not be re-rendered from anything in the repository when it was needed.
+# These are the bytes, so that cannot happen twice.
+
+printf '\n--- CINV-000003 payload ---\n'
+payload="${ROOT}/${PAYLOAD_ARTIFACT}"
+if [[ -f "${payload}" ]]; then
+  pass "payload: committed at ${PAYLOAD_ARTIFACT}"
+  payload_sha="$(sha256sum "${payload}" | cut -d' ' -f1)"
+  payload_bytes="$(wc -c < "${payload}")"
+  if [[ "${payload_sha}" == "${PAYLOAD_RAW_SHA256}" ]]; then
+    pass "payload: raw sha256 ${PAYLOAD_RAW_SHA256}"
+  else
+    fail "payload: raw sha256 is ${payload_sha}, reviewed ${PAYLOAD_RAW_SHA256}"
+  fi
+  if [[ "${payload_bytes}" == "${PAYLOAD_RAW_BYTES}" ]]; then
+    pass "payload: raw bytes ${PAYLOAD_RAW_BYTES}"
+  else
+    fail "payload: raw bytes ${payload_bytes}, reviewed ${PAYLOAD_RAW_BYTES}"
+  fi
+  # The canonical digest is what the CINV record binds, and it is a different
+  # number from the file digest. Both are checked, against released code.
+  if canon="$(python3 - "${payload}" <<'CANON_PY'
+import json, sys, hashlib, pathlib
+from tools.capability.invocation_identity import canonical_bytes
+raw = pathlib.Path(sys.argv[1]).read_bytes()
+doc = json.loads(raw)
+blob = canonical_bytes(doc)
+print(hashlib.sha256(blob).hexdigest())
+print(len(blob))
+print(doc["operation"])
+CANON_PY
+  )"; then
+    canon_digest="$(printf '%s' "${canon}" | sed -n 1p)"
+    canon_bytes="$(printf '%s' "${canon}" | sed -n 2p)"
+    canon_op="$(printf '%s' "${canon}" | sed -n 3p)"
+    if [[ "${canon_digest}" == "${PAYLOAD_CANONICAL_DIGEST}" ]]; then
+      pass "payload: canonical digest ${PAYLOAD_CANONICAL_DIGEST}"
+    else
+      fail "payload: canonical digest is ${canon_digest}, reviewed ${PAYLOAD_CANONICAL_DIGEST}"
+    fi
+    if [[ "${canon_bytes}" == "${PAYLOAD_CANONICAL_BYTES}" ]]; then
+      pass "payload: canonical bytes ${PAYLOAD_CANONICAL_BYTES}"
+    else
+      fail "payload: canonical bytes ${canon_bytes}, reviewed ${PAYLOAD_CANONICAL_BYTES}"
+    fi
+    if [[ "${canon_op}" == "${PAYLOAD_OPERATION}" ]]; then
+      pass "payload: operation ${PAYLOAD_OPERATION}"
+    else
+      fail "payload: operation ${canon_op}, reviewed ${PAYLOAD_OPERATION}"
+    fi
+  else
+    fail "payload: the canonical digest could not be computed"
+  fi
+else
+  fail "payload: ${PAYLOAD_ARTIFACT} is missing"
+fi
+
+# ---- the regression the withdrawal exists for ------------------------------
+#
+# A backdated evaluated_at must never make an expired authority executable.
+# Run the committed gate against a window that has demonstrably closed -- the
+# accepted CADV-000006 input, whose authority ended 2026-09-19T06:00:00-05:00 --
+# and require a refusal. If this ever passes, the gate has stopped working and
+# the G11-BC-M failure is reachable again.
+
+printf '\n--- backdated-expiry regression ---\n'
+gated_artifact=""
+for row in "${ARTIFACTS[@]}"; do
+  [[ "$(field "${row}" 13)" != "-" ]] && gated_artifact="${ROOT}/$(field "${row}" 1)" && break
+done
+if [[ -n "${gated_artifact}" ]]; then
+  gate_py="${WORK}/gate.py"
+  sed -n "/^GATE=\"\$(python3 - \"\${TMP}\" <<'GATE_PY'\$/,/^GATE_PY\$/p" \
+    "${gated_artifact}" | sed '1d;$d' > "${gate_py}"
+  if [[ -s "${gate_py}" ]]; then
+    pass "regression: the current-time gate was extracted from the committed artifact"
+
+    expired="${WORK}/expired.json"
+    cat > "${expired}" <<'EXPIRED_BODY'
+{
+  "observed_at": "2026-09-15T06:00:00-05:00",
+  "valid_until": "2026-09-19T06:00:00-05:00"
+}
+EXPIRED_BODY
+    if python3 "${gate_py}" "${expired}" >/dev/null 2>&1; then
+      fail "regression: the gate ACCEPTED the expired G11-BC-M window"
+    else
+      pass "regression: the gate refuses the expired G11-BC-M window"
+    fi
+
+    # And it must still accept a window that is genuinely open, or it is not a
+    # gate, it is a brick.
+    open_body="${WORK}/open.json"
+    python3 - "${open_body}" <<'OPEN_PY'
+import sys
+from datetime import datetime, timedelta
+now = datetime.now().astimezone()
+open(sys.argv[1], "w").write(
+    '{\n  "observed_at": "%s",\n  "valid_until": "%s"\n}\n'
+    % ((now - timedelta(days=1)).isoformat(), (now + timedelta(days=1)).isoformat()))
+OPEN_PY
+    if python3 "${gate_py}" "${open_body}" >/dev/null 2>&1; then
+      pass "regression: the gate accepts a window that is open now"
+    else
+      fail "regression: the gate refuses a window that is open now"
+    fi
+  else
+    fail "regression: the current-time gate could not be extracted"
+  fi
+else
+  fail "regression: no gated artifact in the table to extract from"
 fi
 
 printf '\n'

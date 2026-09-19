@@ -1,0 +1,8 @@
+{
+  "operation": "verify-execution-boundary",
+  "arguments": {
+    "count": 1,
+    "label": "g11bcn-third-controlled-production-invoke"
+  },
+  "note": "ENG-0005 G11-BC-N: the third controlled production invocation, CINV-000003, on the CADV-000007 / CINST-000006 / CROUTE-0006 / CSEL-000004 chain."
+}

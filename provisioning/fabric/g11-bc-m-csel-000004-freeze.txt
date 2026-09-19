@@ -1,156 +1,59 @@
 #!/usr/bin/env bash
-# The CSEL-000004 freeze, exactly as it is to be typed.
+# TOMBSTONE -- THE G11-BC-M CSEL-000004 FREEZE ARTIFACT IS WITHDRAWN.
 #
-# This file is reference text, not a script to run: the operator pastes it into
-# a shell so every command and every refusal is visible on the console.
+# THIS ARTIFACT MUST NOT BE USED. Pasting it can no longer do anything, and
+# that is deliberate: it exits nonzero before reaching any command.
 #
-# STEP 10 OF THE G11-BC-M WRITE PLAN. CADV-000006, CINST-000005 and CROUTE-0005
-# are written and accepted. This freezes CSEL-000004 and runs a READ-ONLY
-# preflight; the select WRITE is a separate authorisation and is not in this
-# block.
+# WHY IT WAS WITHDRAWN
+# ====================
+# The G11-BC-M authority expired at 2026-09-19T06:00:00-05:00. CADV-000006 is
+# no longer fresh and the CINST-000005 admission window has closed, so
+# CROUTE-0005 now routes to an instance that is ineligible at any current
+# clock.
 #
-# It writes exactly one file, into /etc/kyri/fabric. It does not touch
-# /var/lib/kyri/fabric, and proves so.
+# THE DANGEROUS PART, STATED PLAINLY. This block did NOT fail closed on its
+# own. Rehearsed against production after the lease expired, every one of its
+# seven pins still held and its preflight still returned would_accept true with
+# selected_instance_id CINST-000005. The reason is that the selection carried a
+# reviewed `evaluated_at` of 2026-09-15T06:45:00-05:00, and the Fabric engine
+# judges eligibility at the instant the request names rather than at a clock --
+# see the comment at tools/fabric/admission.py, "Reading the current time here
+# would make the verdict depend on when the request was replayed". That is
+# correct for an append-only engine and it is exactly why the operator artifact,
+# not the engine, has to carry a wall-clock gate.
 #
-# THE BASELINE PIN IS STEP-SPECIFIC. The CROUTE-0005 block pinned the Fabric
-# aggregate at 712730063d90..., which was correct with CINST-000005 written and
-# CROUTE-0005 not. Writing CROUTE-0005 moved it to 8f1df4b739ca..., which is
-# what this block pins. A freeze block carrying its predecessor's aggregate
-# refuses on every run; one carrying no aggregate proves nothing about the store
-# it preflighted against.
+# So a backdated `evaluated_at` alone kept an expired chain executable. Left in
+# place, this block would have installed a frozen input binding to an expired
+# instance, and would then have blocked the replacement freeze by occupying
+# /etc/kyri/fabric/csel-000004.json.
 #
-# WHAT THIS BLOCK PROVES THAT would_accept DOES NOT. A selection that accepted
-# but resolved to some other instance is still a wrong record. So the preflight
-# is pinned on THREE facts, separately: the predicted identity, the request
-# digest, and the instance the route actually resolved to.
-set -Eeuo pipefail
-cd /opt/schott-platform
-
-bash <<'FREEZE_CSEL'
-set -Eeuo pipefail
-DEST=/etc/kyri/fabric/csel-000004.json
-REVIEWED=60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd
-REVIEWED_BYTES=605
-
-# The Fabric store as it stands with CADV-000006, CINST-000005 and CROUTE-0005
-# written and CSEL-000004 not. Pinned so the preflight below cannot be read as
-# proof against a store that moved underneath it.
-FABRIC_BEFORE=8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add
-
-# Bodies that are NOT this one, refused BY NAME rather than by a generic
-# mismatch. The first is the G11-BC-J candidate, superseded for lease age; the
-# Fabric engine accepts it, so this block is the only thing between a stale
-# paste and an immutable record nobody reviewed.
-SUPERSEDED_BCJ=0f2b38d360adc17bec48d8b4c6558eb0d4daf461ebcfad518c078025b2fdef93
-ACCEPTED_CSEL3=700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e
-
-printf '\n--- /etc/kyri/fabric BEFORE ---\n'
-sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
-
-# The destination must not exist.
-sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
-
-# And its predecessor in the chain must. This selection resolves through
-# CROUTE-0005; freezing it against a route whose own frozen input is absent
-# would mean selecting under an authority nobody can re-render.
-sudo test -f /etc/kyri/fabric/croute-0005.json \
-  || { echo "REFUSE: /etc/kyri/fabric/croute-0005.json is absent; CROUTE-0005 must be frozen and written first"; exit 1; }
-
-TMP="$(mktemp)"
-cat > "${TMP}" <<'BODY'
-{
-  "request_id": "g11bcm-select-capdef-0001-ccon-0001-internal-local-only-host-0001-croute-0005",
-  "actor": "primary-platform-operator",
-  "recorded_at": "2026-09-15T06:45:00-05:00",
-  "evaluated_at": "2026-09-15T06:45:00-05:00",
-  "capability_id": "CAPDEF-0001",
-  "contract_id": "CCON-0001",
-  "accepted_contract_versions": [
-    "1.0.0"
-  ],
-  "data_classification": "internal",
-  "locality": "local-only",
-  "local_node_identity": "HOST-0001",
-  "provenance": {
-    "class": "declared",
-    "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
-    "recorded_at": "2026-09-15"
-  }
-}
-BODY
-
-ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
-case "${ACTUAL}" in
-  "${SUPERSEDED_BCJ}")
-    echo "REFUSE: this is the SUPERSEDED G11-BC-J selection candidate (lease age)"
-    rm -f "${TMP}"; exit 1 ;;
-  "${ACCEPTED_CSEL3}")
-    echo "REFUSE: this is the already-accepted CSEL-000003 input"
-    rm -f "${TMP}"; exit 1 ;;
-esac
-test "${ACTUAL}" = "${REVIEWED}" || {
-  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
-test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
-  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
-  rm -f "${TMP}"; exit 1; }
-
-sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
-rm -f "${TMP}"
-
-printf '\n--- frozen input ---\n'
-sudo sha256sum "${DEST}"
-sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
-
-printf '\n--- read-only preflight (NO Fabric write) ---\n'
-cd /opt/schott-platform
-PREFLIGHT="$(python3 -m tools.fabric.cli select \
-  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
-  --trust-store-root /var/lib/kyri/trust \
-  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
-  --input-file csel-000004.json --approved-directory /etc/kyri/fabric --preflight)"
-printf '%s\n' "${PREFLIGHT}"
-
-# THREE facts pinned SEPARATELY. `would_accept` alone says a body is well
-# formed; it does not say the engine resolved it to the record this ceremony is
-# authorised to create, and it does not say which instance the route chose. A
-# selection that accepted but resolved to some other instance satisfies the
-# digest and fails the third test.
-PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["predicted_record_id"])')"
-DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
-SELECTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_instance_id"])')"
-test "${PREDICTED}" = "CSEL-000004" \
-  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CSEL-000004"; exit 1; }
-test "${DIGEST}" = "sha256:86bd92d17cc06271b904be6db2355baa0434bfae7484f1afe10842430df2e479" \
-  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed one"; exit 1; }
-test "${SELECTED}" = "CINST-000005" \
-  || { echo "REFUSE: the route resolved to ${SELECTED}, not CINST-000005"; exit 1; }
-printf 'ok  predicted_record_id  %s\n' "${PREDICTED}"
-printf 'ok  request_digest       %s\n' "${DIGEST}"
-printf 'ok  selected_instance_id %s\n' "${SELECTED}"
-
-printf '\n--- production Fabric must be byte-identical to before ---\n'
-AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
-printf '%s\n' "${AFTER}"
-test "${AFTER}" = "${FABRIC_BEFORE}" \
-  || { echo "REFUSE: /var/lib/kyri/fabric changed during the freeze (${AFTER}, expected ${FABRIC_BEFORE})"; exit 1; }
-printf 'ok  /var/lib/kyri/fabric unchanged at %s\n' "${FABRIC_BEFORE}"
-
-printf '\n--- /etc/kyri/fabric AFTER ---\n'
-sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
-FREEZE_CSEL
-
-# EXPECTED:
-#   frozen input   60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd
-#                  /etc/kyri/fabric/csel-000004.json  root:cschott  640  605 bytes
-#   preflight      would_accept true, mutated false, destination_exists false,
-#                  predicted_record_id CSEL-000004,
-#                  request_digest sha256:86bd92d1…,
-#                  selected_instance_id CINST-000005
-#   fabric         8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add
+# Its sibling CINST-000005 and CROUTE-0005 artifacts did not need withdrawing:
+# both records are written, so their `sudo test ! -e "${DEST}"` refuses at the
+# first step. This one was reachable only because its destination was still
+# absent.
 #
-# Return this output. The select WRITE is a separate authorisation.
+# WHERE THE REVIEWED BYTES REMAIN RECOVERABLE
+# ===========================================
+# The original reviewed body -- 605 bytes, sha256
+# 60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd -- and the
+# complete freeze block are preserved in git history at:
 #
-# THE LEASE. CADV-000006 and CINST-000005 expire 2026-09-19T06:00:00-05:00.
-# Everything still to come -- this freeze, the selection write and its
-# acceptance, and CINV-000003 Stages 0 to 3 -- has to fit inside that. This
-# block does not extend it and must not be used to.
+#   77670b71749cd051cb1a0825ca93163dda04b982
+#
+#   git show 77670b71749cd051cb1a0825ca93163dda04b982:provisioning/fabric/g11-bc-m-csel-000004-freeze.txt
+#
+# They are historical reviewed evidence. They are not an authority, and that
+# digest must be REFUSED BY NAME by every successor artifact.
+#
+# THE REPLACEMENT
+# ===============
+# G11-BC-N prepares a fresh chain -- CADV-000007, CINST-000006, CROUTE-0006 and
+# a NEW CSEL-000004 body (605 bytes, sha256
+# d04171c50397be2d41f8d066b526f237d982ac1df113840eb81afa6ec44c2f29) resolving to
+# CINST-000006. Same identity, different bytes. Every G11-BC-N artifact carries
+# an independent current-time freshness gate ahead of its install.
+echo "REFUSE: the G11-BC-M CSEL-000004 authority expired at 2026-09-19T06:00:00-05:00." >&2
+echo "REFUSE: this artifact is withdrawn and MUST NOT be used." >&2
+echo "REFUSE: reviewed bytes remain recoverable at commit 77670b71749cd051cb1a0825ca93163dda04b982." >&2
+echo "REFUSE: use the G11-BC-N chain instead; the replacement CSEL-000004 body is d04171c5..." >&2
+exit 1
