@@ -51,6 +51,7 @@ ARTIFACTS=(
 "CINST-000005|provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|1269|sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b|admit-instance|CINST-000005|/etc/kyri/fabric/cinst-000005.json|/etc/kyri/fabric/cadv-000006.json|a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b|-|-|-"
 "CROUTE-0005|provisioning/fabric/g11-bc-m-croute-0005-freeze.txt|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|678|sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb|create-route|CROUTE-0005|/etc/kyri/fabric/croute-0005.json|/etc/kyri/fabric/cinst-000005.json|77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c|-|-|-"
 "CADV-000007|provisioning/fabric/g11-bc-n-cadv-000007-freeze.txt|962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d|673|sha256:f3fe5fa5960f0a623e7da2cd2be860136b039676f1536a4805fec38f2328de62|register-advertisement|CADV-000007|/etc/kyri/fabric/cadv-000007.json|/etc/kyri/fabric/cadv-000006.json|ee862cc2d9d946df895962fe6f165e610554813f0d712b5c1dbac67c83cd09ad|223d6ec3dbcfa686d32be07d4b6d5b01613de04a14b6bb563f845442ab7348ec|8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add|-|2026-09-23T06:00:00-05:00|-"
+"CINST-000006|provisioning/fabric/g11-bc-n-cinst-000006-freeze.txt|6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162|1269|sha256:c9444952f62e9a9a40132f3d4569043a2b853d9446dd00be64c43031f6f02372|admit-instance|CINST-000006|/etc/kyri/fabric/cinst-000006.json|/etc/kyri/fabric/cadv-000007.json|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|3bcb57790fc7c502e4b5493ba5a6a956dab78703b7c86b5756293b78f3007f28|-|2026-09-23T06:00:00-05:00|CINST-000006"
 )
 
 # The withdrawn G11-BC-M CSEL-000004 artifact is deliberately NOT a row here.
@@ -172,13 +173,27 @@ for row in "${ARTIFACTS[@]}"; do
     fi
   done
 
-  # It is a FREEZE, not a write. A call without --preflight creates the record,
-  # which no freeze artifact is authorised to do.
-  if [[ "$(grep -c -- "tools.fabric.cli ${subcommand}" "${artifact}")" == "1" ]] \
-     && grep -q -- "--approved-directory /etc/kyri/fabric --preflight" "${artifact}"; then
-    pass "${name}: runs ${subcommand} exactly once, and only with --preflight"
+  # It is a FREEZE, not a write. Scoped to PRODUCTION: a block may run the
+  # subcommand against a scratch copy -- the current-eligibility gate has to,
+  # because the candidate does not exist anywhere else to be judged -- but it
+  # may reach the live store exactly once, and only with --preflight.
+  # Continuation lines are joined first, so each invocation is judged whole:
+  # a call is only production if its OWN --store-root names the live store.
+  # Read-only subcommands such as `inspect` are not record-creating and are not
+  # counted; what is counted is the one subcommand that can create this record.
+  joined="${WORK}/${name}.joined"
+  sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "${artifact}" > "${joined}"
+  prod_calls=0
+  prod_unguarded=0
+  while IFS= read -r call; do
+    [[ "${call}" == *"--store-root /var/lib/kyri/fabric"* ]] || continue
+    prod_calls=$((prod_calls + 1))
+    [[ "${call}" == *"--preflight"* ]] || prod_unguarded=$((prod_unguarded + 1))
+  done < <(grep -- "tools.fabric.cli ${subcommand}" "${joined}" || true)
+  if (( prod_calls == 1 && prod_unguarded == 0 )); then
+    pass "${name}: runs ${subcommand} against production exactly once, and only with --preflight"
   else
-    fail "${name}: runs ${subcommand} more than once, or without --preflight"
+    fail "${name}: runs ${subcommand} against production ${prod_calls} times, ${prod_unguarded} without --preflight"
   fi
 
   # The destination refusal must come before the file is written.
@@ -253,14 +268,14 @@ for row in "${ARTIFACTS[@]}"; do
       fail "${name}: has no current-time freshness gate"
     fi
 
-    # Read out of the rendered body, never restated: a gate carrying its own
-    # copy of the window can drift from the bytes it guards.
-    # shellcheck disable=SC2016  # literal text in the artifact
-    if grep -q 'observed = datetime.fromisoformat(body\["observed_at"\])' "${artifact}" \
-       && grep -q 'expires = datetime.fromisoformat(body\["valid_until"\])' "${artifact}"; then
-      pass "${name}: the gate reads the window out of the rendered body"
+    # Read out of the rendered body and the live store, never restated: a gate
+    # carrying its own copy of the window can drift from the authority it
+    # guards. Two parses at least, and not one of them off a date literal.
+    parses="$(grep -c 'datetime.fromisoformat(' "${artifact}" || true)"
+    if (( parses >= 2 )) && ! grep -qE 'fromisoformat\("[0-9]{4}-' "${artifact}"; then
+      pass "${name}: the gate reads its windows from authority, not from date literals"
     else
-      fail "${name}: the gate does not read the window from the rendered body"
+      fail "${name}: the gate restates a window as a constant (${parses} parses)"
     fi
 
     gate_line="$(grep -n 'current-time freshness gate' "${artifact}" | tail -1 | cut -d: -f1)"
@@ -281,6 +296,20 @@ for row in "${ARTIFACTS[@]}"; do
       pass "${name}: recomputes current eligibility for ${gate_instance}"
     else
       fail "${name}: does not recompute current eligibility for ${gate_instance}"
+    fi
+    # And it must be evaluated at the clock, not at a pinned instant.
+    # shellcheck disable=SC2016  # the pattern is literal text in the artifact
+    if grep -q -- '--evaluated-at "$(date -Is)"' "${artifact}"; then
+      pass "${name}: evaluates eligibility at the current clock"
+    else
+      fail "${name}: does not evaluate eligibility at the current clock"
+    fi
+    elig_line="$(grep -n 'compute-eligibility' "${artifact}" | head -1 | cut -d: -f1)"
+    inst_line2="$(grep -n 'install -o root -g cschott' "${artifact}" | head -1 | cut -d: -f1)"
+    if [[ -n "${elig_line}" && -n "${inst_line2}" ]] && (( elig_line < inst_line2 )); then
+      pass "${name}: the eligibility gate precedes the install"
+    else
+      fail "${name}: the eligibility gate does not precede the install"
     fi
   fi
 

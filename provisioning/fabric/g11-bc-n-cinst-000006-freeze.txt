@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+# The CINST-000006 freeze, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# STEP 3 OF THE G11-BC-N WRITE PLAN. CADV-000007 is written and accepted. This
+# freezes CINST-000006 and runs a READ-ONLY preflight; the admit-instance WRITE
+# against production is a separate authorisation and is not in this block.
+#
+# It writes exactly one file into /etc/kyri/fabric. It does not touch
+# /var/lib/kyri/fabric, and proves so.
+#
+# THE FILENAME. This artifact is labelled g11-bc-n, not g11-bc-o, because every
+# artifact in this repository takes the label of the request_id prefix of the
+# body it carries -- g11-bc-m-cinst-000005 carries g11bcm-, g11-bc-n-cadv-000007
+# carries g11bcn-. This body was reviewed in G11-BC-N and says g11bcn-, and a
+# reviewed byte is not edited to suit a filename. G11-BC-O is the checkpoint
+# that prepared the artifact, which the report records; the label names the
+# authority the body belongs to, which is the thing a reviewer matches on.
+#
+# THE BASELINE PIN IS STEP-SPECIFIC. The CADV-000007 block pinned
+# 8f1df4b739ca..., correct with the G11-BC-M chain written and CADV-000007 not.
+# Writing CADV-000007 moved the store to 3bcb577900fc..., which is what this
+# block pins.
+#
+# THE GATES. Two, and both run BEFORE anything is installed:
+#
+#   1. WALL CLOCK. The engine judges every request at the instant the request
+#      names and never at a clock -- correct for an append-only store, and the
+#      reason the withdrawn G11-BC-M CSEL artifact still accepted after its
+#      authority had expired. So the clock check lives here. The admission
+#      window is read out of the rendered body, and the governing
+#      advertisement's window is read out of the live store through the
+#      released `inspect` CLI. Neither is restated as a constant, so neither
+#      can drift from the authority it describes.
+#
+#   2. CURRENT ELIGIBILITY. A window being open does not mean the instance is
+#      admissible. This computes it with the released evaluator, at the current
+#      clock, against a COPY of production with the candidate applied -- the
+#      only context in which CINST-000006 exists to be judged before it is
+#      written. The copy is discarded; production is never touched.
+#
+# A backdated evaluated_at must never make an expired authority executable.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE_CINST'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/cinst-000006.json
+REVIEWED=6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162
+REVIEWED_BYTES=1269
+
+# The Fabric store as it stands with CADV-000007 written and CINST-000006 not.
+FABRIC_BEFORE=3bcb57790fc7c502e4b5493ba5a6a956dab78703b7c86b5756293b78f3007f28
+
+# Bodies that are NOT this one, refused BY NAME rather than by a generic
+# mismatch. Both are accepted instance inputs still sitting in /etc/kyri/fabric,
+# so both are a plausible mis-paste. CINST-000005 is the more dangerous of the
+# two: it is the immediate predecessor, it looks current, and its admission
+# window closed at 2026-09-19T06:00:00-05:00.
+ACCEPTED_CINST4=5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c
+ACCEPTED_CINST5=850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da
+
+printf '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+# The destination must not exist.
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+
+# And the advertisement this instance binds must be present as a frozen input.
+sudo test -f /etc/kyri/fabric/cadv-000007.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cadv-000007.json is absent; CINST-000006 binds CADV-000007 and must be frozen against it"; exit 1; }
+
+TMP="$(mktemp)"
+cat > "${TMP}" <<'BODY'
+{
+  "request_id": "g11bcn-admit-instance-cpkg-0001-chost-0001-cadv-000007-supersedes-cinst-000005",
+  "actor": "primary-platform-operator",
+  "approving_authority": "primary-platform-operator",
+  "recorded_at": "2026-09-19T06:15:00-05:00",
+  "evaluated_at": "2026-09-19T06:15:00-05:00",
+  "capability_id": "CAPDEF-0001",
+  "capability_package_id": "CPKG-0001",
+  "capability_host_id": "CHOST-0001",
+  "contract_id": "CCON-0001",
+  "satisfied_contract_versions": [
+    "1.0.0"
+  ],
+  "verified_resource_profile": {
+    "architecture": "x86-64"
+  },
+  "admission_decision_id": "eng-0005-cinst-000006-admission",
+  "package_trust_record_id": "TREC-000002",
+  "host_trust_record_id": "TREC-000001",
+  "advertisement_id": "CADV-000007",
+  "supersedes": "CINST-000005",
+  "admission_scope": {
+    "permitted_capabilities": [
+      "CAPDEF-0001"
+    ],
+    "permitted_operations": [
+      "execute"
+    ],
+    "permitted_data_classifications": [
+      "internal"
+    ],
+    "permitted_targets": [
+      "HOST-0001"
+    ]
+  },
+  "admitted_at": "2026-09-19T06:15:00-05:00",
+  "admitted_until": "2026-09-23T06:00:00-05:00",
+  "provenance": {
+    "class": "declared",
+    "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
+    "recorded_at": "2026-09-19"
+  }
+}
+BODY
+
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+case "${ACTUAL}" in
+  "${ACCEPTED_CINST4}")
+    echo "REFUSE: this is the already-accepted CINST-000004 input"
+    rm -f "${TMP}"; exit 1 ;;
+  "${ACCEPTED_CINST5}")
+    echo "REFUSE: this is the already-accepted CINST-000005 input, whose admission window closed 2026-09-19T06:00:00-05:00"
+    rm -f "${TMP}"; exit 1 ;;
+esac
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+
+# ---- GATE 1: WALL CLOCK, BEFORE ANYTHING IS INSTALLED --------------------
+printf '\n--- current-time freshness gate ---\n'
+ADVERT="$(python3 -m tools.fabric.cli inspect \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --kind capability-advertisement --identifier CADV-000007)"
+GATE="$(python3 - "${TMP}" <<'GATE_PY'
+import json, sys
+from datetime import datetime
+body = json.load(open(sys.argv[1]))
+advert = json.load(sys.stdin)["records"][0]
+observed = datetime.fromisoformat(advert["observed_at"])
+expires = datetime.fromisoformat(advert["valid_until"])
+admitted = datetime.fromisoformat(body["admitted_at"])
+until = datetime.fromisoformat(body["admitted_until"])
+now = datetime.now().astimezone()
+print(f"now            {now.isoformat()}")
+print(f"CADV-000007    {observed.isoformat()} .. {expires.isoformat()}")
+print(f"admission      {admitted.isoformat()} .. {until.isoformat()}")
+if now < observed:
+    print("REFUSE: the governing advertisement window has not opened yet"); sys.exit(1)
+if now >= expires:
+    print("REFUSE: the governing advertisement window closed; CADV-000007 is EXPIRED at the current clock")
+    print("REFUSE: do not extend it -- prepare a fresh renewal chain")
+    sys.exit(1)
+if now >= until:
+    print("REFUSE: the admission window closed at the current clock"); sys.exit(1)
+if until > expires:
+    print("REFUSE: admitted_until outlives the advertisement it rests on"); sys.exit(1)
+print("ok  observed_at <= now < valid_until")
+print("ok  now < admitted_until <= valid_until")
+GATE_PY
+<<<"${ADVERT}"
+)" || { printf '%s\n' "${GATE}"; echo "REFUSE: current-time freshness gate failed"; rm -f "${TMP}"; exit 1; }
+printf '%s\n' "${GATE}"
+
+# ---- GATE 2: CURRENT ELIGIBILITY, BEFORE ANYTHING IS INSTALLED -----------
+#
+# Computed by the released evaluator at the current clock, against a COPY of
+# production with the candidate applied. Production is not touched: every path
+# below is inside GATE_DIR, which is removed either way.
+printf '\n--- current eligibility gate ---\n'
+GATE_DIR="$(mktemp -d)"
+trap 'rm -rf "${GATE_DIR}"' EXIT
+cp -a /var/lib/kyri/fabric "${GATE_DIR}/fabric"
+mkdir -p "${GATE_DIR}/approved"
+cp "${TMP}" "${GATE_DIR}/approved/cinst-000006.json"
+chmod 0640 "${GATE_DIR}/approved/cinst-000006.json"
+
+python3 -m tools.fabric.cli admit-instance \
+  --store-root "${GATE_DIR}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
+  --trust-store-root /var/lib/kyri/trust \
+  --input-file cinst-000006.json --approved-directory "${GATE_DIR}/approved" \
+  >/dev/null || { echo "REFUSE: the candidate does not admit against a copy of current production"; rm -f "${TMP}"; exit 1; }
+
+ELIG="$(python3 -m tools.fabric.cli compute-eligibility \
+  --store-root "${GATE_DIR}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --trust-store-root /var/lib/kyri/trust \
+  --instance-id CINST-000006 --capability-id CAPDEF-0001 --contract-id CCON-0001 \
+  --accepted-version 1.0.0 --data-classification internal \
+  --evaluated-at "$(date -Is)")"
+printf '%s\n' "${ELIG}" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+met = sum(1 for c in d["conditions"] if c["status"] == "met")
+print(f"eligible {d[\"eligible\"]} | {met} of {len(d[\"conditions\"])} met | unmet {d[\"unmet\"]} | reasons {d[\"reasons\"]}")
+sys.exit(0 if d["eligible"] is True and not d["unmet"] else 1)
+' || { echo "REFUSE: CINST-000006 is not eligible at the current clock"; rm -f "${TMP}"; exit 1; }
+printf 'ok  CINST-000006 eligible at the current clock\n'
+rm -rf "${GATE_DIR}"
+trap - EXIT
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf '\n--- read-only preflight (NO Fabric write) ---\n'
+cd /opt/schott-platform
+PREFLIGHT="$(python3 -m tools.fabric.cli admit-instance \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
+  --trust-store-root /var/lib/kyri/trust \
+  --input-file cinst-000006.json --approved-directory /etc/kyri/fabric --preflight)"
+printf '%s\n' "${PREFLIGHT}"
+
+# The two facts pinned SEPARATELY. `would_accept` alone says a body is well
+# formed; it does not say the engine resolved it to the record this ceremony is
+# authorised to create.
+PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["predicted_record_id"])')"
+DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
+test "${PREDICTED}" = "CINST-000006" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CINST-000006"; exit 1; }
+test "${DIGEST}" = "sha256:c9444952f62e9a9a40132f3d4569043a2b853d9446dd00be64c43031f6f02372" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed one"; exit 1; }
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+
+printf '\n--- production Fabric must be byte-identical to before ---\n'
+AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+printf '%s\n' "${AFTER}"
+test "${AFTER}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the freeze (${AFTER}, expected ${FABRIC_BEFORE})"; exit 1; }
+printf 'ok  /var/lib/kyri/fabric unchanged at %s\n' "${FABRIC_BEFORE}"
+
+printf '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+FREEZE_CINST
+
+# EXPECTED:
+#   gate 1         observed_at <= now < valid_until, now < admitted_until <= valid_until
+#   gate 2         CINST-000006 eligible, 12 of 12, against a copy of production
+#   frozen input   6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162
+#                  /etc/kyri/fabric/cinst-000006.json  root:cschott  640  1269 bytes
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CINST-000006,
+#                  request_digest sha256:c9444952…
+#   fabric         3bcb57790fc7c502e4b5493ba5a6a956dab78703b7c86b5756293b78f3007f28
+#
+# Return this output. The admit-instance WRITE is a separate authorisation.
+#
+# THE WINDOW. CADV-000007 is valid through 2026-09-23T06:00:00-05:00. The
+# selection chain and CINV-000003 Stages 0 to 3 all have to fit inside it. This
+# block does not extend it and must not be used to.
