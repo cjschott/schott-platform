@@ -54,6 +54,27 @@ REVIEWED_BYTES=1269
 REVIEWED_DIGEST=sha256:c9444952f62e9a9a40132f3d4569043a2b853d9446dd00be64c43031f6f02372
 PRODUCTION_BASELINE=3bcb57790fc7c502e4b5493ba5a6a956dab78703b7c86b5756293b78f3007f28
 
+# THE CEREMONY IS SPENT ONCE CINST-000006 IS WRITTEN.
+#
+# This suite rehearses a freeze that installs /etc/kyri/fabric/cinst-000006.json
+# and preflights against a store where CINST-000006 does not yet exist. Once
+# the operator has performed the ceremony and the reviewer has accepted the
+# write, neither precondition can ever hold again: the destination exists, so
+# the block's own first refusal fires, and the pre-write baseline is gone.
+#
+# Deleting the suite would delete the evidence. Leaving it asserting a world
+# that no longer exists would make it fail forever for the one reason that is
+# not a defect. So it branches on the fact, and in the spent state it asserts
+# what remains true and checkable: the artifact still renders exactly the
+# reviewed body, the frozen input in production IS that body, and the record
+# the write produced is the accepted one. A skip would prove nothing; these
+# still do.
+ACCEPTED_RECORD=/var/lib/kyri/fabric/capability-instances/CINST-000006.yaml
+ACCEPTED_RECORD_SHA256=5a320fa0cb9f678d3f78a11416beec17945b06add25446fbae7e0e1bf5575b9b
+ACCEPTED_REQUEST_DIGEST=sha256:c9444952f62e9a9a40132f3d4569043a2b853d9446dd00be64c43031f6f02372
+POST_WRITE_BASELINE=1549986cf2119f9da4af805cf5cbb5733f9c0fa1d28b76e25dc3e78be7f2cb78
+POST_WRITE_INSTANCE_SEQ=6
+
 FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
@@ -67,6 +88,66 @@ aggregate() {
 
 PRODUCTION_BEFORE="$(aggregate "${PRODUCTION_FABRIC}")"
 FROZEN_BEFORE="$(aggregate "${PRODUCTION_FROZEN}")"
+
+# ---- has the ceremony been performed? -------------------------------------
+
+if [[ -e "${ACCEPTED_RECORD}" ]]; then
+  printf '\n--- the CINST-000006 ceremony is spent ---\n'
+  pass "CINST-000006 is written in production; the freeze cannot be rehearsed again"
+
+  if [[ "${PRODUCTION_BEFORE}" == "${POST_WRITE_BASELINE}" ]]; then
+    pass "production Fabric is at the accepted post-write baseline ${POST_WRITE_BASELINE}"
+  else
+    fail "production Fabric is ${PRODUCTION_BEFORE}, not the accepted ${POST_WRITE_BASELINE}"
+  fi
+
+  record_sha="$(sha256sum "${ACCEPTED_RECORD}" | cut -d' ' -f1)"
+  if [[ "${record_sha}" == "${ACCEPTED_RECORD_SHA256}" ]]; then
+    pass "the persisted CINST-000006 record is the accepted one (${ACCEPTED_RECORD_SHA256})"
+  else
+    fail "the persisted CINST-000006 record is ${record_sha}, accepted ${ACCEPTED_RECORD_SHA256}"
+  fi
+
+  if grep -qF -- "${ACCEPTED_REQUEST_DIGEST}" "${ACCEPTED_RECORD}"; then
+    pass "the persisted record carries the reviewed request digest"
+  else
+    fail "the persisted record does not carry the reviewed request digest"
+  fi
+
+  seq_now="$(cat "${PRODUCTION_FABRIC}/sequences/capability-instance.seq")"
+  if [[ "${seq_now}" == "${POST_WRITE_INSTANCE_SEQ}" ]]; then
+    pass "capability-instance.seq is ${POST_WRITE_INSTANCE_SEQ}"
+  else
+    fail "capability-instance.seq is ${seq_now}, expected ${POST_WRITE_INSTANCE_SEQ}"
+  fi
+
+  frozen_prod="${PRODUCTION_FROZEN}/cinst-000006.json"
+  if [[ -f "${frozen_prod}" ]] \
+     && [[ "$(sha256sum "${frozen_prod}" | cut -d' ' -f1)" == "${REVIEWED_SHA256}" ]] \
+     && [[ "$(wc -c < "${frozen_prod}")" == "${REVIEWED_BYTES}" ]]; then
+    pass "the frozen input in production is the reviewed body, ${REVIEWED_BYTES} bytes"
+  else
+    fail "the frozen input in production is not the reviewed body"
+  fi
+
+  # The artifact is kept, and it must still carry the bytes that were written.
+  rendered_now="${WORK}/rendered-body.json"
+  sed -n "/^cat > \"\${TMP}\" <<'BODY'\$/,/^BODY\$/p" "${ARTIFACT}" \
+    | sed '1d;$d' > "${rendered_now}"
+  if [[ "$(sha256sum "${rendered_now}" | cut -d' ' -f1)" == "${REVIEWED_SHA256}" ]]; then
+    pass "the committed artifact still renders the body that was written"
+  else
+    fail "the committed artifact no longer renders the body that was written"
+  fi
+
+  printf '\n'
+  if (( FAILURES == 0 )); then
+    printf 'CINST-000006 freeze rehearsal: ceremony spent, accepted write verified.\n'
+    exit 0
+  fi
+  printf 'CINST-000006 freeze rehearsal FAILED: %d\n' "${FAILURES}" >&2
+  exit 1
+fi
 
 if [[ "${PRODUCTION_BEFORE}" == "${PRODUCTION_BASELINE}" ]]; then
   pass "production Fabric is at the pinned baseline before the rehearsal"

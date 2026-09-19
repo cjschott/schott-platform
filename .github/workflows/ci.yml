@@ -539,6 +539,12 @@ jobs:
       - name: Fabric freeze CINST-000006 rehearsal
         run: bash tests/test-fabric-freeze-cinst-000006-rehearsal.sh
 
+      # The whole CROUTE-0006 operator block against a fixture copied from the
+      # production stores, each stage sabotaged in turn and required to refuse
+      # for its own reason. Host-only: skips here.
+      - name: Fabric freeze CROUTE-0006 rehearsal
+        run: bash tests/test-fabric-freeze-croute-0006-rehearsal.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests

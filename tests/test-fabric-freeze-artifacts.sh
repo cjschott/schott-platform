@@ -32,7 +32,17 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # name | artifact | reviewed sha256 | bytes | request digest | subcommand |
 #   record id | destination | required predecessor input | superseded body |
 #   accepted predecessor body | fabric baseline pin | selected instance |
-#   current-time gate valid_until | current-eligibility instance
+#   current-time gate valid_until | current-eligibility instance |
+#   committed inert body, or "-" for a body rendered from the block's heredoc
+#
+# Field 16 is where the reviewed bytes LIVE. A block may carry them in its own
+# BODY heredoc, which is how every G11-BC-M and early G11-BC-N artifact does
+# it, or it may copy a committed inert input. The second shape exists because
+# the reviewed CROUTE-0006 and CSEL-000004 bodies were pinned by digest in
+# G11-BC-N and never committed, and a digest whose bytes are gone is not a
+# reviewable artifact -- the same defect that lost the Option-B CINV payload.
+# Where field 16 names a file, that file is the single source of the bytes: the
+# block copies it rather than restating it, so the two cannot drift apart.
 #
 # Field 12 is the instance the route must resolve to, or "-". A selection is
 # the only record whose correctness is not settled by its own identity: it can
@@ -48,10 +58,11 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # instance whose eligibility it must recompute at the current clock, where one
 # exists to compute.
 ARTIFACTS=(
-"CINST-000005|provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|1269|sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b|admit-instance|CINST-000005|/etc/kyri/fabric/cinst-000005.json|/etc/kyri/fabric/cadv-000006.json|a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b|-|-|-"
-"CROUTE-0005|provisioning/fabric/g11-bc-m-croute-0005-freeze.txt|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|678|sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb|create-route|CROUTE-0005|/etc/kyri/fabric/croute-0005.json|/etc/kyri/fabric/cinst-000005.json|77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c|-|-|-"
-"CADV-000007|provisioning/fabric/g11-bc-n-cadv-000007-freeze.txt|962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d|673|sha256:f3fe5fa5960f0a623e7da2cd2be860136b039676f1536a4805fec38f2328de62|register-advertisement|CADV-000007|/etc/kyri/fabric/cadv-000007.json|/etc/kyri/fabric/cadv-000006.json|ee862cc2d9d946df895962fe6f165e610554813f0d712b5c1dbac67c83cd09ad|223d6ec3dbcfa686d32be07d4b6d5b01613de04a14b6bb563f845442ab7348ec|8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add|-|2026-09-23T06:00:00-05:00|-"
-"CINST-000006|provisioning/fabric/g11-bc-n-cinst-000006-freeze.txt|6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162|1269|sha256:c9444952f62e9a9a40132f3d4569043a2b853d9446dd00be64c43031f6f02372|admit-instance|CINST-000006|/etc/kyri/fabric/cinst-000006.json|/etc/kyri/fabric/cadv-000007.json|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|3bcb57790fc7c502e4b5493ba5a6a956dab78703b7c86b5756293b78f3007f28|-|2026-09-23T06:00:00-05:00|CINST-000006"
+"CINST-000005|provisioning/fabric/g11-bc-m-cinst-000005-freeze.txt|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|1269|sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b|admit-instance|CINST-000005|/etc/kyri/fabric/cinst-000005.json|/etc/kyri/fabric/cadv-000006.json|a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b|-|-|-|-"
+"CROUTE-0005|provisioning/fabric/g11-bc-m-croute-0005-freeze.txt|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|678|sha256:c2ded2c50ee8cee42d9a18faaef85a03d697b136c160f2f25ab9589ff9169bfb|create-route|CROUTE-0005|/etc/kyri/fabric/croute-0005.json|/etc/kyri/fabric/cinst-000005.json|77aac8c8e8aa2e40a2bc9c9888ead1b9ecbb5444f41d8d1a1b41c7e2c483e1e3|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|712730063d90f83d86b097aefc7fca5df36a443c8c84a3ab67396611db70d38c|-|-|-|-"
+"CADV-000007|provisioning/fabric/g11-bc-n-cadv-000007-freeze.txt|962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d|673|sha256:f3fe5fa5960f0a623e7da2cd2be860136b039676f1536a4805fec38f2328de62|register-advertisement|CADV-000007|/etc/kyri/fabric/cadv-000007.json|/etc/kyri/fabric/cadv-000006.json|ee862cc2d9d946df895962fe6f165e610554813f0d712b5c1dbac67c83cd09ad|223d6ec3dbcfa686d32be07d4b6d5b01613de04a14b6bb563f845442ab7348ec|8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add|-|2026-09-23T06:00:00-05:00|-|-"
+"CINST-000006|provisioning/fabric/g11-bc-n-cinst-000006-freeze.txt|6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162|1269|sha256:c9444952f62e9a9a40132f3d4569043a2b853d9446dd00be64c43031f6f02372|admit-instance|CINST-000006|/etc/kyri/fabric/cinst-000006.json|/etc/kyri/fabric/cadv-000007.json|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|3bcb57790fc7c502e4b5493ba5a6a956dab78703b7c86b5756293b78f3007f28|-|2026-09-23T06:00:00-05:00|CINST-000006|-"
+"CROUTE-0006|provisioning/fabric/g11-bc-n-croute-0006-freeze.txt|cd7a1f9a8cd5f982d3f62b7d02ff253bc6c33b006a9aa0717aff162a1e40a78c|678|sha256:4a81d1c7fc7c023de601ea004a8bbd3ee9d4bb150b9867e52e1c7075447035a9|create-route|CROUTE-0006|/etc/kyri/fabric/croute-0006.json|/etc/kyri/fabric/cinst-000006.json|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|1549986cf2119f9da4af805cf5cbb5733f9c0fa1d28b76e25dc3e78be7f2cb78|-|2026-09-23T06:00:00-05:00|CINST-000006|provisioning/fabric/g11-bc-n-croute-0006-input.json"
 )
 
 # The withdrawn G11-BC-M CSEL-000004 artifact is deliberately NOT a row here.
@@ -96,6 +107,7 @@ for row in "${ARTIFACTS[@]}"; do
   selected="$(field "${row}" 12)"
   gate_until="$(field "${row}" 13)"
   gate_instance="$(field "${row}" 14)"
+  inert_input="$(field "${row}" 15)"
 
   printf '\n--- %s ---\n' "${name}"
 
@@ -106,11 +118,36 @@ for row in "${ARTIFACTS[@]}"; do
 
   # ---- the body is committed, and it is the reviewed body -----------------
   #
-  # Extracted the way the operator's shell would see it: the literal text
-  # between the BODY heredoc markers, with no substitution.
+  # Two shapes, judged identically once the bytes are in hand.
+  #
+  # A heredoc block: extracted the way the operator's shell would see it, the
+  # literal text between the BODY heredoc markers, with no substitution.
+  #
+  # An inert-input block: the committed file IS the body. The block must copy
+  # that exact path and must not carry a BODY heredoc of its own, because two
+  # copies of reviewed bytes are two things that can disagree.
   rendered="${WORK}/${name}.json"
-  sed -n "/^cat > \"\${TMP}\" <<'BODY'\$/,/^BODY\$/p" "${artifact}" \
-    | sed '1d;$d' > "${rendered}"
+  if [[ "${inert_input}" == "-" ]]; then
+    sed -n "/^cat > \"\${TMP}\" <<'BODY'\$/,/^BODY\$/p" "${artifact}" \
+      | sed '1d;$d' > "${rendered}"
+  else
+    if [[ -f "${ROOT}/${inert_input}" ]]; then
+      pass "${name}: the reviewed body is committed at ${inert_input}"
+    else
+      fail "${name}: the committed body ${inert_input} is missing"
+    fi
+    cp "${ROOT}/${inert_input}" "${rendered}" 2>/dev/null || : > "${rendered}"
+    if grep -qF -- "${inert_input}" "${artifact}"; then
+      pass "${name}: the block sources its body from ${inert_input}"
+    else
+      fail "${name}: the block does not reference ${inert_input}"
+    fi
+    if grep -q "^cat > \"\${TMP}\" <<'BODY'\$" "${artifact}"; then
+      fail "${name}: the block restates the body in a heredoc as well as sourcing it"
+    else
+      pass "${name}: the block carries no second copy of the reviewed bytes"
+    fi
+  fi
 
   rendered_sha="$(sha256sum "${rendered}" | cut -d' ' -f1)"
   rendered_bytes="$(wc -c < "${rendered}")"
@@ -413,9 +450,14 @@ if (( stale_found == 0 )); then
   pass "no artifact under provisioning/fabric renders the withdrawn CSEL body"
 fi
 
-# ---- every G11-BC-N artifact is gated --------------------------------------
+# ---- every G11-BC-N ceremony is gated ---------------------------------------
 #
-# A new artifact must not be able to join the chain without the clock check.
+# A new ceremony must not be able to join the chain without the clock check.
+#
+# Scoped to *-freeze.txt, which is what "ceremony" means here: a block an
+# operator pastes into a shell. The inert *-input.json bodies beside them are
+# reviewed BYTES, not ceremonies -- nothing executes them, so there is nothing
+# for a clock to gate. They are judged by digest and byte count below instead.
 while IFS= read -r bcn; do
   rel="${bcn#"${ROOT}/"}"
   row_gate=""
@@ -429,7 +471,76 @@ while IFS= read -r bcn; do
   else
     pass "${rel} is a G11-BC-N artifact and is gated at ${row_gate}"
   fi
-done < <(find "${ROOT}/provisioning/fabric" -type f -name 'g11-bc-n-*')
+done < <(find "${ROOT}/provisioning/fabric" -type f -name 'g11-bc-n-*-freeze.txt')
+
+# ---- the inert reviewed request bodies, as bytes ---------------------------
+#
+# G11-BC-N reviewed the CROUTE-0006 and CSEL-000004 bodies, recorded their
+# digests in prose, and committed neither. G11-BC-Q re-derived both and
+# required exact agreement with the reviewed sha256 and byte count before
+# committing them. These assertions are what stop that agreement from being a
+# claim in a report: the bytes are here, and they are these bytes.
+#
+# CSEL-000004 has no executable freeze artifact yet, and must not have one
+# until CROUTE-0006 is permanently written -- its baseline does not exist
+# before then. Its bytes are preserved here regardless, which is the whole
+# point: preserve the body now, prepare the authority later.
+
+printf '\n--- inert reviewed request bodies ---\n'
+
+# path | reviewed sha256 | reviewed bytes | expected record id
+INERT_BODIES=(
+"provisioning/fabric/g11-bc-n-croute-0006-input.json|cd7a1f9a8cd5f982d3f62b7d02ff253bc6c33b006a9aa0717aff162a1e40a78c|678|CROUTE-0006"
+"provisioning/fabric/g11-bc-n-csel-000004-input.json|d04171c50397be2d41f8d066b526f237d982ac1df113840eb81afa6ec44c2f29|605|CSEL-000004"
+)
+
+for row in "${INERT_BODIES[@]}"; do
+  rel="$(field "${row}" 0)"
+  want_sha="$(field "${row}" 1)"
+  want_bytes="$(field "${row}" 2)"
+  want_record="$(field "${row}" 3)"
+  body="${ROOT}/${rel}"
+
+  if [[ ! -f "${body}" ]]; then
+    fail "inert: ${rel} is missing"
+    continue
+  fi
+  pass "inert: ${rel} is committed"
+
+  got_sha="$(sha256sum "${body}" | cut -d' ' -f1)"
+  if [[ "${got_sha}" == "${want_sha}" ]]; then
+    pass "inert: ${want_record} sha256 ${want_sha}"
+  else
+    fail "inert: ${want_record} sha256 is ${got_sha}, reviewed ${want_sha}"
+  fi
+
+  got_bytes="$(wc -c < "${body}")"
+  if [[ "${got_bytes}" == "${want_bytes}" ]]; then
+    pass "inert: ${want_record} is exactly ${want_bytes} bytes"
+  else
+    fail "inert: ${want_record} is ${got_bytes} bytes, reviewed ${want_bytes}"
+  fi
+
+  if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "${body}" 2>/dev/null; then
+    pass "inert: ${want_record} is one JSON document"
+  else
+    fail "inert: ${want_record} is not valid JSON"
+  fi
+
+  # It is a request body, not a ceremony: nothing in it may be executable.
+  if head -c 2 "${body}" | grep -q '#!'; then
+    fail "inert: ${rel} carries a shebang"
+  else
+    pass "inert: ${rel} carries no shebang"
+  fi
+done
+
+# CSEL-000004 must not have an executable artifact yet.
+if [[ -e "${ROOT}/provisioning/fabric/g11-bc-n-csel-000004-freeze.txt" ]]; then
+  fail "inert: a CSEL-000004 freeze artifact exists before CROUTE-0006 is written"
+else
+  pass "inert: no CSEL-000004 freeze artifact exists yet, as required"
+fi
 
 # ---- the CINV-000003 payload, as bytes -------------------------------------
 #
@@ -523,12 +634,17 @@ for gated_artifact in ${gated_artifacts[@]+"${gated_artifacts[@]}"}; do
   fi
   pass "regression: ${label}: the current-time gate was extracted"
 
-  # Two spellings, because two records need different things. An advertisement
-  # carries its own window, so its gate reads one file. An instance's window is
-  # its admission and the governing advertisement's, so its gate reads two --
-  # the body, then the inspect output. The gate says which it is; this does not
-  # guess, and does not assume every gate looks like the first one.
-  if grep -q 'sys.argv\[2\]' "${gate_py}"; then
+  # Three spellings, because three records need different things. An
+  # advertisement carries its own window, so its gate reads one file. An
+  # instance's window is its admission and the governing advertisement's, so
+  # its gate reads two -- the body, then the inspect output. A route carries no
+  # window at all: both windows it rests on are live records, so its gate reads
+  # three -- the body, the advertisement, then the instance. The gate says
+  # which it is; this does not guess, and does not assume every gate looks like
+  # the first one.
+  if grep -q 'sys.argv\[3\]' "${gate_py}"; then
+    arity=3
+  elif grep -q 'sys.argv\[2\]' "${gate_py}"; then
     arity=2
   else
     arity=1
@@ -538,21 +654,24 @@ for gated_artifact in ${gated_artifacts[@]+"${gated_artifacts[@]}"}; do
   expired="${WORK}/expired.json"
   open_window="${WORK}/open.json"
   body_fixture="${WORK}/gate-body.json"
-  python3 - "${expired}" "${open_window}" "${body_fixture}" "${arity}" <<'FIXTURE_PY'
+  instance_fixture="${WORK}/gate-instance.json"
+  python3 - "${expired}" "${open_window}" "${body_fixture}" "${arity}" \
+           "${instance_fixture}" <<'FIXTURE_PY'
 import json
 import sys
 from datetime import datetime, timedelta
 
-expired_path, open_path, body_path, arity = sys.argv[1:5]
+expired_path, open_path, body_path, arity, instance_path = sys.argv[1:6]
 now = datetime.now().astimezone()
 day = timedelta(days=1)
+hour = timedelta(hours=1)
 
 
 def window(observed, expires):
     if arity == "1":
         # The advertisement body IS the window.
         return {"observed_at": observed, "valid_until": expires}
-    # The inspect output the instance gate reads.
+    # The inspect output the instance and route gates read.
     return {"findings": [], "reason": None,
             "records": [{"advertisement_id": "CADV-000007",
                          "observed_at": observed,
@@ -564,13 +683,34 @@ json.dump(window("2026-09-15T06:00:00-05:00", "2026-09-19T06:00:00-05:00"),
           open(expired_path, "w"), indent=2)
 json.dump(window((now - day).isoformat(), (now + day).isoformat()),
           open(open_path, "w"), indent=2)
-json.dump({"advertisement_id": "CADV-000007",
-           "admitted_at": (now - timedelta(hours=1)).isoformat(),
-           "admitted_until": (now + timedelta(hours=1)).isoformat()},
-          open(body_path, "w"), indent=2)
+
+if arity == "3":
+    # A route body: no window of its own, so it states what it routes to and
+    # when it was recorded. The admission it rests on is a separate live
+    # record, supplied as the third file.
+    json.dump({"candidate_instances": ["CINST-000006"],
+               "supersedes": "CROUTE-0005",
+               "route_version": 6,
+               "recorded_at": now.isoformat()},
+              open(body_path, "w"), indent=2)
+    json.dump({"findings": [], "reason": None,
+               "records": [{"instance_id": "CINST-000006",
+                            "advertisement_id": "CADV-000007",
+                            "lifecycle_state": "admitted",
+                            "admitted_at": (now - hour).isoformat(),
+                            "admitted_until": (now + hour).isoformat()}]},
+              open(instance_path, "w"), indent=2)
+else:
+    json.dump({"advertisement_id": "CADV-000007",
+               "admitted_at": (now - hour).isoformat(),
+               "admitted_until": (now + hour).isoformat()},
+              open(body_path, "w"), indent=2)
 FIXTURE_PY
 
-  if [[ "${arity}" == 2 ]]; then
+  if [[ "${arity}" == 3 ]]; then
+    expired_argv=("${body_fixture}" "${expired}" "${instance_fixture}")
+    open_argv=("${body_fixture}" "${open_window}" "${instance_fixture}")
+  elif [[ "${arity}" == 2 ]]; then
     expired_argv=("${body_fixture}" "${expired}")
     open_argv=("${body_fixture}" "${open_window}")
   else

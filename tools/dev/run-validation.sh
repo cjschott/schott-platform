@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=119
+  TOTAL_STEPS=120
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=144
+  TOTAL_STEPS=145
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -591,6 +591,15 @@ run "Fabric freeze gate execution" \
 # its own fixture and proves production unchanged by aggregate afterwards.
 run "Fabric freeze CINST-000006 rehearsal" \
   bash tests/test-fabric-freeze-cinst-000006-rehearsal.sh
+
+# G11-BC-Q. The whole CROUTE-0006 operator block, end to end, against a fixture
+# copied from the production stores, with each stage sabotaged in turn -- and
+# each sabotage required to refuse FOR ITS OWN REASON, so a crash cannot score
+# as a gate. Also proves the reviewed body resolves through CINST-000006.
+# Host-only: it needs the governed stores. Writes only inside its own fixture
+# and proves production unchanged by aggregate afterwards.
+run "Fabric freeze CROUTE-0006 rehearsal" \
+  bash tests/test-fabric-freeze-croute-0006-rehearsal.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,
