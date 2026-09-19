@@ -49,3 +49,4 @@ test-capability-execution-generation13-packaging.sh	reads the installed Generati
 test-capability-identity-authority-ceremony.sh	renders the reviewed identity candidates from this deployment's account database
 test-capability-execution-generation14-installer.sh	drives the generation-14 ceremony against a fixture built from the installed runtime
 test-capability-execution-helper-ceremony.sh	drives the ten-object helper ceremony against a fixture built from the installed Generation-14 runtime
+test-fabric-freeze-cinst-000006-rehearsal.sh	runs the whole CINST-000006 freeze block against a fixture copied from the production Fabric and frozen inputs

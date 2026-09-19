@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=117
+  TOTAL_STEPS=119
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=142
+  TOTAL_STEPS=144
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -573,6 +573,24 @@ run "Capability execution payload operation contract" \
 # row here rather than a copy of this file.
 run "Fabric freeze artifacts" \
   bash tests/test-fabric-freeze-artifacts.sh
+
+# G11-BC-P. The freeze artifacts' GATES, executed rather than asserted. G11-BC-O
+# shipped a CINST-000006 artifact whose two gates had never been run in the
+# shape the operator runs them in: gate 1 fed python3 its program on stdin and
+# then tried to read the advertisement from that same stdin through a trailing
+# here-string, which is its own status-0 null command, so the advertisement was
+# never read AND the failure was masked; gate 2's report line carried
+# backslashes inside f-string expressions and would not compile. The suite above
+# had 136 passing assertions over that artifact. This one runs the constructs.
+run "Fabric freeze gate execution" \
+  bash tests/test-fabric-freeze-gate-execution.sh
+
+# G11-BC-P. The whole CINST-000006 operator block, end to end, against a fixture
+# copied from the production stores, with each stage sabotaged in turn to prove
+# it fails closed. Host-only: it needs the governed stores. Writes only inside
+# its own fixture and proves production unchanged by aggregate afterwards.
+run "Fabric freeze CINST-000006 rehearsal" \
+  bash tests/test-fabric-freeze-cinst-000006-rehearsal.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,

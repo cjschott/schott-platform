@@ -270,12 +270,29 @@ for row in "${ARTIFACTS[@]}"; do
 
     # Read out of the rendered body and the live store, never restated: a gate
     # carrying its own copy of the window can drift from the authority it
-    # guards. Two parses at least, and not one of them off a date literal.
-    parses="$(grep -c 'datetime.fromisoformat(' "${artifact}" || true)"
-    if (( parses >= 2 )) && ! grep -qE 'fromisoformat\("[0-9]{4}-' "${artifact}"; then
-      pass "${name}: the gate reads its windows from authority, not from date literals"
+    # guards. So: it must parse instants, none of them off a date literal, and
+    # it must name at least two window fields it read out of data.
+    #
+    # This used to count `fromisoformat(` call sites and demand two. That is a
+    # proxy for the property, not the property, and it punished the correct
+    # refactor -- one parse helper called four times reads MORE windows from
+    # authority than two open-coded calls, and scored worse. The fields are
+    # counted instead, because the fields are what has to come from authority.
+    #
+    # Scoped to the gate program, so a field named in a comment elsewhere in
+    # the artifact cannot stand in for one the gate actually reads.
+    gate_program="${WORK}/gate-program.py"
+    sed -n "/<<'GATE_PY'\$/,/^GATE_PY\$/p" "${artifact}" | sed '1d;$d' > "${gate_program}"
+    fields=0
+    for window_field in observed_at valid_until admitted_at admitted_until; do
+      grep -q "\"${window_field}\"" "${gate_program}" && fields=$((fields + 1))
+    done
+    if (( fields >= 2 )) \
+       && grep -q 'datetime.fromisoformat(' "${gate_program}" \
+       && ! grep -qE 'fromisoformat\("[0-9]{4}-' "${gate_program}"; then
+      pass "${name}: the gate reads its windows from authority, not from date literals (${fields} fields)"
     else
-      fail "${name}: the gate restates a window as a constant (${parses} parses)"
+      fail "${name}: the gate restates a window as a constant (${fields} window fields read)"
     fi
 
     gate_line="$(grep -n 'current-time freshness gate' "${artifact}" | tail -1 | cut -d: -f1)"
@@ -482,53 +499,99 @@ fi
 # and require a refusal. If this ever passes, the gate has stopped working and
 # the G11-BC-M failure is reachable again.
 
+# EVERY gated artifact, not the first one found. The `break` that used to be
+# here stopped at CADV-000007, whose gate is single-channel and was sound, and
+# so the CINST-000006 gate below it was never extracted, never executed, and
+# shipped broken past 136 passing assertions. A loop that stops at the first
+# row proves something about that row and nothing about the table.
 printf '\n--- backdated-expiry regression ---\n'
-gated_artifact=""
+gated_artifacts=()
 for row in "${ARTIFACTS[@]}"; do
-  [[ "$(field "${row}" 13)" != "-" ]] && gated_artifact="${ROOT}/$(field "${row}" 1)" && break
+  [[ "$(field "${row}" 13)" != "-" ]] && gated_artifacts+=("${ROOT}/$(field "${row}" 1)")
 done
-if [[ -n "${gated_artifact}" ]]; then
-  gate_py="${WORK}/gate.py"
-  sed -n "/^GATE=\"\$(python3 - \"\${TMP}\" <<'GATE_PY'\$/,/^GATE_PY\$/p" \
-    "${gated_artifact}" | sed '1d;$d' > "${gate_py}"
-  if [[ -s "${gate_py}" ]]; then
-    pass "regression: the current-time gate was extracted from the committed artifact"
-
-    expired="${WORK}/expired.json"
-    cat > "${expired}" <<'EXPIRED_BODY'
-{
-  "observed_at": "2026-09-15T06:00:00-05:00",
-  "valid_until": "2026-09-19T06:00:00-05:00"
-}
-EXPIRED_BODY
-    if python3 "${gate_py}" "${expired}" >/dev/null 2>&1; then
-      fail "regression: the gate ACCEPTED the expired G11-BC-M window"
-    else
-      pass "regression: the gate refuses the expired G11-BC-M window"
-    fi
-
-    # And it must still accept a window that is genuinely open, or it is not a
-    # gate, it is a brick.
-    open_body="${WORK}/open.json"
-    python3 - "${open_body}" <<'OPEN_PY'
-import sys
-from datetime import datetime, timedelta
-now = datetime.now().astimezone()
-open(sys.argv[1], "w").write(
-    '{\n  "observed_at": "%s",\n  "valid_until": "%s"\n}\n'
-    % ((now - timedelta(days=1)).isoformat(), (now + timedelta(days=1)).isoformat()))
-OPEN_PY
-    if python3 "${gate_py}" "${open_body}" >/dev/null 2>&1; then
-      pass "regression: the gate accepts a window that is open now"
-    else
-      fail "regression: the gate refuses a window that is open now"
-    fi
-  else
-    fail "regression: the current-time gate could not be extracted"
-  fi
-else
+if (( ${#gated_artifacts[@]} == 0 )); then
   fail "regression: no gated artifact in the table to extract from"
 fi
+for gated_artifact in ${gated_artifacts[@]+"${gated_artifacts[@]}"}; do
+  label="provisioning/fabric/$(basename "${gated_artifact}")"
+  gate_py="${WORK}/gate.py"
+  sed -n "/<<'GATE_PY'\$/,/^GATE_PY\$/p" \
+    "${gated_artifact}" | sed '1d;$d' > "${gate_py}"
+  if [[ ! -s "${gate_py}" ]]; then
+    fail "regression: ${label}: the current-time gate could not be extracted"
+    continue
+  fi
+  pass "regression: ${label}: the current-time gate was extracted"
+
+  # Two spellings, because two records need different things. An advertisement
+  # carries its own window, so its gate reads one file. An instance's window is
+  # its admission and the governing advertisement's, so its gate reads two --
+  # the body, then the inspect output. The gate says which it is; this does not
+  # guess, and does not assume every gate looks like the first one.
+  if grep -q 'sys.argv\[2\]' "${gate_py}"; then
+    arity=2
+  else
+    arity=1
+  fi
+  pass "regression: ${label}: the gate reads ${arity} input file(s)"
+
+  expired="${WORK}/expired.json"
+  open_window="${WORK}/open.json"
+  body_fixture="${WORK}/gate-body.json"
+  python3 - "${expired}" "${open_window}" "${body_fixture}" "${arity}" <<'FIXTURE_PY'
+import json
+import sys
+from datetime import datetime, timedelta
+
+expired_path, open_path, body_path, arity = sys.argv[1:5]
+now = datetime.now().astimezone()
+day = timedelta(days=1)
+
+
+def window(observed, expires):
+    if arity == "1":
+        # The advertisement body IS the window.
+        return {"observed_at": observed, "valid_until": expires}
+    # The inspect output the instance gate reads.
+    return {"findings": [], "reason": None,
+            "records": [{"advertisement_id": "CADV-000007",
+                         "observed_at": observed,
+                         "valid_until": expires}]}
+
+
+# The withdrawn G11-BC-M window: closed 2026-09-19T06:00:00-05:00.
+json.dump(window("2026-09-15T06:00:00-05:00", "2026-09-19T06:00:00-05:00"),
+          open(expired_path, "w"), indent=2)
+json.dump(window((now - day).isoformat(), (now + day).isoformat()),
+          open(open_path, "w"), indent=2)
+json.dump({"advertisement_id": "CADV-000007",
+           "admitted_at": (now - timedelta(hours=1)).isoformat(),
+           "admitted_until": (now + timedelta(hours=1)).isoformat()},
+          open(body_path, "w"), indent=2)
+FIXTURE_PY
+
+  if [[ "${arity}" == 2 ]]; then
+    expired_argv=("${body_fixture}" "${expired}")
+    open_argv=("${body_fixture}" "${open_window}")
+  else
+    expired_argv=("${expired}")
+    open_argv=("${open_window}")
+  fi
+
+  if python3 "${gate_py}" "${expired_argv[@]}" >/dev/null 2>&1; then
+    fail "regression: ${label}: the gate ACCEPTED the expired G11-BC-M window"
+  else
+    pass "regression: ${label}: the gate refuses the expired G11-BC-M window"
+  fi
+
+  # And it must still accept a window that is genuinely open, or it is not a
+  # gate, it is a brick.
+  if python3 "${gate_py}" "${open_argv[@]}" >/dev/null 2>&1; then
+    pass "regression: ${label}: the gate accepts a window that is open now"
+  else
+    fail "regression: ${label}: the gate refuses a window that is open now"
+  fi
+done
 
 printf '\n'
 if (( FAILURES == 0 )); then

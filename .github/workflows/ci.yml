@@ -528,6 +528,17 @@ jobs:
       - name: Fabric freeze artifact tests
         run: bash tests/test-fabric-freeze-artifacts.sh
 
+      # The freeze artifacts' gates, executed rather than asserted: the real
+      # extracted constructs, real python3, real shell status propagation.
+      # Fixture-only; no store, no sudo.
+      - name: Fabric freeze gate execution tests
+        run: bash tests/test-fabric-freeze-gate-execution.sh
+
+      # The whole CINST-000006 operator block against a fixture copied from the
+      # production stores, each stage sabotaged in turn. Host-only: skips here.
+      - name: Fabric freeze CINST-000006 rehearsal
+        run: bash tests/test-fabric-freeze-cinst-000006-rehearsal.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests

@@ -21,7 +21,7 @@
 #
 # THE BASELINE PIN IS STEP-SPECIFIC. The CADV-000007 block pinned
 # 8f1df4b739ca..., correct with the G11-BC-M chain written and CADV-000007 not.
-# Writing CADV-000007 moved the store to 3bcb577900fc..., which is what this
+# Writing CADV-000007 moved the store to 3bcb57790fc7..., which is what this
 # block pins.
 #
 # THE GATES. Two, and both run BEFORE anything is installed:
@@ -135,39 +135,115 @@ test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
   rm -f "${TMP}"; exit 1; }
 
 # ---- GATE 1: WALL CLOCK, BEFORE ANYTHING IS INSTALLED --------------------
+#
+# TWO INPUTS, TWO SEPARATE CHANNELS. This gate needs the rendered body AND the
+# live advertisement, and each arrives as its own named file passed as argv.
+# Python's stdin carries the program text and nothing else; no command in this
+# gate takes a second input redirection.
+#
+# The G11-BC-O form fed the program in on stdin through a heredoc and then
+# tried to read the advertisement from that same stdin through a trailing
+# here-string. Two faults, one construct. The advertisement was never read, so
+# `json.load(sys.stdin)` saw a spent stream and raised JSONDecodeError. And a
+# here-string on its own line is a complete word-less command in its own right
+# with status 0, so it -- not python3 -- supplied the exit status of the
+# enclosing $( ), which masked the failure and let control fall through into
+# GATE 2. A gate that cannot fail closed is not a gate.
+#
+# FAIL CLOSED, EXPLICITLY. Every read, field lookup, instant parse and
+# comparison refuses by name and exits nonzero, an absent timezone is refused
+# rather than guessed, and any unhandled error exits nonzero on its own. The
+# gate runs as a plain command in an `if !`, so its status is its own.
+# >>> GATE1_BEGIN
 printf '\n--- current-time freshness gate ---\n'
-ADVERT="$(python3 -m tools.fabric.cli inspect \
+GATE_ADVERT="$(mktemp)"
+trap 'rm -f "${GATE_ADVERT}"' EXIT
+
+python3 -m tools.fabric.cli inspect \
   --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
-  --kind capability-advertisement --identifier CADV-000007)"
-GATE="$(python3 - "${TMP}" <<'GATE_PY'
-import json, sys
+  --kind capability-advertisement --identifier CADV-000007 \
+  > "${GATE_ADVERT}" \
+  || { echo "REFUSE: could not inspect CADV-000007 in the live store"
+       rm -f "${TMP}"; exit 1; }
+
+if ! python3 - "${TMP}" "${GATE_ADVERT}" <<'GATE_PY'
+import json
+import sys
 from datetime import datetime
-body = json.load(open(sys.argv[1]))
-advert = json.load(sys.stdin)["records"][0]
-observed = datetime.fromisoformat(advert["observed_at"])
-expires = datetime.fromisoformat(advert["valid_until"])
-admitted = datetime.fromisoformat(body["admitted_at"])
-until = datetime.fromisoformat(body["admitted_until"])
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+def load(path, what):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError) as exc:
+        refuse(f"could not read {what} ({exc})")
+
+
+def field(mapping, key, what):
+    if not isinstance(mapping, dict) or key not in mapping:
+        refuse(f"{what} has no {key}")
+    return mapping[key]
+
+
+def instant(raw, what):
+    try:
+        value = datetime.fromisoformat(raw)
+    except (TypeError, ValueError) as exc:
+        refuse(f"{what} is not an ISO-8601 instant ({exc})")
+    if value.tzinfo is None or value.utcoffset() is None:
+        refuse(f"{what} carries no timezone offset; refusing to guess one")
+    return value
+
+
+body = load(sys.argv[1], "the rendered body")
+inspected = load(sys.argv[2], "the inspect output for CADV-000007")
+
+records = field(inspected, "records", "the inspect output")
+if not isinstance(records, list) or len(records) != 1:
+    refuse("the inspect output did not return exactly one advertisement record")
+advert = records[0]
+
+if field(advert, "advertisement_id", "the inspected record") != "CADV-000007":
+    refuse("the inspected record is not CADV-000007")
+if field(body, "advertisement_id", "the rendered body") != "CADV-000007":
+    refuse("the rendered body does not bind CADV-000007")
+
+observed = instant(field(advert, "observed_at", "the advertisement"), "observed_at")
+expires = instant(field(advert, "valid_until", "the advertisement"), "valid_until")
+admitted = instant(field(body, "admitted_at", "the body"), "admitted_at")
+until = instant(field(body, "admitted_until", "the body"), "admitted_until")
 now = datetime.now().astimezone()
+
 print(f"now            {now.isoformat()}")
 print(f"CADV-000007    {observed.isoformat()} .. {expires.isoformat()}")
 print(f"admission      {admitted.isoformat()} .. {until.isoformat()}")
+
 if now < observed:
-    print("REFUSE: the governing advertisement window has not opened yet"); sys.exit(1)
+    refuse("the governing advertisement window has not opened yet")
 if now >= expires:
     print("REFUSE: the governing advertisement window closed; CADV-000007 is EXPIRED at the current clock")
-    print("REFUSE: do not extend it -- prepare a fresh renewal chain")
-    sys.exit(1)
+    refuse("do not extend it -- prepare a fresh renewal chain")
 if now >= until:
-    print("REFUSE: the admission window closed at the current clock"); sys.exit(1)
+    refuse("the admission window closed at the current clock")
 if until > expires:
-    print("REFUSE: admitted_until outlives the advertisement it rests on"); sys.exit(1)
+    refuse("admitted_until outlives the advertisement it rests on")
+
 print("ok  observed_at <= now < valid_until")
 print("ok  now < admitted_until <= valid_until")
 GATE_PY
-<<<"${ADVERT}"
-)" || { printf '%s\n' "${GATE}"; echo "REFUSE: current-time freshness gate failed"; rm -f "${TMP}"; exit 1; }
-printf '%s\n' "${GATE}"
+then
+  echo "REFUSE: current-time freshness gate failed"
+  rm -f "${TMP}"; exit 1
+fi
+rm -f "${GATE_ADVERT}"
+trap - EXIT
+# <<< GATE1_END
 
 # ---- GATE 2: CURRENT ELIGIBILITY, BEFORE ANYTHING IS INSTALLED -----------
 #
@@ -189,20 +265,73 @@ python3 -m tools.fabric.cli admit-instance \
   --input-file cinst-000006.json --approved-directory "${GATE_DIR}/approved" \
   >/dev/null || { echo "REFUSE: the candidate does not admit against a copy of current production"; rm -f "${TMP}"; exit 1; }
 
-ELIG="$(python3 -m tools.fabric.cli compute-eligibility \
+# >>> GATE2_CHECK_BEGIN
+ELIG_FILE="${GATE_DIR}/eligibility.json"
+python3 -m tools.fabric.cli compute-eligibility \
   --store-root "${GATE_DIR}/fabric" --expected-uid 1000 --expected-gid 1000 \
   --trust-store-root /var/lib/kyri/trust \
   --instance-id CINST-000006 --capability-id CAPDEF-0001 --contract-id CCON-0001 \
   --accepted-version 1.0.0 --data-classification internal \
-  --evaluated-at "$(date -Is)")"
-printf '%s\n' "${ELIG}" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-met = sum(1 for c in d["conditions"] if c["status"] == "met")
-print(f"eligible {d[\"eligible\"]} | {met} of {len(d[\"conditions\"])} met | unmet {d[\"unmet\"]} | reasons {d[\"reasons\"]}")
-sys.exit(0 if d["eligible"] is True and not d["unmet"] else 1)
-' || { echo "REFUSE: CINST-000006 is not eligible at the current clock"; rm -f "${TMP}"; exit 1; }
+  --evaluated-at "$(date -Is)" \
+  > "${ELIG_FILE}" \
+  || { echo "REFUSE: compute-eligibility failed against the copy of production"
+       rm -f "${TMP}"; exit 1; }
+
+# The result arrives as a FILE argument and the program arrives on stdin, the
+# same separation GATE 1 uses. The G11-BC-O form piped the result into
+# `python3 -c` and wrote the report line as an f-string containing \" inside
+# its expressions; inside bash single quotes those backslashes are literal, so
+# Python received d[\"eligible\"] and refused to compile it. Nothing below
+# contains a backslash, and every value is bound to a plain name before it is
+# formatted.
+if ! python3 - "${ELIG_FILE}" <<'ELIG_PY'
+import json
+import sys
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    refuse(f"could not read the compute-eligibility result ({exc})")
+
+if not isinstance(result, dict):
+    refuse("the compute-eligibility result is not an object")
+for key in ("eligible", "conditions", "unmet", "reasons"):
+    if key not in result:
+        refuse(f"the compute-eligibility result has no {key}")
+
+eligible = result["eligible"]
+conditions = result["conditions"]
+unmet = result["unmet"]
+reasons = result["reasons"]
+if not isinstance(conditions, list) or not isinstance(unmet, list):
+    refuse("conditions and unmet must both be lists")
+
+met = sum(1 for c in conditions if isinstance(c, dict) and c.get("status") == "met")
+total = len(conditions)
+print(f"eligible {eligible} | {met} of {total} met | unmet {unmet} | reasons {reasons}")
+
+if total == 0:
+    refuse("compute-eligibility returned no conditions to judge")
+if eligible is not True:
+    refuse("compute-eligibility did not return eligible true")
+if unmet:
+    refuse(f"compute-eligibility reported unmet conditions: {unmet}")
+
+print("ok  eligible true, no unmet conditions")
+ELIG_PY
+then
+  echo "REFUSE: CINST-000006 is not eligible at the current clock"
+  rm -f "${TMP}"; exit 1
+fi
 printf 'ok  CINST-000006 eligible at the current clock\n'
+# <<< GATE2_CHECK_END
 rm -rf "${GATE_DIR}"
 trap - EXIT
 
