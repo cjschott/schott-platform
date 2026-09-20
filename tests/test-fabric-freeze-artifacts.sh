@@ -63,6 +63,7 @@ ARTIFACTS=(
 "CADV-000007|provisioning/fabric/g11-bc-n-cadv-000007-freeze.txt|962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d|673|sha256:f3fe5fa5960f0a623e7da2cd2be860136b039676f1536a4805fec38f2328de62|register-advertisement|CADV-000007|/etc/kyri/fabric/cadv-000007.json|/etc/kyri/fabric/cadv-000006.json|ee862cc2d9d946df895962fe6f165e610554813f0d712b5c1dbac67c83cd09ad|223d6ec3dbcfa686d32be07d4b6d5b01613de04a14b6bb563f845442ab7348ec|8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add|-|2026-09-23T06:00:00-05:00|-|-"
 "CINST-000006|provisioning/fabric/g11-bc-n-cinst-000006-freeze.txt|6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162|1269|sha256:c9444952f62e9a9a40132f3d4569043a2b853d9446dd00be64c43031f6f02372|admit-instance|CINST-000006|/etc/kyri/fabric/cinst-000006.json|/etc/kyri/fabric/cadv-000007.json|5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c|850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da|3bcb57790fc7c502e4b5493ba5a6a956dab78703b7c86b5756293b78f3007f28|-|2026-09-23T06:00:00-05:00|CINST-000006|-"
 "CROUTE-0006|provisioning/fabric/g11-bc-n-croute-0006-freeze.txt|cd7a1f9a8cd5f982d3f62b7d02ff253bc6c33b006a9aa0717aff162a1e40a78c|678|sha256:4a81d1c7fc7c023de601ea004a8bbd3ee9d4bb150b9867e52e1c7075447035a9|create-route|CROUTE-0006|/etc/kyri/fabric/croute-0006.json|/etc/kyri/fabric/cinst-000006.json|bfb153831a11a28064ca1e6c0bbbbd7ad877667987866135c355ea0419a9aeda|6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a|1549986cf2119f9da4af805cf5cbb5733f9c0fa1d28b76e25dc3e78be7f2cb78|-|2026-09-23T06:00:00-05:00|CINST-000006|provisioning/fabric/g11-bc-n-croute-0006-input.json"
+"CSEL-000004|provisioning/fabric/g11-bc-n-csel-000004-freeze.txt|d04171c50397be2d41f8d066b526f237d982ac1df113840eb81afa6ec44c2f29|605|sha256:2856ff77601e24e80f9414abf93a6eb4719d0514b386ceaca9472e712f1fd437|select|CSEL-000004|/etc/kyri/fabric/csel-000004.json|/etc/kyri/fabric/croute-0006.json|60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd|700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e|f122e53034eeca45ce7b1d8ac5afdc9562a16a086757e203291a8ce1b018cefb|CINST-000006|2026-09-23T06:00:00-05:00|CINST-000006|provisioning/fabric/g11-bc-n-csel-000004-input.json"
 )
 
 # The withdrawn G11-BC-M CSEL-000004 artifact is deliberately NOT a row here.
@@ -182,6 +183,18 @@ for row in "${ARTIFACTS[@]}"; do
       fail "${name}: does not pin ${label} (${value})"
     fi
   done
+
+  # THE EXECUTABLE PIN, not merely a mention. Every block explains which
+  # baseline it replaces and why, so an earlier aggregate legitimately appears
+  # in the prose; what must be current is the value the block actually compares
+  # against. A ceremony prepared before its predecessor was written carries the
+  # wrong FABRIC_BEFORE and is caught here rather than by an operator.
+  pinned_baseline="$(sed -n 's/^FABRIC_BEFORE=\(.*\)$/\1/p' "${artifact}" | head -1)"
+  if [[ "${pinned_baseline}" == "${baseline}" ]]; then
+    pass "${name}: FABRIC_BEFORE is the step's own baseline"
+  else
+    fail "${name}: FABRIC_BEFORE is ${pinned_baseline:-unset}, expected ${baseline}"
+  fi
 
   # A refusal naming the reviewed body would refuse the ceremony itself. This
   # is the check that catches a copy-paste that left a digest in place.
@@ -535,12 +548,15 @@ for row in "${INERT_BODIES[@]}"; do
   fi
 done
 
-# CSEL-000004 must not have an executable artifact yet.
-if [[ -e "${ROOT}/provisioning/fabric/g11-bc-n-csel-000004-freeze.txt" ]]; then
-  fail "inert: a CSEL-000004 freeze artifact exists before CROUTE-0006 is written"
-else
-  pass "inert: no CSEL-000004 freeze artifact exists yet, as required"
-fi
+# CSEL-000004's ceremony was withheld until CROUTE-0006 was written, because
+# its baseline did not exist before then. CROUTE-0006 is written, so the
+# artifact now exists and the guard that withheld it is spent.
+#
+# What replaces it is stronger and outlives it: the executable FABRIC_BEFORE of
+# every artifact must be that step's own baseline, asserted per row above. An
+# artifact prepared before its predecessor landed pins a superseded aggregate
+# and fails there -- which is the property the existence guard was standing in
+# for, checked directly instead of by absence.
 
 # ---- the CINV-000003 payload, as bytes -------------------------------------
 #
@@ -634,15 +650,18 @@ for gated_artifact in ${gated_artifacts[@]+"${gated_artifacts[@]}"}; do
   fi
   pass "regression: ${label}: the current-time gate was extracted"
 
-  # Three spellings, because three records need different things. An
+  # Four spellings, because four records need different things. An
   # advertisement carries its own window, so its gate reads one file. An
   # instance's window is its admission and the governing advertisement's, so
   # its gate reads two -- the body, then the inspect output. A route carries no
   # window at all: both windows it rests on are live records, so its gate reads
-  # three -- the body, the advertisement, then the instance. The gate says
-  # which it is; this does not guess, and does not assume every gate looks like
-  # the first one.
-  if grep -q 'sys.argv\[3\]' "${gate_py}"; then
+  # three -- the body, the advertisement, then the instance. A selection rests
+  # on all of that AND on the route that must resolve it, so its gate reads
+  # four. The gate says which it is; this does not guess, and does not assume
+  # every gate looks like the first one.
+  if grep -q 'sys.argv\[4\]' "${gate_py}"; then
+    arity=4
+  elif grep -q 'sys.argv\[3\]' "${gate_py}"; then
     arity=3
   elif grep -q 'sys.argv\[2\]' "${gate_py}"; then
     arity=2
@@ -655,13 +674,14 @@ for gated_artifact in ${gated_artifacts[@]+"${gated_artifacts[@]}"}; do
   open_window="${WORK}/open.json"
   body_fixture="${WORK}/gate-body.json"
   instance_fixture="${WORK}/gate-instance.json"
+  route_fixture="${WORK}/gate-route.json"
   python3 - "${expired}" "${open_window}" "${body_fixture}" "${arity}" \
-           "${instance_fixture}" <<'FIXTURE_PY'
+           "${instance_fixture}" "${route_fixture}" <<'FIXTURE_PY'
 import json
 import sys
 from datetime import datetime, timedelta
 
-expired_path, open_path, body_path, arity, instance_path = sys.argv[1:6]
+expired_path, open_path, body_path, arity, instance_path, route_path = sys.argv[1:7]
 now = datetime.now().astimezone()
 day = timedelta(days=1)
 hour = timedelta(hours=1)
@@ -684,7 +704,34 @@ json.dump(window("2026-09-15T06:00:00-05:00", "2026-09-19T06:00:00-05:00"),
 json.dump(window((now - day).isoformat(), (now + day).isoformat()),
           open(open_path, "w"), indent=2)
 
-if arity == "3":
+if arity == "4":
+    # A selection body: it names a request CLASS, not a route, so the class
+    # must match the route fixture field for field or the gate refuses before
+    # it ever looks at a clock.
+    request_class = {"capability_id": "CAPDEF-0001",
+                     "contract_id": "CCON-0001",
+                     "data_classification": "internal",
+                     "locality": "local-only",
+                     "accepted_contract_versions": ["1.0.0"]}
+    body = dict(request_class)
+    body["local_node_identity"] = "HOST-0001"
+    body["recorded_at"] = now.isoformat()
+    body["evaluated_at"] = now.isoformat()
+    json.dump(body, open(body_path, "w"), indent=2)
+    json.dump({"findings": [], "reason": None,
+               "records": [{"instance_id": "CINST-000006",
+                            "advertisement_id": "CADV-000007",
+                            "lifecycle_state": "admitted",
+                            "admitted_at": (now - hour).isoformat(),
+                            "admitted_until": (now + hour).isoformat()}]},
+              open(instance_path, "w"), indent=2)
+    route = dict(request_class)
+    route["route_id"] = "CROUTE-0006"
+    route["route_version"] = 6
+    route["candidate_instances"] = ["CINST-000006"]
+    json.dump({"findings": [], "reason": None, "records": [route]},
+              open(route_path, "w"), indent=2)
+elif arity == "3":
     # A route body: no window of its own, so it states what it routes to and
     # when it was recorded. The admission it rests on is a separate live
     # record, supplied as the third file.
@@ -707,7 +754,10 @@ else:
               open(body_path, "w"), indent=2)
 FIXTURE_PY
 
-  if [[ "${arity}" == 3 ]]; then
+  if [[ "${arity}" == 4 ]]; then
+    expired_argv=("${body_fixture}" "${expired}" "${instance_fixture}" "${route_fixture}")
+    open_argv=("${body_fixture}" "${open_window}" "${instance_fixture}" "${route_fixture}")
+  elif [[ "${arity}" == 3 ]]; then
     expired_argv=("${body_fixture}" "${expired}" "${instance_fixture}")
     open_argv=("${body_fixture}" "${open_window}" "${instance_fixture}")
   elif [[ "${arity}" == 2 ]]; then

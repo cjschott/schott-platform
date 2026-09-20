@@ -545,6 +545,11 @@ jobs:
       - name: Fabric freeze CROUTE-0006 rehearsal
         run: bash tests/test-fabric-freeze-croute-0006-rehearsal.sh
 
+      # The whole CSEL-000004 operator block, plus the governed-resolution gate
+      # judged directly against crafted engine output. Host-only: skips here.
+      - name: Fabric freeze CSEL-000004 rehearsal
+        run: bash tests/test-fabric-freeze-csel-000004-rehearsal.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests
