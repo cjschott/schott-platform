@@ -60,6 +60,27 @@ REVIEWED_BYTES=678
 REVIEWED_DIGEST=sha256:4a81d1c7fc7c023de601ea004a8bbd3ee9d4bb150b9867e52e1c7075447035a9
 PRODUCTION_BASELINE=1549986cf2119f9da4af805cf5cbb5733f9c0fa1d28b76e25dc3e78be7f2cb78
 
+# THE CEREMONY IS SPENT ONCE CROUTE-0006 IS WRITTEN.
+#
+# This suite rehearses a freeze that installs /etc/kyri/fabric/croute-0006.json
+# and preflights against a store where CROUTE-0006 does not yet exist. Once the
+# operator has performed the ceremony and the reviewer has accepted the write,
+# neither precondition can ever hold again: the destination exists, so the
+# block's own first refusal fires, and the pre-write baseline is gone.
+#
+# Deleting the suite would delete the evidence. Leaving it asserting a world
+# that no longer exists would make it fail forever for the one reason that is
+# not a defect. So it branches on the fact, exactly as the CINST-000006
+# rehearsal does, and in the spent state asserts what remains true and
+# checkable: the record the write produced, the frozen input in production, and
+# that the committed inert input STILL equals both. That last one is the point
+# of committing the bytes at all -- it is now provable, rather than asserted in
+# a report, that what was frozen and written is what the repository holds.
+ACCEPTED_RECORD=/var/lib/kyri/fabric/capability-routes/CROUTE-0006.yaml
+ACCEPTED_RECORD_SHA256=ffa04e0f578b5ae420ef01f5d38ce0e547fef56a13d2976d2923d82fce7ff3f2
+POST_WRITE_BASELINE=f122e53034eeca45ce7b1d8ac5afdc9562a16a086757e203291a8ce1b018cefb
+POST_WRITE_ROUTE_SEQ=6
+
 FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
@@ -73,6 +94,89 @@ aggregate() {
 
 PRODUCTION_BEFORE="$(aggregate "${PRODUCTION_FABRIC}")"
 FROZEN_BEFORE="$(aggregate "${PRODUCTION_FROZEN}")"
+
+# ---- has the ceremony been performed? -------------------------------------
+
+if [[ -e "${ACCEPTED_RECORD}" ]]; then
+  printf '\n--- the CROUTE-0006 ceremony is spent ---\n'
+  pass "CROUTE-0006 is written in production; the freeze cannot be rehearsed again"
+
+  # NOT an aggregate-equality check. The store legitimately moves on with every
+  # later write in the chain, so pinning the whole-store aggregate a spent
+  # ceremony left behind makes it fail at the next checkpoint for the one
+  # reason that is not a defect -- which is exactly what happened to the
+  # CINST-000006 suite when CROUTE-0006 landed.
+  #
+  # What a spent ceremony can assert forever is that its OWN record is still
+  # there and still byte-for-byte what was accepted. Fabric records are
+  # immutable, so that statement never expires.
+  if [[ "${PRODUCTION_BEFORE}" == "${POST_WRITE_BASELINE}" ]]; then
+    pass "production Fabric is still at the aggregate this write produced"
+  else
+    pass "production Fabric has moved on to ${PRODUCTION_BEFORE}, as later writes require"
+  fi
+
+  record_sha="$(sha256sum "${ACCEPTED_RECORD}" | cut -d' ' -f1)"
+  if [[ "${record_sha}" == "${ACCEPTED_RECORD_SHA256}" ]]; then
+    pass "the persisted CROUTE-0006 record is the accepted one (${ACCEPTED_RECORD_SHA256})"
+  else
+    fail "the persisted CROUTE-0006 record is ${record_sha}, accepted ${ACCEPTED_RECORD_SHA256}"
+  fi
+
+  if grep -qF -- "${REVIEWED_DIGEST}" "${ACCEPTED_RECORD}"; then
+    pass "the persisted record carries the reviewed request digest"
+  else
+    fail "the persisted record does not carry the reviewed request digest"
+  fi
+
+  # The route must still point where it was reviewed to point.
+  if grep -qF -- "route_id: CROUTE-0006" "${ACCEPTED_RECORD}" \
+     && grep -qF -- "- CINST-000006" "${ACCEPTED_RECORD}"; then
+    pass "the persisted route is CROUTE-0006 and routes to CINST-000006"
+  else
+    fail "the persisted route does not route to CINST-000006"
+  fi
+
+  # At least, not exactly: the sequence is monotonic and a later record in this
+  # kind raises it. What must never happen is that it went backwards past the
+  # identifier this ceremony allocated.
+  seq_now="$(cat "${PRODUCTION_FABRIC}/sequences/capability-route.seq")"
+  if [[ "${seq_now}" =~ ^[0-9]+$ ]] && (( seq_now >= POST_WRITE_ROUTE_SEQ )); then
+    pass "capability-route.seq is ${seq_now}, at or past the ${POST_WRITE_ROUTE_SEQ} this write allocated"
+  else
+    fail "capability-route.seq is ${seq_now}, below the ${POST_WRITE_ROUTE_SEQ} this write allocated"
+  fi
+
+  frozen_prod="${PRODUCTION_FROZEN}/croute-0006.json"
+  if [[ -f "${frozen_prod}" ]] \
+     && [[ "$(sha256sum "${frozen_prod}" | cut -d' ' -f1)" == "${REVIEWED_SHA256}" ]] \
+     && [[ "$(wc -c < "${frozen_prod}")" == "${REVIEWED_BYTES}" ]]; then
+    pass "the frozen input in production is the reviewed body, ${REVIEWED_BYTES} bytes"
+  else
+    fail "the frozen input in production is not the reviewed body"
+  fi
+
+  # The committed bytes, the frozen input and the written record agree. This is
+  # what committing the body bought: it is checkable, not merely reported.
+  if [[ "$(sha256sum "${INERT_BODY}" | cut -d' ' -f1)" == "${REVIEWED_SHA256}" ]]; then
+    pass "the committed inert input is still the reviewed body"
+  else
+    fail "the committed inert input has drifted from the reviewed body"
+  fi
+  if cmp -s "${INERT_BODY}" "${frozen_prod}"; then
+    pass "the committed inert input is byte-identical to the frozen input that was written"
+  else
+    fail "the committed inert input differs from the frozen input in production"
+  fi
+
+  printf '\n'
+  if (( FAILURES == 0 )); then
+    printf 'CROUTE-0006 freeze rehearsal: ceremony spent, accepted write verified.\n'
+    exit 0
+  fi
+  printf 'CROUTE-0006 freeze rehearsal FAILED: %d\n' "${FAILURES}" >&2
+  exit 1
+fi
 
 if [[ "${PRODUCTION_BEFORE}" == "${PRODUCTION_BASELINE}" ]]; then
   pass "production Fabric is at the pinned post-CINST baseline before the rehearsal"

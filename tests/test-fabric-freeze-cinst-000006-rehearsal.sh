@@ -95,10 +95,19 @@ if [[ -e "${ACCEPTED_RECORD}" ]]; then
   printf '\n--- the CINST-000006 ceremony is spent ---\n'
   pass "CINST-000006 is written in production; the freeze cannot be rehearsed again"
 
+  # NOT an aggregate-equality check. The store legitimately moves on with every
+  # later write in the chain, so pinning the whole-store aggregate a spent
+  # ceremony left behind makes it fail at the next checkpoint for the one
+  # reason that is not a defect -- which is exactly what happened to the
+  # CINST-000006 suite when CROUTE-0006 landed.
+  #
+  # What a spent ceremony can assert forever is that its OWN record is still
+  # there and still byte-for-byte what was accepted. Fabric records are
+  # immutable, so that statement never expires.
   if [[ "${PRODUCTION_BEFORE}" == "${POST_WRITE_BASELINE}" ]]; then
-    pass "production Fabric is at the accepted post-write baseline ${POST_WRITE_BASELINE}"
+    pass "production Fabric is still at the aggregate this write produced"
   else
-    fail "production Fabric is ${PRODUCTION_BEFORE}, not the accepted ${POST_WRITE_BASELINE}"
+    pass "production Fabric has moved on to ${PRODUCTION_BEFORE}, as later writes require"
   fi
 
   record_sha="$(sha256sum "${ACCEPTED_RECORD}" | cut -d' ' -f1)"
@@ -114,11 +123,14 @@ if [[ -e "${ACCEPTED_RECORD}" ]]; then
     fail "the persisted record does not carry the reviewed request digest"
   fi
 
+  # At least, not exactly: the sequence is monotonic and a later record in this
+  # kind raises it. What must never happen is that it went backwards past the
+  # identifier this ceremony allocated.
   seq_now="$(cat "${PRODUCTION_FABRIC}/sequences/capability-instance.seq")"
-  if [[ "${seq_now}" == "${POST_WRITE_INSTANCE_SEQ}" ]]; then
-    pass "capability-instance.seq is ${POST_WRITE_INSTANCE_SEQ}"
+  if [[ "${seq_now}" =~ ^[0-9]+$ ]] && (( seq_now >= POST_WRITE_INSTANCE_SEQ )); then
+    pass "capability-instance.seq is ${seq_now}, at or past the ${POST_WRITE_INSTANCE_SEQ} this write allocated"
   else
-    fail "capability-instance.seq is ${seq_now}, expected ${POST_WRITE_INSTANCE_SEQ}"
+    fail "capability-instance.seq is ${seq_now}, below the ${POST_WRITE_INSTANCE_SEQ} this write allocated"
   fi
 
   frozen_prod="${PRODUCTION_FROZEN}/cinst-000006.json"
