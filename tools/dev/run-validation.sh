@@ -450,6 +450,15 @@ run "Capability execution generation 17 installer" \
 # defining module publishes before the module that imports it, because the
 # reverse intermediate is an ImportError on every CLI command including
 # `recover`. Measured against all four mixes, not inherited.
+# G11-BC-W. Generation 19 publishes governed administrative abandonment. It must
+# be installed BEFORE any abandonment is written: the Generation-18 reader
+# refuses an `abandoned` record, and `all_states` resolves every chain in one
+# comprehension, so one such record would raise out of capacity, recovery and
+# cleanup for the whole store. Host-only, fixture-driven; mutates no production
+# runtime object.
+run "Capability execution generation 19 installer" \
+  bash tests/test-capability-execution-generation19-installer.sh
+
 run "Capability execution generation 18 installer" \
   bash tests/test-capability-execution-generation18-installer.sh
 
