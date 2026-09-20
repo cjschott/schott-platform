@@ -550,6 +550,11 @@ jobs:
       - name: Fabric freeze CSEL-000004 rehearsal
         run: bash tests/test-fabric-freeze-csel-000004-rehearsal.sh
 
+      # The whole CINV-000003 Stage 0 ceremony, plus the payload gate's
+      # canonical check judged directly. Host-only: skips here.
+      - name: CINV-000003 Stage 0 rehearsal
+        run: bash tests/test-capability-cinv-000003-stage-0-rehearsal.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests

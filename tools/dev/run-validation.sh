@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=121
+  TOTAL_STEPS=122
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=146
+  TOTAL_STEPS=147
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -610,6 +610,16 @@ run "Fabric freeze CROUTE-0006 rehearsal" \
 # unchanged by aggregate afterwards.
 run "Fabric freeze CSEL-000004 rehearsal" \
   bash tests/test-fabric-freeze-csel-000004-rehearsal.sh
+
+# G11-BC-S. The whole CINV-000003 Stage 0 ceremony, end to end. Stage 0 creates
+# only the reviewed operator work area and allocates nothing, so the assertion
+# that matters most is negative: after the happy path the fixture runtime store
+# is byte-identical and capability-invocation.seq has not moved. Also judges the
+# payload gate's canonical check directly, because the raw check fires first and
+# no substitution of the payload can reach it. Host-only: it needs the governed
+# stores. Writes only inside its own fixture.
+run "CINV-000003 Stage 0 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-0-rehearsal.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,
