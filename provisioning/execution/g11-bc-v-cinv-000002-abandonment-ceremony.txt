@@ -1,4 +1,44 @@
 #!/usr/bin/env bash
+# =====================================================================
+# WITHDRAWN. NOT AUTHORISED FOR EXECUTION. DO NOT RUN THIS.
+# =====================================================================
+#
+# G11-BC-W. This ceremony runs `python3 -m tools.capability.cli abandon` out of
+# /opt/schott-platform, which imports the Generation-19 checkout. The INSTALLED
+# runtime is Generation 18, and it cannot parse the record this would write:
+#
+#     StateIntegrityFailure: CINV-000002.000003 names an unknown state
+#
+# `state.all_states` resolves every chain in ONE comprehension, so that single
+# record would raise out of `capacity.reserve`, `recovery` and `cleanup` for the
+# WHOLE store -- not merely for CINV-000002. The installed execution plane would
+# have stopped working entirely, and the reclamation this was written to perform
+# would have been the thing that broke it.
+#
+# The architecture it rests on is ACCEPTED. What was wrong is the sequence.
+#
+# WHAT REPLACES IT:
+#
+#   1. provisioning/execution/install-generation-19.sh   publish Generation 19
+#      provisioning/execution/gen19-operator-ceremony.txt
+#
+#   2. a REGENERATED CINV-000002 reclamation ceremony, prepared after Generation
+#      19 is installed and independently verified, and revalidated against the
+#      then-current runtime baseline, immutable record digests, lifecycle
+#      states, capacity occupancy and container absence. It will call the
+#      INSTALLED runtime authority rather than importing unpublished checkout
+#      code.
+#
+# This file is kept, unexecutable, as pre-Generation-19 preparation evidence:
+# its gates, pins and rehearsal are what the regenerated ceremony is built from.
+# Deleting it would delete that.
+printf 'WITHDRAWN: this ceremony is not authorised. Generation 19 must be installed first.\n' >&2
+printf 'See docs/development/reports/eng-0005/2026-09-20-g11-bc-w-generation-19-publication.md\n' >&2
+exit 1
+
+# ---------------------------------------------------------------------
+# The withdrawn text follows, unreachable, as evidence only.
+# ---------------------------------------------------------------------
 # CINV-000002 ADMINISTRATIVE ABANDONMENT, exactly as it is to be typed.
 #
 # This file is reference text, not a script to run: the operator pastes it into
