@@ -69,6 +69,28 @@ REVIEWED_BYTES=605
 REVIEWED_DIGEST=sha256:2856ff77601e24e80f9414abf93a6eb4719d0514b386ceaca9472e712f1fd437
 PRODUCTION_BASELINE=f122e53034eeca45ce7b1d8ac5afdc9562a16a086757e203291a8ce1b018cefb
 
+# THE CEREMONY IS SPENT ONCE CSEL-000004 IS WRITTEN.
+#
+# This suite rehearses a freeze that installs /etc/kyri/fabric/csel-000004.json
+# and preflights against a store where CSEL-000004 does not yet exist. Once the
+# operator has performed the ceremony and the reviewer has accepted the write,
+# neither precondition can ever hold again.
+#
+# Deleting the suite would delete the evidence; leaving it asserting a vanished
+# world would make it fail forever for the one reason that is not a defect. So
+# it branches on the fact, as the CINST and CROUTE rehearsals do.
+#
+# DURABLE FACTS ONLY. The whole-store aggregate is deliberately NOT pinned here:
+# it moves with every later write in the chain, and pinning it is the defect
+# that broke the CINST-000006 spent mode when CROUTE-0006 landed. What is
+# asserted instead never expires -- Fabric records are immutable, so the record
+# this ceremony produced is still byte-for-byte what was accepted, the frozen
+# input is still the reviewed body, the committed inert input still equals both,
+# and the sequence is at or past the identifier the write allocated.
+ACCEPTED_RECORD=/var/lib/kyri/fabric/capability-selections/CSEL-000004.yaml
+ACCEPTED_RECORD_SHA256=5e58396f3e6937701f07c8b7f2aabbfdb7483213f801358e5ea369eb223aaf24
+POST_WRITE_SELECTION_SEQ=4
+
 FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
@@ -82,6 +104,82 @@ aggregate() {
 
 PRODUCTION_BEFORE="$(aggregate "${PRODUCTION_FABRIC}")"
 FROZEN_BEFORE="$(aggregate "${PRODUCTION_FROZEN}")"
+
+# ---- has the ceremony been performed? -------------------------------------
+
+if [[ -e "${ACCEPTED_RECORD}" ]]; then
+  printf '\n--- the CSEL-000004 ceremony is spent ---\n'
+  pass "CSEL-000004 is written in production; the freeze cannot be rehearsed again"
+
+  if [[ "${PRODUCTION_BEFORE}" == "${PRODUCTION_BASELINE}" ]]; then
+    pass "production Fabric is still at the aggregate this write produced"
+  else
+    pass "production Fabric has moved on to ${PRODUCTION_BEFORE}, as later writes require"
+  fi
+
+  record_sha="$(sha256sum "${ACCEPTED_RECORD}" | cut -d' ' -f1)"
+  if [[ "${record_sha}" == "${ACCEPTED_RECORD_SHA256}" ]]; then
+    pass "the persisted CSEL-000004 record is the accepted one (${ACCEPTED_RECORD_SHA256})"
+  else
+    fail "the persisted CSEL-000004 record is ${record_sha}, accepted ${ACCEPTED_RECORD_SHA256}"
+  fi
+
+  if grep -qF -- "${REVIEWED_DIGEST}" "${ACCEPTED_RECORD}"; then
+    pass "the persisted record carries the reviewed request digest"
+  else
+    fail "the persisted record does not carry the reviewed request digest"
+  fi
+
+  # A selection is the one record whose identity does not settle its
+  # correctness, so what it chose and what governed the choice are asserted by
+  # name rather than assumed from the digest.
+  for needle in 'selection_id: CSEL-000004' \
+                'selected_instance_id: CINST-000006' \
+                'route_id: CROUTE-0006' \
+                'route_version: 6' \
+                'excluded_candidates: []'; do
+    if grep -qF -- "${needle}" "${ACCEPTED_RECORD}"; then
+      pass "the persisted selection records ${needle}"
+    else
+      fail "the persisted selection does not record ${needle}"
+    fi
+  done
+
+  seq_now="$(cat "${PRODUCTION_FABRIC}/sequences/capability-selection.seq")"
+  if [[ "${seq_now}" =~ ^[0-9]+$ ]] && (( seq_now >= POST_WRITE_SELECTION_SEQ )); then
+    pass "capability-selection.seq is ${seq_now}, at or past the ${POST_WRITE_SELECTION_SEQ} this write allocated"
+  else
+    fail "capability-selection.seq is ${seq_now}, below the ${POST_WRITE_SELECTION_SEQ} this write allocated"
+  fi
+
+  frozen_prod="${PRODUCTION_FROZEN}/csel-000004.json"
+  if [[ -f "${frozen_prod}" ]] \
+     && [[ "$(sha256sum "${frozen_prod}" | cut -d' ' -f1)" == "${REVIEWED_SHA256}" ]] \
+     && [[ "$(wc -c < "${frozen_prod}")" == "${REVIEWED_BYTES}" ]]; then
+    pass "the frozen input in production is the reviewed body, ${REVIEWED_BYTES} bytes"
+  else
+    fail "the frozen input in production is not the reviewed body"
+  fi
+
+  if [[ "$(sha256sum "${INERT_BODY}" | cut -d' ' -f1)" == "${REVIEWED_SHA256}" ]]; then
+    pass "the committed inert input is still the reviewed body"
+  else
+    fail "the committed inert input has drifted from the reviewed body"
+  fi
+  if cmp -s "${INERT_BODY}" "${frozen_prod}"; then
+    pass "the committed inert input is byte-identical to the frozen input that was written"
+  else
+    fail "the committed inert input differs from the frozen input in production"
+  fi
+
+  printf '\n'
+  if (( FAILURES == 0 )); then
+    printf 'CSEL-000004 freeze rehearsal: ceremony spent, accepted write verified.\n'
+    exit 0
+  fi
+  printf 'CSEL-000004 freeze rehearsal FAILED: %d\n' "${FAILURES}" >&2
+  exit 1
+fi
 
 if [[ "${PRODUCTION_BEFORE}" == "${PRODUCTION_BASELINE}" ]]; then
   pass "production Fabric is at the pinned post-CROUTE baseline before the rehearsal"
