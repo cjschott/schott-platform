@@ -119,7 +119,7 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=124
+  TOTAL_STEPS=125
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
   TOTAL_STEPS=149
