@@ -61,6 +61,26 @@ FABRIC_BASELINE=a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
 CINV_SEQ_BEFORE=2
 CRES_SEQ_BEFORE=1
 
+# THE CEREMONY IS SPENT ONCE THE WORK AREA EXISTS.
+#
+# This suite rehearses a ceremony whose first refusal is "the work area must
+# not already exist". Once the operator has performed Stage 0 and the reviewer
+# has accepted it, that precondition can never hold again.
+#
+# Deleting the suite would delete the evidence; leaving it asserting a vanished
+# world would make it fail forever for the one reason that is not a defect. So
+# it branches on the fact, as the Fabric freeze rehearsals do.
+#
+# DURABLE FACTS ONLY. Stage 0's output is a work area, and what stays true
+# about it is its security properties and the bytes it holds -- not any
+# whole-store aggregate. The runtime aggregate is deliberately NOT pinned here:
+# Stage 1 legitimately moves it, and pinning it is the defect that broke the
+# CINST-000006 spent mode when CROUTE-0006 landed. What IS asserted is the
+# thing Stage 0 is responsible for: that it allocated nothing, which is proved
+# by the invocation sequence never having gone below the 2 it left behind.
+STAGE0_CINV_SEQ=2
+STAGE0_CRES_SEQ=1
+
 FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
@@ -80,8 +100,107 @@ if [[ "${PRODUCTION_FABRIC_BEFORE}" == "${FABRIC_BASELINE}" ]]; then
 else
   fail "production Fabric is ${PRODUCTION_FABRIC_BEFORE}, not the pinned ${FABRIC_BASELINE}"
 fi
+# ---- has the ceremony been performed? -------------------------------------
+
 if [[ -e "${PRODUCTION_WORK}" ]]; then
-  fail "the production work area already exists; this suite will not rehearse over it"
+  printf '\n--- the Stage 0 ceremony is spent ---\n'
+  pass "the work area exists; Stage 0 cannot be rehearsed again"
+
+  if [[ "$(stat -c '%u' "${PRODUCTION_WORK}")" == "1000" ]]; then
+    pass "the work root is owned by uid 1000"
+  else
+    fail "the work root is owned by uid $(stat -c '%u' "${PRODUCTION_WORK}")"
+  fi
+  if [[ "$(stat -c '%a' "${PRODUCTION_WORK}")" == "700" ]]; then
+    pass "the work root is mode 0700"
+  else
+    fail "the work root is mode $(stat -c '%a' "${PRODUCTION_WORK}")"
+  fi
+
+  spent_payload="${PRODUCTION_WORK}/third-invoke.json"
+  if [[ -f "${spent_payload}" ]]; then
+    pass "the reviewed payload is in the work area"
+  else
+    fail "the reviewed payload is absent from the work area"
+    exit 1
+  fi
+  for check in "uid:%u:1000" "mode:%a:600" "links:%h:1" "bytes:%s:${REVIEWED_RAW_BYTES}"; do
+    label="${check%%:*}"; rest="${check#*:}"
+    fmt="${rest%%:*}"; want="${rest##*:}"
+    got="$(stat -c "${fmt}" "${spent_payload}")"
+    if [[ "${got}" == "${want}" ]]; then
+      pass "the payload ${label} is ${want}"
+    else
+      fail "the payload ${label} is ${got}, expected ${want}"
+    fi
+  done
+  if [[ "$(sha256sum "${spent_payload}" | cut -d' ' -f1)" == "${REVIEWED_RAW}" ]]; then
+    pass "the payload raw sha256 is ${REVIEWED_RAW}"
+  else
+    fail "the payload raw sha256 has drifted"
+  fi
+  if cmp -s "${spent_payload}" "${PAYLOAD}"; then
+    pass "the payload is byte-identical to the committed payload"
+  else
+    fail "the payload differs from the committed payload"
+  fi
+
+  # The canonical digest, through the released canonicalizer -- the value Stage
+  # 1 will record as payload_digest.
+  if spent_canon="$(cd "${ROOT}" && python3 - "${spent_payload}" <<'SPENT_CANON_PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+from tools.capability.invocation_identity import canonical_bytes
+
+blob = canonical_bytes(json.loads(pathlib.Path(sys.argv[1]).read_bytes()))
+print(hashlib.sha256(blob).hexdigest())
+print(len(blob))
+SPENT_CANON_PY
+  )"; then
+    if [[ "$(printf '%s' "${spent_canon}" | sed -n 1p)" == "${REVIEWED_CANONICAL}" ]] \
+       && [[ "$(printf '%s' "${spent_canon}" | sed -n 2p)" == "${REVIEWED_CANONICAL_BYTES}" ]]; then
+      pass "the canonical digest is still ${REVIEWED_CANONICAL} (${REVIEWED_CANONICAL_BYTES} bytes)"
+    else
+      fail "the canonical digest has drifted: ${spent_canon}"
+    fi
+  else
+    fail "the released canonicalizer could not be run over the spent payload"
+  fi
+
+  # STAGE 0 ALLOCATED NOTHING, and that stays provable after Stage 1 lands:
+  # sequences are monotonic, so one that never fell below what Stage 0 left is
+  # one Stage 0 never advanced. The whole-store aggregate is deliberately not
+  # pinned -- Stage 1 moves it by design.
+  seq_now="$(cat "${PRODUCTION_RUNTIME}/sequences/capability-invocation.seq")"
+  if [[ "${seq_now}" =~ ^[0-9]+$ ]] && (( seq_now >= STAGE0_CINV_SEQ )); then
+    pass "capability-invocation.seq is ${seq_now}, at or past the ${STAGE0_CINV_SEQ} Stage 0 left"
+  else
+    fail "capability-invocation.seq is ${seq_now}, below the ${STAGE0_CINV_SEQ} Stage 0 left"
+  fi
+  res_now="$(cat "${PRODUCTION_RUNTIME}/sequences/capability-result.seq")"
+  if [[ "${res_now}" =~ ^[0-9]+$ ]] && (( res_now >= STAGE0_CRES_SEQ )); then
+    pass "capability-result.seq is ${res_now}, at or past the ${STAGE0_CRES_SEQ} Stage 0 left"
+  else
+    fail "capability-result.seq is ${res_now}, below the ${STAGE0_CRES_SEQ} Stage 0 left"
+  fi
+
+  # The committed ceremony still describes what was done.
+  if grep -qF -- "${REVIEWED_RAW}" "${ARTIFACT}" \
+     && grep -qF -- "${REVIEWED_CANONICAL}" "${ARTIFACT}"; then
+    pass "the committed Stage 0 ceremony still pins both reviewed digests"
+  else
+    fail "the committed Stage 0 ceremony no longer pins the reviewed digests"
+  fi
+
+  printf '\n'
+  if (( FAILURES == 0 )); then
+    printf 'CINV-000003 Stage 0 rehearsal: ceremony spent, accepted work area verified.\n'
+    exit 0
+  fi
+  printf 'CINV-000003 Stage 0 rehearsal FAILED: %d\n' "${FAILURES}" >&2
   exit 1
 fi
 
