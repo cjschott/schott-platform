@@ -1,0 +1,393 @@
+#!/usr/bin/env bash
+# CINV-000002 ADMINISTRATIVE ABANDONMENT, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# =====================================================================
+# WHAT THIS IS, AND WHAT IT IS NOT
+# =====================================================================
+#
+# CINV-000002 is stuck at `launch_authorized`. It already has a terminal result
+# -- CRES-000001, outcome_class `provider-error` -- so the question it asked was
+# answered on 2026-09-13. Its lifecycle never advanced, so it has held an
+# execution slot ever since. Together with CINV-000001 it holds both, and every
+# later invocation is refused with `CapacityExhausted` before it mutates
+# anything.
+#
+# This closes it, permanently and administratively, and reclaims its slot.
+#
+# IT IS NOT A REPAIR AND NOT A FORCE. `capability abandon` takes one CINV, one
+# controlled reason from a closed set the parser enforces, and NO target state:
+# there is no --to, no --force and no --state. It deletes nothing. CINV-000002,
+# CRES-000001, the launch authorisation and the published handoff are all left
+# exactly as they are, and this block proves it by digest afterwards.
+#
+# IT DOES NOT CLAIM THE INVOCATION COMPLETED. `abandoned` is not `released`.
+# `released` means the work ran and was classified, collected and cleaned.
+# `abandoned` means the invocation was permanently administratively closed
+# WITHOUT asserting any of that. The difference is the point, and ADR-0015 is
+# why the two are separate states rather than one convenient one.
+#
+# IT FABRICATES NO EXECUTION EVIDENCE. No CRES is written. CRES-000001 already
+# exists and is referenced, not rewritten.
+#
+# MAXIMUM_SLOTS IS UNCHANGED at 2. The ceiling was never the defect; the defect
+# was that a slot could never be given back.
+#
+# =====================================================================
+# THE ORDER, AND WHY BLOCK A COMES FIRST
+# =====================================================================
+#
+# Abandoning an invocation removes it from the recovery enumeration. If a
+# container could still exist for it, this would close the one surface that
+# would have found it. The engine does not attempt to prove container absence
+# -- that is what `recover` and the reconciliation verbs are for -- so the
+# OPERATOR proves it here, before the closure, and BLOCK B gates on the witness.
+#
+# This reclaims ONE slot. CINV-000001 is a separate ceremony and a separate
+# authorisation; do not do both here.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# =====================================================================
+# BLOCK A -- CONTAINER OBSERVATION. READ-ONLY. RUN THIS FIRST.
+# =====================================================================
+#
+# `runuser` inherits the caller's working directory and kyri-capability cannot
+# traverse /opt/schott-platform, so this runs from /tmp. Nothing is pulled,
+# built, loaded or retagged.
+bash <<'OBSERVE'
+set -Eeuo pipefail
+WITNESS=/data/kyri/work/g11bcv-cinv-000002-witness
+TARGET=kyri-CINV-000002
+
+cd /tmp
+
+printf '\n--- containers ---\n'
+CONTAINERS="$(sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman ps -a --format '{{.Names}} {{.Status}}')"
+printf '%s\n' "${CONTAINERS}"
+
+# No container for the invocation about to be closed. If one exists, it must be
+# reconciled through the §20 administrative verbs FIRST -- abandonment is not a
+# way around container reconciliation.
+if printf '%s' "${CONTAINERS}" | grep -q "${TARGET}"; then
+  echo "REFUSE: a ${TARGET} container exists; reconcile it before abandoning the invocation"
+  exit 1
+fi
+printf 'ok  no %s container\n' "${TARGET}"
+
+umask 077
+printf 'cinv-000002-observation\nno-container %s\n' "${TARGET}" > "${WITNESS}"
+printf 'ok  witness written to %s\n' "${WITNESS}"
+OBSERVE
+
+# =====================================================================
+# BLOCK B -- THE GATES AND THE ONE ADMINISTRATIVE CLOSURE
+# =====================================================================
+bash <<'ABANDON_CINV2'
+set -Eeuo pipefail
+RUNTIME=/data/kyri/capability-runtime
+WITNESS=/data/kyri/work/g11bcv-cinv-000002-witness
+WITNESS_MAXIMUM_AGE=900
+
+TARGET=CINV-000002
+REASON=terminal-result-lifecycle-stranded
+ACTOR=primary-platform-operator
+REQUEST_ID=g11bcv-reclaim-cinv-000002
+
+# The runtime as G11-BC-U left it, with CINV-000003 prepared and nothing since.
+RUNTIME_BEFORE=6202e1ecb7ce54cb6a90176ab1c5aff41438319f4c5a4f50e3f46dd705092e6f
+
+# The immutable records, by observed digest. None of them may change.
+SHA_CINV1=1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa
+SHA_CINV2=923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa
+SHA_CINV3=c0941b7d45dcccac4bb28d00f942ea63aa90cd46ed55767797363f1ed1accaf2
+SHA_CRES1=18ba4c3428f3b87a033abdeb54feb63a4cda6c8c41597e5ab591e7e7a7396f2d
+
+# Sequences that this operation does not allocate from, and must not move.
+CINV_SEQ=3
+CRES_SEQ=1
+
+printf '\n--- observation witness gate ---\n'
+test -f "${WITNESS}" \
+  || { echo "REFUSE: ${WITNESS} is absent; run BLOCK A first"; exit 1; }
+test "$(stat -c '%u' "${WITNESS}")" = "1000" \
+  || { echo "REFUSE: the witness is not owned by uid 1000"; exit 1; }
+AGE=$(( $(date +%s) - $(stat -c '%Y' "${WITNESS}") ))
+test "${AGE}" -ge 0 \
+  || { echo "REFUSE: the witness is dated in the future"; exit 1; }
+test "${AGE}" -le "${WITNESS_MAXIMUM_AGE}" \
+  || { echo "REFUSE: the observation is ${AGE}s old, older than ${WITNESS_MAXIMUM_AGE}s; re-run BLOCK A"; exit 1; }
+grep -qx "no-container kyri-${TARGET}" "${WITNESS}" \
+  || { echo "REFUSE: the witness does not record the absence of a kyri-${TARGET} container"; exit 1; }
+printf 'ok  observation %ss old, container absence recorded\n' "${AGE}"
+
+printf '\n--- runtime baseline gate ---\n'
+NOW="$(find "${RUNTIME}" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+test "${NOW}" = "${RUNTIME_BEFORE}" \
+  || { echo "REFUSE: the capability-runtime store has moved: ${NOW}, expected ${RUNTIME_BEFORE}"; exit 1; }
+printf 'ok  runtime  %s\n' "${NOW}"
+
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "${CINV_SEQ}" \
+  || { echo "REFUSE: capability-invocation.seq is not ${CINV_SEQ}"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "${CRES_SEQ}" \
+  || { echo "REFUSE: capability-result.seq is not ${CRES_SEQ}"; exit 1; }
+printf 'ok  capability-invocation.seq %s, capability-result.seq %s\n' "${CINV_SEQ}" "${CRES_SEQ}"
+
+printf '\n--- immutable records gate ---\n'
+check_sha() {
+  local path="$1" want="$2" got
+  got="$(sha256sum "${path}" | cut -d' ' -f1)"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: $(basename "${path}") is ${got}, expected ${want}"; exit 1; }
+  printf 'ok  %-16s %s\n' "$(basename "${path}")" "${got}"
+}
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" "${SHA_CINV1}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" "${SHA_CINV2}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000003.yaml" "${SHA_CINV3}"
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml" "${SHA_CRES1}"
+
+printf '\n--- lifecycle and occupancy gate ---\n'
+GATE_DIR="$(mktemp -d)"
+trap 'rm -rf "${GATE_DIR}"' EXIT
+
+# >>> GATE_OCCUPANCY_BEGIN
+# Read through the released modules, so "which states hold a slot" is answered
+# by the capacity model rather than restated here.
+if ! python3 - "${TARGET}" <<'STATE_PY'
+import os
+import sys
+
+sys.path.insert(0, "/opt/schott-platform")
+from tools.capability import cli
+from tools.capability.execution import capacity as capacity_module
+from tools.capability.execution import state as state_module
+from tools.capability.execution.types import LifecycleState
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+target = sys.argv[1]
+root = cli._anchored(os.path.join(cli.CAPABILITY_RUNTIME_ROOT, "execution"))
+try:
+    states = state_module.all_states(root)
+    holding = capacity_module.slot_holding_states()
+    occupied = {c: s for c, s in states.items() if s in holding}
+    for cinv, state in sorted(states.items()):
+        print(f"{cinv}  {state.value}")
+    print(f"occupancy {len(occupied)} of {capacity_module.MAXIMUM_SLOTS}")
+
+    if capacity_module.MAXIMUM_SLOTS != 2:
+        refuse("MAXIMUM_SLOTS is not 2; this ceremony was reviewed against 2")
+    if len(occupied) != capacity_module.MAXIMUM_SLOTS:
+        refuse(f"occupancy is {len(occupied)}, and this ceremony was reviewed "
+               f"at {capacity_module.MAXIMUM_SLOTS} of "
+               f"{capacity_module.MAXIMUM_SLOTS}")
+    if set(occupied) != {"CINV-000001", "CINV-000002"}:
+        refuse(f"the slots are held by {sorted(occupied)}, not by "
+               "CINV-000001 and CINV-000002")
+    if states.get(target) is not LifecycleState.LAUNCH_AUTHORIZED:
+        refuse(f"{target} is {states.get(target)}, not launch_authorized")
+    if "CINV-000003" in states:
+        refuse("CINV-000003 already has execution state; Stage 2 has run")
+
+    print("ok  2 of 2 held, by CINV-000001 and CINV-000002")
+    print("ok  CINV-000002 is launch_authorized")
+    print("ok  CINV-000003 has no execution state")
+finally:
+    root.close()
+STATE_PY
+then
+  echo "REFUSE: the lifecycle and occupancy gate failed"
+  exit 1
+fi
+# <<< GATE_OCCUPANCY_END
+
+printf '\n========================================================\n'
+printf 'ALL GATES PASSED. THE NEXT COMMAND IS IRREVERSIBLE.\n'
+printf 'It permanently closes %s and reclaims one execution slot.\n' "${TARGET}"
+printf 'It does NOT claim the invocation completed.\n'
+printf '========================================================\n'
+
+# ---- THE ONE ADMINISTRATIVE CLOSURE -------------------------------------
+printf '\n--- capability abandon (production) ---\n'
+OUT="${GATE_DIR}/abandon.json"
+set +e
+python3 -m tools.capability.cli abandon \
+  --expected-uid 1000 --expected-gid 1000 \
+  --cinv "${TARGET}" \
+  --actor "${ACTOR}" \
+  --request-id "${REQUEST_ID}" \
+  --recorded-at "$(date -Is)" \
+  --reason "${REASON}" \
+  > "${OUT}"
+RC=$?
+set -e
+cat "${OUT}"
+printf 'process rc=%s\n' "${RC}"
+
+test "${RC}" = "0" \
+  || { echo "REFUSE: the process exited ${RC}, and the released contract returns 0; STOP AND REPORT"; exit 1; }
+printf 'ok  process rc 0\n'
+
+# ---- THE VERDICT --------------------------------------------------------
+printf '\n--- the verdict ---\n'
+# >>> VERDICT_CHECK_BEGIN
+if ! python3 - "${OUT}" "${TARGET}" "${REASON}" <<'VERDICT_PY'
+import json
+import sys
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    print("STOP AND REPORT. The closure may be durable; do not re-run blindly.")
+    sys.exit(1)
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    refuse(f"the verdict is not readable JSON ({exc})")
+
+target, reason = sys.argv[2], sys.argv[3]
+
+if result.get("cinv") != target:
+    refuse(f"the verdict names {result.get('cinv')}, not {target}")
+if result.get("lifecycle_state") != "abandoned":
+    refuse(f"the lifecycle state is {result.get('lifecycle_state')}, not abandoned")
+if result.get("previous_state") != "launch_authorized":
+    refuse(f"the previous state is {result.get('previous_state')}, not launch_authorized")
+if result.get("reason") != reason:
+    refuse(f"the reason is {result.get('reason')}, not {reason}")
+if result.get("result_record_id") != "CRES-000001":
+    refuse(f"the referenced result is {result.get('result_record_id')}, not CRES-000001")
+if result.get("slot_released") is not True:
+    refuse("no slot was released")
+if result.get("resumed") is not False:
+    refuse("the verdict reports a resume; this was meant to be the first closure")
+cadm = result.get("cadm")
+if not isinstance(cadm, str) or not cadm.startswith("CADM-"):
+    refuse(f"the administrative identity is {cadm!r}")
+
+print(f"ok  cinv             {target}")
+print("ok  previous_state   launch_authorized")
+print("ok  lifecycle_state  abandoned")
+print(f"ok  reason           {reason}")
+print("ok  result_record_id CRES-000001 -- referenced, not rewritten")
+print("ok  slot_released    true")
+print(f"ok  cadm             {cadm}")
+VERDICT_PY
+then
+  echo "REFUSE: the abandonment verdict is not the reviewed one"
+  exit 1
+fi
+# <<< VERDICT_CHECK_END
+
+CADM="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["cadm"])' "${OUT}")"
+
+# ---- WHAT THE STORE NOW HOLDS -------------------------------------------
+printf '\n--- the immutable records are untouched ---\n'
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" "${SHA_CINV1}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" "${SHA_CINV2}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000003.yaml" "${SHA_CINV3}"
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml" "${SHA_CRES1}"
+
+printf '\n--- no result was fabricated, and no identity allocated ---\n'
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "${CINV_SEQ}" \
+  || { echo "REFUSE: capability-invocation.seq moved"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "${CRES_SEQ}" \
+  || { echo "REFUSE: capability-result.seq moved; a result was allocated"; exit 1; }
+test ! -e "${RUNTIME}/capability-results/CRES-000002.yaml" \
+  || { echo "REFUSE: CRES-000002 exists; a result was fabricated"; exit 1; }
+printf 'ok  sequences unchanged, no CRES-000002\n'
+
+printf '\n--- the administrative evidence ---\n'
+find "${RUNTIME}/execution/admin-records/${CADM}" -printf '%M %u:%g %s %p\n' | sort
+cat "${RUNTIME}/execution/admin-records/${CADM}/abandonment"; printf '\n'
+
+printf '\n--- the lifecycle and the reclaimed slot ---\n'
+# >>> AFTER_CHECK_BEGIN
+if ! python3 - "${TARGET}" <<'AFTER_PY'
+import os
+import sys
+
+sys.path.insert(0, "/opt/schott-platform")
+from tools.capability import cli
+from tools.capability.execution import capacity as capacity_module
+from tools.capability.execution import state as state_module
+from tools.capability.execution.types import LifecycleState
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+target = sys.argv[1]
+root = cli._anchored(os.path.join(cli.CAPABILITY_RUNTIME_ROOT, "execution"))
+try:
+    states = state_module.all_states(root)
+    holding = capacity_module.slot_holding_states()
+    occupied = {c: s for c, s in states.items() if s in holding}
+    for cinv, state in sorted(states.items()):
+        print(f"{cinv}  {state.value}")
+    print(f"occupancy {len(occupied)} of {capacity_module.MAXIMUM_SLOTS}")
+
+    if states.get(target) is not LifecycleState.ABANDONED:
+        refuse(f"{target} is {states.get(target)}, not abandoned")
+    if states.get("CINV-000001") is not LifecycleState.LAUNCH_AUTHORIZED:
+        refuse("CINV-000001 is not still launch_authorized; it was not this "
+               "ceremony's to touch")
+    if "CINV-000003" in states:
+        refuse("CINV-000003 gained execution state during this ceremony")
+    if len(occupied) != 1:
+        refuse(f"occupancy is {len(occupied)}, expected exactly 1 of "
+               f"{capacity_module.MAXIMUM_SLOTS}")
+    if set(occupied) != {"CINV-000001"}:
+        refuse(f"the remaining slot is held by {sorted(occupied)}, not CINV-000001")
+
+    print(f"ok  {target} is abandoned -- closed, not released")
+    print("ok  CINV-000001 untouched and still holding its slot")
+    print("ok  CINV-000003 has no execution state")
+    print(f"ok  occupancy 2 -> 1 of {capacity_module.MAXIMUM_SLOTS}")
+finally:
+    root.close()
+AFTER_PY
+then
+  echo "REFUSE: the post-closure state is not the reviewed one"
+  exit 1
+fi
+# <<< AFTER_CHECK_END
+
+rm -rf "${GATE_DIR}"
+trap - EXIT
+
+printf '\n========================================================\n'
+printf 'CINV-000002 IS CLOSED. ONE SLOT RECLAIMED. STOP HERE.\n'
+printf 'Do NOT abandon CINV-000001 in this ceremony.\n'
+printf 'Do NOT run CINV-000003 Stage 2.\n'
+printf 'Both are separate authorisations.\n'
+printf '========================================================\n'
+ABANDON_CINV2
+
+# EXPECTED:
+#   witness      container absence for kyri-CINV-000002, under 900s old
+#   runtime      6202e1ecb7ce54cb6a90176ab1c5aff41438319f4c5a4f50e3f46dd705092e6f
+#   occupancy    2 of 2, held by CINV-000001 and CINV-000002
+#   rc           0
+#   verdict      cinv CINV-000002, previous_state launch_authorized,
+#                lifecycle_state abandoned, reason terminal-result-lifecycle-stranded,
+#                result_record_id CRES-000001, slot_released true, resumed false
+#   records      CINV-000001/2/3 and CRES-000001 all byte-identical
+#   sequences    capability-invocation.seq 3, capability-result.seq 1, no CRES-000002
+#   evidence     admin-records/CADM-NNNNNN/{intent,abandonment,outcome}
+#   occupancy    1 of 2, held by CINV-000001
+#
+# Return this output. CINV-000001 and CINV-000003 Stage 2 are separate
+# authorisations.
