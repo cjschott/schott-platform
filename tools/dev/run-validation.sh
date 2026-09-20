@@ -122,7 +122,7 @@ if (( QUICK == 1 )); then
   TOTAL_STEPS=124
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=148
+  TOTAL_STEPS=149
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
