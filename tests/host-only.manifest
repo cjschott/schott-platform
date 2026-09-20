@@ -53,3 +53,4 @@ test-fabric-freeze-cinst-000006-rehearsal.sh	runs the whole CINST-000006 freeze 
 test-fabric-freeze-croute-0006-rehearsal.sh	runs the whole CROUTE-0006 freeze block against a fixture copied from the production Fabric and frozen inputs
 test-fabric-freeze-csel-000004-rehearsal.sh	runs the whole CSEL-000004 freeze block against a fixture copied from the production Fabric and frozen inputs
 test-capability-cinv-000003-stage-0-rehearsal.sh	runs the whole CINV-000003 Stage 0 ceremony against a fixture copied from the production Fabric and capability-runtime stores
+test-capability-cinv-000003-stage-1-rehearsal.sh	runs the whole CINV-000003 Stage 1 ceremony against a fixture copied from the production Fabric, capability-runtime and accepted Stage 0 work area

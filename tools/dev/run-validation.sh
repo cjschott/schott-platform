@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=122
+  TOTAL_STEPS=123
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=147
+  TOTAL_STEPS=148
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -620,6 +620,16 @@ run "Fabric freeze CSEL-000004 rehearsal" \
 # stores. Writes only inside its own fixture.
 run "CINV-000003 Stage 0 rehearsal" \
   bash tests/test-capability-cinv-000003-stage-0-rehearsal.sh
+
+# G11-BC-T. The whole CINV-000003 Stage 1 ceremony, end to end. Stage 1 is the
+# FIRST IRREVERSIBLE STEP: it allocates the invocation identity, and the
+# identity is spent even when the invocation is refused. So every sabotage
+# asserts not only that the block refused but that the fixture's
+# capability-invocation.seq never moved -- an identity spent in a rehearsal is
+# an identity the gate failed to protect. Host-only: it needs the governed
+# stores and the accepted Stage 0 work area.
+run "CINV-000003 Stage 1 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-1-rehearsal.sh
 
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,

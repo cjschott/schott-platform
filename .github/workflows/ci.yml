@@ -555,6 +555,12 @@ jobs:
       - name: CINV-000003 Stage 0 rehearsal
         run: bash tests/test-capability-cinv-000003-stage-0-rehearsal.sh
 
+      # The whole CINV-000003 Stage 1 ceremony -- the first irreversible step.
+      # Every sabotage proves no invocation identity was spent. Host-only:
+      # skips here.
+      - name: CINV-000003 Stage 1 rehearsal
+        run: bash tests/test-capability-cinv-000003-stage-1-rehearsal.sh
+
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
       - name: Capability execution quarantine tests
