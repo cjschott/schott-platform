@@ -264,13 +264,17 @@ def refuses(action, classification, what):
 
 # --- the closed verb set ----------------------------------------------------
 
-run_case "the verb set is exactly the fourteen §20 verbs" "${PRELUDE}
+# Fifteen since ADR-0015. `abandon` is a reviewed closed-set addition, not a
+# convenience: it permanently closes one stuck invocation so its execution slot
+# can be reclaimed, and it is the only verb here that does not reach a
+# container. It carries no destruction authority, which the next case proves.
+run_case "the verb set is exactly the fifteen accepted verbs" "${PRELUDE}
 expected = {'retain', 'destroy', 'retain-residue', 'retry-cleanup',
             'retain-collision', 'destroy-collision', 'retain-start-unknown',
             'destroy-start-unknown', 'retain-lifecycle-failure',
             'destroy-lifecycle-failure', 'acknowledge-state-lost',
             'retain-quarantine-incomplete', 'retain-quarantine-residue',
-            'inspect-admin-integrity'}
+            'inspect-admin-integrity', 'abandon'}
 actual = {verb.value for verb in A.Verb}
 assert actual == expected, sorted(actual ^ expected)
 for invented in ('delete', 'cleanup', 'podman', 'repair', 'force', 'exec',
@@ -286,7 +290,19 @@ print('OK')
 run_case "only inspection is non-mutating and only it allocates no CADM" "${PRELUDE}
 mutating = {v for v in A.Verb if A.is_mutating(v)}
 assert A.Verb.INSPECT_ADMIN_INTEGRITY not in mutating
-assert len(mutating) == 13, len(mutating)
+assert A.Verb.ABANDON in mutating
+assert len(mutating) == 14, len(mutating)
+print('OK')
+"
+
+# ADR-0015. Abandonment closes a lifecycle; it must never be able to destroy a
+# container, and the mapping that grants destruction authority is where that is
+# decided rather than in prose about it.
+run_case "abandon carries no destruction authority" "${PRELUDE}
+assert A.Verb.ABANDON not in A._DESTROYS_UNDER, A._DESTROYS_UNDER
+destroyers = {v.value for v in A._DESTROYS_UNDER}
+assert destroyers == {'destroy', 'destroy-collision', 'destroy-start-unknown',
+                      'destroy-lifecycle-failure'}, destroyers
 print('OK')
 "
 

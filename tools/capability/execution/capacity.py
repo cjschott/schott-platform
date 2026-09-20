@@ -37,16 +37,49 @@ from .types import Classification, LifecycleState, SlotReservation
 
 MAXIMUM_SLOTS = 2
 
-# Every state except RELEASED holds its slot. Quarantine and reconciliation
-# conditions live inside this range deliberately: a slot stays held until the
-# invocation is finished with, which is what makes two stuck quarantines able
-# to halt new execution rather than silently oversubscribing the host.
-CAPACITY_CONSUMING_STATES = tuple(
-    s for s in LifecycleState if s is not LifecycleState.RELEASED)
+# THE STATES THAT DO NOT HOLD A SLOT, enumerated. Everything else does.
+#
+# Stated as an exclusion rather than an inclusion on purpose: a lifecycle state
+# added later then holds a slot until somebody decides otherwise, which is the
+# safe direction. An inclusive list would silently let a new state consume
+# nothing and oversubscribe the host.
+#
+# Quarantine and reconciliation conditions stay inside the holding range
+# deliberately: a slot is held until the invocation is finished with, which is
+# what makes two stuck quarantines able to halt new execution rather than
+# silently oversubscribing the host.
+#
+# The two that are finished with:
+#   RELEASED   the normal lifecycle completed, through `cleaned`.
+#   ABANDONED  the invocation was permanently administratively closed WITHOUT
+#              asserting that it completed (ADR-0015). It is not `released`,
+#              and the difference is the point.
+NON_SLOT_HOLDING_STATES = frozenset({
+    LifecycleState.RELEASED,
+    LifecycleState.ABANDONED,
+})
 
-__all__ = ["MAXIMUM_SLOTS", "CAPACITY_CONSUMING_STATES", "LOCKS_DIRECTORY",
-           "CAPACITY_LOCK", "LockOrderViolation", "CapacityError",
-           "CapacityExhausted", "reserve", "release"]
+SLOT_HOLDING_STATES = tuple(
+    s for s in LifecycleState if s not in NON_SLOT_HOLDING_STATES)
+
+# Retained under its original name for callers that import it. It is the same
+# tuple; the meaning is now stated by SLOT_HOLDING_STATES.
+CAPACITY_CONSUMING_STATES = SLOT_HOLDING_STATES
+
+
+def slot_holding_states() -> tuple[LifecycleState, ...]:
+    """The states that hold an execution slot.
+
+    A function as well as a constant so a caller asking "does this state hold a
+    slot" has one answer to depend on rather than a set it might reconstruct.
+    """
+    return SLOT_HOLDING_STATES
+
+
+__all__ = ["MAXIMUM_SLOTS", "SLOT_HOLDING_STATES", "NON_SLOT_HOLDING_STATES",
+           "slot_holding_states", "CAPACITY_CONSUMING_STATES",
+           "LOCKS_DIRECTORY", "CAPACITY_LOCK", "LockOrderViolation",
+           "CapacityError", "CapacityExhausted", "reserve", "release"]
 
 
 class CapacityError(ValueError):
@@ -69,7 +102,7 @@ def _require_root(root: Any) -> RootDescriptor:
 
 
 def _consuming(root: RootDescriptor) -> dict[str, LifecycleState]:
-    consuming = CAPACITY_CONSUMING_STATES
+    consuming = SLOT_HOLDING_STATES
     return {cinv: value for cinv, value in state_module.all_states(root).items()
             if value in consuming}
 

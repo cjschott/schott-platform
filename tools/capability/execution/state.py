@@ -53,9 +53,18 @@ _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 # The transition relation, enumerated from the specification's §16 lifecycle.
 # Written out rather than derived from enum order so that adding a state to the
 # vocabulary does not silently create new legal transitions.
+#
+# ABANDONED (ADR-0015) is reachable from exactly two states, and they are the
+# two the COORDINATOR wrote before handing anything over. From `created`
+# onwards a container provably exists on the far side of the privilege drop,
+# and closing those administratively would strand it -- container
+# reconciliation is what the §20 admin verbs already have authority for, and
+# abandonment must not become a way around them.
 _ALLOWED: dict[LifecycleState, frozenset[LifecycleState]] = {
-    LifecycleState.RESERVED: frozenset({LifecycleState.LAUNCH_AUTHORIZED}),
-    LifecycleState.LAUNCH_AUTHORIZED: frozenset({LifecycleState.CREATED}),
+    LifecycleState.RESERVED: frozenset({LifecycleState.LAUNCH_AUTHORIZED,
+                                        LifecycleState.ABANDONED}),
+    LifecycleState.LAUNCH_AUTHORIZED: frozenset({LifecycleState.CREATED,
+                                                 LifecycleState.ABANDONED}),
     LifecycleState.CREATED: frozenset({LifecycleState.CONTAINER_VERIFIED}),
     LifecycleState.CONTAINER_VERIFIED: frozenset({LifecycleState.START_AUTHORIZED}),
     LifecycleState.START_AUTHORIZED: frozenset({LifecycleState.STARTED}),
@@ -66,6 +75,9 @@ _ALLOWED: dict[LifecycleState, frozenset[LifecycleState]] = {
     LifecycleState.COLLECTED: frozenset({LifecycleState.CLEANED}),
     LifecycleState.CLEANED: frozenset({LifecycleState.RELEASED}),
     LifecycleState.RELEASED: frozenset(),
+    # Terminal. Nothing leaves an administrative closure, including back into
+    # the normal cleanup progression.
+    LifecycleState.ABANDONED: frozenset(),
 }
 
 

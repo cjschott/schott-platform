@@ -97,6 +97,7 @@ BACKING_STORE_CONFIG = "/etc/kyri/backing-store.json"       # prod-path-referenc
 
 
 # Read from the bridge so the two can never disagree about what it spells.
+from .execution.abandonment import REASONS as _ABANDONMENT_REASONS
 from .execution.launch import LIFECYCLE_STATE as LAUNCH_AUTHORIZED_STATE
 
 _MOUNTINFO = "/proc/self/mountinfo"
@@ -715,6 +716,57 @@ def _helper_launcher():
     return module.HelperLauncher()
 
 
+def command_abandon(args) -> int:
+    """Permanently close one stuck invocation administratively, and stop.
+
+    **It is not a force-transition and it is not a repair.** It closes exactly
+    one invocation, only from the two states the coordinator wrote before
+    handing anything over, only under a controlled reason that must agree with
+    what the store already holds, and it deletes nothing. The `CINV`, any
+    `CRES`, the launch authorisation and the published handoff are all left
+    exactly as they are.
+
+    **Every judgement belongs to `abandonment.abandon`.** This opens the ruled
+    roots, hands them over, and reports what came back.
+    """
+    from .execution import abandonment
+
+    try:
+        store = CapabilityStore(CAPABILITY_RUNTIME_ROOT,
+                                expected_uid=args.expected_uid,
+                                expected_gid=args.expected_gid)
+    except CapabilityError as error:
+        raise _Unusable(
+            f"the capability runtime store is unusable ({error})") from None
+
+    execution_root = _anchored(os.path.join(CAPABILITY_RUNTIME_ROOT, "execution"))
+    try:
+        outcome = abandonment.abandon(
+            store=store, execution_root=execution_root, cinv=args.cinv,
+            actor=args.actor, request_id=args.request_id,
+            recorded_at=args.recorded_at, reason=args.reason)
+    except ValueError as error:
+        # Every governed refusal in the execution plane subclasses ValueError,
+        # so a refusal added later arrives here as a clean denial instead of a
+        # traceback.
+        print(f"capability: {type(error).__name__}: {error}", file=sys.stderr)
+        return EXIT_DENIED
+    finally:
+        execution_root.close()
+
+    _emit({
+        "cinv": outcome.cinv,
+        "cadm": outcome.cadm,
+        "previous_state": outcome.previous_state,
+        "lifecycle_state": outcome.state,
+        "reason": outcome.reason,
+        "result_record_id": outcome.result_record_id,
+        "slot_released": outcome.slot_released,
+        "resumed": outcome.resumed,
+    })
+    return EXIT_SUCCESS
+
+
 def command_recover(args) -> int:
     """Resolve every interrupted invocation's container, and report the verdict.
 
@@ -869,6 +921,23 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--actor", required=True)
     execute.add_argument("--recorded-at", required=True)
     execute.set_defaults(handler=command_execute)
+
+    # Administrative abandonment (ADR-0015). Narrow on purpose: one CINV, one
+    # controlled reason, and no way to name a target state. It exists because
+    # an invocation stuck before the privilege boundary otherwise holds an
+    # execution slot for ever, and raising the ceiling would have removed the
+    # control rather than the defect.
+    abandon = subparsers.add_parser("abandon")
+    abandon.add_argument("--expected-uid", required=True, type=int)
+    abandon.add_argument("--expected-gid", required=True, type=int)
+    abandon.add_argument("--cinv", required=True)
+    abandon.add_argument("--actor", required=True)
+    abandon.add_argument("--request-id", required=True)
+    abandon.add_argument("--recorded-at", required=True)
+    abandon.add_argument("--reason", required=True,
+                         choices=sorted(_ABANDONMENT_REASONS),
+                         help="the controlled abandonment reason category")
+    abandon.set_defaults(handler=command_abandon)
 
     # Recovery, and the execution-safety verdict it decides. It takes no
     # invocation: the ones to resolve are the ones the runtime records say were

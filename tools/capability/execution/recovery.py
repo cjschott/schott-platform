@@ -91,6 +91,10 @@ _LIFECYCLE_ORDER: tuple[LifecycleState, ...] = (
 # the last state the coordinator wrote *before* handing over.
 _CONTAINER_POSSIBLE_FROM = LifecycleState.LAUNCH_AUTHORIZED
 
+# Deliberately absent from `_LIFECYCLE_ORDER` above: administrative closure is
+# not a position on the execution line. ADR-0015.
+_ADMINISTRATIVELY_CLOSED = frozenset({LifecycleState.ABANDONED})
+
 # What a finding concluded about one unresolved invocation's container.
 DISPOSITION_ABSENT = "absent"
 DISPOSITION_RECONCILED = "reconciled"
@@ -190,6 +194,14 @@ def _lifecycle_states(execution_root: Any) -> dict[str, LifecycleState]:
 def _container_possible(state: Any) -> bool:
     """Whether a container could exist for an invocation in ``state``."""
     if not isinstance(state, LifecycleState):
+        return False
+    if state in _ADMINISTRATIVELY_CLOSED:
+        # Refused explicitly rather than by falling through the index lookup
+        # below. ABANDONED is not a point on the linear order, so `.index`
+        # would raise and the `except` would answer False by accident -- and an
+        # accident is not a safety property. An administratively closed
+        # invocation is closed: recovery may report it historically, and must
+        # never offer it as something to resume.
         return False
     try:
         return (_LIFECYCLE_ORDER.index(state)

@@ -476,8 +476,22 @@ root.close()
 print('OK')
 "
 
-run_case "released is not capacity-consuming, every other state is" "${PRELUDE}
-expected = tuple(s for s in LifecycleState if s is not LifecycleState.RELEASED)
+# ADR-0015 added ABANDONED. Two states now hold no slot and they mean
+# different things: RELEASED is the normal lifecycle completed through
+# `cleaned`, ABANDONED is a permanent administrative closure that asserts no
+# such thing. Everything else still holds its slot, and the set is stated as an
+# EXCLUSION so a state added later holds a slot by default -- the safe
+# direction.
+run_case "only released and abandoned hold no slot, and every other state does" "${PRELUDE}
+from tools.capability.execution.capacity import (
+    SLOT_HOLDING_STATES, NON_SLOT_HOLDING_STATES, slot_holding_states)
+assert NON_SLOT_HOLDING_STATES == frozenset({LifecycleState.RELEASED,
+                                             LifecycleState.ABANDONED}), NON_SLOT_HOLDING_STATES
+expected = tuple(s for s in LifecycleState
+                 if s not in (LifecycleState.RELEASED, LifecycleState.ABANDONED))
+assert set(SLOT_HOLDING_STATES) == set(expected), SLOT_HOLDING_STATES
+assert set(slot_holding_states()) == set(expected)
+# The historical name still answers the same question.
 assert set(CAPACITY_CONSUMING_STATES) == set(expected), CAPACITY_CONSUMING_STATES
 print('OK')
 "

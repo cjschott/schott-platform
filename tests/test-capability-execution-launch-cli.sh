@@ -319,9 +319,12 @@ assert verbs is not None, 'no subcommands'
 assert 'authorise-launch' in verbs, verbs
 # Closed on purpose. G11-AT added the two verbs that finish the released path:
 # one supervises an authorised invocation, and one resolves the containers of
-# invocations whose supervision was lost. A third would be a new operator
-# surface and belongs in a reviewed increment, not in this set by accident.
-assert set(verbs) == {'authorise-launch', 'execute', 'inspect', 'invoke',
+# invocations whose supervision was lost. ADR-0015 added the abandon verb, which
+# permanently closes one stuck invocation so its execution slot can be
+# reclaimed. Another would be a new operator surface and belongs in a reviewed
+# increment, not in this set by accident.
+assert 'abandon' in verbs, verbs
+assert set(verbs) == {'abandon', 'authorise-launch', 'execute', 'inspect', 'invoke',
                       'recover', 'validate'}, verbs
 print('OK')
 "

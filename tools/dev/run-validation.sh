@@ -634,6 +634,13 @@ run "CINV-000003 Stage 1 rehearsal" \
 # ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
 # and seals inside the suite's own directory. Deletes nothing and, being v1,
 # has no deletion path at all.
+# ADR-0015. Governed administrative abandonment: the exceptional closure that
+# lets a permanently stuck invocation give its execution slot back. Reproduces
+# the production blocker first, then proves the operation, then proves the
+# blocker is gone. Portable: fixtures only, no governed store.
+run "Capability execution abandonment" \
+  bash tests/test-capability-execution-abandonment.sh
+
 run "Capability execution quarantine" \
   bash tests/test-capability-execution-quarantine.sh
 

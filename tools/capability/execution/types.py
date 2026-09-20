@@ -134,6 +134,20 @@ class LifecycleState(enum.Enum):
     CLEANED = "cleaned"
     RELEASED = "released"
 
+    # The exceptional closure, added by ADR-0015 and deliberately last.
+    #
+    # ABANDONED means the invocation was permanently administratively closed
+    # WITHOUT asserting that the normal execution and cleanup lifecycle
+    # completed. It is NOT `released`: conflating the two would let an
+    # administrative closure be read as a successful lifecycle, and the whole
+    # value of the state is that it says what did not happen.
+    #
+    # It is off the linear order on purpose. It is not "after" `released` and
+    # nothing reaches it by advancing; the two places that read this enum
+    # positionally -- the recovery container-possibility comparison and the
+    # capacity occupancy set -- both treat it explicitly rather than by index.
+    ABANDONED = "abandoned"
+
 
 @dataclasses.dataclass(frozen=True)
 class Mount:

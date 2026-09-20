@@ -117,6 +117,13 @@ class Verb(enum.Enum):
     RETAIN_QUARANTINE_RESIDUE = "retain-quarantine-residue"
     INSPECT_ADMIN_INTEGRITY = "inspect-admin-integrity"
 
+    # ADR-0015. A closed-set addition, not a convenience: it exists so a
+    # permanently stuck invocation can be administratively closed and its
+    # execution slot reclaimed. It dispatches to `abandonment.abandon` and
+    # carries NO destruction authority -- it is absent from `_DESTROYS_UNDER`,
+    # touches no container, and deletes nothing.
+    ABANDON = "abandon"
+
 
 # Which verb may destroy, and the one condition each may destroy under. A verb
 # absent from this mapping has no destruction authority whatsoever, and a verb

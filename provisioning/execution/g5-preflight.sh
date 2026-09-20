@@ -109,7 +109,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -230,7 +230,7 @@ GENERATION_DELTA=(
 "tools/capability/execution/protocol.py|REPLACE|613ff30d5999e47e615ac28023b2e9a6e799439154b0e353eb385888b2484cfb|c2040807fa26c349f6948b7c44ca28aeea6e2fdd8f57cb54d0e608c12c9d09c1"
 "tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
 "tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
-"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03,fdad3cecdf72eeb7b00c21f0ba04ee9bbc4ca3ebd6d6c4a571037518c2c567f0"
+"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03,fdad3cecdf72eeb7b00c21f0ba04ee9bbc4ca3ebd6d6c4a571037518c2c567f0,d044cb29a32714945d0d76db59ca3c44cd77d4978e5781fedc073e675b897173"
 "tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb,74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07,78da8519db99fa06e809755808397fe36bb8c83872deab142987c98308b38a4f"
 #
 # G11-AX. `helpers.py` again, and this time as a REPLACE off its own installed
@@ -346,6 +346,54 @@ GENERATION_DELTA=(
 # `25f65bd3` and `b72e7e25`, and publishing the successors is a runtime
 # generation ceremony that G11-BC-K is not authorised to perform and has not
 # written.
+#
+# G11-BC-V. Generation 19: governed administrative abandonment (ADR-0015).
+#
+# THE DEFECT IT ANSWERS. An invocation that reached `launch_authorized` and
+# never went further held an execution slot for ever: `released` is reachable
+# only from `cleaned`, `recover` writes nothing, and no administrative verb
+# repairs or forces. CINV-000001 and CINV-000002 held both slots between them,
+# and CINV-000003 Stage 2 refused with `CapacityExhausted` before mutating
+# anything. G11-BC-U found it; this is the correction.
+#
+# `MAXIMUM_SLOTS` IS UNCHANGED at 2. The ceiling was never the defect -- it did
+# exactly what it is for. The defect was that a slot could never be given back.
+#
+# SEVEN OBJECTS, ONE COHERENCE GROUP, AND THEY MOVE TOGETHER. `types.py` adds
+# the `ABANDONED` member; `state.py` adds the two edges into it and none out;
+# `capacity.py` states occupancy as an exclusion so the new state holds no
+# slot; `recovery.py` refuses it explicitly rather than by an index lookup that
+# would raise; `admin.py` adds the closed-set `abandon` verb; `abandonment.py`
+# is the operation; `cli.py` carries the surface. Publishing any subset leaves
+# a host that is worse than either end: `state.py` alone would permit a
+# transition to a state `types.py` has never heard of, and `abandonment.py`
+# alone fails at import. Publication order is `types.py`, `state.py`,
+# `capacity.py`, `recovery.py`, `admin.py`, `abandonment.py`, `cli.py` -- each
+# after everything it imports.
+#
+# THE WIDENING IS BY DECLARATION ONLY. The Generation-18 digests move into the
+# baseline lists because they are what the host installed and are therefore
+# legitimate predecessors to move FROM; the new digests join the successor
+# lists because they are the reviewed bytes to move TO. No check is relaxed, no
+# comparison becomes a wildcard, and nothing is derived from git.
+#
+# `abandonment.py` is a CREATE: it does not exist on the installed host, and
+# ABSENT is the honest baseline for an object that has never been published.
+#
+# None of the seven is in `helpers.REQUIRED_HELPERS`, so `helpers.compatibility()`
+# is unaffected and NO HELPER CEREMONY is required -- a library-and-surface
+# generation, like 18 and unlike the 17/BC-E pair.
+#
+# Declared here as pending. NOT INSTALLED: the installed objects are still the
+# Generation-18 bytes, and publishing the successors is a runtime generation
+# ceremony that G11-BC-V is not authorised to perform and has not written. The
+# CINV-000002 reclamation ceremony runs the coordinator CLI out of this
+# checkout, which is why it is executable before that publication.
+"tools/capability/execution/types.py|REPLACE|7dc35046fafdb4e7218739cdbc86deff18ed804b2a37d66a173df58016258b5c|da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae"
+"tools/capability/execution/state.py|REPLACE|f0b00112db5090f1885149e4eaee0df79ef03fa3c72a5b618d51cf9263486241|88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b"
+"tools/capability/execution/capacity.py|REPLACE|25bab08cd2f517e28d5a9add58a4d0fff6d6d720cd20df241d4a4003eaa27afb|f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e"
+"tools/capability/execution/admin.py|REPLACE|be899d7a193f6aa5c80d3887109fa07212d757f94503ba994bac104f217633d5|2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3"
+"tools/capability/execution/abandonment.py|CREATE|ABSENT|4fb431ca5f74e45aba8cb4ed7f80699e9a16b4743b5c554e992747926f9b1903"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

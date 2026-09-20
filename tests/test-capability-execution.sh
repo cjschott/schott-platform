@@ -278,7 +278,16 @@ assert_backstop_coverage() {
                  # digests are the reviewed sources they name, that the whole
                  # supervised privileged surface is declared, and that a stale
                  # or absent object is never reported compatible.
-                 "helpers.py")
+                 "helpers.py"
+                 # Backstopped by tests/test-capability-execution-abandonment.sh,
+                 # which proves it starts no process, names no container
+                 # runtime, deletes nothing, writes no Capability Runtime
+                 # record, allocates no invocation or result identity, and
+                 # reads no clock -- it parses the instant its caller supplies
+                 # and refuses one with no timezone. Behaviourally, that it
+                 # closes a lifecycle and gives a slot back without asserting
+                 # the lifecycle completed, and fabricates no execution result.
+                 "abandonment.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do
@@ -421,12 +430,18 @@ else:
 
 # --- immutability ----------------------------------------------------------
 
+# Twelve linear states plus the ADR-0015 exceptional closure, which is LAST on
+# purpose: it is not a point on the execution line, nothing reaches it by
+# advancing, and the two places that read this enum positionally handle it
+# explicitly rather than by index.
 run_python_case "LifecycleState is a closed ordered vocabulary" "
 from tools.capability.execution.types import LifecycleState
 expected = ['reserved', 'launch_authorized', 'created', 'container_verified',
             'start_authorized', 'started', 'running', 'terminal', 'classified',
-            'collected', 'cleaned', 'released']
+            'collected', 'cleaned', 'released', 'abandoned']
 assert [s.value for s in LifecycleState] == expected, [s.value for s in LifecycleState]
+# The linear progression is unchanged: abandoned is appended, not inserted.
+assert [s.value for s in LifecycleState][:12] == expected[:12]
 print('OK')
 "
 

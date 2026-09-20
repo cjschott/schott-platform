@@ -563,6 +563,11 @@ jobs:
 
       # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
       # path at all.
+      # Governed administrative abandonment (ADR-0015): the exceptional closure
+      # that lets a permanently stuck invocation give its execution slot back.
+      - name: Capability execution abandonment tests
+        run: bash tests/test-capability-execution-abandonment.sh
+
       - name: Capability execution quarantine tests
         run: bash tests/test-capability-execution-quarantine.sh
 
