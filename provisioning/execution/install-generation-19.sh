@@ -1765,7 +1765,97 @@ case "${MODE}" in
   require_group_names_known
 
   # THE CORRECTION THIS GENERATION EXISTS TO DEPLOY, PROVED FROM THE REVIEWED
-  # BYTES -- as ORDER, not as the presence of a word.
+  # BYTES -- as PROPERTIES, not as the presence of a word.
+  #
+  # A grep for "abandoned" would pass on a state that could be reached from
+  # anywhere, held a slot, or could be left again. Each property is checked
+  # where it is decided.
+  types_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/types.py")"
+  state_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/state.py")"
+  capacity_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/capacity.py")"
+  recovery_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/recovery.py")"
+  admin_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/admin.py")"
+  abandonment_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/abandonment.py")"
+  cli_source="$(git_as_owner show "${COMMIT}:tools/capability/cli.py")"
+
+  # 1. The state exists, and is NOT a rename of RELEASED.
+  grep -q 'ABANDONED = "abandoned"' <<<"${types_source}" \
+    || halt "the reviewed types.py declares no ABANDONED member"
+  grep -q 'RELEASED = "released"' <<<"${types_source}" \
+    || halt "the reviewed types.py no longer declares RELEASED: abandonment must not replace the normal terminal state"
+  ok "the reviewed types.py declares ABANDONED alongside RELEASED, not instead of it"
+
+  # 2. Reachable ONLY from the two pre-handover states, and terminal.
+  grep -q "LifecycleState.ABANDONED: frozenset()" <<<"${state_source}" \
+    || halt "the reviewed state.py does not make ABANDONED terminal"
+  for from_state in RESERVED LAUNCH_AUTHORIZED; do
+    grep -A2 "LifecycleState.${from_state}: frozenset({" <<<"${state_source}" \
+      | grep -q "ABANDONED" \
+      || halt "the reviewed state.py does not reach ABANDONED from ${from_state}"
+  done
+  for forbidden in CREATED CONTAINER_VERIFIED START_AUTHORIZED STARTED RUNNING \
+                   TERMINAL CLASSIFIED COLLECTED CLEANED RELEASED; do
+    if grep -A2 "LifecycleState.${forbidden}: frozenset({" <<<"${state_source}" \
+         | grep -q "ABANDONED"; then
+      halt "the reviewed state.py lets ${forbidden} reach ABANDONED: a container provably exists past the handover and would be stranded"
+    fi
+  done
+  ok "the reviewed state.py reaches ABANDONED only from reserved and launch_authorized, and never leaves it"
+
+  # 3. Occupancy is an EXCLUSION, so a state added later holds a slot by
+  #    default. An inclusive list would fail open.
+  grep -q "NON_SLOT_HOLDING_STATES = frozenset({" <<<"${capacity_source}" \
+    || halt "the reviewed capacity.py does not state occupancy as an exclusion"
+  grep -q "s not in NON_SLOT_HOLDING_STATES" <<<"${capacity_source}" \
+    || halt "the reviewed capacity.py does not derive the holding set from the exclusion"
+  grep -q "MAXIMUM_SLOTS = 2" <<<"${capacity_source}" \
+    || halt "the reviewed capacity.py does not keep MAXIMUM_SLOTS at 2"
+  ok "the reviewed capacity.py keeps MAXIMUM_SLOTS at 2 and excludes only RELEASED and ABANDONED"
+
+  # 4. Recovery refuses it EXPLICITLY. Omitting it from the linear order would
+  #    make `.index` raise and the existing `except ValueError` answer False by
+  #    accident, and an accident is not a safety property.
+  grep -q "_ADMINISTRATIVELY_CLOSED" <<<"${recovery_source}" \
+    || halt "the reviewed recovery.py does not name administratively closed states"
+  grep -q "if state in _ADMINISTRATIVELY_CLOSED:" <<<"${recovery_source}" \
+    || halt "the reviewed recovery.py does not refuse administratively closed states before the index lookup"
+  ok "the reviewed recovery.py refuses ABANDONED explicitly, not by an index lookup that happens to raise"
+
+  # 5. The verb is closed-set and carries NO destruction authority.
+  grep -q 'ABANDON = "abandon"' <<<"${admin_source}" \
+    || halt "the reviewed admin.py declares no ABANDON verb"
+  if grep -A8 "_DESTROYS_UNDER = {" <<<"${admin_source}" | grep -q "Verb.ABANDON"; then
+    halt "the reviewed admin.py grants ABANDON destruction authority"
+  fi
+  ok "the reviewed admin.py adds ABANDON to the closed set with no destruction authority"
+
+  # 6. The operation allocates nothing and deletes nothing.
+  for forbidden in "allocate_id" "write_atomic" "shutil"; do
+    if grep -q "${forbidden}" <<<"${abandonment_source}"; then
+      halt "the reviewed abandonment.py reaches ${forbidden}: it must allocate nothing and delete nothing"
+    fi
+  done
+  grep -q "ELIGIBLE_SOURCE_STATES = frozenset({" <<<"${abandonment_source}" \
+    || halt "the reviewed abandonment.py declares no eligible source states"
+  ok "the reviewed abandonment.py allocates no identity, deletes nothing, and names its eligible states"
+
+  # 7. The operator surface offers no target state.
+  for forbidden in "--force" "--to" "--target-state"; do
+    if grep -q -- "\"${forbidden}\"" <<<"${cli_source}"; then
+      halt "the reviewed cli.py exposes ${forbidden}: abandonment must not be a force-transition surface"
+    fi
+  done
+  grep -q 'add_parser("abandon")' <<<"${cli_source}" \
+    || halt "the reviewed cli.py exposes no abandon subcommand"
+  grep -q "choices=sorted(_ABANDONMENT_REASONS)" <<<"${cli_source}" \
+    || halt "the reviewed cli.py does not constrain the reason to the closed set"
+  ok "the reviewed cli.py exposes abandon with a closed reason set and no target-state flag"
+
+  # --- carried forward from Generation 18, as regression --------------------
+  #
+  # `evidence.py` and `coordinator.py` do not move in this generation. These
+  # checks are kept so the Generation-18 correction is proved not to have
+  # regressed under it, and they are labelled as what they are.
   #
   # A grep for `require_no_terminal_result` would pass on a coordinator that
   # called it after `supervisor.execute`, which is the defect. So the two call
@@ -1785,7 +1875,7 @@ case "${MODE}" in
     || halt "the reviewed coordinator.py has no supervised execution call to gate"
   (( gate_line < exec_line )) \
     || halt "the reviewed coordinator.py asks at line ${gate_line} and executes at line ${exec_line}: the gate is not in front of the provider"
-  ok "the reviewed coordinator asks at line ${gate_line} and executes at line ${exec_line}"
+  ok "carried forward: the coordinator asks at line ${gate_line} and executes at line ${exec_line}"
 
   # The locally executed path carries the same gate, ahead of its own call.
   adapter_gate="$(grep -n "require_no_terminal_result(store, decision.invocation_record_id)" \
@@ -1796,7 +1886,7 @@ case "${MODE}" in
     || halt "the reviewed coordinator.py does not gate the locally executed adapter path"
   (( adapter_gate < adapter_exec )) \
     || halt "the locally executed path is gated at line ${adapter_gate}, behind adapter.execute at ${adapter_exec}"
-  ok "the locally executed path is gated at line ${adapter_gate}, ahead of line ${adapter_exec}"
+  ok "carried forward: the locally executed path is gated at line ${adapter_gate}, ahead of line ${adapter_exec}"
 
   # The reader exists, is shared, and the fail-open the old guard carried is
   # gone. `attempt_number == 1` as a MATCH CONDITION is what let a result with
@@ -1807,13 +1897,13 @@ case "${MODE}" in
     || halt "the reviewed evidence.py defines no gate wrapper"
   grep -q 'existing.get("attempt_number") == 1' <<<"${evidence_source}" \
     && halt "the reviewed evidence.py still matches on attempt_number == 1: a result carrying any other value would block nothing"
-  ok "the reviewed evidence.py carries one shared reader and no attempt_number fail-open"
+  ok "carried forward: evidence.py carries one shared reader and no attempt_number fail-open"
 
   # Both callers go through the one wrapper, so the gate and the recording guard
   # cannot drift into two different answers.
   [[ "$(grep -c "require_no_terminal_result" <<<"${evidence_source}")" -ge 2 ]] \
     || halt "the reviewed evidence.py does not use its own gate wrapper in record_terminal_result"
-  ok "the gate and the recording guard answer through the same reader"
+  ok "carried forward: the gate and the recording guard answer through the same reader"
 
   note "no installed path was read for state and none was written"
   printf '\n'
