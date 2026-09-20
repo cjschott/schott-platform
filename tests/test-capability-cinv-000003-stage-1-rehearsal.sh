@@ -77,6 +77,28 @@ CINV_SEQ_BEFORE=2
 CRES_SEQ_BEFORE=1
 CINV_SEQ_AFTER=3
 
+# THE CEREMONY IS SPENT ONCE CINV-000003 EXISTS.
+#
+# Stage 1 allocated the invocation identity. That is irreversible: identities
+# are spent, not reserved, and the Capability Runtime is append-only. The
+# block's own Gate 3 refuses when CINV-000003 is present, so the ceremony can
+# never be rehearsed again -- and it must never be re-run, because a replayed
+# invocation_id resolves to the existing record and returns `consumed`.
+#
+# Deleting the suite would delete the evidence; leaving it asserting a vanished
+# world would make it fail forever for the one reason that is not a defect.
+#
+# DURABLE FACTS ONLY. The record is immutable, so its SHA is now an OBSERVED
+# fact and may be pinned -- it could not be predicted before the write, because
+# `requested_at` carries the operator's clock, but it cannot change afterwards.
+# The runtime whole-store aggregate is deliberately NOT pinned: Stage 2
+# legitimately writes lifecycle state, a projection and a handoff, and pinning a
+# whole-store aggregate in spent-mode evidence is the defect that broke the
+# CINST-000006 spent mode when CROUTE-0006 landed.
+ACCEPTED_RECORD=/data/kyri/capability-runtime/capability-invocations/CINV-000003.yaml
+ACCEPTED_RECORD_SHA256=c0941b7d45dcccac4bb28d00f942ea63aa90cd46ed55767797363f1ed1accaf2
+ACCEPTED_RECORD_BYTES=988
+
 FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
@@ -96,16 +118,108 @@ if [[ "${PRODUCTION_FABRIC_BEFORE}" == "${FABRIC_BASELINE}" ]]; then
 else
   fail "production Fabric is ${PRODUCTION_FABRIC_BEFORE}, not the pinned ${FABRIC_BASELINE}"
 fi
+# ---- has the ceremony been performed? -------------------------------------
+
+if [[ -e "${ACCEPTED_RECORD}" ]]; then
+  printf '\n--- the Stage 1 ceremony is spent ---\n'
+  pass "${EXPECTED_CINV} is written; the invocation identity is permanently spent"
+
+  record_sha="$(sha256sum "${ACCEPTED_RECORD}" | cut -d' ' -f1)"
+  if [[ "${record_sha}" == "${ACCEPTED_RECORD_SHA256}" ]]; then
+    pass "the persisted record is the accepted one (${ACCEPTED_RECORD_SHA256})"
+  else
+    fail "the persisted record is ${record_sha}, accepted ${ACCEPTED_RECORD_SHA256}"
+  fi
+  if [[ "$(wc -c < "${ACCEPTED_RECORD}")" == "${ACCEPTED_RECORD_BYTES}" ]]; then
+    pass "the persisted record is ${ACCEPTED_RECORD_BYTES} bytes"
+  else
+    fail "the persisted record is $(wc -c < "${ACCEPTED_RECORD}") bytes"
+  fi
+  if [[ "$(stat -c '%a' "${ACCEPTED_RECORD}")" == "600" ]]; then
+    pass "the persisted record is mode 0600"
+  else
+    fail "the persisted record is mode $(stat -c '%a' "${ACCEPTED_RECORD}")"
+  fi
+
+  for field in "invocation_record_id: ${EXPECTED_CINV}" \
+               'invocation_id: g11bcn-third-controlled-invoke' \
+               'request_id: g11bcn-third-production-invoke' \
+               'selection_id: CSEL-000004' \
+               'instance_id: CINST-000006' \
+               'capability_package_id: CPKG-0001' \
+               'capability_id: CAPDEF-0001' \
+               'contract_id: CCON-0001' \
+               'operation: execute' \
+               'kind: capability-invocation' \
+               'schema_version: 2' \
+               'effect_class: computational' \
+               'adapter_identity: null' \
+               'outcome: execution-prepared' \
+               "payload_digest: ${EXPECTED_PAYLOAD_DIGEST}" \
+               "binding_digest: ${EXPECTED_BINDING_DIGEST}" \
+               "artifact_digest: ${EXPECTED_ARTIFACT_DIGEST}"; do
+    if grep -qF -- "${field}" "${ACCEPTED_RECORD}"; then
+      pass "the record carries ${field}"
+    else
+      fail "the record does not carry ${field}"
+    fi
+  done
+
+  # Monotonic, so "at or past" rather than "equal to": a later invocation
+  # legitimately raises it, and the whole-store aggregate is not pinned at all.
+  seq_now="$(cat "${PRODUCTION_RUNTIME}/sequences/capability-invocation.seq")"
+  if [[ "${seq_now}" =~ ^[0-9]+$ ]] && (( seq_now >= CINV_SEQ_AFTER )); then
+    pass "capability-invocation.seq is ${seq_now}, at or past the ${CINV_SEQ_AFTER} this write allocated"
+  else
+    fail "capability-invocation.seq is ${seq_now}, below the ${CINV_SEQ_AFTER} this write allocated"
+  fi
+
+  # Stage 1 wrote no result and reached no execution surface. Both stay true
+  # until a later stage legitimately changes them, so they are asserted as
+  # Stage 1's own effect rather than as a permanent property of the store.
+  if [[ ! -e "${PRODUCTION_RUNTIME}/capability-results/CRES-000002.yaml" ]]; then
+    pass "Stage 1 wrote no result record"
+  else
+    fail "a result record exists for this invocation"
+  fi
+
+  # The Stage 0 payload the record binds must still be the reviewed bytes:
+  # Stage 2 re-presents it and checks it against this record's payload_digest.
+  spent_payload="${PRODUCTION_WORK}/third-invoke.json"
+  if [[ "$(sha256sum "${spent_payload}" | cut -d' ' -f1)" == "${REVIEWED_RAW}" ]] \
+     && [[ "$(stat -c '%a' "${spent_payload}")" == "600" ]] \
+     && [[ "$(stat -c '%h' "${spent_payload}")" == "1" ]]; then
+    pass "the Stage 0 payload is still the reviewed payload, 0600, one link"
+  else
+    fail "the Stage 0 payload has drifted"
+  fi
+
+  # The committed ceremony still describes what was done.
+  if grep -qF -- "${EXPECTED_PAYLOAD_DIGEST}" "${ARTIFACT}" \
+     && grep -qF -- "${EXPECTED_BINDING_DIGEST}" "${ARTIFACT}"; then
+    pass "the committed Stage 1 ceremony still pins the reviewed digests"
+  else
+    fail "the committed Stage 1 ceremony no longer pins the reviewed digests"
+  fi
+
+  printf '\n'
+  if (( FAILURES == 0 )); then
+    printf 'CINV-000003 Stage 1 rehearsal: ceremony spent, accepted write verified.\n'
+    exit 0
+  fi
+  printf 'CINV-000003 Stage 1 rehearsal FAILED: %d\n' "${FAILURES}" >&2
+  exit 1
+fi
+
+pass "${EXPECTED_CINV} is absent from production"
+
+# Only meaningful while Stage 1 is unspent: Stage 1 moves this aggregate by
+# design, which is why the spent branch above does not assert it at all.
 if [[ "${PRODUCTION_RUNTIME_BEFORE}" == "${RUNTIME_BASELINE}" ]]; then
-  pass "the production runtime store is at the pinned Stage-0 baseline"
+  pass "the production runtime store is at the pinned pre-Stage-1 baseline"
 else
   fail "the production runtime store is ${PRODUCTION_RUNTIME_BEFORE}, not ${RUNTIME_BASELINE}"
 fi
-if [[ -e "${PRODUCTION_RUNTIME}/capability-invocations/${EXPECTED_CINV}.yaml" ]]; then
-  fail "${EXPECTED_CINV} already exists in production; Stage 1 has already run"
-  exit 1
-fi
-pass "${EXPECTED_CINV} is absent from production"
 
 # ---- Stage 0's durable output, which Stage 1 depends on --------------------
 
