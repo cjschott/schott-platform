@@ -321,11 +321,14 @@ assert 'authorise-launch' in verbs, verbs
 # one supervises an authorised invocation, and one resolves the containers of
 # invocations whose supervision was lost. ADR-0015 added the abandon verb, which
 # permanently closes one stuck invocation so its execution slot can be
-# reclaimed. Another would be a new operator surface and belongs in a reviewed
-# increment, not in this set by accident.
+# reclaimed. ADR-0016 added correct-provenance, which records that a claim in an
+# earlier administrative record is not truthful provenance without touching that
+# record or the lifecycle. Another would be a new operator surface and belongs in
+# a reviewed increment, not in this set by accident.
 assert 'abandon' in verbs, verbs
-assert set(verbs) == {'abandon', 'authorise-launch', 'execute', 'inspect', 'invoke',
-                      'recover', 'validate'}, verbs
+assert set(verbs) == {'abandon', 'authorise-launch', 'correct-provenance',
+                      'execute', 'inspect', 'invoke', 'recover',
+                      'validate'}, verbs
 print('OK')
 "
 

@@ -124,6 +124,14 @@ class Verb(enum.Enum):
     # touches no container, and deletes nothing.
     ABANDON = "abandon"
 
+    # ADR-0016, G11-BC-Y. The second closed-set addition, and the narrowest
+    # verb here: it dispatches nothing, changes no lifecycle state, releases no
+    # slot and writes no transition. It records that a claim made by an earlier
+    # `CADM` is not truthful provenance, while that record's effect stands.
+    # It is absent from `_DESTROYS_UNDER`, and it cannot reach any field but the
+    # ones `provenance.CORRECTABLE_FIELDS` names.
+    CORRECT_PROVENANCE = "correct-provenance"
+
 
 # Which verb may destroy, and the one condition each may destroy under. A verb
 # absent from this mapping has no destruction authority whatsoever, and a verb

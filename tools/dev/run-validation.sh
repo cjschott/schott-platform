@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=125
+  TOTAL_STEPS=127
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=150
+  TOTAL_STEPS=152
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -649,6 +649,20 @@ run "CINV-000003 Stage 1 rehearsal" \
 # blocker is gone. Portable: fixtures only, no governed store.
 run "Capability execution abandonment" \
   bash tests/test-capability-execution-abandonment.sh
+
+# ADR-0016. Provenance correction: the record that says a claim in an earlier
+# CADM is not truthful provenance while that record's effect stands. Most of it
+# proves what the verb CANNOT do -- no transition, no slot, no result, no write
+# to the record it is about. Portable: fixtures only.
+run "Capability execution provenance correction" \
+  bash tests/test-capability-execution-provenance-correction.sh
+
+# G11-BC-Y. Which store a mutating command actually writes through. Reproduces
+# the 2026-09-20 incident against the INSTALLED runtime without touching
+# production, then proves the explicit-target surface that replaced it. The
+# audit of every mutating verb's root resolution lives here too. Host-only.
+run "Capability mutation target" \
+  bash tests/test-capability-mutation-target-explicit.sh
 
 run "Capability execution quarantine" \
   bash tests/test-capability-execution-quarantine.sh

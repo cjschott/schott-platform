@@ -287,7 +287,15 @@ assert_backstop_coverage() {
                  # and refuses one with no timezone. Behaviourally, that it
                  # closes a lifecycle and gives a slot back without asserting
                  # the lifecycle completed, and fabricates no execution result.
-                 "abandonment.py")
+                 "abandonment.py"
+                 # Backstopped by tests/test-capability-execution-provenance-correction.sh,
+                 # which proves it imports no capacity module and no lifecycle
+                 # transition, opens nothing read-write, reads no clock, and
+                 # reaches no field outside its closed provenance set -- and
+                 # behaviourally that a correction leaves the subject record,
+                 # the lifecycle, the occupancy and the mutation journal exactly
+                 # as they were.
+                 "provenance.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do

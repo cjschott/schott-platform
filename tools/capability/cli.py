@@ -73,6 +73,19 @@ EXIT_USAGE = 2
 # mechanism for a line that legitimately names a production path. These are not
 # defaults -- nothing here creates either path, and no argument can override
 # them; both are read-only inputs this verb refuses to run without.
+#
+# G11-BC-Y drew the line the other way for the administrative verbs. `abandon`
+# had been given the compiled-in root by analogy with `authorise-launch`, and
+# the analogy was false: nothing downstream of it compiles in a matching root,
+# so the argument for agreement-by-construction did not apply -- while the
+# hazard did. A rehearsal substituted the runtime path through every shell gate
+# it ran, and the mutation resolved `CAPABILITY_RUNTIME_ROOT` anyway. The gates
+# proved a fixture and the writer wrote production.
+#
+# So every administrative mutator below takes `--store-root` and has no
+# default. Omission is a usage error before any store is opened. The production
+# ceremony has to spell `/data/kyri/capability-runtime` out, and a rehearsal
+# that means a fixture has to say so in the one place the writer reads.
 # Which refusals belong to which gate, so a rehearsal can report the two apart
 # rather than making an operator infer it from one combined verdict. Named from
 # the boundary's own vocabulary rather than restated as strings here.
@@ -98,6 +111,9 @@ BACKING_STORE_CONFIG = "/etc/kyri/backing-store.json"       # prod-path-referenc
 
 # Read from the bridge so the two can never disagree about what it spells.
 from .execution.abandonment import REASONS as _ABANDONMENT_REASONS
+from .execution.provenance import CORRECTABLE_FIELDS as _CORRECTABLE_FIELDS
+from .execution.provenance import FINDINGS as _CORRECTION_FINDINGS
+from .execution.provenance import INITIATORS as _CORRECTION_INITIATORS
 from .execution.launch import LIFECYCLE_STATE as LAUNCH_AUTHORIZED_STATE
 
 _MOUNTINFO = "/proc/self/mountinfo"
@@ -477,6 +493,23 @@ def _observed_filesystem(path: str) -> ObservedFilesystem:
                               device_name=device_name)
 
 
+def _explicit_root(value: Any, what: str = "--store-root") -> str:
+    """The root a mutating verb was told to use, or a usage refusal.
+
+    There is no default and no fallback: the whole point is that omitting it
+    cannot quietly resolve to production. Checked before anything is opened, so
+    a malformed root never reaches a store constructor at all.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise _Unusable(f"{what} must be given explicitly; there is no default")
+    if not value.startswith("/"):
+        raise _Unusable(f"{what} must be an absolute path, not {value!r}")
+    if value != os.path.normpath(value):
+        raise _Unusable(
+            f"{what} must be given in normal form, not {value!r}")
+    return value
+
+
 def _anchored(root: str):
     """A verified root descriptor over ``root``, or refuse.
 
@@ -731,15 +764,16 @@ def command_abandon(args) -> int:
     """
     from .execution import abandonment
 
+    root = _explicit_root(args.store_root)
     try:
-        store = CapabilityStore(CAPABILITY_RUNTIME_ROOT,
+        store = CapabilityStore(root,
                                 expected_uid=args.expected_uid,
                                 expected_gid=args.expected_gid)
     except CapabilityError as error:
         raise _Unusable(
             f"the capability runtime store is unusable ({error})") from None
 
-    execution_root = _anchored(os.path.join(CAPABILITY_RUNTIME_ROOT, "execution"))
+    execution_root = _anchored(os.path.join(root, "execution"))
     try:
         outcome = abandonment.abandon(
             store=store, execution_root=execution_root, cinv=args.cinv,
@@ -763,6 +797,63 @@ def command_abandon(args) -> int:
         "result_record_id": outcome.result_record_id,
         "slot_released": outcome.slot_released,
         "resumed": outcome.resumed,
+        # The root as typed, and the object the writer actually held. A test
+        # asserts the second one: text naming a store is not evidence about
+        # which store was written.
+        "store_root": root,
+        "target": outcome.target,
+    })
+    return EXIT_SUCCESS
+
+
+def command_correct_provenance(args) -> int:
+    """Record that one claim in an earlier `CADM` is not truthful provenance.
+
+    **It corrects a record, not a lifecycle.** Nothing here transitions an
+    invocation, releases or takes a slot, writes a result, or edits the record
+    it is about. The subject `CADM` is read and digested and left exactly as it
+    is, and the finding is written as a separate append-only record beside it.
+
+    **It is not ratification.** Accepting that an action's effect stands is a
+    different statement from accepting who is recorded as having taken it, and
+    this verb makes only the second one, in the negative.
+
+    **Every judgement belongs to `provenance.correct_provenance`.** This opens
+    the ruled root, hands it over, and reports what came back.
+    """
+    from .execution import provenance
+
+    root = _explicit_root(args.store_root)
+    execution_root = _anchored(os.path.join(root, "execution"))
+    try:
+        outcome = provenance.correct_provenance(
+            execution_root=execution_root, subject_cadm=args.subject_cadm,
+            cinv=args.cinv, disputed_field=args.disputed_field,
+            disputed_value=args.disputed_value, finding=args.finding,
+            actual_initiator=args.actual_initiator, actor=args.actor,
+            request_id=args.request_id, recorded_at=args.recorded_at,
+            evidence_references=args.evidence_reference or None)
+    except ValueError as error:
+        print(f"capability: {type(error).__name__}: {error}", file=sys.stderr)
+        return EXIT_DENIED
+    finally:
+        execution_root.close()
+
+    _emit({
+        "cadm": outcome.cadm,
+        "subject_cadm": outcome.subject_cadm,
+        "subject_member": outcome.subject_member,
+        "subject_digest": outcome.subject_digest,
+        "cinv": outcome.cinv,
+        "disputed_field": outcome.disputed_field,
+        "disputed_value": outcome.disputed_value,
+        "finding": outcome.finding,
+        "actual_initiator": outcome.actual_initiator,
+        "effect": outcome.effect,
+        "lifecycle_state": outcome.lifecycle_state,
+        "resumed": outcome.resumed,
+        "store_root": root,
+        "target": outcome.target,
     })
     return EXIT_SUCCESS
 
@@ -928,6 +1019,11 @@ def build_parser() -> argparse.ArgumentParser:
     # execution slot for ever, and raising the ceiling would have removed the
     # control rather than the defect.
     abandon = subparsers.add_parser("abandon")
+    abandon.add_argument("--store-root", required=True,
+                         help="the capability runtime root to mutate, absolute "
+                              "and explicit; production is "
+                              "/data/kyri/capability-runtime and there is NO "
+                              "default -- a rehearsal must name its own fixture")
     abandon.add_argument("--expected-uid", required=True, type=int)
     abandon.add_argument("--expected-gid", required=True, type=int)
     abandon.add_argument("--cinv", required=True)
@@ -938,6 +1034,39 @@ def build_parser() -> argparse.ArgumentParser:
                          choices=sorted(_ABANDONMENT_REASONS),
                          help="the controlled abandonment reason category")
     abandon.set_defaults(handler=command_abandon)
+
+    # Provenance correction (ADR-0016). Narrower than abandonment: it takes a
+    # subject record and one disputed claim, writes a finding beside it, and
+    # has no way to name a lifecycle state, a slot, or a result. The disputed
+    # value must match what the store already holds, so an operator cannot
+    # correct a claim that is not there.
+    correct = subparsers.add_parser("correct-provenance")
+    correct.add_argument("--store-root", required=True,
+                         help="the capability runtime root to mutate, absolute "
+                              "and explicit; production is "
+                              "/data/kyri/capability-runtime and there is NO "
+                              "default -- a rehearsal must name its own fixture")
+    correct.add_argument("--subject-cadm", required=True,
+                         help="the administrative record whose claim is disputed")
+    correct.add_argument("--cinv", required=True)
+    correct.add_argument("--disputed-field", required=True,
+                         choices=sorted(_CORRECTABLE_FIELDS),
+                         help="the provenance claim being disputed; no "
+                              "lifecycle claim is correctable here")
+    correct.add_argument("--disputed-value", required=True,
+                         help="what that claim currently says, which must "
+                              "match the record")
+    correct.add_argument("--finding", required=True,
+                         choices=sorted(_CORRECTION_FINDINGS))
+    correct.add_argument("--actual-initiator", required=True,
+                         choices=sorted(_CORRECTION_INITIATORS))
+    correct.add_argument("--actor", required=True,
+                         help="who is recording this correction")
+    correct.add_argument("--request-id", required=True)
+    correct.add_argument("--recorded-at", required=True)
+    correct.add_argument("--evidence-reference", action="append", default=[],
+                         help="repeatable; where the incident evidence lives")
+    correct.set_defaults(handler=command_correct_provenance)
 
     # Recovery, and the execution-safety verdict it decides. It takes no
     # invocation: the ones to resolve are the ones the runtime records say were

@@ -55,7 +55,7 @@ from ..records import INVOCATION_KIND, RESULT_KIND
 from . import admin as admin_module
 from . import canonical_json
 from . import state as state_module
-from .backing_store import RootDescriptor
+from .backing_store import RootDescriptor, target_fingerprint
 from .types import LifecycleState
 
 # The two controlled reason categories, closed. A free-form reason would make
@@ -120,6 +120,11 @@ class Abandonment:
     result_record_id: str | None
     slot_released: bool
     resumed: bool
+    # G11-BC-Y. Which object this was actually written through, asked of the
+    # kernel rather than inferred from the path a caller typed. A rehearsal
+    # that proves its gates against one store while the mutator resolves
+    # another is the incident this field exists to make impossible to miss.
+    target: dict[str, int]
 
 
 def _text(value: Any, what: str) -> str:
@@ -276,6 +281,8 @@ def abandon(*, store: Any, execution_root: Any, cinv: Any, actor: Any,
             f"{reason_text} asserts no terminal result and {identity} has "
             f"{result_record_id}")
 
+    target = target_fingerprint(execution_root)
+
     locks = state_module._LockOrder()
     locks.acquire_capacity(execution_root)
     try:
@@ -308,7 +315,7 @@ def abandon(*, store: Any, execution_root: Any, cinv: Any, actor: Any,
                 actor=actor_text, request_id=request_text,
                 recorded_at=recorded_text, reason=reason_text,
                 result_record_id=result_record_id, slot_released=False,
-                resumed=True)
+                resumed=True, target=target)
 
         if prior is not None:
             raise AbandonmentRefused(
@@ -357,6 +364,6 @@ def abandon(*, store: Any, execution_root: Any, cinv: Any, actor: Any,
             state=LifecycleState.ABANDONED.value, actor=actor_text,
             request_id=request_text, recorded_at=recorded_text,
             reason=reason_text, result_record_id=result_record_id,
-            slot_released=True, resumed=False)
+            slot_released=True, resumed=False, target=target)
     finally:
         locks.release_all()

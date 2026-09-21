@@ -264,21 +264,24 @@ def refuses(action, classification, what):
 
 # --- the closed verb set ----------------------------------------------------
 
-# Fifteen since ADR-0015. `abandon` is a reviewed closed-set addition, not a
-# convenience: it permanently closes one stuck invocation so its execution slot
-# can be reclaimed, and it is the only verb here that does not reach a
-# container. It carries no destruction authority, which the next case proves.
-run_case "the verb set is exactly the fifteen accepted verbs" "${PRELUDE}
+# Sixteen. Two reviewed closed-set additions, and nothing else has ever been
+# added: `abandon` (ADR-0015) permanently closes one stuck invocation so its
+# execution slot can be reclaimed, and `correct-provenance` (ADR-0016) records
+# that a claim in an earlier CADM is not truthful provenance while that
+# record's effect stands. Neither reaches a container and neither carries
+# destruction authority, which the next cases prove.
+run_case "the verb set is exactly the sixteen accepted verbs" "${PRELUDE}
 expected = {'retain', 'destroy', 'retain-residue', 'retry-cleanup',
             'retain-collision', 'destroy-collision', 'retain-start-unknown',
             'destroy-start-unknown', 'retain-lifecycle-failure',
             'destroy-lifecycle-failure', 'acknowledge-state-lost',
             'retain-quarantine-incomplete', 'retain-quarantine-residue',
-            'inspect-admin-integrity', 'abandon'}
+            'inspect-admin-integrity', 'abandon', 'correct-provenance'}
 actual = {verb.value for verb in A.Verb}
 assert actual == expected, sorted(actual ^ expected)
 for invented in ('delete', 'cleanup', 'podman', 'repair', 'force', 'exec',
-                 'prune', 'destroy-residue', 'reset'):
+                 'prune', 'destroy-residue', 'reset', 'annotate', 'amend',
+                 'edit', 'correct', 'ratify'):
     try:
         A.Verb(invented)
     except ValueError:
@@ -291,7 +294,8 @@ run_case "only inspection is non-mutating and only it allocates no CADM" "${PREL
 mutating = {v for v in A.Verb if A.is_mutating(v)}
 assert A.Verb.INSPECT_ADMIN_INTEGRITY not in mutating
 assert A.Verb.ABANDON in mutating
-assert len(mutating) == 14, len(mutating)
+assert A.Verb.CORRECT_PROVENANCE in mutating
+assert len(mutating) == 15, len(mutating)
 print('OK')
 "
 

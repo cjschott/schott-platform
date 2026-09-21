@@ -177,3 +177,22 @@ def verify_backing_store(config_fd: int, root_fd: int, *,
         mount_point=document["mount_point"],
         device_name=observed.device_name,
     )
+
+
+def target_fingerprint(root: Any) -> dict[str, int]:
+    """Which object a mutation is actually about to be written through.
+
+    G11-BC-Y. A rehearsal proved its gates against a fixture while the mutator
+    resolved production from a module constant, and every check it ran was a
+    check of the *text* naming a root rather than of the root the writer held.
+    This answers the second question: the descriptor is stat'ed now, so the
+    answer is the kernel's, not a string the caller passed.
+
+    ``path`` stays absent from ``RootDescriptor`` -- nothing may reopen by name
+    -- so identity here is the device and inode pair, which is what distinguishes
+    a fixture from production without handing anybody a way back to either.
+    """
+    if not isinstance(root, RootDescriptor):
+        raise BackingStoreError("a verified RootDescriptor is required")
+    status = os.fstat(root.fd)
+    return {"st_dev": status.st_dev, "st_ino": status.st_ino}

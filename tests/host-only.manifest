@@ -16,6 +16,7 @@
 # format: <suite>\t<reason>
 
 test-artifact-authority.sh	drives the artifact-authority ceremony pinned to /opt/schott-platform
+test-capability-cinv-000002-reclamation-rehearsal.sh	DISARMED after it mutated production on 2026-09-20; listed because it still declares the host preconditions it was written against
 test-capability-execution-bb-helper-ceremony.sh	reads the installed helper surface and runtime to reconstruct the accepted baseline
 test-capability-execution-g5-authority.sh	drives the G5 ceremony pinned to /opt/schott-platform
 test-capability-execution-g5-build-context.sh	drives the G5 ceremony pinned to /opt/schott-platform
@@ -50,6 +51,7 @@ test-capability-execution-generation13-packaging.sh	reads the installed Generati
 test-capability-identity-authority-ceremony.sh	renders the reviewed identity candidates from this deployment's account database
 test-capability-execution-generation14-installer.sh	drives the generation-14 ceremony against a fixture built from the installed runtime
 test-capability-execution-helper-ceremony.sh	drives the ten-object helper ceremony against a fixture built from the installed Generation-14 runtime
+test-capability-mutation-target-explicit.sh	reads the installed runtime and the production capability-runtime store to prove which store a mutator writes through
 test-fabric-freeze-cinst-000006-rehearsal.sh	runs the whole CINST-000006 freeze block against a fixture copied from the production Fabric and frozen inputs
 test-fabric-freeze-croute-0006-rehearsal.sh	runs the whole CROUTE-0006 freeze block against a fixture copied from the production Fabric and frozen inputs
 test-fabric-freeze-csel-000004-rehearsal.sh	runs the whole CSEL-000004 freeze block against a fixture copied from the production Fabric and frozen inputs
