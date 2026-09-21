@@ -185,9 +185,9 @@ against real kernel credential transitions.**
 | Reconcile-entrypoint suite | **12 PASS** |
 | Quick validator | **131/131**, passed |
 | Full validator | **156/156**, passed — **with the E2E running inside it** |
-| Clean-clone full validator | CLONE_PLACEHOLDER |
+| Clean-clone full validator | **156/156**, passed — clone of the pushed commit **from the remote**, E2E ran and passed there too |
 | ShellCheck (CI-pinned 0.9.0, host) | clean, rc 0 |
-| GitHub CI | CI_PLACEHOLDER |
+| GitHub CI | **6/6 success** at `b79cf8a` — CI, CodeQL, Gitleaks, Semgrep, ShellCheck, Trivy |
 
 **Skipped tests, explicitly.** The full validator reported exactly **two**
 `HOST_ONLY_SKIP`s, and `test-capability-supervised-execution-e2e.sh` is no
@@ -198,6 +198,12 @@ longer one of them — it ran inside the validator at line 20974 and passed:
 
 both with the reason `runs as uid 1000, not the coordinator identity ` — with
 the expected identity **blank**.
+
+The **clean-clone** run reported 20 skips: the same two, plus 18 suites that
+pin `/opt/schott-platform` and correctly decline to run against a clone at a
+different path. That is the designed behaviour of
+`host_only_requires_pinned_checkout`, not a regression. The E2E suite is **not**
+among them — it ran and passed in the clean clone as well.
 
 ### A pre-existing defect in those two skip guards, reported not fixed
 
@@ -239,11 +245,21 @@ Re-measured after every run above:
 | Occupancy | 2 of 2 |
 | `cmut` / `cadm` | `000000000010` / `000002` |
 | Transitions | 7 |
-| Production `kyri-CINV-000003` container | none |
+| Production `kyri-CINV-000003` container | none — see the limitation below |
 | Stage 3 | not executed |
 
 Every container created in this checkpoint lived in a disposable Podman store
 under `/tmp` and was removed by its suite's own cleanup trap.
+
+**One limitation, stated rather than papered over.** The governed
+`kyri-capability` Podman store cannot be read from this account — that needs
+the elevation BLOCK A performs, and this checkpoint did not elevate. So the
+absence of a production `kyri-CINV-000003` container is established indirectly:
+`execute` was never invoked, no privileged helper was called, the runtime
+aggregate is unchanged, and every container this checkpoint created was in a
+disposable store at a different graphroot. A direct observation of the governed
+store is BLOCK A's job and belongs to the Stage-3 run itself, which pins a
+witness under 900 s old.
 
 ## 9. Current Fabric authority
 
