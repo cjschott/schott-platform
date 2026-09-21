@@ -174,222 +174,131 @@ else
 fi
 
 # ===========================================================================
-# 2. The pre-correction store, reconstructed
+# 2. The released operation still refuses a conflicting correction
 # ===========================================================================
 #
-# The correction's whole mutation was one CADM and one counter increment, so
-# removing them reproduces the store it ran against -- which G11-BC-Z proved by
-# aggregate. That reconstruction is what the ceremony is rehearsed against, so
-# the rehearsal still runs the REAL ceremony against the REAL starting state
-# rather than being retired to a list of assertions.
+# WHAT THIS SUITE STOPPED DOING, AND WHY.
+#
+# It used to reconstruct the pre-correction store -- today's store less
+# CADM-000002 and its counter -- and drive the whole ceremony against it. That
+# was sound the day it was written and stopped being sound the moment Stage 2
+# landed: the reconstruction reproduces the pre-correction AGGREGATE only while
+# nothing else has happened since, and something always happens next. Keeping
+# it would mean subtracting every later stage's artefacts from a hand-kept
+# list, which is the exact defect corrected at G11-BC-Y in eight other suites.
+#
+# So this is spent mode, as the discipline requires: durable facts, and no
+# historical whole-store aggregate. What remains testable without one is the
+# released operation's own refusal -- a property of the code rather than of the
+# store's history, and the one that protects the accepted record from being
+# written over by a second authority.
 
-printf -- '\n--- the pre-correction store, reconstructed ---\n'
+printf -- '\n--- a conflicting correction is refused ---\n'
 
-cp -a "${PRODUCTION}" "${WORK}/runtime"
-chmod -R u+w "${WORK}/runtime"
-rm -rf "${WORK}/runtime/execution/admin-records/CADM-000002"
-printf '000001\n' > "${WORK}/runtime/execution/cadm-counter"
-reconstructed="$(find "${WORK}/runtime" -type f -print0 | sort -z | xargs -0 sha256sum \
-  | sed "s#${WORK}/runtime#/data/kyri/capability-runtime#" | sha256sum | cut -d' ' -f1)"
-if [[ "${reconstructed}" == "9374b56870759ebccbbb74a38ada5905bcd5ce3bd1418428b72e148cdc662d68" ]]; then
-  pass "the reconstruction reproduces the accepted pre-correction aggregate"
+FIXTURE="${WORK}/conflict"
+[[ -e "${FIXTURE}" ]] && { chmod -R u+w "${FIXTURE}"; rm -rf "${FIXTURE}"; }
+cp -a "${PRODUCTION}" "${FIXTURE}"
+pass "a byte copy of production was taken, correction and all"
+
+if ( cd "${INSTALLED}" && python3 - "${FIXTURE}" <<'CONFLICTPY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import provenance
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    try:
+        provenance.correct_provenance(
+            execution_root=root, subject_cadm="CADM-000001",
+            cinv="CINV-000002", disputed_field="actor",
+            disputed_value="primary-platform-operator",
+            finding=provenance.FINDING_NOT_AUTHORISED,
+            actual_initiator=provenance.INITIATOR_UNKNOWN,
+            actor="somebody-else", request_id="a-different-request",
+            recorded_at="2026-09-22T09:00:00-05:00")
+    except provenance.ProvenanceRefused as error:
+        print(f"refused: {error}")
+        raise SystemExit(0)
+    raise SystemExit(1)
+finally:
+    root.close()
+CONFLICTPY
+); then
+  pass "a correction of the same claim under different authority is refused"
 else
-  fail "the reconstruction is ${reconstructed}"
+  fail "a conflicting correction was accepted"
 fi
-cp -a "${WORK}/runtime" "${WORK}/runtime.orig"
+if [[ ! -e "${FIXTURE}/execution/admin-records/CADM-000003" ]]; then
+  pass "and the refusal allocated nothing"
+else
+  fail "the refused correction allocated a record"
+fi
 
-# The library is the INSTALLED one: Generation 20 is what the operator ran, and
-# it is the authority this rehearsal is about.
-FIXTURE_LIB="${INSTALLED}"
-pass "the rehearsal calls the installed Generation-20 library, as the operator did"
+# An identical repeat resumes rather than writing a second finding. Asked of
+# the copy, so the accepted production record is never the thing under test.
+if ( cd "${INSTALLED}" && python3 - "${FIXTURE}" <<'RESUMEPY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import provenance
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    outcome = provenance.correct_provenance(
+        execution_root=root, subject_cadm="CADM-000001", cinv="CINV-000002",
+        disputed_field="actor", disputed_value="primary-platform-operator",
+        finding=provenance.FINDING_NOT_AUTHORISED,
+        actual_initiator=provenance.INITIATOR_UNAUTHORISED_REHEARSAL,
+        actor="primary-platform-operator",
+        request_id="g11bcy-correct-cadm-000001-attribution",
+        recorded_at="2026-09-21T06:42:08-05:00")
+    raise SystemExit(0 if (outcome.resumed and outcome.cadm == "CADM-000002")
+                     else 1)
+finally:
+    root.close()
+RESUMEPY
+); then
+  pass "the identical correction resumes and reports the record already written"
+else
+  fail "the identical repeat did not resume"
+fi
+if [[ "$(cat "${FIXTURE}/execution/cadm-counter")" == "000002" ]]; then
+  pass "and it allocated no identity"
+else
+  fail "the resume spent a CADM"
+fi
 
 # ===========================================================================
-# 3. The whole ceremony, aimed at the fixture
+# 3. Production, after everything
 # ===========================================================================
 
-printf -- '\n--- the whole ceremony, against the fixture ---\n'
-
-rendered="${WORK}/ceremony.sh"
-sed -e "s#^INSTALLED=/usr/lib/kyri/python\$#INSTALLED=${FIXTURE_LIB}#" \
-    -e "s#^RUNTIME=/data/kyri/capability-runtime\$#RUNTIME=${WORK}/runtime#" \
-    -e "s#^RUNTIME_BEFORE=.*#RUNTIME_BEFORE=$(aggregate "${WORK}/runtime")#" \
-    "${CEREMONY}" > "${rendered}"
-
-# Only the RUNTIME is substituted. INSTALLED stays pointed at the real library
-# on purpose: Generation 20 is installed, it is what the operator ran, and it
-# is the authority this rehearsal exists to exercise.
-if grep -q "^RUNTIME=${PRODUCTION}\$" "${rendered}"; then
-  fail "the production runtime root survived the substitution"
+printf -- '\n--- production untouched ---\n'
+if [[ "$(find "${INSTALLED}" -type f -name '*.py' -print0 | sort -z \
+         | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" == "${LIBRARY_BEFORE}" ]]; then
+  pass "the installed library is byte-identical: this suite published nothing"
 else
-  pass "the runtime root was substituted"
-fi
-if grep -q "^INSTALLED=${INSTALLED}\$" "${rendered}"; then
-  pass "the installed Generation-20 library is still what the ceremony calls"
-else
-  fail "the installed library was substituted away; the rehearsal would prove less"
-fi
-
-out="$( ( cd "${ROOT}" && bash "${rendered}" ) 2>&1 )" && status=0 || status=$?
-if (( status == 0 )); then
-  pass "the ceremony runs to completion against the fixture"
-else
-  fail "the ceremony failed (${status}): $(printf '%s' "${out}" | tail -4 | tr '\n' ' ')"
-fi
-
-for expected in \
-  'ok  installed: correct-provenance present, actor-only, no destruction authority' \
-  'ok  installed: both administrative mutators require an explicit target' \
-  'ok  CADM-000001 records actor primary-platform-operator for CINV-000002 -- the claim this corrects' \
-  'ok  exactly one administrative record, and no correction yet' \
-  'ok  CINV-000001 launch_authorized, CINV-000002 abandoned, 1 of 2 slots held' \
-  'ALL GATES PASSED. THE NEXT COMMAND IS IRREVERSIBLE.' \
-  'ok  process rc 0' \
-  'ok  cadm               CADM-000002' \
-  'ok  effect             retained' \
-  'ok  lifecycle_state    abandoned' \
-  'ok  resumed            False' \
-  'ok  the writer held the production execution root, asked of the kernel' \
-  'ok  no transition, no CMUT, no CRES, no sequence movement, CINV-000003 untouched' \
-  'ok  lifecycle unchanged, 1 of 2 slots held' \
-  'THE ATTRIBUTION IS CORRECTED. THE EFFECT STANDS. STOP HERE.'
-do
-  if printf '%s' "${out}" | grep -qF "${expected}"; then
-    pass "the ceremony reports: ${expected}"
-  else
-    fail "the ceremony did not report: ${expected}"
-  fi
-done
-
-# ===========================================================================
-# 4. THE PROPERTY THE LAST REHEARSAL DID NOT HAVE
-# ===========================================================================
-
-printf -- '\n--- the writer followed the substitution ---\n'
-
-fixture_inode="$(stat -c '%i' "${WORK}/runtime/execution")"
-production_inode="$(stat -c '%i' "${PRODUCTION}/execution")"
-reported="$(printf '%s' "${out}" | sed -n 's/^ok  production execution root is device [0-9]* inode \([0-9]*\)$/\1/p' | head -1)"
-if [[ "${reported}" == "${fixture_inode}" ]]; then
-  pass "the ceremony measured the fixture's execution root (inode ${reported})"
-else
-  fail "the ceremony measured inode ${reported}, the fixture is ${fixture_inode}"
-fi
-if [[ "${reported}" != "${production_inode}" ]]; then
-  pass "and that is not production's (inode ${production_inode})"
-else
-  fail "the fixture and production are indistinguishable"
-fi
-
-if [[ -f "${WORK}/runtime/execution/admin-records/CADM-000002/provenance-correction" ]]; then
-  pass "the correction landed in the fixture"
-else
-  fail "no correction was written to the fixture"
+  fail "THE INSTALLED LIBRARY CHANGED"
 fi
 if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
-  pass "PRODUCTION IS BYTE-IDENTICAL: ${PRODUCTION_BEFORE}"
+  pass "the production runtime is byte-identical: ${PRODUCTION_BEFORE}"
 else
-  fail "THE REHEARSAL MUTATED PRODUCTION"
+  fail "THE PRODUCTION RUNTIME CHANGED"
 fi
-# Production's CADM-000002 is the operator's accepted one, and this run did not
-# touch it. "Absent" stopped being the right assertion the moment the operator
-# performed the correction; "unchanged by me" is.
 if [[ "$(sha256sum "${PRODUCTION}/execution/admin-records/CADM-000002/provenance-correction" | cut -d' ' -f1)" \
       == "47b977d83b164ee9056527d99ec40d995b8e9b26e4b63b992df1ac8da8b0e58e" ]]; then
-  pass "production's accepted CADM-000002 is byte-identical: this run did not touch it"
+  pass "the accepted correction is byte-identical: this run did not touch it"
 else
-  fail "PRODUCTION'S CADM-000002 CHANGED"
+  fail "PRODUCTION'S CORRECTION RECORD CHANGED"
 fi
 if [[ ! -e "${PRODUCTION}/execution/admin-records/CADM-000003" ]]; then
   pass "and no further administrative record was created"
 else
   fail "A PRODUCTION ADMINISTRATIVE RECORD WAS CREATED"
-fi
-after_lib="$(find "${INSTALLED}" -type f -name '*.py' -print0 | sort -z \
-             | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
-if [[ "${after_lib}" == "${LIBRARY_BEFORE}" ]]; then
-  pass "the installed library is byte-identical: the rehearsal published nothing"
-else
-  fail "THE INSTALLED LIBRARY CHANGED"
-fi
-
-# ===========================================================================
-# 5. The mutation, measured
-# ===========================================================================
-
-printf -- '\n--- the mutation, measured ---\n'
-
-for member in intent outcome provenance-correction; do
-  if [[ -f "${WORK}/runtime/execution/admin-records/CADM-000002/${member}" ]]; then
-    pass "CADM-000002 carries its ${member}"
-  else
-    fail "CADM-000002 has no ${member}"
-  fi
-done
-if diff -r "${WORK}/runtime.orig/execution/admin-records/CADM-000001" \
-           "${WORK}/runtime/execution/admin-records/CADM-000001" >/dev/null; then
-  pass "CADM-000001 is byte-identical: the subject was never opened for writing"
-else
-  fail "CADM-000001 CHANGED"
-fi
-if diff -r "${WORK}/runtime.orig/execution/transitions" \
-           "${WORK}/runtime/execution/transitions" >/dev/null; then
-  pass "the transition journal is byte-identical"
-else
-  fail "a transition was written"
-fi
-if diff -r "${WORK}/runtime.orig/execution/mutations" \
-           "${WORK}/runtime/execution/mutations" >/dev/null; then
-  pass "the mutation journal is byte-identical: a correction journals no lifecycle"
-else
-  fail "a CMUT was written"
-fi
-if diff -r "${WORK}/runtime.orig/capability-invocations" \
-           "${WORK}/runtime/capability-invocations" >/dev/null \
-   && diff -r "${WORK}/runtime.orig/capability-results" \
-              "${WORK}/runtime/capability-results" >/dev/null; then
-  pass "every CINV and CRES is byte-identical"
-else
-  fail "an immutable record changed"
-fi
-
-# The whole mutation, by reconstruction rather than by enumeration.
-recon="${WORK}/recon"
-cp -a "${WORK}/runtime" "${recon}"; chmod -R u+w "${recon}"
-rm -rf "${recon}/execution/admin-records/CADM-000002"
-printf '000001\n' > "${recon}/execution/cadm-counter"
-a="$(find "${recon}" -type f -print0 | sort -z | xargs -0 sha256sum | sed "s#${recon}#X#" | sha256sum)"
-b="$(find "${WORK}/runtime.orig" -type f -print0 | sort -z | xargs -0 sha256sum \
-     | sed "s#${WORK}/runtime.orig#X#" | sha256sum)"
-if [[ "${a}" == "${b}" ]]; then
-  pass "removing CADM-000002 and the counter increment reproduces the pre-correction store exactly"
-else
-  fail "the mutation was not exactly one CADM and one counter increment"
-fi
-
-# ===========================================================================
-# 6. A second run refuses
-# ===========================================================================
-
-printf -- '\n--- a second run ---\n'
-sed -i "s#^RUNTIME_BEFORE=.*#RUNTIME_BEFORE=$(aggregate "${WORK}/runtime")#" "${rendered}"
-out="$( ( cd "${ROOT}" && bash "${rendered}" ) 2>&1 )" && status=0 || status=$?
-if (( status != 0 )); then
-  pass "a second run refuses"
-else
-  fail "a second run was accepted"
-fi
-# It refuses at the counter, which is the earliest gate that can see the
-# correction already happened -- before the subject is read and long before
-# anything is written.
-if printf '%s' "${out}" | grep -qE 'cadm-counter is not 000001|more than one administrative record'; then
-  pass "it refuses on evidence that the correction already happened, before the mutation"
-else
-  fail "the second run refused for another reason: $(printf '%s' "${out}" | tail -2 | tr '\n' ' ')"
-fi
-if [[ ! -e "${WORK}/runtime/execution/admin-records/CADM-000003" ]]; then
-  pass "and no second correction was written"
-else
-  fail "a second correction was written"
 fi
 
 printf '\n'
