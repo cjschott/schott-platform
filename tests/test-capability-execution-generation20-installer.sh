@@ -182,10 +182,14 @@ run_installer() {
 
 printf -- '--- the declaration ---\n'
 
-if [[ "$(stat -c '%a' "${INSTALLER}")" == "644" ]]; then
+# NOT EXECUTABLE is the property; the exact mode is not. Git records only the
+# executable bit, so a fresh clone under a different umask carries 664 and an
+# assertion on 644 fails there while proving nothing about the thing that
+# matters -- the provisioning suite refuses an executable under this directory.
+if [[ ! -x "${INSTALLER}" ]]; then
   pass "the installer is not executable: it is run by an operator through bash, deliberately"
 else
-  fail "the installer is mode $(stat -c '%a' "${INSTALLER}"), expected 644"
+  fail "the installer is executable (mode $(stat -c '%a' "${INSTALLER}"))"
 fi
 
 if [[ "$(matrix_rows | wc -l)" == "5" ]]; then
