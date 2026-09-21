@@ -307,7 +307,7 @@ runtime-baseline gate and the durable facts of `CADM-000002`, and rehearses the
 ceremony against a *reconstruction* of the pre-correction store — which is sound
 because that reconstruction is exact.
 
-### Two suites had stopped being reconstructions
+### Three suites had stopped being reconstructions
 
 Both are the class corrected at G11-BC-Y, arriving on schedule:
 
@@ -320,15 +320,30 @@ Both are the class corrected at G11-BC-Y, arriving on schedule:
   is installed, and derives its object counts.
 - `test-capability-cadm-000001-correction-rehearsal.sh` depended on that fixture
   builder and on the ceremony being unspent. Rewritten as above.
+- `test-capability-mutation-target-explicit.sh` reproduced the incident against
+  the **installed** library, and the defect stopped being installed the moment
+  Generation 20 landed — so the proof of it could no longer run. A claim about
+  an earlier release is a claim about its reviewed bytes: the Generation-19
+  package is now materialised from the commit the Generation-20 installer names
+  as its baseline, digest-checked, and the defect reproduced there. The suite
+  additionally asserts the defect is **not** on this host. Its correction
+  fixture is cut from a pre-correction reconstruction, because a fixture cut
+  from production today already carries `CADM-000002` and a fresh correction
+  there is refused as a conflicting one — the released behaviour working, and
+  not the question that suite asks.
 
 ## L. Verification
 
 | Run | Result |
 |---|---|
-| Quick validator | (see final output) |
-| Full validator | (see final output) |
-| Clean-clone full validator | (see final output) |
-| GitHub CI | (see final output) |
+| Quick validator | **130/130**, passed |
+| Full validator | **155/155**, passed |
+| Clean-clone full validator | **155/155**, passed |
+| ShellCheck (CI-pinned 0.9.0) | clean |
+| GitHub CI | all workflows green |
+
+New and reworked suites: Stage-2 rehearsal 126, Generation-20 installer 83,
+correction rehearsal 60, mutation target 32.
 
 Production after every run: runtime `76bf8f99…`, Fabric `a87c2010…`,
 `CINV-000003` with no execution state, no handoff published for it.

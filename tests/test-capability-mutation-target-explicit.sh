@@ -61,6 +61,21 @@ fixture() {
   printf '%s' "${path}"
 }
 
+# The same copy, rewound to before the operator's correction. A correction
+# fixture cut from production today already carries CADM-000002, so a fresh
+# correction there is refused as a conflicting one -- which is the released
+# behaviour working, and is not what this suite is asking about. Removing that
+# record and rewinding the counter reproduces the store the correction ran
+# against, exactly, which G11-BC-Z proved by aggregate.
+uncorrected_fixture() {
+  local path
+  path="$(fixture "$1")"
+  chmod -R u+w "${path}"
+  rm -rf "${path}/execution/admin-records/CADM-000002"
+  printf '000001\n' > "${path}/execution/cadm-counter"
+  printf '%s' "${path}"
+}
+
 # ===========================================================================
 # 1. RED: the old design, reproduced without touching production
 # ===========================================================================
@@ -72,7 +87,45 @@ fixture() {
 
 printf -- '--- RED: the old design resolves production from a constant ---\n'
 
-red="$(cd "${INSTALLED}" && python3 - <<'REDPY' 2>&1
+# THE SUBJECT IS GENERATION 19, AND GENERATION 19 IS A COMMIT.
+#
+# This block read the INSTALLED library until the operator installed Generation
+# 20 on 2026-09-21, at which point the defect was no longer installed and the
+# proof of it could not run. That is the same staleness eight generation suites
+# carried, corrected at G11-BC-Y: a claim about an earlier release is a claim
+# about its reviewed bytes, not about whatever the host happens to hold.
+#
+# So the Generation-19 package is materialised from the commit the Generation-20
+# installer names as its baseline, and the defect is reproduced there. Nothing
+# is opened, locked or written: the store constructor and the root anchor are
+# replaced with recorders that raise, and what is captured is the path the
+# command ASKED for.
+GEN19_COMMIT="$(sed -n 's/^GEN19_COMMIT="\([0-9a-f]\{40\}\)"$/\1/p' \
+  "${ROOT}/provisioning/execution/install-generation-20.sh")"
+if [[ -n "${GEN19_COMMIT}" ]]; then
+  pass "the Generation-19 authority is read from the installer: ${GEN19_COMMIT:0:7}"
+else
+  fail "the Generation-20 installer names no Generation-19 baseline commit"
+  exit 1
+fi
+
+GEN19_TREE="${WORK}/gen19"
+mkdir -p "${GEN19_TREE}"
+( cd "${ROOT}" && git archive --format=tar "${GEN19_COMMIT}" tools ) | tar -x -C "${GEN19_TREE}"
+if [[ -f "${GEN19_TREE}/tools/capability/cli.py" ]]; then
+  pass "the reviewed Generation-19 package was materialised from that commit"
+else
+  fail "the Generation-19 package could not be materialised"
+  exit 1
+fi
+if [[ "$(sha256sum "${GEN19_TREE}/tools/capability/cli.py" | cut -d' ' -f1)" \
+      == "a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407" ]]; then
+  pass "and it is the cli.py Generation 19 published"
+else
+  fail "the materialised cli.py is not the Generation-19 one"
+fi
+
+red="$( cd "${GEN19_TREE}" && PYTHONDONTWRITEBYTECODE=1 python3 - <<'REDPY' 2>&1
 import argparse
 import sys
 
@@ -96,42 +149,55 @@ def anchored(root):
 cli.CapabilityStore = Recorder
 cli._anchored = anchored
 
-# Every value a rehearsal controls says "fixture". There is no argument for
-# the store root, because the old surface has none.
+# Every value a rehearsal controls says "fixture". There is no argument for the
+# store root, because the Generation-19 surface has none.
 args = argparse.Namespace(
     expected_uid=1000, expected_gid=1000, cinv="CINV-000002",
-    actor="a-rehearsal", request_id="rehearsal", reason="terminal-result-lifecycle-stranded",
+    actor="a-rehearsal", request_id="rehearsal",
+    reason="terminal-result-lifecycle-stranded",
     recorded_at="2026-09-20T18:54:33-05:00")
 
 try:
     cli.command_abandon(args)
-except RuntimeError:
-    pass
+except Exception as error:                                   # noqa: BLE001
+    print("RAISED", type(error).__name__)
 
 verbs = next(a.choices for a in cli.build_parser()._actions
              if getattr(a, "choices", None))
 flags = {o for a in verbs["abandon"]._actions for o in a.option_strings}
 
 print("ASKED", asked[0][1] if asked else "nothing")
-print("ROOT_FLAGS", sorted(f for f in flags if "root" in f) or "none")
+print("ROOT_FLAGS", " ".join(sorted(f for f in flags if "root" in f)) or "none")
 REDPY
 )"
 asked="$(printf '%s\n' "${red}" | sed -n 's/^ASKED //p')"
 root_flags="$(printf '%s\n' "${red}" | sed -n 's/^ROOT_FLAGS //p')"
 if [[ "${asked}" == "${PRODUCTION}" ]]; then
-  pass "the installed abandon asks for ${PRODUCTION} while every caller-controlled value says fixture"
+  pass "the Generation-19 abandon asks for ${PRODUCTION} while every caller-controlled value says fixture"
 else
-  fail "expected the installed abandon to resolve ${PRODUCTION}, it asked for '${asked}'"
+  fail "expected the Generation-19 abandon to resolve ${PRODUCTION}, it asked for '${asked}'"
 fi
 if [[ "${root_flags}" == "none" ]]; then
-  pass "the installed abandon surface has no root argument at all, so it cannot be aimed"
+  pass "the Generation-19 abandon surface has no root argument at all, so it cannot be aimed"
 else
-  fail "the installed abandon surface unexpectedly accepts ${root_flags}"
+  fail "the Generation-19 abandon surface unexpectedly accepts ${root_flags}"
 fi
 if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
   pass "reproducing the incident touched nothing: production is byte-identical"
 else
   fail "THE RED CASE MUTATED PRODUCTION"
+fi
+
+# And the defect is gone from the host, which is the other half of the claim.
+if ( cd "${INSTALLED}" && python3 -c '
+import sys; sys.path.insert(0, ".")
+from tools.capability import cli
+verbs = next(a.choices for a in cli.build_parser()._actions if getattr(a, "choices", None))
+flags = {o for a in verbs["abandon"]._actions for o in a.option_strings}
+raise SystemExit(0 if "--store-root" in flags else 1)'); then
+  pass "the INSTALLED abandon now requires --store-root: the defect is not on this host"
+else
+  fail "the installed abandon still has no explicit target"
 fi
 
 # ===========================================================================
@@ -277,7 +343,7 @@ else
   fail "correct-provenance omission gave status ${status}"
 fi
 
-FIX2="$(fixture fix-correct)"
+FIX2="$(uncorrected_fixture fix-correct)"
 out="$(cd "${ROOT}" && python3 -m tools.capability.cli correct-provenance \
       --store-root "${FIX2}" "${correct[@]}" 2>&1)" && status=0 || status=$?
 if (( status == 0 )); then
@@ -414,10 +480,17 @@ if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
 else
   fail "THE PRODUCTION RUNTIME CHANGED"
 fi
-if [[ "$(find "${PRODUCTION}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" == "1" ]]; then
-  pass "production still holds exactly the one administrative record it held"
+# Two now: the abandonment and the operator's accepted correction of it.
+if [[ "$(find "${PRODUCTION}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" == "2" ]]; then
+  pass "production still holds exactly its two administrative records"
 else
   fail "the production administrative records changed"
+fi
+if [[ "$(sha256sum "${PRODUCTION}/execution/admin-records/CADM-000002/provenance-correction" | cut -d' ' -f1)" \
+      == "47b977d83b164ee9056527d99ec40d995b8e9b26e4b63b992df1ac8da8b0e58e" ]]; then
+  pass "and the accepted correction is byte-identical"
+else
+  fail "PRODUCTION'S CORRECTION RECORD CHANGED"
 fi
 
 printf '\n'
