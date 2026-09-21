@@ -287,6 +287,25 @@ exists with the three pinned digests, and the invocation sequence is 3. No
 historical whole-runtime aggregate is pinned in spent mode beyond the one Stage 3
 itself will move.
 
+## 8b. Two suites had to move to spent mode with it
+
+Both re-ran their ceremony against a fixture cut from production, and Stage 2
+landing made that impossible for one and wrong for the other:
+
+- `test-capability-cinv-000003-stage-2-rehearsal.sh` drove `authorise_launch`
+  against a copy. The copy now carries CINV-000003's execution state, so the
+  released code refuses with `CapacityExhausted` — working exactly as designed.
+- `test-capability-cadm-000001-correction-rehearsal.sh` reconstructed the
+  pre-correction store and checked its aggregate. Stage 2 happened *after* the
+  correction, so the reconstruction no longer reproduces it.
+
+Reconstructing further would mean subtracting every later stage's artefacts
+from a hand-kept list — the defect corrected at G11-BC-Y in eight other suites.
+Both are now spent mode: durable facts, the ceremony's own refusal on a durable
+fact, and no historical whole-store aggregate. Each keeps the behaviour that is
+still live — Stage 2 keeps the repeat that resumes and writes nothing, the
+correction keeps its conflict and resume refusals.
+
 ## 9. Actions not performed
 
 Stage 3 was not run in production. No payload was executed in production. No
@@ -294,6 +313,21 @@ Stage 3 was not run in production. No payload was executed in production. No
 reclaimed. Fabric, Trust, Artifact authority and Platform Evidence were not
 altered. `MAXIMUM_SLOTS` is unchanged at 2. No runtime record was hand-edited.
 Root Authority was not mounted. ENG-0006 was not begun.
+
+## 9b. Verification
+
+| Run | Result |
+|---|---|
+| Quick validator | **131/131**, passed |
+| Full validator | **156/156**, passed |
+| Clean-clone full validator | **156/156**, passed |
+| ShellCheck (CI-pinned 0.9.0) | clean |
+
+Suites: Stage-3 rehearsal 160, Stage-2 rehearsal 34 (spent mode), correction
+rehearsal 31 (spent mode).
+
+Production after every run: runtime `648066f6…`, Fabric `a87c2010…`, no
+`CRES-000002`, `capability-result.seq` still 1.
 
 ## 10. Readiness for Stage 3
 
