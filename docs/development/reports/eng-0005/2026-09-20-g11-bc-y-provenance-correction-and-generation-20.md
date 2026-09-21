@@ -316,8 +316,58 @@ Generation 20 and the correction record are accepted.
 
 ## L. Verification
 
-See the run log in the final output block below. All suites green, repository
-clean, pushed fast-forward.
+| Run | Result |
+|---|---|
+| Quick validator | **129/129**, passed |
+| Full validator | **154/154**, passed |
+| Clean-clone full validator | **154/154**, passed |
+| ShellCheck (CI-pinned 0.9.0) | clean |
+| Static + docs-static | passed |
+
+New suites: provenance correction 22, mutation target 39, Generation-20
+installer 83, correction rehearsal 41.
+
+### Eight generation suites were reconstructing hosts that never existed
+
+The first full run failed in eight places, and none of them was the new work.
+Each of those suites rebuilds an earlier host by copying the live library and
+undoing later generations **from a hand-kept list**, and every list stopped at
+Generation 18. When the operator installed Generation 19, each fixture silently
+kept `abandonment.py` and claimed to be a host that never had it. The suites'
+own comments record this going stale at Generations 14, 15 and 16 already;
+Generation 19 was the fourth time, and declaring Generation 20 would have been
+the fifth.
+
+The lists are gone. Every successor is found by name.
+
+Three consequences of a generation being **declared but not installed** — which
+had never happened before — are handled where they arise:
+
+- a CREATE is subtracted from a count only when the live tree actually holds it;
+- the successor chain is a SET of declared states rather than its last value,
+  because the host sits at Generation 19's `cli.py` while Generation 20 declares
+  the next one;
+- `succession_rewind` removes a REPLACE whose pathname another ceremony in the
+  same set introduced, instead of failing to restore it from a commit that never
+  carried it.
+
+The Generation-19 suite also published its intermediates from the **checkout**,
+which was the same thing until Generation 20's `cli.py` imported a module a
+Generation-19 fixture does not hold. It reads its own commit now.
+
+One further defect was found by the clean clone and not by the local run: the
+Generation-20 suite asserted the installer's mode was exactly 644, and a fresh
+clone under a different umask carries 664. The property is that it is not
+executable, and that is what it asserts.
+
+Generation 20 is declared in `g5-preflight.sh`'s `GENERATION_DELTA`. The four
+new suites run in CI; the disarmed reclamation rehearsal is named in both the
+validator and the CI workflow as deliberately not run, so its omission is a
+decision on the record rather than a gap.
+
+Production after every run: runtime `9374b568…`, one administrative record,
+`cadm-counter` `000001`, `cmut-counter` `000000000007`, Fabric `a87c2010…`,
+installed library 82 objects. Unchanged.
 
 ## Actions NOT performed
 
