@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=130
+  TOTAL_STEPS=131
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=155
+  TOTAL_STEPS=156
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -484,6 +484,14 @@ run "CADM-000001 correction rehearsal" \
 # predicates over stores. Host-only.
 run "CINV-000003 Stage 2 rehearsal" \
   bash tests/test-capability-cinv-000003-stage-2-rehearsal.sh
+
+# G11-BC-AA. CINV-000003 Stage 3. The gates run whole against fixtures; the
+# irreversible command does not, for the reason Stage 2's did not. The
+# coordinator half is driven for real over the released protocol, the released
+# package is run against the published payload, and every way the supervision
+# can end is exercised. Host-only.
+run "CINV-000003 Stage 3 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-3-rehearsal.sh
 
 run "Capability execution generation 18 installer" \
   bash tests/test-capability-execution-generation18-installer.sh

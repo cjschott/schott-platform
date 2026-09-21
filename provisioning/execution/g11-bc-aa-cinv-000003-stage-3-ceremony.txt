@@ -1,0 +1,547 @@
+#!/usr/bin/env bash
+# CINV-000003 STAGE 3 -- `capability execute`, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes each
+# block into a shell so every command and every refusal is visible on the
+# console.
+#
+# =====================================================================
+# THREE BLOCKS, AND ONLY ONE OF THEM MUTATES
+# =====================================================================
+#   BLOCK A  observation, as kyri-capability. Containers and the execution
+#            image. Writes a short-lived witness.
+#   BLOCK B  the gates. Read-only, every one of them.
+#   BLOCK C  the single irreversible command, and what must be true after it.
+#
+# BLOCK C IS NOT REHEARSABLE, FOR THE REASON STAGE 2's WAS NOT. `execute`
+# compiles in its runtime root, and `supervised_binding` compiles in the
+# execution root it reads the authorisation from. A path substitution through
+# this file would redirect every gate in BLOCK B and would not redirect the
+# mutation. That is the 2026-09-20 incident, and it is not repeated here: the
+# effect of BLOCK C is rehearsed at the API in
+# tests/test-capability-cinv-000003-stage-3-rehearsal.sh.
+#
+# =====================================================================
+# WHAT STAGE 3 DOES, AND THE ONE THING IT DOES NOT
+# =====================================================================
+# It supervises the privileged execution and writes the one record the first
+# two stages deliberately left unwritten: a `CRES`. That is its ENTIRE mutation
+# of the capability runtime -- one result record and one sequence increment.
+#
+# IT WRITES NO LIFECYCLE TRANSITION, AND THIS IS DELIBERATE. The journal is
+# written by `authorise_launch` before the privilege boundary is crossed and is
+# immutable thereafter; the states past `launch_authorized` are worker-side
+# protocol states that exist on the wire and never in the journal. G11-BC-I
+# established this as specified behaviour, not a defect.
+#
+# THE CONSEQUENCE HAS TO BE SAID BEFORE THE COMMAND IS RUN. After this,
+# CINV-000003 will hold a terminal result and still stand at
+# `launch_authorized`, holding its execution slot with no released path to
+# advance or release it. That is exactly the condition CINV-000002 was
+# administratively abandoned for under ADR-0015, reason
+# `terminal-result-lifecycle-stranded`. Occupancy stays 2 of 2, and both slots
+# will then be held by invocations that cannot move.
+#
+# Nothing here fixes that, and nothing here should: it is an architectural
+# decision for the reviewer, not a step to bolt onto an execution ceremony.
+#
+# =====================================================================
+# WHAT THE PAYLOAD IS EXPECTED TO PRODUCE
+# =====================================================================
+# The capability performs `verify-execution-boundary`, and the payload asks for
+# exactly that -- which is the correction G11-BC-J made after CRES-000001
+# recorded `provider-error` because the payload had asked for `execute`.
+#
+# The result is deterministic. For these payload bytes the package writes
+# exactly 281 bytes:
+#
+#   {"capability":"kyri-execution-boundary-verification",
+#    "checksum":"57b6b93ffd50cce4df4c8af4fd40d9b16494b884f666490257c66ff2dd274de1",
+#    "operation":"verify-execution-boundary",
+#    "payload_digest":"591d4b0d9c81fd5cbb56f7a08a8e9b14ef116c8625b16b19311f75d27d3c59b3",
+#    "result_schema_version":1}
+#
+# whose SHA-256 is
+#   fd2d58e99bae82f32ce320a3d3ac2a35b6e679b87432b2aedd9de1efa92cbad7
+#
+# and that is the digest the verdict must carry. It was computed from the
+# released package and the published payload, and the rehearsal ran the package
+# to confirm it.
+#
+# THE AUTHORITY EXPIRES ON 2026-09-23T06:00:00-05:00. CADV-000007 carries that
+# `valid_until`. BLOCK B asks the released verifier at the moment it runs.
+
+set -Eeuo pipefail
+
+# =====================================================================
+# BLOCK A -- OBSERVATION. Run as the operator; it elevates to kyri-capability.
+# =====================================================================
+bash <<'OBSERVE'
+set -Eeuo pipefail
+WITNESS=/data/kyri/work/g11bcaa-stage-3-witness
+EXPECTED_IMAGE=5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190
+TARGET_CONTAINER=kyri-CINV-000003
+
+cd /tmp
+
+printf '\n--- containers ---\n'
+CONTAINERS="$(sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman ps -a --format '{{.Names}} {{.Status}}')"
+printf '%s\n' "${CONTAINERS}"
+
+# The container name is burned with the CINV, so a pre-existing one would be
+# the name this execution needs. `podman create` would refuse it, and the
+# refusal would arrive from inside the privilege boundary where it is expensive
+# to read. Finding it here costs nothing.
+if printf '%s' "${CONTAINERS}" | grep -q "${TARGET_CONTAINER}"; then
+  echo "REFUSE: a ${TARGET_CONTAINER} container already exists"
+  exit 1
+fi
+if printf '%s' "${CONTAINERS}" | grep -q 'kyri-CINV-'; then
+  echo "REFUSE: a kyri-CINV-* container exists; the execution plane is not idle"
+  exit 1
+fi
+printf 'ok  no %s container, no kyri-CINV-* container\n' "${TARGET_CONTAINER}"
+
+printf '\n--- images ---\n'
+IMAGES="$(sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman images --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}')"
+printf '%s\n' "${IMAGES}"
+
+# `--pull=never` is in the creation argv, and the image is governed by CIMP.
+# An absent image is a refusal from inside the boundary; this is where it is
+# cheap to see.
+printf '%s' "${IMAGES}" | grep -q "${EXPECTED_IMAGE}" \
+  || { echo "REFUSE: the execution image ${EXPECTED_IMAGE} is not present"; exit 1; }
+printf '%s' "${IMAGES}" | grep -q 'localhost/kyri-capability-execution:g5' \
+  || { echo "REFUSE: localhost/kyri-capability-execution:g5 is not present"; exit 1; }
+printf 'ok  execution image %s present\n' "${EXPECTED_IMAGE}"
+
+umask 077
+printf 'stage-3-observation\nimage %s\nno-target-container %s\n' \
+  "${EXPECTED_IMAGE}" "${TARGET_CONTAINER}" > "${WITNESS}"
+printf '\nok  witness written to %s\n' "${WITNESS}"
+OBSERVE
+
+# =====================================================================
+# BLOCK B -- THE GATES. Read-only. Nothing here writes.
+# =====================================================================
+bash <<'GATES'
+set -Eeuo pipefail
+
+INSTALLED=/usr/lib/kyri/python
+RUNTIME=/data/kyri/capability-runtime
+HANDOFF=/data/kyri/capability-handoff
+FABRIC=/var/lib/kyri/fabric
+TRUST=/var/lib/kyri/trust
+WITNESS=/data/kyri/work/g11bcaa-stage-3-witness
+WITNESS_MAXIMUM_AGE=900
+
+TARGET=CINV-000003
+CIMP=CIMP-000001
+SELECTION=CSEL-000004
+INSTANCE=CINST-000006
+PACKAGE=CPKG-0001
+OPERATION=execute
+ROUTE=CROUTE-0006
+ADVERTISEMENT=CADV-000007
+
+# The accepted post-Stage-2 state, pinned. Every value measured at G11-BC-AA.
+RUNTIME_BEFORE=648066f6e79af23732eb6131bf772579bad898e71179def5ae4dabb6475e133a
+FABRIC_BEFORE=a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+SHA_CINV1=1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa
+SHA_CINV2=923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa
+SHA_CINV3=c0941b7d45dcccac4bb28d00f942ea63aa90cd46ed55767797363f1ed1accaf2
+SHA_CRES1=18ba4c3428f3b87a033abdeb54feb63a4cda6c8c41597e5ab591e7e7a7396f2d
+SHA_CADM1_ABANDONMENT=d1307f014d8eae2cccf83bfc8c3d673a93a00a86c797e07af44b9053b0dedced
+SHA_CADM2_CORRECTION=47b977d83b164ee9056527d99ec40d995b8e9b26e4b63b992df1ac8da8b0e58e
+SHA_LAUNCH_AUTHORISATION=885801a1362dcf99faaacdcdf457b7a9cecac99104012c24cfb6cfa5284f31df
+SHA_HANDOFF_PAYLOAD=591d4b0d9c81fd5cbb56f7a08a8e9b14ef116c8625b16b19311f75d27d3c59b3
+SHA_HANDOFF_PROFILE=f6696e0dac6d70fea602897e70adb746ab9f82ddaf94527f674d677d7ace05ee
+SHA_HANDOFF_ENTRYPOINT=683e25ed8cb317acd21e92b4706653454035f12320e0701ddabcb09eb688f7fd
+SHA_PAYLOAD_FILE=d01faccc67b83c60051348422861c121211a4079f7748572bad0a4882575a569
+ARTIFACT_DIGEST=6f2282c58ad8d5bf5a463ca09b8a2c5c3f3faef31aea95e2b07100720e6c9a8e
+PROFILE_DIGEST=f6696e0dac6d70fea602897e70adb746ab9f82ddaf94527f674d677d7ace05ee
+COMMITMENT_DIGEST=6d5a8d9249c7c9407145a69b55748136020a1a696c2e167d879864dc2dc86289
+PAYLOAD_ROOT=/data/kyri/work/g11bcn
+PAYLOAD_NAME=third-invoke.json
+STAGED="${RUNTIME}/staging/tree-sha256-${ARTIFACT_DIGEST}"
+CINV_SEQ=3
+CRES_SEQ=1
+CADM_COUNTER=000002
+CMUT_COUNTER=000000000010
+TRANSITIONS_BEFORE=7
+
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+check_sha() {
+  local path="$1" wanted="$2" got
+  got="$(sha256sum "${path}" 2>/dev/null | cut -d' ' -f1)"
+  test -n "${got}" || { echo "REFUSE: ${path} is absent"; exit 1; }
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${path} is ${got}, expected ${wanted}"; exit 1; }
+  printf 'ok  %-56s %s\n' "$(basename "${path}")" "${got}"
+}
+
+# ---- GATE 0: THE OBSERVATION ------------------------------------------
+printf -- '--- observation gate ---\n'
+test -f "${WITNESS}" \
+  || { echo "REFUSE: no observation witness at ${WITNESS}; run BLOCK A first"; exit 1; }
+AGE=$(( $(date +%s) - $(stat -c %Y "${WITNESS}") ))
+test "${AGE}" -ge 0 || { echo "REFUSE: the witness is dated in the future"; exit 1; }
+test "${AGE}" -le "${WITNESS_MAXIMUM_AGE}" \
+  || { echo "REFUSE: the witness is ${AGE}s old, older than ${WITNESS_MAXIMUM_AGE}s; re-run BLOCK A"; exit 1; }
+grep -q "^no-target-container kyri-${TARGET}\$" "${WITNESS}" \
+  || { echo "REFUSE: the witness does not record the absence of a kyri-${TARGET} container"; exit 1; }
+grep -q '^image 5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190$' "${WITNESS}" \
+  || { echo "REFUSE: the witness does not record the expected execution image"; exit 1; }
+printf 'ok  observation %ss old: no kyri-%s container, execution image present\n' "${AGE}" "${TARGET}"
+
+# ---- GATE 1: THE INSTALLED RUNTIME IS WHOLLY GENERATION 20 ------------
+printf '\n--- installed generation gate ---\n'
+check_installed() {
+  local relative="$1" wanted="$2" got
+  got="$(sha256sum "${INSTALLED}/${relative}" 2>/dev/null | cut -d' ' -f1)"
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${INSTALLED}/${relative} is ${got:-absent}, not the reviewed Generation-20 ${wanted}"; exit 1; }
+  printf 'ok  %-28s %s\n' "$(basename "${relative}")" "${got}"
+}
+check_installed tools/capability/execution/backing_store.py e82aa24b6fe2ef2336737ca344bb5d6b35af9c95b70f0c2ce78bc8dcb786259f
+check_installed tools/capability/execution/admin.py         f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606
+check_installed tools/capability/execution/abandonment.py   7d2f1857f16c54dda9f39658857a0d03b94198af75a04d21cef942bf2a224f24
+check_installed tools/capability/execution/provenance.py    2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6
+check_installed tools/capability/cli.py                     90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23
+
+# ---- GATE 2: CURRENT FABRIC AUTHORITY ---------------------------------
+#
+# THE COMMAND DOES NOT DO THIS EITHER. `execute` re-runs no governed decision:
+# it reads the invocation record, reads the authorisation the bridge wrote, and
+# drives the privileged helper. Preparation's authority was current on
+# 2026-09-20; this asks whether it is current NOW.
+printf '\n--- current Fabric authority gate ---\n'
+NOW_FABRIC="$(aggregate "${FABRIC}")"
+test "${NOW_FABRIC}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: the Fabric has moved: ${NOW_FABRIC}, expected ${FABRIC_BEFORE}"; exit 1; }
+printf 'ok  fabric   %s\n' "${NOW_FABRIC}"
+
+if ! ( cd "${INSTALLED}" && python3 - "${FABRIC}" "${TRUST}" "${SELECTION}" "${INSTANCE}" "${PACKAGE}" "${OPERATION}" <<'AUTHORITY_PY'
+import sys
+from datetime import datetime
+
+sys.path.insert(0, ".")
+from tools.capability.fabric_evidence import verify_selected_evidence
+
+fabric, trust, selection, instance, package, operation = sys.argv[1:7]
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+now = datetime.now().astimezone()
+try:
+    verdict = verify_selected_evidence(
+        fabric, expected_uid=1000, expected_gid=1000, selection_id=selection,
+        instance_id=instance, capability_package_id=package,
+        operation=operation, trust_root=trust, evaluated_at=now)
+except Exception as error:                                   # noqa: BLE001
+    refuse(f"the released verifier refused at {now.isoformat()}: "
+           f"{type(error).__name__}: {error}")
+
+if not verdict.supported:
+    refuse(f"the authority is not currently supported: {verdict.reason}")
+if verdict.eligibility_reasons:
+    refuse(f"current eligibility carries {list(verdict.eligibility_reasons)}")
+for field, expected in (("selection_id", selection), ("instance_id", instance),
+                        ("capability_package_id", package),
+                        ("operation", operation)):
+    if getattr(verdict, field) != expected:
+        refuse(f"{field} resolved to {getattr(verdict, field)}, not {expected}")
+
+print(f"ok  current authority supported at {now.isoformat()}")
+print(f"ok  {selection} -> {instance} -> {package} -> {verdict.contract_id} "
+      f"-> {verdict.capability_id}, operation {verdict.operation}")
+AUTHORITY_PY
+)
+then
+  echo "REFUSE: the Fabric authority is not currently valid; renew and re-prepare"
+  exit 1
+fi
+
+test -z "$(grep -l "^supersedes: ${ROUTE}\$" "${FABRIC}"/capability-routes/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: ${ROUTE} has been superseded and is no longer the route head"; exit 1; }
+test -z "$(grep -l "^supersedes: ${ADVERTISEMENT}\$" "${FABRIC}"/capability-advertisements/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: ${ADVERTISEMENT} has been superseded"; exit 1; }
+grep -q "^selected_instance_id: ${INSTANCE}\$" "${FABRIC}/capability-selections/${SELECTION}.yaml" \
+  || { echo "REFUSE: ${SELECTION} no longer selects ${INSTANCE}"; exit 1; }
+printf 'ok  %s is the route head, %s is unsuperseded, %s still selects %s\n' \
+  "${ROUTE}" "${ADVERTISEMENT}" "${SELECTION}" "${INSTANCE}"
+
+# ---- GATE 3: THE RUNTIME HAS NOT MOVED --------------------------------
+printf '\n--- runtime baseline gate ---\n'
+NOW_RUNTIME="$(aggregate "${RUNTIME}")"
+test "${NOW_RUNTIME}" = "${RUNTIME_BEFORE}" \
+  || { echo "REFUSE: the capability-runtime store has moved: ${NOW_RUNTIME}, expected ${RUNTIME_BEFORE}"; exit 1; }
+printf 'ok  runtime  %s\n' "${NOW_RUNTIME}"
+
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "${CINV_SEQ}" \
+  || { echo "REFUSE: capability-invocation.seq is not ${CINV_SEQ}"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "${CRES_SEQ}" \
+  || { echo "REFUSE: capability-result.seq is not ${CRES_SEQ}; a result already exists"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cadm-counter")" = "${CADM_COUNTER}" \
+  || { echo "REFUSE: cadm-counter is not ${CADM_COUNTER}"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cmut-counter")" = "${CMUT_COUNTER}" \
+  || { echo "REFUSE: cmut-counter is not ${CMUT_COUNTER}"; exit 1; }
+test "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)" = "${TRANSITIONS_BEFORE}" \
+  || { echo "REFUSE: the transition journal does not hold ${TRANSITIONS_BEFORE} records"; exit 1; }
+test ! -e "${RUNTIME}/capability-results/CRES-000002.yaml" \
+  || { echo "REFUSE: CRES-000002 exists; Stage 3 has already run"; exit 1; }
+printf 'ok  sequences %s/%s, cadm %s, cmut %s, %s transitions, no CRES-000002\n' \
+  "${CINV_SEQ}" "${CRES_SEQ}" "${CADM_COUNTER}" "${CMUT_COUNTER}" "${TRANSITIONS_BEFORE}"
+
+# ---- GATE 4: THE IMMUTABLE RECORDS ------------------------------------
+printf '\n--- immutable records gate ---\n'
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" "${SHA_CINV1}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" "${SHA_CINV2}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000003.yaml" "${SHA_CINV3}"
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml"     "${SHA_CRES1}"
+check_sha "${RUNTIME}/execution/admin-records/CADM-000001/abandonment" "${SHA_CADM1_ABANDONMENT}"
+check_sha "${RUNTIME}/execution/admin-records/CADM-000002/provenance-correction" "${SHA_CADM2_CORRECTION}"
+
+# ---- GATE 5: THE STAGE-2 AUTHORITY THIS EXECUTES UNDER ----------------
+printf '\n--- Stage-2 authority gate ---\n'
+check_sha "${RUNTIME}/execution/${TARGET}/launch-authorisation" "${SHA_LAUNCH_AUTHORISATION}"
+grep -q "\"profile_digest\":\"${PROFILE_DIGEST}\"" "${RUNTIME}/execution/${TARGET}/launch-authorisation" \
+  || { echo "REFUSE: the authorisation does not carry the reviewed profile digest"; exit 1; }
+grep -q "\"commitment_digest\":\"${COMMITMENT_DIGEST}\"" "${RUNTIME}/execution/${TARGET}/launch-authorisation" \
+  || { echo "REFUSE: the authorisation does not carry the reviewed commitment digest"; exit 1; }
+grep -q "\"cimp\":\"${CIMP}\"" "${RUNTIME}/execution/${TARGET}/launch-authorisation" \
+  || { echo "REFUSE: the authorisation does not name ${CIMP}"; exit 1; }
+grep -q '"lifecycle_state":"launch_authorized"' "${RUNTIME}/execution/${TARGET}/launch-authorisation" \
+  || { echo "REFUSE: the authorisation does not project launch_authorized"; exit 1; }
+printf 'ok  the launch authorisation is the reviewed one, for %s\n' "${CIMP}"
+
+# ---- GATE 6: THE PUBLISHED HANDOFF ------------------------------------
+printf '\n--- handoff gate ---\n'
+check_sha "${HANDOFF}/${TARGET}/payload"          "${SHA_HANDOFF_PAYLOAD}"
+check_sha "${HANDOFF}/${TARGET}/profile"          "${SHA_HANDOFF_PROFILE}"
+check_sha "${HANDOFF}/${TARGET}/package/main.py"  "${SHA_HANDOFF_ENTRYPOINT}"
+test -d "${HANDOFF}/${TARGET}/out" \
+  || { echo "REFUSE: the handoff has no output directory"; exit 1; }
+for entry in "${HANDOFF}/${TARGET}:555" "${HANDOFF}/${TARGET}/package:555" \
+             "${HANDOFF}/${TARGET}/out:700" "${HANDOFF}/${TARGET}/payload:444" \
+             "${HANDOFF}/${TARGET}/profile:444"; do
+  path="${entry%:*}"; want="${entry##*:}"
+  got="$(stat -c '%a' "${path}" 2>/dev/null || echo absent)"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: ${path} is mode ${got}, expected ${want}"; exit 1; }
+done
+printf 'ok  the published handoff is the reviewed one, with the reviewed modes\n'
+
+# ---- GATE 7: THE MATERIAL BEHIND IT -----------------------------------
+printf '\n--- material gate ---\n'
+check_sha "${PAYLOAD_ROOT}/${PAYLOAD_NAME}" "${SHA_PAYLOAD_FILE}"
+check_sha "${STAGED}/main.py" "${SHA_HANDOFF_ENTRYPOINT}"
+test "$(find "${STAGED}" -type f | wc -l)" = "1" \
+  || { echo "REFUSE: the staged tree holds more than the one reviewed entry"; exit 1; }
+printf 'ok  payload and staged tree as reviewed\n'
+
+# ---- GATE 8: LIFECYCLE AND CAPACITY -----------------------------------
+printf '\n--- lifecycle and capacity gate ---\n'
+if ! ( cd "${INSTALLED}" && python3 - "${RUNTIME}" <<'LIFECYCLE_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import capacity as cap
+from tools.capability.execution import state as sm
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    states = {k: v.value for k, v in sm.all_states(root).items()}
+    expected = {"CINV-000001": "launch_authorized",
+                "CINV-000002": "abandoned",
+                "CINV-000003": "launch_authorized"}
+    if states != expected:
+        print(f"REFUSE: the lifecycle is {states}, expected {expected}")
+        sys.exit(1)
+    held = sum(1 for v in sm.all_states(root).values()
+               if v in cap.slot_holding_states())
+    if held != 2:
+        print(f"REFUSE: occupancy is {held} of {cap.MAXIMUM_SLOTS}, expected 2")
+        sys.exit(1)
+    print(f"ok  CINV-000003 is launch_authorized and awaiting execution")
+    print(f"ok  occupancy {held} of {cap.MAXIMUM_SLOTS} -- Stage 3 reserves "
+          "nothing and releases nothing")
+finally:
+    root.close()
+LIFECYCLE_PY
+)
+then
+  echo "REFUSE: the lifecycle or the capacity is not the state Stage 3 requires"
+  exit 1
+fi
+
+printf '\n========================================================\n'
+printf 'ALL GATES PASSED.\n'
+printf 'BLOCK C is irreversible. It executes the payload in a governed\n'
+printf 'container and writes CRES-000002. It advances NO lifecycle and\n'
+printf 'releases NO slot; %s will still be launch_authorized\n' "${TARGET}"
+printf 'afterwards, holding its slot, with a terminal result.\n'
+printf '========================================================\n'
+GATES
+
+# =====================================================================
+# BLOCK C -- THE ONE IRREVERSIBLE COMMAND.
+#
+# NOT REHEARSABLE AGAINST A FIXTURE. `execute` compiles in its runtime root and
+# `supervised_binding` compiles in the execution root. Do not paste this block
+# anywhere but the production host, and do not render it against a copy.
+#
+# rc IS NOT THE VERDICT. `command_execute` returns 1 both for a supervision
+# refusal that wrote NOTHING and for a completed execution that recorded a
+# non-admitted result. The JSON is what distinguishes them, and the checks
+# below read it rather than the exit status.
+# =====================================================================
+bash <<'STAGE3'
+set -Eeuo pipefail
+
+RUNTIME=/data/kyri/capability-runtime
+HANDOFF=/data/kyri/capability-handoff
+TARGET=CINV-000003
+OUT="$(mktemp)"
+trap 'rm -f "${OUT}"' EXIT
+
+printf -- '--- capability execute (production) ---\n'
+set +e
+( cd /usr/lib/kyri/python && python3 -m tools.capability.cli execute \
+    --expected-uid 1000 --expected-gid 1000 \
+    --cinv "${TARGET}" \
+    --actor primary-platform-operator \
+    --recorded-at "$(date -Is)" ) > "${OUT}"
+RC=$?
+set -e
+cat "${OUT}"
+printf '\nprocess rc %s\n' "${RC}"
+
+# THE VERDICT, BEFORE THE EXIT STATUS.
+STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status"))' "${OUT}")"
+if [[ "${STATUS}" == "unresolved" ]]; then
+  echo "STOP: the supervision did not conclude. NO result was written and the"
+  echo "      invocation is unresolved. Do NOT retry. Report the whole JSON:"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(d, indent=2))' "${OUT}"
+  exit 1
+fi
+test "${RC}" = "0" \
+  || { echo "STOP: the execution concluded and did not succeed. Report the JSON above."; exit 1; }
+printf 'ok  process rc 0 and the supervision concluded\n'
+
+printf '\n--- verdict ---\n'
+verdict() {
+  local key="$1" want="$2" got
+  got="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${OUT}" "${key}")"
+  test "${got}" = "${want}" \
+    || { echo "STOP: ${key} is ${got}, expected ${want}"; exit 1; }
+  printf 'ok  %-24s %s\n' "${key}" "${got}"
+}
+verdict cinv                  "${TARGET}"
+verdict invocation_record_id  "${TARGET}"
+verdict result_record_id      CRES-000002
+verdict succeeded             True
+verdict reason                None
+verdict disposal_proven       True
+verdict result_digest         sha256:fd2d58e99bae82f32ce320a3d3ac2a35b6e679b87432b2aedd9de1efa92cbad7
+
+# ---- THE MUTATION, EXACTLY --------------------------------------------
+printf '\n--- the mutation ---\n'
+test -f "${RUNTIME}/capability-results/CRES-000002.yaml" \
+  || { echo "STOP: no CRES-000002 was written"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "2" \
+  || { echo "STOP: capability-result.seq is not 2"; exit 1; }
+for pair in "capability_result_id: CRES-000002" \
+            "invocation_record_id: ${TARGET}" \
+            "outcome_class: completed" \
+            "attempt_number: 1" \
+            "reason: null" \
+            "result_digest: sha256:fd2d58e99bae82f32ce320a3d3ac2a35b6e679b87432b2aedd9de1efa92cbad7" \
+            "result_artifact_reference: null" \
+            "schema_version: 2"; do
+  grep -qF -- "${pair}" "${RUNTIME}/capability-results/CRES-000002.yaml" \
+    || { echo "STOP: CRES-000002 does not record ${pair}"; exit 1; }
+done
+printf 'ok  CRES-000002 written, capability-result.seq 1 -> 2\n'
+
+# ---- WHAT MUST NOT HAVE CHANGED ---------------------------------------
+printf '\n--- nothing else moved ---\n'
+check_sha() {
+  local path="$1" wanted="$2" got
+  got="$(sha256sum "${path}" 2>/dev/null | cut -d' ' -f1)"
+  test "${got}" = "${wanted}" \
+    || { echo "STOP: ${path} is ${got:-absent}, expected ${wanted}"; exit 1; }
+}
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" 1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" 923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa
+check_sha "${RUNTIME}/capability-invocations/${TARGET}.yaml"   c0941b7d45dcccac4bb28d00f942ea63aa90cd46ed55767797363f1ed1accaf2
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml"     18ba4c3428f3b87a033abdeb54feb63a4cda6c8c41597e5ab591e7e7a7396f2d
+check_sha "${RUNTIME}/execution/${TARGET}/launch-authorisation" 885801a1362dcf99faaacdcdf457b7a9cecac99104012c24cfb6cfa5284f31df
+check_sha "${RUNTIME}/execution/admin-records/CADM-000001/abandonment" d1307f014d8eae2cccf83bfc8c3d673a93a00a86c797e07af44b9053b0dedced
+check_sha "${RUNTIME}/execution/admin-records/CADM-000002/provenance-correction" 47b977d83b164ee9056527d99ec40d995b8e9b26e4b63b992df1ac8da8b0e58e
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "3" \
+  || { echo "STOP: the invocation sequence moved; Stage 3 allocates no invocation"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cmut-counter")" = "000000000010" \
+  || { echo "STOP: the mutation counter moved; Stage 3 journals no lifecycle"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cadm-counter")" = "000002" \
+  || { echo "STOP: cadm-counter moved; Stage 3 is not an administrative action"; exit 1; }
+test "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)" = "7" \
+  || { echo "STOP: a lifecycle transition was written; Stage 3 writes none"; exit 1; }
+test ! -e "${RUNTIME}/capability-results/CRES-000003.yaml" \
+  || { echo "STOP: a second result exists"; exit 1; }
+printf 'ok  no transition, no CMUT, no CADM, no second result, every earlier record byte-identical\n'
+
+# ---- THE CONTAINER IS GONE --------------------------------------------
+#
+# The supervisor proved this before it concluded -- `disposal_proven` above is
+# that proof. Observing it again here would need the execution identity and
+# would add nothing the verdict does not already carry.
+printf '\n--- capacity, unchanged by design ---\n'
+( cd /usr/lib/kyri/python && python3 - "${RUNTIME}" <<'AFTER_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import capacity as cap
+from tools.capability.execution import state as sm
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    states = {k: v.value for k, v in sm.all_states(root).items()}
+    expected = {"CINV-000001": "launch_authorized",
+                "CINV-000002": "abandoned",
+                "CINV-000003": "launch_authorized"}
+    if states != expected:
+        print(f"STOP: the lifecycle changed: {states}")
+        sys.exit(1)
+    held = sum(1 for v in sm.all_states(root).values()
+               if v in cap.slot_holding_states())
+    if held != 2:
+        print(f"STOP: occupancy changed to {held}")
+        sys.exit(1)
+    print(f"ok  lifecycle unchanged; occupancy still {held} of {cap.MAXIMUM_SLOTS}")
+    print("ok  CINV-000003 now holds a TERMINAL RESULT at launch_authorized --")
+    print("    the stranded condition ADR-0015 names. Report it; do not act on it.")
+finally:
+    root.close()
+AFTER_PY
+)
+
+printf '\n========================================================\n'
+printf 'STAGE 3 COMPLETE. THE PAYLOAD EXECUTED AND CRES-000002 EXISTS.\n'
+printf 'Report the new capability-runtime aggregate:\n'
+find "${RUNTIME}" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+printf '\n'
+printf 'STOP HERE. Do NOT run recover, cleanup, abandon, or anything\n'
+printf 'else. The stranded lifecycle is a reviewer decision.\n'
+printf '========================================================\n'
+STAGE3
