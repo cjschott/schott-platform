@@ -30,6 +30,16 @@ CEREMONY="${REPOSITORY}/provisioning/execution/install-generation-13.sh"
 host_only_requires_pinned_checkout "${CEREMONY}"
 
 LIBRARY_ROOT=/usr/lib/kyri/python
+
+# Every installer past this generation, found by name. See the Python finder of
+# the same name below for why a typed list is not used.
+_later_installers=()
+for _installer in "${REPOSITORY}"/provisioning/execution/install-generation-*.sh; do
+  _number="${_installer##*-}"; _number="${_number%.sh}"
+  [[ "${_number}" =~ ^[0-9]+$ ]] || continue
+  (( _number > 13 )) || continue
+  _later_installers+=("${_installer}")
+done
 host_only_requires "${LIBRARY_ROOT}"
 
 WORK="$(mktemp -d)"
@@ -64,6 +74,18 @@ def scalar(name):
     found = re.search(rf'^{name}=\"?([^\"\\n]*)\"?\$', TEXT, re.M)
     assert found, name
     return found.group(1)
+
+# Every runtime-generation installer past a floor, in order. FOUND rather than
+# listed: a hand-kept list of successors went stale four times in this
+# repository -- at Generations 14, 15, 16 and 19 -- and each time a correctly
+# installed host was reported as drift.
+def later_generation_installers(floor):
+    found = []
+    for path in Path('provisioning/execution').glob('install-generation-*.sh'):
+        number = path.stem.rsplit('-', 1)[-1]
+        if number.isdigit() and int(number) > floor:
+            found.append((int(number), path))
+    return [path for _, path in sorted(found)]
 
 COMMIT = scalar('COMMIT')
 GEN12_COMMIT = scalar('GEN12_COMMIT')
@@ -190,11 +212,19 @@ def superseded_by_successor():
     # list is the suite's statement of which successors it accounts for, and a
     # list that stops short of the installed generation is incomplete by its own
     # definition rather than merely out of date.
+    #
+    # It happened a FOURTH time when Generation 19 landed. The list is the
+    # defect: it is now FOUND rather than typed, so every installer past this
+    # generation is accounted for whether or not anyone remembered to add it.
+    #
+    # AND EVERY HOP IS KEPT, not just the last. A later generation may be
+    # DECLARED and not yet installed -- Generation 20 is, and the host sits at
+    # Generation 19's target for cli.py -- so collapsing the chain to its final
+    # value reports a correctly installed host as drift all over again. The
+    # answer is the SET of declared successor states, and the host must be at
+    # one of them.
     out = {}
-    for name in ('install-generation-14.sh', 'install-generation-15.sh',
-                 'install-generation-16.sh', 'install-generation-17.sh',
-                 'install-generation-18.sh'):
-        successor = Path('provisioning/execution') / name
+    for successor in later_generation_installers(13):
         if not successor.is_file():
             continue
         text = successor.read_text(encoding='utf-8')
@@ -207,7 +237,8 @@ def superseded_by_successor():
             if operation == 'REPLACE':
                 # chr(36) so bash does not expand this before python sees it:
                 # the matrix text carries the literal placeholder, not its value.
-                out[target.replace(chr(36) + '{LIBRARY_ROOT}/', '')] = want
+                relative = target.replace(chr(36) + '{LIBRARY_ROOT}/', '')
+                out.setdefault(relative, set()).update(want.split(','))
     return out
 
 SUPERSEDED = superseded_by_successor()
@@ -215,7 +246,7 @@ SUPERSEDED = superseded_by_successor()
 at_base, at_target, superseded, unknown = [], [], [], []
 for row in ROWS:
     have = installed_digest(row['target'])
-    if row['target'] in SUPERSEDED and have == SUPERSEDED[row['target']]:
+    if row['target'] in SUPERSEDED and have in SUPERSEDED[row['target']]:
         superseded.append(row['target'])
     elif have == row['want']:
         at_target.append(row['target'])
@@ -257,12 +288,14 @@ assert BASELINE_N + len(creates) == TARGET_N, (BASELINE_N, len(creates), TARGET_
 # creates two -- so the offset is every library-root CREATE published after this
 # generation, not the helper ceremony's alone. Counting only the helper ceremony
 # left this arithmetic right until the next generation that created anything.
-def helper_creates():
+# Only a create the live tree ACTUALLY HOLDS counts. A generation that is
+# declared and not yet installed -- Generation 20 is one -- would otherwise be
+# subtracted from a host that never received it.
+def helper_creates(present):
     total = 0
-    for name in ('install-g11-ax-helpers.sh', 'install-generation-14.sh',
-                 'install-generation-15.sh', 'install-generation-16.sh',
-                 'install-generation-17.sh', 'install-generation-18.sh'):
-        ceremony = Path('provisioning/execution') / name
+    ceremonies = ([Path('provisioning/execution/install-g11-ax-helpers.sh')]
+                  + later_generation_installers(13))
+    for ceremony in ceremonies:
         if not ceremony.is_file():
             continue
         block = ceremony.read_text(encoding='utf-8').split(
@@ -272,11 +305,16 @@ def helper_creates():
             if not line.startswith(chr(34)):
                 continue
             fields = line.strip(chr(34)).split('|')
-            if fields[3] == 'CREATE' and chr(36) + '{LIBRARY_ROOT}/' in fields[1]:
-                total += 1
+            if fields[3] != 'CREATE':
+                continue
+            if chr(36) + '{LIBRARY_ROOT}/' not in fields[1]:
+                continue
+            if fields[1].split(chr(36) + '{LIBRARY_ROOT}/', 1)[1] not in present:
+                continue
+            total += 1
     return total
 
-offset = helper_creates()
+offset = helper_creates({str(p.relative_to(LIBRARY_ROOT)) for p in installed})
 assert len(installed) in (BASELINE_N + offset, TARGET_N + offset), \
     (len(installed), BASELINE_N, TARGET_N, offset)
 # And the operations are only the two this transaction implements.
@@ -401,12 +439,7 @@ build_gen12_root() {
   while IFS= read -r later; do
     [[ -n "${later}" ]] || continue
     rm -f "${root}${LIBRARY_ROOT}/${later}"
-  done < <(succession_created_by \
-             "${REPOSITORY}/provisioning/execution/install-generation-14.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-15.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-16.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-17.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-18.sh")
+  done < <(succession_created_by "${_later_installers[@]}")
 
   local row target source base
   while IFS= read -r row; do

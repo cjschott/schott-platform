@@ -109,7 +109,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -392,8 +392,43 @@ GENERATION_DELTA=(
 "tools/capability/execution/types.py|REPLACE|7dc35046fafdb4e7218739cdbc86deff18ed804b2a37d66a173df58016258b5c|da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae"
 "tools/capability/execution/state.py|REPLACE|f0b00112db5090f1885149e4eaee0df79ef03fa3c72a5b618d51cf9263486241|88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b"
 "tools/capability/execution/capacity.py|REPLACE|25bab08cd2f517e28d5a9add58a4d0fff6d6d720cd20df241d4a4003eaa27afb|f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e"
-"tools/capability/execution/admin.py|REPLACE|be899d7a193f6aa5c80d3887109fa07212d757f94503ba994bac104f217633d5|2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3"
-"tools/capability/execution/abandonment.py|CREATE|ABSENT|4fb431ca5f74e45aba8cb4ed7f80699e9a16b4743b5c554e992747926f9b1903"
+"tools/capability/execution/admin.py|REPLACE|be899d7a193f6aa5c80d3887109fa07212d757f94503ba994bac104f217633d5,2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3|2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606"
+"tools/capability/execution/abandonment.py|CREATE|ABSENT|4fb431ca5f74e45aba8cb4ed7f80699e9a16b4743b5c554e992747926f9b1903,7d2f1857f16c54dda9f39658857a0d03b94198af75a04d21cef942bf2a224f24"
+
+# Generation 20, ENG-0005 G11-BC-Y. Explicit mutation targets, and a way to
+# correct provenance.
+#
+# WHAT WENT WRONG. On 2026-09-20 a rehearsal harness drove `capability abandon`
+# against production. It substituted the runtime path through every shell gate
+# of the ceremony it was rehearsing -- each gate read a fixture and passed --
+# and then `command_abandon` resolved `CAPABILITY_RUNTIME_ROOT`, a module
+# constant with no argument able to override it, and abandoned CINV-000002 in
+# production. The store now holds a materially valid lifecycle effect under an
+# untrue attribution.
+#
+# FIVE OBJECTS, ONE COHERENCE GROUP, AND THEY MOVE TOGETHER. `backing_store.py`
+# adds `target_fingerprint`, which asks the kernel which object a mutation is
+# about to be written through; `admin.py` adds the closed-set
+# `correct-provenance` verb; `abandonment.py` reports the root it held;
+# `provenance.py` is the correction operation; `cli.py` requires an explicit
+# `--store-root` for both administrative mutators and carries the new surface.
+# Publication order is `backing_store.py`, `admin.py`, `abandonment.py`,
+# `provenance.py`, `cli.py` -- each after everything it imports. `cli.py`
+# imports two of them at MODULE level, so a subset is an ImportError on every
+# command including `recover`.
+#
+# `abandonment.py` is no longer a CREATE against this host: Generation 19
+# published it, so the row's successor CHAIN gains a hop rather than the row
+# changing shape. `provenance.py` is this generation's CREATE, and ABSENT is
+# the honest baseline for an object that has never been published.
+#
+# ADR-0016 is the architecture. None of the five is in
+# `helpers.REQUIRED_HELPERS`, so no helper ceremony is required.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-20.sh`
+# is the ceremony that publishes them, and it has not been run.
+"tools/capability/execution/backing_store.py|REPLACE|03331aa8b974d636a39710c53867af5a4ae6e1480cc68404009df118e24c4c32|e82aa24b6fe2ef2336737ca344bb5d6b35af9c95b70f0c2ce78bc8dcb786259f"
+"tools/capability/execution/provenance.py|CREATE|ABSENT|2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2317  # everything past the disarm guard is deliberately
+# unreachable: the file is kept as evidence of what it did, not to be run.
 set -Eeuo pipefail
 
 # The CINV-000002 reclamation ceremony, rehearsed whole against the INSTALLED
@@ -124,8 +126,13 @@ else
 fi
 OBSERVE="${WORK}/observe.sh"
 awk "/^bash <<'OBSERVE'\$/{on=1;next} /^OBSERVE\$/{on=0} on" "${CEREMONY}" > "${OBSERVE}"
-[[ -s "${OBSERVE}" ]] && pass "BLOCK A was extracted whole" || fail "BLOCK A could not be extracted"
+if [[ -s "${OBSERVE}" ]]; then
+  pass "BLOCK A was extracted whole"
+else
+  fail "BLOCK A could not be extracted"
+fi
 
+# shellcheck disable=SC2016  # the ceremony's own text is matched literally
 if grep -q 'cd "${INSTALLED}" && python3 -m tools.capability.cli abandon' "${BLOCK}"; then
   pass "the abandon call runs from the installed library, not the checkout"
 else

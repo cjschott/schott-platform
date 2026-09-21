@@ -132,12 +132,21 @@ def successor_creates():
     ceremony would leave this suite correct exactly until the generation after
     that, which is the failure it has already had twice.
     """
+    # FOUND, NOT LISTED. A hand-kept list of successors went stale three times:
+    # at Generation 13, at G11-AX, and again at Generation 19, when
+    # `abandonment.py` landed in the live tree with nothing subtracting it. The
+    # list was the defect, so it is gone -- every installer beyond this one is
+    # matched by name, which is the same reviewed data with nothing left to
+    # forget.
+    provisioning = Path(ROOT) / "provisioning" / "execution"
+    successors = sorted(
+        path for path in provisioning.glob("install-generation-*.sh")
+        if (path.stem.rsplit("-", 1)[-1].isdigit()
+            and int(path.stem.rsplit("-", 1)[-1]) > 12))
+    successors += [provisioning / "install-g11-ax-helpers.sh"]
+
     creates = set()
-    for name in ("install-generation-13.sh", "install-generation-15.sh",
-                 "install-generation-16.sh", "install-generation-17.sh",
-                 "install-generation-18.sh",
-                 "install-g11-ax-helpers.sh"):
-        ceremony = Path(ROOT) / "provisioning" / "execution" / name
+    for ceremony in successors:
         if not ceremony.is_file():
             continue
         block = ceremony.read_text(encoding="utf-8").split(

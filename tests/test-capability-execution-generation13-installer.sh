@@ -129,6 +129,18 @@ gen12_blob() {
   return 1
 }
 
+# Every installer beyond this generation, FOUND rather than listed. The list
+# was hand-kept and stopped at 17, so when Generation 19 published
+# abandonment.py the fixture carried an object Generation 13 never had and the
+# ceremony counted it.
+_later_installers=()
+for _installer in "${REPOSITORY}"/provisioning/execution/install-generation-*.sh; do
+  _number="${_installer##*-}"; _number="${_number%.sh}"
+  [[ "${_number}" =~ ^[0-9]+$ ]] || continue
+  (( _number > 13 )) || continue
+  _later_installers+=("${_installer}")
+done
+
 build_host() {
   local root="$1"
   rm -rf "${root}"
@@ -149,11 +161,7 @@ build_host() {
   while IFS= read -r later; do
     [[ -n "${later}" ]] || continue
     rm -f "${root}${LIBRARY_ROOT}/${later}"
-  done < <(succession_created_by \
-             "${REPOSITORY}/provisioning/execution/install-generation-14.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-15.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-16.sh" \
-             "${REPOSITORY}/provisioning/execution/install-generation-17.sh")
+  done < <(succession_created_by "${_later_installers[@]}")
 
   local row target source base
   while IFS= read -r row; do

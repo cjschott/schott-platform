@@ -442,6 +442,33 @@ jobs:
       - name: Capability execution generation-19 installer tests
         run: bash tests/test-capability-execution-generation19-installer.sh
 
+      # tests/test-capability-cinv-000002-reclamation-rehearsal.sh IS
+      # DELIBERATELY NOT RUN, here or locally, and is named so that omission is
+      # a decision rather than a gap. It is disarmed: on 2026-09-20 it mutated
+      # production, because it rehearsed a whole ceremony by substituting the
+      # runtime path while the mutator resolved a module constant. It refuses to
+      # run and is kept as evidence. The rehearsal that replaces it, and can be
+      # aimed, is the CADM-000001 one below.
+
+      # Generation 20: explicit mutation targets and provenance correction.
+      # Host-only: the fixture IS the installed Generation-19 surface, so on a
+      # runner it reports HOST_ONLY_SKIP and the local validator is authority.
+      - name: Capability execution generation-20 installer tests
+        run: bash tests/test-capability-execution-generation20-installer.sh
+
+      # ADR-0016, the correction verb itself. Portable: fixtures only.
+      - name: Capability execution provenance correction tests
+        run: bash tests/test-capability-execution-provenance-correction.sh
+
+      # Which store a mutating command actually writes through. Host-only: it
+      # reproduces the 2026-09-20 incident against the installed runtime.
+      - name: Capability mutation target tests
+        run: bash tests/test-capability-mutation-target-explicit.sh
+
+      # The CADM-000001 correction ceremony, rehearsed whole. Host-only.
+      - name: CADM-000001 correction rehearsal tests
+        run: bash tests/test-capability-cadm-000001-correction-rehearsal.sh
+
       - name: Capability execution BC-E helper ceremony tests
         run: bash tests/test-capability-execution-bc-e-helper-ceremony.sh
 

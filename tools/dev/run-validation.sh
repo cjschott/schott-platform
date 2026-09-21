@@ -668,6 +668,13 @@ run "CINV-000003 Stage 1 rehearsal" \
 run "Capability execution abandonment" \
   bash tests/test-capability-execution-abandonment.sh
 
+# tests/test-capability-cinv-000002-reclamation-rehearsal.sh IS DELIBERATELY NOT
+# RUN, and is named here so that omission is a decision rather than a gap. It is
+# disarmed: on 2026-09-20 it mutated production, because it rehearsed a whole
+# ceremony by substituting the runtime path while `command_abandon` resolved a
+# module constant. It refuses to run and is kept as evidence of what it did. The
+# rehearsal that replaces it, and can be aimed, is the CADM-000001 one below.
+
 # ADR-0016. Provenance correction: the record that says a claim in an earlier
 # CADM is not truthful provenance while that record's effect stands. Most of it
 # proves what the verb CANNOT do -- no transition, no slot, no result, no write

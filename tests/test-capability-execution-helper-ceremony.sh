@@ -41,6 +41,23 @@ host_only_requires_pinned_checkout "${ROOT}/provisioning/execution/install-g11-a
 CEREMONY="provisioning/execution/install-g11-ax-helpers.sh"
 LIBRARY_ROOT="/usr/lib/kyri/python"          # prod-path-reference
 LIBEXEC_ROOT="/usr/libexec"
+
+# Every installer beyond the generation being reconstructed, FOUND rather than
+# listed. A hand-kept list is exactly the thing that goes stale: this one
+# stopped at Generation 18, so when Generation 19 published abandonment.py the
+# fixture silently kept it and claimed to be an earlier host. The rewind list
+# must name every later ceremony or the reconstruction is a lie, and finding
+# them by name is the same reviewed data with nothing left to forget.
+later_generation_installers() {
+  local floor="$1" installer number
+  for installer in "${ROOT}"/provisioning/execution/install-generation-*.sh; do
+    number="${installer##*-}"; number="${number%.sh}"
+    [[ "${number}" =~ ^[0-9]+$ ]] || continue
+    (( number > floor )) || continue
+    printf '%s\n' "${installer}"
+  done
+}
+
 COMMIT="7709cf0443ab11f2b84c94eefbbb60f1eb95c98c"
 RUNTIME_HELPERS_SHA="74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874"
 # The generation whose readiness rule RUNTIME_HELPERS_SHA names, so the fixture
@@ -121,11 +138,10 @@ build_host() {
   # Generation 16 too: the rewind list names every ceremony accepted after the
   # generation this reconstructs, not just the ones that happen to move an
   # object this suite reads.
+  local -a _rewind
+  mapfile -t _rewind < <(later_generation_installers 14)
   succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN14_COMMIT}" \
-    "${ROOT}/provisioning/execution/install-generation-15.sh" \
-    "${ROOT}/provisioning/execution/install-generation-16.sh" \
-    "${ROOT}/provisioning/execution/install-generation-17.sh" \
-    "${ROOT}/provisioning/execution/install-generation-18.sh" || return 1
+    "${_rewind[@]}" || return 1
   [[ "$(digest_of "${root}${LIBRARY_ROOT}/tools/capability/execution/helpers.py")" \
       == "${RUNTIME_HELPERS_SHA}" ]] || return 1
 

@@ -498,12 +498,40 @@ else
   fail "the gate and the recording guard do not share a reader"
 fi
 
+# The live count MINUS every library-root pathname a later generation created
+# AND actually published. The raw live count was the comparison until
+# Generation 19 published abandonment.py, at which point the reconstruction was
+# correct and the assertion about it was not: a fixture rebuilt from an earlier
+# tree cannot hold an object that did not exist then. A generation that is
+# declared but not installed is not subtracted -- that would describe a host
+# nobody has.
+successor_created_since() {
+  local floor="$1" installer number row target operation created=0
+  for installer in "${ROOT}"/provisioning/execution/install-generation-*.sh; do
+    number="${installer##*-}"; number="${number%.sh}"
+    [[ "${number}" =~ ^[0-9]+$ ]] || continue
+    (( number > floor )) || continue
+    # shellcheck disable=SC2016  # the matrix stores the placeholder literally
+    while IFS= read -r row; do
+      row="${row#\"}"; row="${row%\"}"
+      IFS='|' read -r _ target _ operation _ <<<"${row}"
+      [[ "${operation}" == "CREATE" ]] || continue
+      [[ "${target}" == *'${LIBRARY_ROOT}/'* ]] || continue
+      [[ -f "/usr/lib/kyri/python/${target##*'${LIBRARY_ROOT}/'}" ]] || continue
+      created=$(( created + 1 ))
+    done < <(sed -n '/^MATRIX=(/,/^)$/p' "${installer}" | grep '^"')
+  done
+  printf '%s' "${created}"
+}
+
 root="${WORK}/shape"; build_fixture "${root}"
 baseline_count="$(library_count "${root}")"
-if [[ "${baseline_count}" == "$(find /usr/lib/kyri/python -type f -name '*.py' ! -path '*__pycache__*' | wc -l)" ]]; then
+live_count="$(find /usr/lib/kyri/python -type f -name '*.py' ! -path '*__pycache__*' | wc -l)"
+expected_count=$(( live_count - $(successor_created_since 18) ))
+if [[ "${baseline_count}" == "${expected_count}" ]]; then
   pass "the reconstructed Generation-18 fixture holds the accepted object count (${baseline_count})"
 else
-  fail "the fixture holds ${baseline_count} objects; the installed surface holds a different number"
+  fail "the fixture holds ${baseline_count} objects; the installed surface (${live_count}) less later creates gives ${expected_count}"
 fi
 for src in "${GEN19_SOURCES[@]}"; do
   if [[ "$(digest_at "${root}" "${src}")" == "$(base_of "${src}")" ]]; then
@@ -661,7 +689,13 @@ fi
 step="${WORK}/step"; rm -rf "${step}"; build_fixture "${step}" >/dev/null 2>&1
 published=0
 for src in "${GEN19_SOURCES[@]}"; do
-  install -D -m 0444 "${ROOT}/${src}" "${step}/$(installed_of "${src}")"
+  # THE REVIEWED GENERATION-19 BYTES, not the checkout. The checkout was the
+  # same thing while this was the tip generation and stopped being so at
+  # Generation 20, whose cli.py imports a module a Generation-19 fixture does
+  # not hold -- so the suite reported its own subject as broken. What this
+  # proves is a property of Generation 19, and Generation 19 is a commit.
+  git -C "${ROOT}" show "${GEN19_COMMIT}:${src}" > "${WORK}/step-object.tmp"
+  install -D -m 0444 "${WORK}/step-object.tmp" "${step}/$(installed_of "${src}")"
   published=$((published + 1))
   if ! importable "${step}"; then
     fail "intermediate ${published} (after $(basename "${src}")) cannot import"

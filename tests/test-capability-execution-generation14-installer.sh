@@ -38,6 +38,20 @@ host_only_requires_pinned_checkout "${ROOT}/provisioning/execution/install-gener
 
 CEREMONY="provisioning/execution/install-generation-14.sh"
 LIBRARY_ROOT="/usr/lib/kyri/python"                    # prod-path-reference
+
+# Every installer beyond the generation being reconstructed, FOUND rather than
+# listed. A hand-kept list is exactly the thing that goes stale: this one
+# stopped at Generation 18, so when Generation 19 published abandonment.py the
+# fixture silently kept it and claimed to be an earlier host.
+later_generation_installers() {
+  local floor="$1" installer number
+  for installer in "${ROOT}"/provisioning/execution/install-generation-*.sh; do
+    number="${installer##*-}"; number="${number%.sh}"
+    [[ "${number}" =~ ^[0-9]+$ ]] || continue
+    (( number > floor )) || continue
+    printf '%s\n' "${installer}"
+  done
+}
 TARGET_RELATIVE="tools/capability/execution/helpers.py"
 GEN13_SHA="eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb"
 GEN14_SHA="74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874"
@@ -87,11 +101,10 @@ build_host() {
   # successor touching an object no earlier ceremony touched would leave the
   # fixture silently carrying that successor's bytes while claiming to be this
   # host. A silently wrong fixture is worse than a loud failure.
+  local -a _rewind
+  mapfile -t _rewind < <(later_generation_installers 14)
   succession_rewind "${root}${LIBRARY_ROOT}" "${ROOT}" "${GEN13_COMMIT}" \
-    "${ROOT}/provisioning/execution/install-generation-15.sh" \
-    "${ROOT}/provisioning/execution/install-generation-16.sh" \
-    "${ROOT}/provisioning/execution/install-generation-17.sh" \
-    "${ROOT}/provisioning/execution/install-generation-18.sh" || return 1
+    "${_rewind[@]}" || return 1
 
   # The installed objects are 0444, so the copies are too. Remove before writing
   # rather than relaxing the mode: the fixture should carry the modes a real

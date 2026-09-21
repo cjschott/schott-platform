@@ -355,12 +355,41 @@ else
   pass "the matrix declares no CREATE and no REMOVE"
 fi
 
+# The live count MINUS every library-root pathname a later generation creates,
+# found by name rather than listed. The raw live count was the comparison until
+# Generation 19 published abandonment.py, at which point the reconstruction was
+# correct and the assertion about it was not: a fixture rebuilt from the
+# Generation-15 tree cannot hold an object that did not exist then.
+successor_created_since_15() {
+  local installer number row target created=0
+  for installer in "${ROOT}"/provisioning/execution/install-generation-*.sh; do
+    number="${installer##*-}"; number="${number%.sh}"
+    [[ "${number}" =~ ^[0-9]+$ ]] || continue
+    (( number > 15 )) || continue
+    # shellcheck disable=SC2016  # the matrix stores the placeholder literally
+    while IFS= read -r row; do
+      row="${row#\"}"; row="${row%\"}"
+      IFS='|' read -r _ target _ operation _ <<<"${row}"
+      [[ "${operation}" == "CREATE" ]] || continue
+      [[ "${target}" == *'${LIBRARY_ROOT}/'* ]] || continue
+      # Declared by a later generation is not the same as PRESENT. Generation 20
+      # is declared and not installed, so subtracting its create would describe a
+      # host that does not exist. Only what the live tree actually holds counts.
+      [[ -f "/usr/lib/kyri/python/${target##*'${LIBRARY_ROOT}/'}" ]] || continue
+      created=$(( created + 1 ))
+    done < <(sed -n '/^MATRIX=(/,/^)$/p' "${installer}" | grep '^"')
+  done
+  printf '%s' "${created}"
+}
+
 root="${WORK}/shape"; build_fixture "${root}"
 baseline_count="$(library_count "${root}")"
-if [[ "${baseline_count}" == "$(find /usr/lib/kyri/python -type f -name '*.py' ! -path '*__pycache__*' | wc -l)" ]]; then
+live_count="$(find /usr/lib/kyri/python -type f -name '*.py' ! -path '*__pycache__*' | wc -l)"
+expected_count=$(( live_count - $(successor_created_since_15) ))
+if [[ "${baseline_count}" == "${expected_count}" ]]; then
   pass "the reconstructed Generation-15 fixture holds the accepted object count (${baseline_count})"
 else
-  fail "the fixture holds ${baseline_count} objects; the installed surface holds a different number"
+  fail "the fixture holds ${baseline_count} objects; the installed surface (${live_count}) less later creates gives ${expected_count}"
 fi
 
 installed_recovery="$(sha256sum \

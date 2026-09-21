@@ -68,6 +68,15 @@ succession_library_rows() {
 #              path, which is the mapping from repository file to installed
 #              module and is not guessable from the pathname.
 #
+#              UNLESS another ceremony in the same set CREATEd that pathname. A
+#              later generation may replace an object an earlier one introduced,
+#              and rewinding past both means the object did not exist at
+#              <commit> at all -- so it is removed rather than restored from a
+#              commit that has never carried it. Only a pathname some ceremony
+#              here declares a CREATE for qualifies; a REPLACE of anything else
+#              that <commit> does not carry is still a failure, because that is
+#              a rewind list naming the wrong ceremonies.
+#
 # Modes are preserved: a real host carries 0444 and so must the fixture, because
 # the installed set is verified for mode as well as for bytes.
 #
@@ -77,6 +86,19 @@ succession_library_rows() {
 succession_rewind() {
   local lib="$1" repository="$2" commit="$3"; shift 3
   local ceremony relative operation source failures=0
+
+  # Every pathname any ceremony in this set introduces, gathered first so a
+  # REPLACE can be told apart from a REPLACE-of-something-introduced-later
+  # regardless of which order the ceremonies are named in.
+  local introduced=" "
+  for ceremony in "$@"; do
+    while read -r relative operation source; do
+      [[ -n "${relative}" ]] || continue
+      [[ "${operation}" == "CREATE" ]] || continue
+      introduced+="${relative} "
+    done < <(succession_library_rows "${ceremony}")
+  done
+
   for ceremony in "$@"; do
     while read -r relative operation source; do
       [[ -n "${relative}" ]] || continue
@@ -85,6 +107,10 @@ succession_rewind() {
           rm -f "${lib}/${relative}"
           ;;
         REPLACE)
+          if [[ "${introduced}" == *" ${relative} "* ]]; then
+            rm -f "${lib}/${relative}"
+            continue
+          fi
           if ! git -C "${repository}" cat-file -e "${commit}:${source}" 2>/dev/null; then
             printf 'succession_rewind: %s does not carry %s (for %s)\n' \
               "${commit}" "${source}" "${relative}" >&2
