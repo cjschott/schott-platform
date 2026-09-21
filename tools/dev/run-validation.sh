@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=129
+  TOTAL_STEPS=130
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=154
+  TOTAL_STEPS=155
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -476,6 +476,14 @@ run "Capability execution generation 20 installer" \
 # not. Host-only; production is measured byte-identical at the end.
 run "CADM-000001 correction rehearsal" \
   bash tests/test-capability-cadm-000001-correction-rehearsal.sh
+
+# G11-BC-Z. CINV-000003 Stage 2. The gates run whole against fixtures; the
+# irreversible command does NOT, because `authorise-launch` compiles in its
+# roots and a substitution would redirect its checks and not its mutation.
+# Its effect is rehearsed at the API instead, and its post-checks are run as
+# predicates over stores. Host-only.
+run "CINV-000003 Stage 2 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-2-rehearsal.sh
 
 run "Capability execution generation 18 installer" \
   bash tests/test-capability-execution-generation18-installer.sh

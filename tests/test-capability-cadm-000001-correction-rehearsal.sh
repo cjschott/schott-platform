@@ -3,9 +3,23 @@ set -Eeuo pipefail
 
 # The CADM-000001 provenance-correction ceremony, rehearsed whole.
 #
-# HOST-ONLY. It builds a Generation-20 library with the real installer and
-# drives the real operator ceremony against a byte copy of the production
-# runtime. See tests/host-only.manifest.
+# HOST-ONLY. It drives the real operator ceremony, with the real INSTALLED
+# Generation-20 library, against a reconstruction of the store the operator ran
+# it against. See tests/host-only.manifest.
+#
+# THE CEREMONY IS SPENT, AND THE REHEARSAL IS NOT RETIRED
+# ======================================================
+# The operator performed the correction on 2026-09-21, so the ceremony now
+# refuses: it pins the pre-correction runtime baseline and production is past
+# it. That refusal is asserted here, at the gate it belongs to.
+#
+# The rehearsal itself still runs, because the correction's whole mutation was
+# one CADM and one counter increment -- so removing them reproduces the store
+# the operator ran against, exactly, which G11-BC-Z proved by aggregate. The
+# ceremony is then driven against that reconstruction with the real installed
+# library, which is a stronger claim than a list of assertions about what the
+# record says: it shows the accepted production record is reproducible from the
+# reviewed ceremony.
 #
 # THIS IS THE SUITE THE LAST ONE COULD NOT BE
 # ===========================================
@@ -36,8 +50,6 @@ host_only_requires /data/kyri/capability-runtime /usr/lib/kyri/python \
                    /etc/kyri/backing-store.json
 
 CEREMONY="${ROOT}/provisioning/execution/g11-bc-y-cadm-000001-provenance-correction-ceremony.txt"
-GEN20_SUITE="${ROOT}/tests/test-capability-execution-generation20-installer.sh"
-INSTALLER="${ROOT}/provisioning/execution/install-generation-20.sh"
 PRODUCTION=/data/kyri/capability-runtime          # prod-path-reference
 INSTALLED=/usr/lib/kyri/python                    # prod-path-reference
 
@@ -54,27 +66,31 @@ LIBRARY_BEFORE="$(find "${INSTALLED}" -type f -name '*.py' -print0 | sort -z \
                   | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
 
 # ===========================================================================
-# 1. Against the host as it stands, the ceremony refuses
+# 1. The ceremony is SPENT, and says so where it should
 # ===========================================================================
 #
-# Generation 20 is not installed yet. G11-BC-W's rule is that an operation runs
-# against the runtime that can read what it writes, and this is that rule
-# holding for the correction: the ceremony must refuse a Generation-19 host,
-# and it must say which property failed.
+# The operator ran it on 2026-09-21 and CADM-000002 exists. A spent ceremony
+# must refuse, and it must refuse on a DURABLE FACT rather than on a whole-store
+# aggregate that will keep moving: the runtime baseline it pins is the
+# pre-correction one, and production is past it.
 
-printf -- '--- the ceremony refuses a host that is not at Generation 20 ---\n'
+printf -- '--- the ceremony is spent ---\n'
 
 out="$( ( cd "${ROOT}" && bash "${CEREMONY}" ) 2>&1 )" && status=0 || status=$?
 if (( status != 0 )); then
-  pass "the ceremony refuses on this host"
+  pass "the spent ceremony refuses"
 else
-  fail "the ceremony ran against a Generation-19 host"
+  fail "the spent ceremony ran again"
 fi
-if [[ "${out}" == *"not the reviewed Generation-20"* ]] \
-   || [[ "${out}" == *"still has no explicit store root"* ]]; then
-  pass "it refuses at the installed-generation gate, naming what is wrong"
+if [[ "${out}" == *"the capability-runtime store has moved"* ]]; then
+  pass "it refuses at the runtime-baseline gate, before touching the subject"
 else
   fail "it refused for another reason: $(printf '%s' "${out}" | tail -2 | tr '\n' ' ')"
+fi
+if [[ "${out}" == *"not the reviewed Generation-20"* ]]; then
+  fail "it refused on the installed generation; Generation 20 is installed"
+else
+  pass "the installed-generation gate passes: the host is at Generation 20"
 fi
 if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
   pass "the refusal wrote nothing: production is byte-identical"
@@ -83,48 +99,109 @@ else
 fi
 
 # ===========================================================================
-# 2. A Generation-20 library, built by the real installer
+# 1b. The durable facts of the accepted correction
 # ===========================================================================
+#
+# Spent mode: facts that stay true, never an aggregate. Stage 2 will move
+# counters and transitions; none of these depends on that.
 
-printf -- '\n--- a Generation-20 library, and a runtime copy ---\n'
+printf -- '\n--- the accepted correction, as durable facts ---\n'
 
-FIXTURE="${WORK}/host"
-# Reuse the Generation-20 suite's fixture builder rather than a second copy of
-# it: a fixture that drifted from the one the installer is tested against would
-# be proving something about neither.
-build_only() {
-  local builder="${WORK}/builder.sh"
-  sed -n '/^build_fixture() {/,/^}$/p' "${GEN20_SUITE}" > "${builder}"
-  sed -n '/^declared_helper_paths() {/,/^}$/p' "${GEN20_SUITE}" >> "${builder}"
-  printf 'set -Eeuo pipefail\nINSTALLED=%s\nbuild_fixture "%s"\n' \
-    "${INSTALLED}" "${FIXTURE}" >> "${builder}"
-  bash "${builder}"
-}
-if build_only; then
-  pass "the Generation-19 fixture host was built from the installed runtime"
+CADM2="${PRODUCTION}/execution/admin-records/CADM-000002"
+if [[ -d "${CADM2}" ]]; then
+  pass "CADM-000002 exists in production"
 else
-  fail "the fixture host could not be built"
+  fail "CADM-000002 is absent"
   exit 1
 fi
+if [[ "$(cd "${CADM2}" && find . -type f -printf '%P\n' | sort | tr '\n' ' ')" \
+      == "intent outcome provenance-correction " ]] \
+   || [[ "$(cd "${CADM2}" && find . -type f -printf '%P\n' | sort | tr '\n' ' ')" \
+      == "intent outcome provenance-correction" ]]; then
+  pass "it carries intent, outcome and the finding, and nothing else"
+else
+  fail "CADM-000002 holds $(cd "${CADM2}" && find . -type f -printf '%P\n' | sort | tr '\n' ' ')"
+fi
+for pair in \
+  "abandonment:d1307f014d8eae2cccf83bfc8c3d673a93a00a86c797e07af44b9053b0dedced" \
+  "intent:a7faa2c165f7c0fd4b3b91204ecd213b4ad4ffdb1029e0c438b3eb25d6e92944" \
+  "outcome:07bb889d884bc76b0cae423a65f6e2fdff9a6d7d8de4584df029fc6a3bbeeeb3"
+do
+  member="${pair%%:*}"; want="${pair##*:}"
+  got="$(sha256sum "${PRODUCTION}/execution/admin-records/CADM-000001/${member}" | cut -d' ' -f1)"
+  if [[ "${got}" == "${want}" ]]; then
+    pass "CADM-000001/${member} is byte-identical: the subject was never written to"
+  else
+    fail "CADM-000001/${member} is ${got}"
+  fi
+done
+for claim in '"subject_cadm":"CADM-000001"' '"subject_member":"abandonment"' \
+             '"subject_digest":"d1307f014d8eae2cccf83bfc8c3d673a93a00a86c797e07af44b9053b0dedced"' \
+             '"disputed_field":"actor"' '"disputed_value":"primary-platform-operator"' \
+             '"finding":"attribution-not-authorised"' \
+             '"actual_initiator":"unauthorised-rehearsal-harness"' \
+             '"effect":"retained"' '"action_reversed":false' \
+             '"lifecycle_unchanged":true' '"slot_changed":false' \
+             '"lifecycle_state":"abandoned"'
+do
+  if grep -qF -- "${claim}" "${CADM2}/provenance-correction"; then
+    pass "the finding records ${claim}"
+  else
+    fail "the finding does not record ${claim}"
+  fi
+done
+# The effect it describes is still standing. This is the fact the correction is
+# ABOUT, so it is checked rather than assumed.
+if ( cd "${INSTALLED}" && python3 - "${PRODUCTION}" <<'STANDINGPY'
+import os, sys
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import capacity as cap, state as sm
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    states = sm.all_states(root)
+    if states["CINV-000002"].value != "abandoned":
+        raise SystemExit(1)
+    if states["CINV-000002"] in cap.slot_holding_states():
+        raise SystemExit(1)
+finally:
+    root.close()
+STANDINGPY
+); then
+  pass "CINV-000002 is still abandoned and still holds no slot: the effect stands"
+else
+  fail "the effect the correction describes has changed"
+fi
 
-if ( cd "${ROOT}" && PYTHONDONTWRITEBYTECODE=1 bash "${INSTALLER}" --install \
-     --fixture "${FIXTURE}" ) > "${WORK}/install.log" 2>&1; then
-  pass "the real installer published Generation 20 into the fixture"
-else
-  fail "the fixture installation failed: $(tail -3 "${WORK}/install.log" | tr '\n' ' ')"
-  exit 1
-fi
-FIXTURE_LIB="${FIXTURE}/usr/lib/kyri/python"
-if [[ -f "${FIXTURE_LIB}/tools/capability/execution/provenance.py" ]]; then
-  pass "the fixture library carries provenance.py"
-else
-  fail "the fixture library has no provenance.py"
-  exit 1
-fi
+# ===========================================================================
+# 2. The pre-correction store, reconstructed
+# ===========================================================================
+#
+# The correction's whole mutation was one CADM and one counter increment, so
+# removing them reproduces the store it ran against -- which G11-BC-Z proved by
+# aggregate. That reconstruction is what the ceremony is rehearsed against, so
+# the rehearsal still runs the REAL ceremony against the REAL starting state
+# rather than being retired to a list of assertions.
+
+printf -- '\n--- the pre-correction store, reconstructed ---\n'
 
 cp -a "${PRODUCTION}" "${WORK}/runtime"
+chmod -R u+w "${WORK}/runtime"
+rm -rf "${WORK}/runtime/execution/admin-records/CADM-000002"
+printf '000001\n' > "${WORK}/runtime/execution/cadm-counter"
+reconstructed="$(find "${WORK}/runtime" -type f -print0 | sort -z | xargs -0 sha256sum \
+  | sed "s#${WORK}/runtime#/data/kyri/capability-runtime#" | sha256sum | cut -d' ' -f1)"
+if [[ "${reconstructed}" == "9374b56870759ebccbbb74a38ada5905bcd5ce3bd1418428b72e148cdc662d68" ]]; then
+  pass "the reconstruction reproduces the accepted pre-correction aggregate"
+else
+  fail "the reconstruction is ${reconstructed}"
+fi
 cp -a "${WORK}/runtime" "${WORK}/runtime.orig"
-pass "the production runtime was copied byte for byte into the fixture"
+
+# The library is the INSTALLED one: Generation 20 is what the operator ran, and
+# it is the authority this rehearsal is about.
+FIXTURE_LIB="${INSTALLED}"
+pass "the rehearsal calls the installed Generation-20 library, as the operator did"
 
 # ===========================================================================
 # 3. The whole ceremony, aimed at the fixture
@@ -138,10 +215,18 @@ sed -e "s#^INSTALLED=/usr/lib/kyri/python\$#INSTALLED=${FIXTURE_LIB}#" \
     -e "s#^RUNTIME_BEFORE=.*#RUNTIME_BEFORE=$(aggregate "${WORK}/runtime")#" \
     "${CEREMONY}" > "${rendered}"
 
-if grep -qE "^(INSTALLED=${INSTALLED}|RUNTIME=${PRODUCTION})\$" "${rendered}"; then
-  fail "a production root survived the substitution"
+# Only the RUNTIME is substituted. INSTALLED stays pointed at the real library
+# on purpose: Generation 20 is installed, it is what the operator ran, and it
+# is the authority this rehearsal exists to exercise.
+if grep -q "^RUNTIME=${PRODUCTION}\$" "${rendered}"; then
+  fail "the production runtime root survived the substitution"
 else
-  pass "both roots were substituted"
+  pass "the runtime root was substituted"
+fi
+if grep -q "^INSTALLED=${INSTALLED}\$" "${rendered}"; then
+  pass "the installed Generation-20 library is still what the ceremony calls"
+else
+  fail "the installed library was substituted away; the rehearsal would prove less"
 fi
 
 out="$( ( cd "${ROOT}" && bash "${rendered}" ) 2>&1 )" && status=0 || status=$?
@@ -205,10 +290,19 @@ if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
 else
   fail "THE REHEARSAL MUTATED PRODUCTION"
 fi
-if [[ ! -e "${PRODUCTION}/execution/admin-records/CADM-000002" ]]; then
-  pass "no CADM-000002 exists in production"
+# Production's CADM-000002 is the operator's accepted one, and this run did not
+# touch it. "Absent" stopped being the right assertion the moment the operator
+# performed the correction; "unchanged by me" is.
+if [[ "$(sha256sum "${PRODUCTION}/execution/admin-records/CADM-000002/provenance-correction" | cut -d' ' -f1)" \
+      == "47b977d83b164ee9056527d99ec40d995b8e9b26e4b63b992df1ac8da8b0e58e" ]]; then
+  pass "production's accepted CADM-000002 is byte-identical: this run did not touch it"
 else
-  fail "A PRODUCTION CORRECTION RECORD WAS CREATED"
+  fail "PRODUCTION'S CADM-000002 CHANGED"
+fi
+if [[ ! -e "${PRODUCTION}/execution/admin-records/CADM-000003" ]]; then
+  pass "and no further administrative record was created"
+else
+  fail "A PRODUCTION ADMINISTRATIVE RECORD WAS CREATED"
 fi
 after_lib="$(find "${INSTALLED}" -type f -name '*.py' -print0 | sort -z \
              | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"

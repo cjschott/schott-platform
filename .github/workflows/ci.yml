@@ -469,6 +469,11 @@ jobs:
       - name: CADM-000001 correction rehearsal tests
         run: bash tests/test-capability-cadm-000001-correction-rehearsal.sh
 
+      # CINV-000003 Stage 2. Host-only: it drives the installed launch bridge
+      # against copies of the governed stores.
+      - name: CINV-000003 Stage 2 rehearsal tests
+        run: bash tests/test-capability-cinv-000003-stage-2-rehearsal.sh
+
       - name: Capability execution BC-E helper ceremony tests
         run: bash tests/test-capability-execution-bc-e-helper-ceremony.sh
 

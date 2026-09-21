@@ -48,6 +48,8 @@ CEREMONY="${ROOT}/provisioning/execution/gen20-operator-ceremony.txt"
 # on a machine without one.
 # shellcheck source=tests/lib/host-only.sh disable=SC1091
 . "${SCRIPT_DIR}/lib/host-only.sh"
+# shellcheck source=tests/lib/succession.sh disable=SC1091
+. "${SCRIPT_DIR}/lib/succession.sh"
 host_only_requires /usr/lib/kyri/python          # prod-path-reference
 
 INSTALLED=/usr/lib/kyri/python                   # prod-path-reference
@@ -125,12 +127,22 @@ build_fixture() {
   mkdir -p "${root}/var/lib/kyri/implementation-authority"          # prod-path-reference
   mkdir -p "${root}/var/lib/kyri/implementation-authority-control"  # prod-path-reference
 
-  # The accepted Generation-19 surface, paths and bytes, as installed.
+  # The Generation-19 surface, RECONSTRUCTED.
+  #
+  # This suite copied the installed library and called it Generation 19, which
+  # was true for exactly as long as Generation 20 was unpublished. The operator
+  # installed it on 2026-09-21 and the copy became a Generation-20 tree
+  # claiming to be its own predecessor -- the same defect eight earlier
+  # generation suites carried, corrected at G11-BC-Y. So the PATH SET comes
+  # from the live library and the BYTES of everything this generation moves are
+  # rewound to the reviewed Generation-19 commit.
   local object
   while IFS= read -r object; do
     install -D -m 0444 "${INSTALLED}/${object}" "${lib}/${object}"
   done < <( cd "${INSTALLED}" && find . -type f -name '*.py' ! -path '*__pycache__*' \
               -printf '%P\n' | sort )
+  succession_rewind "${lib}" "${ROOT}" "${GEN19_COMMIT}" "${INSTALLER}" \
+    || { printf 'FIXTURE: the Generation-19 reconstruction failed\n' >&2; return 1; }
 
   # The predecessor evidence, which records exactly that surface.
   local evidence="${root}/root/kyri-gen19-library-digests.txt"
@@ -230,21 +242,34 @@ for source in "${GEN20_SOURCES[@]}"; do
 done
 pass "every row is in coherence group P"
 
-# The declared baselines are what is actually installed. If this drifts, the
-# installer would refuse on a real host and nobody would know why.
+# The declared baselines are what the reviewed Generation-19 commit carries.
+# NOT what is installed: the host is at Generation 20 now, and asking the host
+# what its own predecessor was is the question that goes stale.
 drift=0
 for source in "${GEN20_SOURCES[@]}"; do
   declared="$(base_of "${source}")"
-  # A CREATE row has no installed predecessor, and sha256sum failing on it
-  # would take the whole suite down under errexit rather than reporting.
-  if [[ -f "${INSTALLED}/${source}" ]]; then
-    actual="$(sha256sum "${INSTALLED}/${source}" | cut -d' ' -f1)"
+  # Asked, not inferred: a CREATE row's path is simply not in that commit, and
+  # under pipefail a `git show` of it would take the suite down rather than
+  # report.
+  if git -C "${ROOT}" cat-file -e "${GEN19_COMMIT}:${source}" 2>/dev/null; then
+    actual="$(git -C "${ROOT}" show "${GEN19_COMMIT}:${source}" | sha256sum | cut -d' ' -f1)"
   else
     actual="ABSENT"
   fi
-  [[ "${declared}" == "${actual}" ]] || { fail "${source}: declared baseline ${declared}, installed ${actual}"; drift=1; }
+  [[ "${declared}" == "${actual}" ]] \
+    || { fail "${source}: declared baseline ${declared}, reviewed Generation 19 ${actual}"; drift=1; }
 done
-(( drift == 0 )) && pass "every declared Generation-19 baseline matches what is installed"
+(( drift == 0 )) && pass "every declared baseline matches the reviewed Generation-19 commit ${GEN19_COMMIT:0:7}"
+
+# And the targets are what IS installed, because the operator installed them.
+drift=0
+for source in "${GEN20_SOURCES[@]}"; do
+  declared="$(want_of "${source}")"
+  actual="$(sha256sum "${INSTALLED}/${source}" 2>/dev/null | cut -d' ' -f1)"
+  [[ "${declared}" == "${actual}" ]] \
+    || { fail "${source}: declared target ${declared}, installed ${actual:-absent}"; drift=1; }
+done
+(( drift == 0 )) && pass "every declared target matches what the operator installed"
 
 drift=0
 for source in "${GEN20_SOURCES[@]}"; do
@@ -306,10 +331,14 @@ build_fixture "${root}"
 before_manifest="$(manifest "${root}")"
 before_count="$(library_count "${root}")"
 
-if [[ "${before_count}" == "82" ]]; then
-  pass "the fixture holds the Generation-19 library: 82 objects"
+# The live library, less the one object this generation creates. Derived, so
+# that a later generation adding an object does not make this a lie.
+live_count="$(find "${INSTALLED}" -type f -name '*.py' ! -path '*__pycache__*' | wc -l)"
+expected_before=$(( live_count - $(matrix_rows | grep -c '|CREATE|') ))
+if [[ "${before_count}" == "${expected_before}" ]]; then
+  pass "the reconstructed Generation-19 fixture holds ${before_count} objects"
 else
-  fail "the fixture holds ${before_count} objects, expected 82"
+  fail "the fixture holds ${before_count} objects; the installed ${live_count} less this generation's creates gives ${expected_before}"
 fi
 
 if run_installer "${root}" --verify; then
@@ -336,8 +365,8 @@ for source in "${GEN20_SOURCES[@]}"; do
 done
 (( drift == 0 )) && pass "all five objects are at their Generation-20 targets"
 
-if [[ "$(library_count "${root}")" == "83" ]]; then
-  pass "the library grew by exactly one object: 82 -> 83"
+if [[ "$(library_count "${root}")" == "$(( expected_before + 1 ))" ]]; then
+  pass "the library grew by exactly one object: ${expected_before} -> $(( expected_before + 1 ))"
 else
   fail "the library holds $(library_count "${root}") objects after install"
 fi
