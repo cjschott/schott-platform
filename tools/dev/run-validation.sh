@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=128
+  TOTAL_STEPS=129
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=153
+  TOTAL_STEPS=154
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -467,6 +467,15 @@ run "Capability execution generation 19 installer" \
 # Generation-19 surface, and nothing production is published.
 run "Capability execution generation 20 installer" \
   bash tests/test-capability-execution-generation20-installer.sh
+
+# G11-BC-Y. The CADM-000001 correction ceremony, rehearsed WHOLE: a real
+# Generation-20 library built by the real installer, a byte copy of the
+# production runtime, and the ceremony's own emitted target asserted to be the
+# fixture's. This is the rehearsal the reclamation ceremony could not have --
+# before Generation 20 the gates followed a substitution and the mutation did
+# not. Host-only; production is measured byte-identical at the end.
+run "CADM-000001 correction rehearsal" \
+  bash tests/test-capability-cadm-000001-correction-rehearsal.sh
 
 run "Capability execution generation 18 installer" \
   bash tests/test-capability-execution-generation18-installer.sh

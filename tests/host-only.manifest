@@ -16,6 +16,7 @@
 # format: <suite>\t<reason>
 
 test-artifact-authority.sh	drives the artifact-authority ceremony pinned to /opt/schott-platform
+test-capability-cadm-000001-correction-rehearsal.sh	builds a Generation-20 library with the real installer and rehearses the correction ceremony against a copy of the production runtime
 test-capability-cinv-000002-reclamation-rehearsal.sh	DISARMED after it mutated production on 2026-09-20; listed because it still declares the host preconditions it was written against
 test-capability-execution-bb-helper-ceremony.sh	reads the installed helper surface and runtime to reconstruct the accepted baseline
 test-capability-execution-g5-authority.sh	drives the G5 ceremony pinned to /opt/schott-platform
