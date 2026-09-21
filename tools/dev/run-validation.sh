@@ -119,10 +119,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=127
+  TOTAL_STEPS=128
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=152
+  TOTAL_STEPS=153
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -458,6 +458,15 @@ run "Capability execution generation 17 installer" \
 # runtime object.
 run "Capability execution generation 19 installer" \
   bash tests/test-capability-execution-generation19-installer.sh
+
+# Generation 20: five objects in ONE coherence group, four of them on a single
+# import chain, and cli.py imports two of them at MODULE level -- so a wrong
+# order is an ImportError on every command including `recover`. Every
+# intermediate is imported rather than argued about, and none may expose the
+# new verb before the last step. Host-only; the fixture IS the installed
+# Generation-19 surface, and nothing production is published.
+run "Capability execution generation 20 installer" \
+  bash tests/test-capability-execution-generation20-installer.sh
 
 run "Capability execution generation 18 installer" \
   bash tests/test-capability-execution-generation18-installer.sh

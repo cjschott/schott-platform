@@ -34,6 +34,7 @@ test-capability-execution-generation18-installer.sh	reads the installed Generati
 test-capability-execution-generation19-installer.sh	reads the installed Generation-18 runtime to reconstruct the accepted baseline path set
 test-capability-execution-bc-e-helper-ceremony.sh	reads the installed runtime and helper surface to reconstruct the accepted Generation-16 host
 test-capability-execution-evidence-remediation.sh	copies the installed helper objects into its fixture, because the remediation verifies its evidence against the deployment actually installed
+test-capability-execution-generation20-installer.sh	the fixture is the installed Generation-19 surface, read from the installed runtime
 test-capability-execution-generation5-installer.sh	drives the generation-5 installer pinned to /opt/schott-platform
 test-capability-execution-generation6-installer.sh	drives the generation-6 installer pinned to /opt/schott-platform
 test-capability-execution-generation7-installer.sh	drives the generation-7 installer pinned to /opt/schott-platform
