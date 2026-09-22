@@ -18,8 +18,11 @@ written yields exactly one destination, ``abandoned``.
 progression the coordinator drove, then let ``cleanup`` and ``capacity.release``
 finish. ``cleanup`` records ``cleaned`` only after the per-`CINV` handoff
 subtree is gone, and §13 transfers the output leaf to the execution identity --
-``out`` is ``uid 999, mode 0700`` while the coordinator is uid 1000. The
-coordinator cannot open it, empty it or remove it, released ``cleanup`` refuses
+``out`` ends up owned by the execution principal and mode ``0700``, while this
+side of the boundary is the coordinator. The numbers are a fact about a
+deployment and are deliberately not written down here; what matters is that the
+owner is not the coordinator. It cannot open the leaf, empty it or remove it,
+released ``cleanup`` refuses
 with ``CleanupIncomplete: directory 'out' could not be opened``, and nothing in
 the released system -- privileged or otherwise -- removes that leaf. So
 ``cleaned`` is structurally unreachable for every supervised invocation, and

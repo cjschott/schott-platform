@@ -41,10 +41,13 @@ set -Eeuo pipefail
 # after the per-CINV handoff subtree is gone, and §13 transfers the output leaf
 # to the execution identity:
 #
-#   /data/kyri/capability-handoff/CINV-000003        uid=1000 gid=1000 mode=555
-#   /data/kyri/capability-handoff/CINV-000003/out    uid=999  gid=987  mode=700
+#   /data/kyri/capability-handoff/CINV-000003        the coordinator, mode 0555
+#   /data/kyri/capability-handoff/CINV-000003/out    the EXECUTION identity, 0700
 #
-# The coordinator is uid 1000. It cannot open that leaf, empty it, or remove it.
+# The deployment's actual numbers are deliberately not written here -- they are
+# a fact about a deployment, which is why G11-AH removed the compiled-in ones.
+# What matters is that the leaf is not the coordinator's: it cannot open it,
+# empty it, or remove it.
 # Released `cleanup` refuses with `CleanupIncomplete: directory 'out' could not
 # be opened`, and nothing in the released system -- the reconcile helper, a
 # tmpfiles rule, anything -- removes it. So `cleaned` is STRUCTURALLY
@@ -279,7 +282,7 @@ MATRIX=(
 "tools/capability/execution/capacity.py|${LIBRARY_ROOT}/tools/capability/execution/capacity.py|0444|REPLACE|f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e|650c05dd3c5ebe3496c468181c7c8770954f79fe73675eec6efa210b01472eb3|P"
 "tools/capability/execution/recovery.py|${LIBRARY_ROOT}/tools/capability/execution/recovery.py|0444|REPLACE|d044cb29a32714945d0d76db59ca3c44cd77d4978e5781fedc073e675b897173|5efec912fdf27add88dadefd2afcb50c698bae4db3296f9926897e272aad9490|P"
 "tools/capability/execution/admin.py|${LIBRARY_ROOT}/tools/capability/execution/admin.py|0444|REPLACE|f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606|b4ea351b3e34e5d4674c72fce14465761eff1eb8444edb7019fcd7d1c0dc7be9|P"
-"tools/capability/execution/conclusion.py|${LIBRARY_ROOT}/tools/capability/execution/conclusion.py|0444|CREATE|ABSENT|d55bca52b515085a6665ed84225beb931611e2a703a0f89611ce65badeab82b8|P"
+"tools/capability/execution/conclusion.py|${LIBRARY_ROOT}/tools/capability/execution/conclusion.py|0444|CREATE|ABSENT|d24ad855e787fce1720df1f8d15f068f65aba46464c1e1382b5e3b68749297b2|P"
 "tools/capability/cli.py|${LIBRARY_ROOT}/tools/capability/cli.py|0444|REPLACE|90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23|82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c|P"
 )
 

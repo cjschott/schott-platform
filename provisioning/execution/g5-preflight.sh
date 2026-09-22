@@ -454,7 +454,7 @@ GENERATION_DELTA=(
 #
 # Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-21.sh`
 # is the ceremony that publishes them, and it has not been run.
-"tools/capability/execution/conclusion.py|CREATE|ABSENT|d55bca52b515085a6665ed84225beb931611e2a703a0f89611ce65badeab82b8"
+"tools/capability/execution/conclusion.py|CREATE|ABSENT|d24ad855e787fce1720df1f8d15f068f65aba46464c1e1382b5e3b68749297b2"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
