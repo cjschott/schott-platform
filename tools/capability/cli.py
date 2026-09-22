@@ -702,6 +702,42 @@ def command_execute(args) -> int:
         print(f"capability: {error}", file=sys.stderr)
         return EXIT_DENIED
 
+    # THE CLOSURE, AFTER THE RESULT IS DURABLE, AND NEVER BEFORE.
+    #
+    # ADR-0017. The supervised path journals nothing past `launch_authorized`,
+    # so without this every successful execution holds a slot for ever. The
+    # ordering is deliberate: the result is written first and stands whatever
+    # happens here. A recorded execution must never be lost because the closure
+    # that follows it failed -- an invocation left at `launch_authorized` with a
+    # durable result is exactly what `capability conclude` resumes, and it is
+    # the state this whole ADR exists to close.
+    #
+    # `observed`, not `reconstructed`: this process supervised the execution it
+    # is closing.
+    from .execution import conclusion
+
+    concluded: Any = None
+    conclusion_refused: Any = None
+    execution_root = _anchored(os.path.join(CAPABILITY_RUNTIME_ROOT, "execution"))
+    try:
+        concluded = conclusion.conclude(
+            store=store, execution_root=execution_root, cinv=args.cinv,
+            actor=args.actor,
+            request_id=f"supervised-execute:{args.cinv}",
+            recorded_at=_instant(args.recorded_at, "--recorded-at"),
+            derivation=conclusion.DERIVATION_OBSERVED)
+    except Exception as error:                                   # noqa: BLE001
+        # Deliberately broad, and only here. The result is already durable, and
+        # the contract is that it stands whatever the closure does. A narrow
+        # `except ValueError` would let anything else -- an ImportError from a
+        # half-published generation, an OSError from the journal -- turn a
+        # recorded execution into a traceback, which is precisely the loss this
+        # ordering exists to prevent. The reason is reported, and the
+        # invocation is left where `capability conclude` resumes it.
+        conclusion_refused = f"{type(error).__name__}: {error}"
+    finally:
+        execution_root.close()
+
     _emit({
         "cinv": args.cinv,
         "status": terminal.status,
@@ -712,6 +748,11 @@ def command_execute(args) -> int:
         "result_digest": terminal.result_digest,
         "result_artifact_reference": terminal.result_artifact_reference,
         "disposal_proven": True,
+        "lifecycle_state": (concluded.state if concluded is not None
+                            else "launch_authorized"),
+        "slot_released": bool(concluded is not None and concluded.slot_released),
+        "conclusion_cadm": concluded.cadm if concluded is not None else None,
+        "conclusion_refused": conclusion_refused,
     })
     return EXIT_SUCCESS if terminal.succeeded else EXIT_DENIED
 
@@ -802,6 +843,66 @@ def command_abandon(args) -> int:
         # which store was written.
         "store_root": root,
         "target": outcome.target,
+    })
+    return EXIT_SUCCESS
+
+
+def command_conclude(args) -> int:
+    """Close one executed invocation and return its slot, and stop.
+
+    **It is not a force-transition and it is not a repair.** It closes exactly
+    one invocation, only from `launch_authorized`, only when the store already
+    holds a terminal result for it, and there is no way to name a target state.
+    It deletes nothing and reaches no container: the container it concerns was
+    proven gone before the result it rests on could be written at all.
+
+    **It does not claim the cleanup progression ran.** `concluded` says the
+    execution ran and concluded and that cleanup did not; the per-`CINV` handoff
+    subtree is still on disk, and the evidence records that.
+
+    **Every judgement belongs to `conclusion.conclude`.** This opens the ruled
+    root, hands it over, and reports what came back.
+    """
+    from .execution import conclusion
+
+    root = _explicit_root(args.store_root)
+    try:
+        store = CapabilityStore(root,
+                                expected_uid=args.expected_uid,
+                                expected_gid=args.expected_gid)
+    except CapabilityError as error:
+        raise _Unusable(
+            f"the capability runtime store is unusable ({error})") from None
+
+    execution_root = _anchored(os.path.join(root, "execution"))
+    try:
+        outcome = conclusion.conclude(
+            store=store, execution_root=execution_root, cinv=args.cinv,
+            actor=args.actor, request_id=args.request_id,
+            recorded_at=args.recorded_at,
+            derivation=conclusion.DERIVATION_RECONSTRUCTED)
+    except ValueError as error:
+        # Every governed refusal in the execution plane subclasses ValueError,
+        # so a refusal added later arrives here as a clean denial instead of a
+        # traceback.
+        print(f"capability: {type(error).__name__}: {error}", file=sys.stderr)
+        return EXIT_DENIED
+    finally:
+        execution_root.close()
+
+    _emit({
+        "cinv": outcome.cinv,
+        "cadm": outcome.cadm,
+        "previous_state": outcome.previous_state,
+        "lifecycle_state": outcome.state,
+        "result_record_id": outcome.result_record_id,
+        "derivation": outcome.derivation,
+        "handoff_retained": outcome.handoff_retained,
+        "slot_released": outcome.slot_released,
+        "resumed": outcome.resumed,
+        # The root as typed. A test asserts the object the writer actually
+        # held: text naming a store is not evidence about which store moved.
+        "store_root": root,
     })
     return EXIT_SUCCESS
 
@@ -1034,6 +1135,28 @@ def build_parser() -> argparse.ArgumentParser:
                          choices=sorted(_ABANDONMENT_REASONS),
                          help="the controlled abandonment reason category")
     abandon.set_defaults(handler=command_abandon)
+
+    # Post-execution conclusion (ADR-0017). Narrower than abandonment: no
+    # reason category, because there is only one situation it closes -- an
+    # execution that ran, concluded, and whose terminal result is durable. It
+    # exists because the supervised path never journals past
+    # `launch_authorized`, so every successful execution otherwise holds a slot
+    # for ever, and `released` is unreachable: §13 gives the output leaf to the
+    # execution identity and nothing released can remove it, so `cleaned`
+    # cannot be truthfully recorded.
+    conclude = subparsers.add_parser("conclude")
+    conclude.add_argument("--store-root", required=True,
+                          help="the capability runtime root to mutate, absolute "
+                               "and explicit; production is "
+                               "/data/kyri/capability-runtime and there is NO "
+                               "default -- a rehearsal must name its own fixture")
+    conclude.add_argument("--expected-uid", required=True, type=int)
+    conclude.add_argument("--expected-gid", required=True, type=int)
+    conclude.add_argument("--cinv", required=True)
+    conclude.add_argument("--actor", required=True)
+    conclude.add_argument("--request-id", required=True)
+    conclude.add_argument("--recorded-at", required=True)
+    conclude.set_defaults(handler=command_conclude)
 
     # Provenance correction (ADR-0016). Narrower than abandonment: it takes a
     # subject record and one disputed claim, writes a finding beside it, and

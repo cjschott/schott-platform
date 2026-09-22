@@ -132,6 +132,14 @@ class Verb(enum.Enum):
     # ones `provenance.CORRECTABLE_FIELDS` names.
     CORRECT_PROVENANCE = "correct-provenance"
 
+    # ADR-0017. The third closed-set addition. It closes an invocation whose
+    # execution already happened and whose terminal result is durable, by
+    # writing the lifecycle the coordinator drove and then letting the existing
+    # cleanup and release operations finish it. It fabricates no result, and it
+    # is absent from `_DESTROYS_UNDER`: the container it concerns was proven
+    # gone before the result it rests on could be written at all.
+    CONCLUDE = "conclude"
+
 
 # Which verb may destroy, and the one condition each may destroy under. A verb
 # absent from this mapping has no destruction authority whatsoever, and a verb

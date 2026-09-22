@@ -482,13 +482,17 @@ print('OK')
 # such thing. Everything else still holds its slot, and the set is stated as an
 # EXCLUSION so a state added later holds a slot by default -- the safe
 # direction.
-run_case "only released and abandoned hold no slot, and every other state does" "${PRELUDE}
+run_case "only released, abandoned and concluded hold no slot, and every other state does" "${PRELUDE}
 from tools.capability.execution.capacity import (
     SLOT_HOLDING_STATES, NON_SLOT_HOLDING_STATES, slot_holding_states)
-assert NON_SLOT_HOLDING_STATES == frozenset({LifecycleState.RELEASED,
-                                             LifecycleState.ABANDONED}), NON_SLOT_HOLDING_STATES
-expected = tuple(s for s in LifecycleState
-                 if s not in (LifecycleState.RELEASED, LifecycleState.ABANDONED))
+# Still an exact set, which is the point: occupancy is stated as an exclusion so
+# a state added later holds a slot until somebody decides otherwise, and this
+# assertion is what makes that decision visible. ADR-0017 is the review that
+# added CONCLUDED to it.
+CLOSED = (LifecycleState.RELEASED, LifecycleState.ABANDONED,
+          LifecycleState.CONCLUDED)
+assert NON_SLOT_HOLDING_STATES == frozenset(CLOSED), NON_SLOT_HOLDING_STATES
+expected = tuple(s for s in LifecycleState if s not in CLOSED)
 assert set(SLOT_HOLDING_STATES) == set(expected), SLOT_HOLDING_STATES
 assert set(slot_holding_states()) == set(expected)
 # The historical name still answers the same question.

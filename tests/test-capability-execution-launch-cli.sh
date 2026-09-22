@@ -323,12 +323,17 @@ assert 'authorise-launch' in verbs, verbs
 # permanently closes one stuck invocation so its execution slot can be
 # reclaimed. ADR-0016 added correct-provenance, which records that a claim in an
 # earlier administrative record is not truthful provenance without touching that
-# record or the lifecycle. Another would be a new operator surface and belongs in
-# a reviewed increment, not in this set by accident.
+# record or the lifecycle. ADR-0017 added conclude, which closes an invocation
+# whose execution ran and whose terminal result is durable, and returns its
+# slot -- the supervised path journals nothing past launch_authorized, so
+# without it every successful execution holds a slot for ever. Another would be
+# a new operator surface and belongs in a reviewed increment, not in this set by
+# accident.
 assert 'abandon' in verbs, verbs
-assert set(verbs) == {'abandon', 'authorise-launch', 'correct-provenance',
-                      'execute', 'inspect', 'invoke', 'recover',
-                      'validate'}, verbs
+assert 'conclude' in verbs, verbs
+assert set(verbs) == {'abandon', 'authorise-launch', 'conclude',
+                      'correct-provenance', 'execute', 'inspect', 'invoke',
+                      'recover', 'validate'}, verbs
 print('OK')
 "
 

@@ -57,6 +57,13 @@ MAXIMUM_SLOTS = 2
 NON_SLOT_HOLDING_STATES = frozenset({
     LifecycleState.RELEASED,
     LifecycleState.ABANDONED,
+    # ADR-0017. Named here explicitly, which is the whole point of stating
+    # occupancy as an exclusion: a state added later holds a slot until
+    # somebody decides otherwise, and this is that decision. A concluded
+    # execution has finished and its result is durable, so continuing to hold a
+    # slot for it would be the defect ADR-0015 was written to remove, one
+    # invocation further along.
+    LifecycleState.CONCLUDED,
 })
 
 SLOT_HOLDING_STATES = tuple(

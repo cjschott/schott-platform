@@ -93,7 +93,8 @@ _CONTAINER_POSSIBLE_FROM = LifecycleState.LAUNCH_AUTHORIZED
 
 # Deliberately absent from `_LIFECYCLE_ORDER` above: administrative closure is
 # not a position on the execution line. ADR-0015.
-_ADMINISTRATIVELY_CLOSED = frozenset({LifecycleState.ABANDONED})
+_ADMINISTRATIVELY_CLOSED = frozenset({LifecycleState.ABANDONED,
+                                      LifecycleState.CONCLUDED})
 
 # What a finding concluded about one unresolved invocation's container.
 DISPOSITION_ABSENT = "absent"

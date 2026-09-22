@@ -148,6 +148,29 @@ class LifecycleState(enum.Enum):
     # capacity occupancy set -- both treat it explicitly rather than by index.
     ABANDONED = "abandoned"
 
+    # The normal post-execution closure, added by ADR-0017 and also off the
+    # linear order.
+    #
+    # CONCLUDED means the execution ran, concluded, and its terminal result is
+    # durable -- and that the cleanup progression did NOT run. It is not
+    # `released`, which additionally claims the invocation was classified,
+    # collected and cleaned; the per-`CINV` handoff subtree is still on disk,
+    # because §13 transfers the output leaf to the execution identity and no
+    # released path can remove it afterwards. Saying `released` here would make
+    # that claim untrue.
+    #
+    # It is not `abandoned` either. Abandonment says the normal lifecycle did
+    # not complete and deliberately declines to say why; this says the
+    # execution completed and points at the result that proves it. The
+    # supervised path strands EVERY success, so reusing `abandoned` for them
+    # would make it the normal end of the happy path and destroy the
+    # distinction ADR-0015 exists to create.
+    #
+    # Like ABANDONED it is reached by closure rather than by advancing, so the
+    # two positional readers of this enum treat it explicitly rather than by
+    # index.
+    CONCLUDED = "concluded"
+
 
 @dataclasses.dataclass(frozen=True)
 class Mount:

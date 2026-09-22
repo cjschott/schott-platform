@@ -63,8 +63,14 @@ _DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_DIRECTORY
 _ALLOWED: dict[LifecycleState, frozenset[LifecycleState]] = {
     LifecycleState.RESERVED: frozenset({LifecycleState.LAUNCH_AUTHORIZED,
                                         LifecycleState.ABANDONED}),
+    # ADR-0017 adds CONCLUDED here and nowhere else. A conclusion closes an
+    # execution the coordinator already drove and whose terminal result is
+    # already durable, and `launch_authorized` is the only state a supervised
+    # invocation is ever left in -- the states past it are worker-side protocol
+    # states that exist on the wire and never in this journal.
     LifecycleState.LAUNCH_AUTHORIZED: frozenset({LifecycleState.CREATED,
-                                                 LifecycleState.ABANDONED}),
+                                                 LifecycleState.ABANDONED,
+                                                 LifecycleState.CONCLUDED}),
     LifecycleState.CREATED: frozenset({LifecycleState.CONTAINER_VERIFIED}),
     LifecycleState.CONTAINER_VERIFIED: frozenset({LifecycleState.START_AUTHORIZED}),
     LifecycleState.START_AUTHORIZED: frozenset({LifecycleState.STARTED}),
@@ -78,6 +84,9 @@ _ALLOWED: dict[LifecycleState, frozenset[LifecycleState]] = {
     # Terminal. Nothing leaves an administrative closure, including back into
     # the normal cleanup progression.
     LifecycleState.ABANDONED: frozenset(),
+    # Terminal for the same reason: a concluded execution is finished, and
+    # nothing re-enters the cleanup progression it never ran.
+    LifecycleState.CONCLUDED: frozenset(),
 }
 
 

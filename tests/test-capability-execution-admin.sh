@@ -270,13 +270,14 @@ def refuses(action, classification, what):
 # that a claim in an earlier CADM is not truthful provenance while that
 # record's effect stands. Neither reaches a container and neither carries
 # destruction authority, which the next cases prove.
-run_case "the verb set is exactly the sixteen accepted verbs" "${PRELUDE}
+run_case "the verb set is exactly the seventeen accepted verbs" "${PRELUDE}
 expected = {'retain', 'destroy', 'retain-residue', 'retry-cleanup',
             'retain-collision', 'destroy-collision', 'retain-start-unknown',
             'destroy-start-unknown', 'retain-lifecycle-failure',
             'destroy-lifecycle-failure', 'acknowledge-state-lost',
             'retain-quarantine-incomplete', 'retain-quarantine-residue',
-            'inspect-admin-integrity', 'abandon', 'correct-provenance'}
+            'inspect-admin-integrity', 'abandon', 'correct-provenance',
+            'conclude'}
 actual = {verb.value for verb in A.Verb}
 assert actual == expected, sorted(actual ^ expected)
 for invented in ('delete', 'cleanup', 'podman', 'repair', 'force', 'exec',
@@ -295,7 +296,8 @@ mutating = {v for v in A.Verb if A.is_mutating(v)}
 assert A.Verb.INSPECT_ADMIN_INTEGRITY not in mutating
 assert A.Verb.ABANDON in mutating
 assert A.Verb.CORRECT_PROVENANCE in mutating
-assert len(mutating) == 15, len(mutating)
+assert A.Verb.CONCLUDE in mutating
+assert len(mutating) == 16, len(mutating)
 print('OK')
 "
 

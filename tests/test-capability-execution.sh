@@ -295,7 +295,15 @@ assert_backstop_coverage() {
                  # behaviourally that a correction leaves the subject record,
                  # the lifecycle, the occupancy and the mutation journal exactly
                  # as they were.
-                 "provenance.py")
+                 "provenance.py"
+                 # Backstopped by tests/test-capability-execution-conclusion.sh,
+                 # which proves it starts no process, reaches no container
+                 # runtime, deletes nothing, fabricates no execution result and
+                 # reads no clock -- and behaviourally that it closes only a
+                 # launch_authorized invocation that already has a terminal
+                 # result, releases exactly one slot, and writes nothing at all
+                 # on every refusal.
+                 "conclusion.py")
   local uncovered=()
   local path name known found
   for path in "${ROOT}/${EXECUTION}"/*.py; do
@@ -446,9 +454,13 @@ run_python_case "LifecycleState is a closed ordered vocabulary" "
 from tools.capability.execution.types import LifecycleState
 expected = ['reserved', 'launch_authorized', 'created', 'container_verified',
             'start_authorized', 'started', 'running', 'terminal', 'classified',
-            'collected', 'cleaned', 'released', 'abandoned']
+            'collected', 'cleaned', 'released', 'abandoned', 'concluded']
 assert [s.value for s in LifecycleState] == expected, [s.value for s in LifecycleState]
-# The linear progression is unchanged: abandoned is appended, not inserted.
+# The linear progression is unchanged: the two closures are APPENDED, never
+# inserted. Declaration order is the specification's order and is read
+# positionally when a transition is checked, so an insertion would silently
+# redefine which transitions are legal. ADR-0015 appended 'abandoned';
+# ADR-0017 appended 'concluded' behind it.
 assert [s.value for s in LifecycleState][:12] == expected[:12]
 print('OK')
 "

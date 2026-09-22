@@ -249,12 +249,16 @@ assert sources == {LifecycleState.RESERVED, LifecycleState.LAUNCH_AUTHORIZED}, s
 print('eligible sources:', sorted(s.value for s in sources))
 "
 
-run_case "RELEASED and ABANDONED hold no slot; every other state does" "${PRELUDE}
+run_case "RELEASED, ABANDONED and CONCLUDED hold no slot; every other state does" "${PRELUDE}
 holding = set(capacity_module.slot_holding_states())
-assert LifecycleState.RELEASED not in holding
-assert LifecycleState.ABANDONED not in holding
-expected = {s for s in LifecycleState
-            if s not in (LifecycleState.RELEASED, LifecycleState.ABANDONED)}
+# ADR-0017 added CONCLUDED to the exclusion. Abandonment's own guarantee is
+# unchanged by it: this asserts the exclusion set exactly, so a state added
+# without review would still fail here.
+CLOSED = (LifecycleState.RELEASED, LifecycleState.ABANDONED,
+          LifecycleState.CONCLUDED)
+for closed in CLOSED:
+    assert closed not in holding, closed
+expected = {s for s in LifecycleState if s not in CLOSED}
 assert holding == expected, holding
 print('slot-holding states:', len(holding), 'of', len(list(LifecycleState)))
 "
