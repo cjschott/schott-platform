@@ -174,13 +174,17 @@ if [[ -e "${ACCEPTED_RECORD}" ]]; then
     fail "capability-invocation.seq is ${seq_now}, below the ${CINV_SEQ_AFTER} this write allocated"
   fi
 
-  # Stage 1 wrote no result and reached no execution surface. Both stay true
-  # until a later stage legitimately changes them, so they are asserted as
-  # Stage 1's own effect rather than as a permanent property of the store.
-  if [[ ! -e "${PRODUCTION_RUNTIME}/capability-results/CRES-000002.yaml" ]]; then
-    pass "Stage 1 wrote no result record"
+  # Stage 1 wrote no result and reached no execution surface. Both stayed true
+  # until a later stage legitimately changed them, which is exactly what this
+  # comment anticipated: the operator ran Stage 3 on 2026-09-22 and it wrote
+  # CRES-000002. Stage 1 still wrote no result -- what is asserted now is that
+  # the result which exists is Stage 3's, unchanged, pinned by content rather
+  # than by presence, so a rehearsal that touched production still fails here.
+  if [[ "$(sha256sum "${PRODUCTION_RUNTIME}/capability-results/CRES-000002.yaml" 2>/dev/null | cut -d' ' -f1)" \
+        == "2d908b866e4f953cc8c53f7f5b367015f9cc75cb1bcbea518261f4997aafaebf" ]]; then
+    pass "the only result is Stage 3's CRES-000002, byte-identical"
   else
-    fail "a result record exists for this invocation"
+    fail "THE PRODUCTION RESULT CHANGED"
   fi
 
   # The Stage 0 payload the record binds must still be the reviewed bytes:

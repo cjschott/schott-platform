@@ -47,6 +47,9 @@ INSTALLED=/usr/lib/kyri/python                    # prod-path-reference
 PRODUCTION=/data/kyri/capability-runtime          # prod-path-reference
 PRODUCTION_FABRIC=/var/lib/kyri/fabric            # prod-path-reference
 PRODUCTION_HANDOFF=/data/kyri/capability-handoff  # prod-path-reference
+# The worker-owned output leaf, which the coordinator cannot read once §13 has
+# transferred it. Named once so the exclusion is a stated fact, not a glob.
+HANDOFF_OUTPUT_LEAF=out
 AUTHORITY=/var/lib/kyri/implementation-authority  # prod-path-reference
 PAYLOAD=/data/kyri/work/g11bcn/third-invoke.json  # prod-path-reference
 
@@ -253,7 +256,26 @@ FIX="${WORK}/resume"
 mkdir -p "${FIX}"
 cp -a "${PRODUCTION}" "${FIX}/runtime"
 mkdir -p "${FIX}/handoff"
-cp -a "${PRODUCTION_HANDOFF}/${TARGET}" "${FIX}/handoff/${TARGET}"
+# The output leaf is EXCLUDED, and it has to be. Stage 3 ran on 2026-09-22 and
+# §13's ownership transfer gave `out` to the execution identity -- uid 999,
+# mode 0700 -- so the coordinator can no longer read it and `cp -a` of the whole
+# subtree fails. The leaf is not this suite's subject: what it drives is
+# `authorise_launch` against the payload and profile, and those are still the
+# coordinator's. Copying what can be read, and saying why the rest is skipped,
+# is the honest repair; widening the copy would need an authority this suite
+# should not have.
+mkdir -p "${FIX}/handoff/${TARGET}"
+find "${PRODUCTION_HANDOFF}/${TARGET}" -mindepth 1 -maxdepth 1 \
+     ! -name "${HANDOFF_OUTPUT_LEAF}" -exec cp -a {} "${FIX}/handoff/${TARGET}/" \;
+# Recreated rather than copied. `_verify_handoff` requires the leaf to exist and
+# to be a directory, and checks neither its mode nor its owner -- so an empty
+# directory satisfies the released code exactly, without this suite pretending
+# to hold bytes it cannot read.
+mkdir -p "${FIX}/handoff/${TARGET}/${HANDOFF_OUTPUT_LEAF}"
+chmod 0700 "${FIX}/handoff/${TARGET}/${HANDOFF_OUTPUT_LEAF}"
+# The invocation directory carries production's mode, and last: the
+# rebuild created it at the shell default, and BLOCK B checks it.
+chmod 0555 "${FIX}/handoff/${TARGET}"
 cp -a "${FIX}/runtime" "${FIX}/runtime.orig"
 
 resume="${WORK}/resume.json"
@@ -353,10 +375,17 @@ if [[ "$(sha256sum "${PRODUCTION_HANDOFF}/${TARGET}/profile" | cut -d' ' -f1)" =
 else
   fail "THE PRODUCTION HANDOFF CHANGED"
 fi
-if [[ ! -e "${PRODUCTION}/capability-results/CRES-000002.yaml" ]]; then
-  pass "and no result exists: Stage 3 has not run"
+# "Absent" stopped being the right assertion when the operator ran Stage 3 on
+# 2026-09-22, for the same reason it stopped being right for the
+# launch-authorisation when they ran Stage 2. What this suite must still prove
+# is that IT did not move anything: the result Stage 3 wrote is pinned by
+# content, so a rehearsal that touched production would fail here rather than
+# pass because the file merely exists.
+if [[ "$(sha256sum "${PRODUCTION}/capability-results/CRES-000002.yaml" 2>/dev/null | cut -d' ' -f1)" \
+      == "2d908b866e4f953cc8c53f7f5b367015f9cc75cb1bcbea518261f4997aafaebf" ]]; then
+  pass "CRES-000002 is byte-identical: Stage 3's result is untouched by this run"
 else
-  fail "A PRODUCTION RESULT EXISTS"
+  fail "THE PRODUCTION RESULT CHANGED"
 fi
 
 printf '\n'

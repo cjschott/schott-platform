@@ -48,6 +48,12 @@ INSTALLED=/usr/lib/kyri/python                    # prod-path-reference
 PRODUCTION=/data/kyri/capability-runtime          # prod-path-reference
 PRODUCTION_FABRIC=/var/lib/kyri/fabric            # prod-path-reference
 PRODUCTION_HANDOFF=/data/kyri/capability-handoff  # prod-path-reference
+# The worker-owned output leaf, which the coordinator cannot read once §13 has
+# transferred it. Named once so the exclusion is a stated fact, not a glob.
+HANDOFF_OUTPUT_LEAF=out
+# The accepted capability-runtime aggregate BEFORE Stage 3, which the rewound
+# fixture must reproduce exactly. Pinned so the rewind is checked, not trusted.
+RUNTIME_BEFORE_STAGE3=648066f6e79af23732eb6131bf772579bad898e71179def5ae4dabb6475e133a
 PAYLOAD=/data/kyri/work/g11bcn/third-invoke.json  # prod-path-reference
 
 TARGET=CINV-000003
@@ -454,7 +460,46 @@ build_fixture() {
   mkdir -p "${base}/handoff" "${base}/work"
   cp -a "${PRODUCTION}" "${base}/runtime"
   cp -a "${PRODUCTION_FABRIC}" "${base}/fabric"
-  cp -a "${PRODUCTION_HANDOFF}/${TARGET}" "${base}/handoff/${TARGET}"
+
+  # THE FIXTURE IS REWOUND TO BEFORE STAGE 3, AND THE REWIND IS PROVEN.
+  #
+  # The operator ran Stage 3 on 2026-09-22, so a copy of production now carries
+  # CRES-000002 and the duplicate-result gate refuses before this suite can
+  # drive anything. What Stage 3 wrote is exactly one result and one sequence
+  # increment -- measured by content at G11-BC-AD -- so removing them returns
+  # the copy to the state this rehearsal was written against.
+  #
+  # G11-BC-AA warned that subtracting later artefacts from a HAND-KEPT LIST is
+  # the defect G11-BC-Y corrected in eight suites: the list drifts and nobody
+  # notices. So the subtraction is not trusted -- it is CHECKED. The rewound
+  # copy must reproduce the accepted pre-Stage-3 aggregate exactly, or this
+  # fixture is not what it claims and the suite stops. A future stage that
+  # writes something else makes this fail here rather than pass quietly.
+  rm -f "${base}/runtime/capability-results/CRES-000002.yaml"
+  printf '1\n' > "${base}/runtime/sequences/capability-result.seq"
+  local rewound
+  rewound="$( cd "${base}/runtime" && find . -type f -print0 | sort -z \
+              | xargs -0 sha256sum | sed "s|  \./|  ${PRODUCTION}/|" \
+              | sha256sum | cut -d' ' -f1 )"
+  if [[ "${rewound}" != "${RUNTIME_BEFORE_STAGE3}" ]]; then
+    fail "the rewound fixture is ${rewound}, not the accepted pre-Stage-3 ${RUNTIME_BEFORE_STAGE3}"
+    return 1
+  fi
+  # The output leaf is excluded and recreated empty. Stage 3 ran on 2026-09-22
+  # and §13's ownership transfer gave `out` to the execution identity -- uid
+  # 999, mode 0700 -- so the coordinator can no longer read it and `cp -a` of
+  # the whole subtree fails. `_verify_handoff` requires the leaf to exist and be
+  # a directory and checks neither its mode nor its owner, so an empty one
+  # satisfies the released code exactly without this fixture pretending to hold
+  # bytes it cannot read.
+  mkdir -p "${base}/handoff/${TARGET}"
+  find "${PRODUCTION_HANDOFF}/${TARGET}" -mindepth 1 -maxdepth 1 \
+       ! -name "${HANDOFF_OUTPUT_LEAF}" -exec cp -a {} "${base}/handoff/${TARGET}/" \;
+  mkdir -p "${base}/handoff/${TARGET}/${HANDOFF_OUTPUT_LEAF}"
+  chmod 0700 "${base}/handoff/${TARGET}/${HANDOFF_OUTPUT_LEAF}"
+  # The invocation directory carries production's mode, and last: the
+  # rebuild created it at the shell default, and BLOCK B checks it.
+  chmod 0555 "${base}/handoff/${TARGET}"
   cp "${PAYLOAD}" "${base}/work/third-invoke.json"
   chmod 0600 "${base}/work/third-invoke.json"
   printf 'stage-3-observation\nimage 5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190\nno-target-container kyri-%s\n' \
@@ -855,15 +900,26 @@ if [[ "$(aggregate "${PRODUCTION_FABRIC}")" == "${FABRIC_BEFORE}" ]]; then
 else
   fail "THE PRODUCTION FABRIC CHANGED"
 fi
-if [[ ! -e "${PRODUCTION}/capability-results/CRES-000002.yaml" ]]; then
-  pass "no CRES-000002 exists in production: the payload has not executed"
+# "Absent" was the right assertion until the operator ran Stage 3 on
+# 2026-09-22. What must still be true is that THIS RUN moved nothing, so the
+# result it wrote is pinned by content and its sequence by value -- a rehearsal
+# that reached production fails here rather than passing because a file happens
+# to exist.
+if [[ "$(sha256sum "${PRODUCTION}/capability-results/CRES-000002.yaml" 2>/dev/null | cut -d' ' -f1)" \
+      == "2d908b866e4f953cc8c53f7f5b367015f9cc75cb1bcbea518261f4997aafaebf" ]]; then
+  pass "CRES-000002 is byte-identical: Stage 3's result is untouched by this run"
 else
-  fail "A PRODUCTION RESULT WAS WRITTEN"
+  fail "THE PRODUCTION RESULT CHANGED"
 fi
-if [[ "$(cat "${PRODUCTION}/sequences/capability-result.seq")" == "1" ]]; then
-  pass "the production result sequence is still 1"
+if [[ "$(cat "${PRODUCTION}/sequences/capability-result.seq")" == "2" ]]; then
+  pass "the production result sequence is 2, where Stage 3 left it"
 else
   fail "the production result sequence moved"
+fi
+if [[ ! -e "${PRODUCTION}/capability-results/CRES-000003.yaml" ]]; then
+  pass "no CRES-000003 exists: this run executed no payload"
+else
+  fail "A SECOND PRODUCTION RESULT WAS WRITTEN"
 fi
 
 printf '\n'
