@@ -224,7 +224,7 @@ protocol, the conclusion and the disposal — has now been exercised for real.
 | Reconcile-entrypoint | **12 PASS** |
 | Quick validator | **131/131**, passed — zero `HOST_ONLY_SKIP` |
 | Full validator | **156/156**, passed — **zero `HOST_ONLY_SKIP`** |
-| Clean-clone full validator | CLONE_RESULT (see §5a) |
+| Clean-clone full validator | **156/156**, passed — clone of `8306bcb` from the remote (see §5a) |
 | ShellCheck (CI-pinned 0.9.0) | clean, rc 0 |
 | GitHub CI | **6/6 success** at `b1bc7ee` — CI, CodeQL, Gitleaks, Semgrep, ShellCheck, Trivy |
 
@@ -280,7 +280,14 @@ It is recorded here rather than quietly re-run: a ceremony refusing to read an
 unreviewed working tree is the behaviour that exists, and the fix was to commit
 the report and run it again from reviewed bytes.
 
-CLONE_RERUN
+Re-run from a fresh clone of the pushed report commit `8306bcb`, taken from the
+remote: **156/156, passed.**
+
+It reports **18** `HOST_ONLY_SKIP`s, every one of them `checkout … is not the
+pinned /opt/schott-platform` — the designed refusal of
+`host_only_requires_pinned_checkout`. G11-BC-AB's clean clone reported **20**:
+the same eighteen, plus the two suites this checkpoint repaired. Neither is
+among them now, because both ran there and passed.
 
 ## 6. Production, before and after
 
