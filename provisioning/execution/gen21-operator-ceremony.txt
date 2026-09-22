@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# The Generation-21 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# THIS IS ONE STAGE, NOT TWO. This generation moves no helper object and no
+# readiness authority: helper compatibility stays `compatible`, blocking stays
+# 0, supervision_ready stays true, and there is no second ceremony to follow.
+#
+# WHAT IT DEPLOYS. Seven objects in one coherence group -- types, state,
+# capacity, recovery, admin, conclusion, cli, in that order.
+#
+# WHAT IT FIXES. CINV-000003 executed successfully on 2026-09-22 and is still
+# `launch_authorized`. That is designed behaviour -- the lifecycle journal is
+# written before the privilege boundary is crossed and the states past
+# `launch_authorized` live on the wire -- but the consequence had never been
+# stated: EVERY successful supervised execution strands, holding an execution
+# slot for ever, because `released` is reachable only through states nothing
+# writes.
+#
+# WHY NOT THE EXISTING CHAIN. Journalling the progression and letting `cleanup`
+# and `release` finish was implemented first and does not work. §13 transfers
+# the output leaf to the execution identity -- `out` is uid 999 mode 0700 and
+# the coordinator is uid 1000 -- so `cleanup` cannot remove the handoff subtree
+# and refuses, and nothing in the system can remove that leaf. `cleaned` is
+# structurally unreachable, and `released` with it.
+#
+# SO `CONCLUDED` SAYS WHAT IS TRUE: the execution ran, concluded, its terminal
+# result is durable, and the cleanup progression did not run. It is terminal,
+# holds no slot, and is neither `released` (which would claim cleanup ran) nor
+# `abandoned` (which would record a success as an exceptional closure and, since
+# every success strands, would make `abandoned` the normal end of the happy
+# path).
+#
+# THIS IS NOT A BREAKING CHANGE. No existing verb changes shape, no record
+# schema moves, and `released` and `abandoned` still mean exactly what they
+# meant. A reader older than ADR-0017 refuses a `concluded` record as an unknown
+# state rather than misreading it.
+#
+# WHAT IT DOES NOT DO. IT CLOSES NOTHING. No invocation changes state, no CADM
+# is written, no slot changes hands, and occupancy stays 2 of 2 across this
+# publication. It publishes the ABILITY to close a concluded execution, under a
+# separate reviewed ceremony, and performs none of it.
+#
+# Do NOT run the closure ceremony until the reviewer accepts this installation.
+# Do NOT reclaim CINV-000001: it has no terminal result, `conclude` refuses it
+# by construction, and it is a separate decision.
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen21-transaction/journal \
+  || { printf 'STOP: a Generation-21 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen21-transaction \
+  || { printf 'STOP: Generation-21 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 20 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 20 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen20-library-digests.txt
+sudo test -f /root/kyri-gen20-helper-digests.txt
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-21.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-21.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-21.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-21.sh --verify-installed
+
+# EXPECTED AFTER THIS CEREMONY:
+#   helper compatibility  compatible      (UNCHANGED -- nothing here moves it)
+#   helpers blocking      0               (UNCHANGED)
+#   supervision_ready     true            (UNCHANGED)
+#   library objects       83 + 1 helper   (was 82 + 1: conclusion.py is a CREATE)
+#   CINV sequence         3               CRES sequence  2
+#   CINV-000001           launch_authorized    CINV-000002  abandoned
+#   CINV-000003           launch_authorized    (UNCHANGED -- nothing closes it here)
+#   administrative records 2               (CADM-000001 and CADM-000002, untouched)
+#   occupancy             2 of 2          (UNCHANGED -- nothing is closed here)
+#   capability --help     now lists `conclude`
+#
+# An `incompatible` verdict here is a FAULT, not an expected intermediate: it
+# would mean something outside this matrix moved. Return the output either way.
+#
+# If the run is interrupted, do NOT rerun --install. Run:
+#   sudo bash /opt/schott-platform/provisioning/execution/install-generation-21.sh --recover
+# and return its output. Do not delete the transaction directory.
+#
+# ONLY AFTER THE REVIEWER ACCEPTS THIS INSTALLATION:
+#   provisioning/execution/g11-bc-ad-cinv-000003-closure-ceremony.txt
+# closes CINV-000003 and returns its slot, taking occupancy to 1 of 2.

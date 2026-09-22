@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# CINV-000003 CLOSURE -- `capability conclude`, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes each
+# block into a shell so every command and every refusal is visible on the
+# console.
+#
+# =====================================================================
+# THIS RUNS ONLY AFTER GENERATION 21 IS INSTALLED AND ACCEPTED
+# =====================================================================
+# `conclude` does not exist before then. BLOCK B refuses if the installed
+# runtime is not Generation 21, rather than letting the verb fail in a way an
+# operator has to interpret.
+#
+# =====================================================================
+# THREE BLOCKS, AND ONLY ONE OF THEM MUTATES
+# =====================================================================
+#   BLOCK A  observation, as kyri-capability. Containers. Writes a short-lived
+#            witness.
+#   BLOCK B  the gates. Read-only, every one of them.
+#   BLOCK C  the single irreversible command, and what must be true after it.
+#
+# =====================================================================
+# WHAT THIS DOES, AND THE THREE THINGS IT DOES NOT
+# =====================================================================
+# It closes CINV-000003, whose execution ran and succeeded on 2026-09-22 and
+# whose terminal result CRES-000002 is durable, and returns its execution slot.
+#
+# ITS ENTIRE MUTATION IS ONE TRANSITION AND ONE CADM: the lifecycle moves
+# `launch_authorized -> concluded`, and one administrative record says who
+# closed it, when, under what authority, and on the evidence of which result.
+#
+#   1. IT WRITES NO RESULT. CRES-000002 is final and is not touched. The
+#      outcome is read and referenced by identity, never reinterpreted.
+#   2. IT DOES NOT CLAIM CLEANUP RAN. `concluded` is not `released`. The
+#      per-CINV handoff subtree is still on disk and CANNOT be removed by the
+#      coordinator -- §13 gave the output leaf to the execution identity -- and
+#      the CADM records `handoff_retained: true` rather than implying otherwise.
+#   3. IT TOUCHES NO CONTAINER. `conclude` carries no destruction authority. The
+#      container was proven gone before CRES-000002 could be written at all:
+#      supervision refuses to conclude an execution whose disposal it cannot
+#      prove, so no result would exist if one remained.
+#
+# WHAT CHANGES, MEASURED
+#
+#   capability-runtime aggregate  6757304e... -> a new value
+#   CINV-000003 lifecycle         launch_authorized -> concluded
+#   occupancy                     2 of 2 -> 1 of 2
+#   cadm-counter                  000002 -> 000003
+#   transitions                   7 -> 8
+#   capability-result.seq         2, unchanged
+#   CRES-000002                   unchanged, byte for byte
+#   CINV-000001                   untouched, still launch_authorized
+#
+# CINV-000001 IS NOT RECLAIMED HERE. It has no terminal result, so `conclude`
+# refuses it by construction -- it is what the recovery enumeration and the
+# readiness gate are built to find, and closing it would remove it from the one
+# surface that could still resolve it. That is a separate decision.
+
+set -Eeuo pipefail
+
+# =====================================================================
+# BLOCK A -- OBSERVATION. Run as the operator; it elevates to kyri-capability.
+# =====================================================================
+bash <<'OBSERVE'
+set -Eeuo pipefail
+WITNESS=/data/kyri/work/g11bcad-closure-witness
+TARGET_CONTAINER=kyri-CINV-000003
+
+cd /tmp
+
+printf '\n--- containers ---\n'
+CONTAINERS="$(sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman ps -a --format '{{.Names}} {{.Status}}')"
+printf '%s\n' "${CONTAINERS}"
+
+# The conclusion asserts the execution concluded and its container is gone. That
+# is licensed by CRES-000002 existing at all -- supervision writes no result for
+# an execution whose disposal it cannot prove. This looks anyway: the invariant
+# licenses a claim about a supervised execution, not about this host, and a
+# container wearing that name now would mean something happened after the
+# result that nobody has accounted for.
+if printf '%s' "${CONTAINERS}" | grep -q "${TARGET_CONTAINER}"; then
+  echo "REFUSE: a ${TARGET_CONTAINER} container exists; the disposal CRES-000002 rests on is contradicted"
+  exit 1
+fi
+printf 'ok  no %s container\n' "${TARGET_CONTAINER}"
+
+umask 077
+{
+  printf 'no-target-container %s\n' "${TARGET_CONTAINER}"
+  printf 'observed-at %s\n' "$(date -Is)"
+} > "${WITNESS}"
+printf '\nwitness written: %s\n' "${WITNESS}"
+OBSERVE
+
+# =====================================================================
+# BLOCK B -- THE GATES. Read-only, every one of them.
+# =====================================================================
+bash <<'GATES'
+set -Eeuo pipefail
+
+INSTALLED=/usr/lib/kyri/python
+RUNTIME=/data/kyri/capability-runtime
+WITNESS=/data/kyri/work/g11bcad-closure-witness
+WITNESS_MAXIMUM_AGE=900
+
+TARGET=CINV-000003
+RESULT=CRES-000002
+
+# The accepted post-Stage-3 state, pinned. Every value measured at G11-BC-AD.
+RUNTIME_BEFORE=6757304ec093dd87c7aaeffeb14df729b01d3725210e932a42789c4801c01048
+FABRIC_BEFORE=a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+SHA_CRES2=2d908b866e4f953cc8c53f7f5b367015f9cc75cb1bcbea518261f4997aafaebf
+CRES_SEQ=2
+CINV_SEQ=3
+CADM_COUNTER=000002
+CMUT_COUNTER=000000000010
+TRANSITIONS_BEFORE=7
+
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+
+# ---- GATE 0: THE OBSERVATION ------------------------------------------
+printf -- '--- observation gate ---\n'
+test -f "${WITNESS}" \
+  || { echo "REFUSE: no observation witness at ${WITNESS}; run BLOCK A first"; exit 1; }
+AGE=$(( $(date +%s) - $(stat -c %Y "${WITNESS}") ))
+test "${AGE}" -ge 0 || { echo "REFUSE: the witness is dated in the future"; exit 1; }
+test "${AGE}" -le "${WITNESS_MAXIMUM_AGE}" \
+  || { echo "REFUSE: the witness is ${AGE}s old; re-run BLOCK A"; exit 1; }
+grep -q "^no-target-container kyri-${TARGET}\$" "${WITNESS}" \
+  || { echo "REFUSE: the witness does not record the absence of a kyri-${TARGET} container"; exit 1; }
+printf 'ok  observation %ss old: no kyri-%s container\n' "${AGE}" "${TARGET}"
+
+# ---- GATE 1: THE INSTALLED RUNTIME IS GENERATION 21 -------------------
+#
+# `conclude` does not exist before Generation 21. Checking the digests rather
+# than the verb's presence means a partially published generation is refused
+# here instead of part-way through the closure.
+printf '\n--- installed generation gate ---\n'
+check_installed() {
+  local relative="$1" wanted="$2" got
+  got="$(sha256sum "${INSTALLED}/${relative}" 2>/dev/null | cut -d' ' -f1)"
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${INSTALLED}/${relative} is ${got:-absent}, not the reviewed Generation-21 ${wanted}"; exit 1; }
+  printf 'ok  %-28s %s\n' "$(basename "${relative}")" "${got}"
+}
+check_installed tools/capability/execution/types.py      6f0c8fa63333cb2880ba195c25fac35f15ad81a9fe82811e112d89f706520f44
+check_installed tools/capability/execution/state.py      9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980
+check_installed tools/capability/execution/capacity.py   650c05dd3c5ebe3496c468181c7c8770954f79fe73675eec6efa210b01472eb3
+check_installed tools/capability/execution/recovery.py   5efec912fdf27add88dadefd2afcb50c698bae4db3296f9926897e272aad9490
+check_installed tools/capability/execution/admin.py      b4ea351b3e34e5d4674c72fce14465761eff1eb8444edb7019fcd7d1c0dc7be9
+check_installed tools/capability/execution/conclusion.py d55bca52b515085a6665ed84225beb931611e2a703a0f89611ce65badeab82b8
+check_installed tools/capability/cli.py                  82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c
+
+# ---- GATE 2: THE RUNTIME IS WHERE STAGE 3 LEFT IT ---------------------
+printf '\n--- runtime baseline gate ---\n'
+NOW_RUNTIME="$(aggregate "${RUNTIME}")"
+test "${NOW_RUNTIME}" = "${RUNTIME_BEFORE}" \
+  || { echo "REFUSE: the capability runtime has moved: ${NOW_RUNTIME}, expected ${RUNTIME_BEFORE}"; exit 1; }
+printf 'ok  runtime  %s\n' "${NOW_RUNTIME}"
+NOW_FABRIC="$(aggregate /var/lib/kyri/fabric)"
+test "${NOW_FABRIC}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: the Fabric has moved: ${NOW_FABRIC}"; exit 1; }
+printf 'ok  fabric   %s\n' "${NOW_FABRIC}"
+
+# ---- GATE 3: THE RESULT THIS CLOSURE RESTS ON -------------------------
+#
+# The conclusion asserts the execution concluded, and CRES-000002 is the entire
+# authority for that. It is pinned by content, not merely by presence.
+printf '\n--- result gate ---\n'
+GOT_CRES="$(sha256sum "${RUNTIME}/capability-results/${RESULT}.yaml" 2>/dev/null | cut -d' ' -f1)"
+test "${GOT_CRES}" = "${SHA_CRES2}" \
+  || { echo "REFUSE: ${RESULT} is ${GOT_CRES:-absent}, expected ${SHA_CRES2}"; exit 1; }
+printf 'ok  %-16s %s\n' "${RESULT}" "${GOT_CRES}"
+test ! -e "${RUNTIME}/capability-results/CRES-000003.yaml" \
+  || { echo "REFUSE: a CRES-000003 exists; this store is not where this ceremony was written for"; exit 1; }
+
+# ---- GATE 4: SEQUENCES, COUNTERS AND THE LIFECYCLE --------------------
+printf '\n--- state gate ---\n'
+check_value() {
+  local what="$1" got="$2" wanted="$3"
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${what} is ${got}, expected ${wanted}"; exit 1; }
+  printf 'ok  %-34s %s\n' "${what}" "${got}"
+}
+check_value "capability-invocation.seq" "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" "${CINV_SEQ}"
+check_value "capability-result.seq"     "$(cat "${RUNTIME}/sequences/capability-result.seq")"     "${CRES_SEQ}"
+check_value "cadm-counter"              "$(cat "${RUNTIME}/execution/cadm-counter")"              "${CADM_COUNTER}"
+check_value "cmut-counter"              "$(cat "${RUNTIME}/execution/cmut-counter")"              "${CMUT_COUNTER}"
+check_value "transitions"               "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)" "${TRANSITIONS_BEFORE}"
+
+cd "${INSTALLED}" && python3 - "${TARGET}" <<'STATE_PY'
+import sys
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution.state import current_state
+from tools.capability.execution import capacity
+from tools.capability.execution.types import LifecycleState
+
+target = sys.argv[1]
+root = cli._anchored("/data/kyri/capability-runtime/execution")
+occupied = 0
+for cinv in ("CINV-000001", "CINV-000002", "CINV-000003"):
+    state = current_state(root, cinv)
+    holding = state in capacity.SLOT_HOLDING_STATES
+    occupied += 1 if holding else 0
+    print(f"ok  {cinv} {state.value:20s} slot={holding}")
+
+state = current_state(root, target)
+if state is not LifecycleState.LAUNCH_AUTHORIZED:
+    print(f"REFUSE: {target} is {state.value}, and a conclusion closes an "
+          f"invocation at launch_authorized")
+    sys.exit(1)
+if occupied != 2:
+    print(f"REFUSE: occupancy is {occupied} of {capacity.MAXIMUM_SLOTS}, expected 2")
+    sys.exit(1)
+if capacity.MAXIMUM_SLOTS != 2:
+    print(f"REFUSE: MAXIMUM_SLOTS is {capacity.MAXIMUM_SLOTS}")
+    sys.exit(1)
+print(f"ok  occupancy {occupied} of {capacity.MAXIMUM_SLOTS}")
+STATE_PY
+
+printf '\nALL GATES PASSED. BLOCK C is the irreversible step.\n'
+GATES
+
+# =====================================================================
+# BLOCK C -- THE ONE IRREVERSIBLE COMMAND
+# =====================================================================
+#
+# `--store-root` is explicit and there is no default: the 2026-09-20 incident
+# was a harness that substituted every path in the text while the library
+# resolved production from a module constant. Generation 20 removed that
+# constant from the administrative mutators, and this names the target it is
+# actually about to write.
+#
+# READ THE JSON FIRST AND THE EXIT STATUS SECOND.
+
+cd /usr/lib/kyri/python && python3 -m tools.capability.cli conclude \
+  --store-root /data/kyri/capability-runtime \
+  --expected-uid 1000 --expected-gid 1000 \
+  --cinv CINV-000003 \
+  --actor primary-platform-operator \
+  --request-id g11bcad-conclude-cinv-000003 \
+  --recorded-at "$(date -Is)"
+
+# EXPECTED JSON
+#
+#   cinv              CINV-000003
+#   cadm              CADM-000003
+#   previous_state    launch_authorized
+#   lifecycle_state   concluded
+#   result_record_id  CRES-000002
+#   derivation        reconstructed
+#   handoff_retained  true
+#   slot_released     true
+#   resumed           false
+#   store_root        /data/kyri/capability-runtime
+#
+# `derivation: reconstructed` is correct and is not a weakness being glossed.
+# This execution ran under Generation 20, which kept no trace, so the closure
+# rests on CRES-000002 alone. A future execution closes itself inline and
+# records `observed`.
+#
+# =====================================================================
+# AFTER: WHAT MUST BE TRUE
+# =====================================================================
+bash <<'AFTER'
+set -Eeuo pipefail
+RUNTIME=/data/kyri/capability-runtime
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+
+printf -- '--- after ---\n'
+printf 'runtime aggregate   %s   (MUST have moved from 6757304e...)\n' "$(aggregate "${RUNTIME}")"
+printf 'fabric aggregate    %s   (MUST be a87c2010...)\n' "$(aggregate /var/lib/kyri/fabric)"
+printf 'result.seq          %s   (MUST still be 2)\n' "$(cat "${RUNTIME}/sequences/capability-result.seq")"
+printf 'cadm-counter        %s   (MUST be 000003)\n' "$(cat "${RUNTIME}/execution/cadm-counter")"
+printf 'cmut-counter        %s   (MUST still be 000000000010)\n' "$(cat "${RUNTIME}/execution/cmut-counter")"
+printf 'transitions         %s   (MUST be 8)\n' "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)"
+printf 'CRES-000002         %s   (MUST be unchanged)\n' "$(sha256sum "${RUNTIME}/capability-results/CRES-000002.yaml" | cut -d' ' -f1)"
+
+cd /usr/lib/kyri/python && python3 - <<'AFTER_PY'
+import sys
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution.state import current_state
+from tools.capability.execution import capacity
+root = cli._anchored("/data/kyri/capability-runtime/execution")
+occupied = 0
+for cinv in ("CINV-000001", "CINV-000002", "CINV-000003"):
+    state = current_state(root, cinv)
+    holding = state in capacity.SLOT_HOLDING_STATES
+    occupied += 1 if holding else 0
+    print(f"{cinv} {state.value:20s} slot={holding}")
+print(f"occupancy {occupied} of {capacity.MAXIMUM_SLOTS}   (MUST be 1 of 2)")
+AFTER_PY
+
+# The residue, stated rather than discovered later. Nothing here removes it,
+# and the CADM records that it is there.
+printf '\nhandoff subtree (RETAINED by design):\n'
+ls -ld /data/kyri/capability-handoff/CINV-000003 || true
+AFTER
