@@ -610,6 +610,13 @@ jobs:
       - name: Capability execution abandonment tests
         run: bash tests/test-capability-execution-abandonment.sh
 
+      # Post-execution lifecycle conclusion (ADR-0017): the NORMAL closure for
+      # an execution that ran. Distinct from abandonment, and deliberately so --
+      # the supervised path strands every success, so reusing the exceptional
+      # closure for them would destroy the distinction ADR-0015 exists to make.
+      - name: Capability execution conclusion tests
+        run: bash tests/test-capability-execution-conclusion.sh
+
       - name: Capability execution quarantine tests
         run: bash tests/test-capability-execution-quarantine.sh
 
