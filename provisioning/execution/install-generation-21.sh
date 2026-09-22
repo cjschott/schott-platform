@@ -123,7 +123,7 @@ set -Eeuo pipefail
 # stays 2 of 2 across this publication -- closing CINV-000003 is a separate
 # operator ceremony that runs AFTER this generation is accepted.
 #
-COMMIT="6b25866185136dcdc7ec7e88dc7f81a93c158874"
+COMMIT="0bd3b8acf9953126b9e1ba3eda07b282debd7c78"
 
 # The accepted Generation-21 source authority, and the baseline this transaction
 # requires the host to be at.
