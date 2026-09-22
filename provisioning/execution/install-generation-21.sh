@@ -1078,19 +1078,23 @@ report_transaction_residue() {
 # matrix would make every `tools.capability.cli` command -- including `recover`
 # -- fail to import for the length of the transaction, and nothing else in the
 # ceremony would notice. This refuses instead.
-FAIL_CLOSED_FIRST="tools/capability/execution/backing_store.py"
-# The operator surface, which must be LAST: it is the only object that can
-# reach the new operation, and publishing it earlier would either fail to
-# import or expose a verb whose dependencies are still at Generation 20.
+FAIL_CLOSED_FIRST="tools/capability/execution/types.py"
+# The operator surface, which must be LAST, and here for a sharper reason than
+# at Generation 20. `cli.py` imports `conclusion` LAZILY, so publishing it early
+# does not fail closed at import: it would expose a `conclude` verb that raises
+# ImportError when used, and `execute` would record a durable result and THEN
+# raise from the inline closure. Last is what makes that unreachable.
 OPERATOR_SURFACE_LAST="tools/capability/cli.py"
 
 # The dependency-safe publication order, in full. Each object is published
 # only after everything it imports. Measured, see the MATRIX header.
 PUBLICATION_ORDER=(
-"tools/capability/execution/backing_store.py"
+"tools/capability/execution/types.py"
+"tools/capability/execution/state.py"
+"tools/capability/execution/capacity.py"
+"tools/capability/execution/recovery.py"
 "tools/capability/execution/admin.py"
-"tools/capability/execution/abandonment.py"
-"tools/capability/execution/provenance.py"
+"tools/capability/execution/conclusion.py"
 "tools/capability/cli.py"
 )
 
