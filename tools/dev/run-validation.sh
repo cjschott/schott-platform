@@ -118,11 +118,13 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # way this number stays true. Each suite added since has been re-measured in
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
+# ADR-0017's conclusion suite was measured the same way and runs in BOTH, so
+# both totals moved by one: 131 -> 132 and 156 -> 157.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=131
+  TOTAL_STEPS=132
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=156
+  TOTAL_STEPS=157
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
