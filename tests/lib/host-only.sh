@@ -152,3 +152,95 @@ except Exception:
   printf 'This machine does not report one, so the fixture cannot be built.\n'
   exit 0
 }
+
+# host_only_requires_coordinator_identity <repository-root>
+#
+# The deployment's coordinator identity, resolved through the authority
+# production itself reads, and used as the identity this suite must run as.
+#
+# WHY THIS EXISTS. Suites that build a fixture the privileged helper
+# authenticates by owner used to pin the identity by sed'ing a compiled-in
+# `COORDINATOR_UID = 1000` out of the policy module. f9d94ce removed that
+# constant -- it was true of `schai` only because `cschott` happens to be uid
+# 1000 -- in favour of /etc/kyri/coordinator-identity.json. The sed then
+# matched nothing, `host_only_requires_identity ""` compared "" against the
+# real uid, and the suites reported HOST_ONLY_SKIP on every run since,
+# including on the production host they exist to prove. A skip produced by a
+# stale extraction is worse than a failure: it reads as "not applicable here"
+# rather than "nobody checked".
+#
+# So the answer comes from `load_coordinator_authority`, the same reader the
+# privileged helper uses, which judges ownership before it reads the bytes as
+# authority and enforces the closed schema and the version. This helper adds no
+# parsing of its own and carries no default: there is deliberately nothing for a
+# failure to degrade to.
+#
+# THE THREE OUTCOMES ARE KEPT APART ON PURPOSE.
+#   absent    -- this deployment publishes no coordinator authority, so the
+#                fixture cannot be built. Not applicable here: skip, with the
+#                reason stated.
+#   malformed -- the deployment HAS an authority and the governed reader
+#                refused it. That is a real finding about a real host and it
+#                fails, because skipping here would recreate exactly the defect
+#                this helper was written to remove.
+#   resolved  -- compare against the running uid in the usual way.
+#
+# An empty or non-numeric answer is also a failure, never a skip, for the same
+# reason: that empty string is the original bug.
+host_only_requires_coordinator_identity() {
+  local _ho_root="$1" _ho_suite _ho_answer _ho_rc
+  _ho_suite="$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]} - 1]}")"
+  # `|| _ho_rc=$?` and not a bare assignment: every suite runs under `set -e`,
+  # which aborts the function on a failing command substitution before `$?` can
+  # be read -- so an absent authority would kill the suite with the reader's own
+  # exit status instead of skipping for a stated reason.
+  _ho_rc=0
+  _ho_answer="$(cd "${_ho_root}" && python3 - <<'COORDINATOR_PY'
+import importlib.util
+import os
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "kyri_exec_transition", "provisioning/execution/kyri-exec-transition.py")
+policy = importlib.util.module_from_spec(spec)
+sys.modules["kyri_exec_transition"] = policy
+spec.loader.exec_module(policy)
+
+try:
+    handle = os.open(policy.COORDINATOR_AUTHORITY_PATH,
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+except OSError:
+    sys.exit(2)                    # absent or unreadable: not this deployment
+try:
+    info = os.fstat(handle)
+    body = os.read(handle, policy.MAXIMUM_COORDINATOR_AUTHORITY_BYTES + 1)
+finally:
+    os.close(handle)
+
+try:
+    authority = policy.load_coordinator_authority(body, info)
+except Exception as error:                                   # noqa: BLE001
+    print(f"{type(error).__name__}: {error}")
+    sys.exit(3)                    # present but not authority: refuse loudly
+print(authority.coordinator_uid)
+COORDINATOR_PY
+)" || _ho_rc=$?
+  case "${_ho_rc}" in
+    0) ;;
+    2) printf 'HOST_ONLY_SKIP\t%s\t%s\n' "${_ho_suite}" \
+         "this deployment publishes no coordinator identity authority"
+       printf 'This suite builds a fixture the production code authenticates by owner.\n'
+       printf 'The deployment coordinator identity authority is absent or unreadable,\n'
+       printf 'so the identity the fixture must carry cannot be resolved.\n'
+       exit 0 ;;
+    *) printf 'FAIL: %s: the coordinator identity authority did not verify: %s\n' \
+         "${_ho_suite}" "${_ho_answer:-the reader exited ${_ho_rc}}" >&2
+       exit 1 ;;
+  esac
+  [[ "${_ho_answer}" =~ ^[0-9]+$ ]] || {
+    printf 'FAIL: %s: the coordinator authority resolved no uid (%s)\n' \
+      "${_ho_suite}" "${_ho_answer:-empty}" >&2
+    exit 1
+  }
+  host_only_requires_identity "${_ho_answer}"
+}

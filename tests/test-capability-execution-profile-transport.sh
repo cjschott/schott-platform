@@ -35,8 +35,15 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # production code pins, so this suite runs only as that identity.
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
-host_only_requires_identity "$(sed -n 's/^COORDINATOR_UID = \([0-9]*\)$/\1/p' \
-  "${ROOT}/provisioning/execution/kyri-exec-transition.py" | head -1)"
+# THIS SUITE WAS SILENTLY SKIPPING. It pinned the identity by sed'ing a
+# compiled-in `COORDINATOR_UID` out of the policy module, and f9d94ce removed
+# that constant in favour of the deployment coordinator identity authority. The
+# sed then matched nothing, the comparison was against an empty string, and
+# every run since reported HOST_ONLY_SKIP -- on the production host too, which
+# is the only place this suite can prove anything. The identity now comes from
+# the authority production itself reads, through the governed reader, which
+# refuses rather than defaults.
+host_only_requires_coordinator_identity "${ROOT}"
 
 FAILURES=0
 
@@ -105,7 +112,7 @@ run_case() {
 }
 
 PRELUDE="
-import fcntl, hashlib, importlib.util, os, stat, sys, types
+import dataclasses, fcntl, hashlib, importlib.util, json, os, stat, sys, types
 
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -123,6 +130,33 @@ from tools.capability.execution.canonical_json import serialise
 from tools.capability.execution.implementation_authority import Admission
 from tools.capability.execution.profile import (
     PROFILE_SCHEMA_VERSION, ProfileBinding, build_profile, canonical_profile, fingerprint)
+
+# The execution principal, through the governed loader. f9d94ce made 'identity'
+# a required keyword on policy_for and removed the compiled-in worker numbers.
+class _Status:
+    def __init__(self, mode=0o100444, uid=0, gid=0):
+        self.st_mode, self.st_uid, self.st_gid = mode, uid, gid
+
+def _identity(account='kyri-capability', uid=999, gid=987):
+    # The POLICY module's loader, not the runtime package's: policy_for checks
+    # isinstance against its own ExecutionIdentity, and the two classes are
+    # deliberately separate sides of the privilege boundary.
+    return policy_mod.load_execution_identity(
+        json.dumps({'execution_account': account, 'execution_gid': gid,
+                    'execution_uid': uid, 'schema_version': 1},
+                   sort_keys=True, separators=(',', ':')).encode(),
+        _Status(), resolve=lambda name: (uid, gid))
+
+IDENTITY = _identity()
+SELF_UID, SELF_GID = os.getuid(), os.getgid()
+
+def local(policy):
+    '''The policy retargeted at this process, so §13's output-leaf transfer --
+    which the transition verifies actually took effect -- can be performed by
+    the one transfer an unprivileged process may make: to itself. The governed
+    numbers stay asserted from the policy object.
+    '''
+    return dataclasses.replace(policy, worker_uid=SELF_UID, worker_gid=SELF_GID)
 
 WORK = os.environ['WORKDIR']
 DROP = object()
@@ -151,8 +185,13 @@ class Backend:
     real. Credentials and exec are recorded only.
     '''
 
-    def __init__(self, roots, fail_at=None, uid=999, gid=987, groups=(987,),
+    def __init__(self, roots, fail_at=None, uid=None, gid=None, groups=None,
                  nnp=1, exec_error=None, root_error=None):
+        # Defaults follow the retargeted policy: §13 verifies the output-leaf
+        # transfer really happened, and only a transfer to this process can.
+        uid = SELF_UID if uid is None else uid
+        gid = SELF_GID if gid is None else gid
+        groups = (SELF_GID,) if groups is None else groups
         self.roots = roots
         self.calls = []
         self._fail_at = fail_at
@@ -174,8 +213,21 @@ class Backend:
         target = self.roots.get(path)
         if target is None:
             raise OSError(2, 'no such governed root', path)
-        return os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+        # O_PATH, as SystemBackend.open_directory does: a governed root is an
+        # anchor for openat, which needs search and not read, and /etc/kyri is
+        # 0711 by design.
+        return os.open(target, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
                        | os.O_DIRECTORY)
+
+    def fchown(self, handle, uid, gid):
+        # Records, then performs only the transfer an unprivileged process may
+        # make -- to itself -- so production's post-transfer verification runs.
+        self._step('fchown', uid, gid)
+        if (uid, gid) == (os.getuid(), os.getgid()):
+            os.fchown(handle, uid, gid)
+
+    def chdir(self, path):
+        self._step('chdir', path)
 
     def close_extra_descriptors(self, allowlist):
         self._step('close_extra_descriptors', tuple(allowlist))
@@ -306,17 +358,28 @@ def scene(name, cinv='CINV-000042', cimp='CIMP-000001', profile=None,
             os.close(handle)
         os.chmod(record_path, record_mode)
 
+    # The §13 writable output leaf, at the governed mode.
+    output = os.path.join(invocation, action.OUTPUT_DIRECTORY_NAME)
+    os.makedirs(output)
+    os.chmod(output, action.OUTPUT_DIRECTORY_MODE)
+
     os.chmod(invocation, invocation_mode)
 
     return types.SimpleNamespace(
         base=base, cinv=cinv, cimp=cimp,
-        policy=policy_mod.policy_for(['prog', cinv]),
+        policy=policy_mod.policy_for(['prog', cinv], identity=IDENTITY),
         profile=governed, profile_bytes=body, profile_digest=digest,
         profile_path=profile_path, invocation=invocation,
         record_path=record_path, record=document,
         writable=writable,
+        # /etc/kyri is handed over as itself: the transition reads the
+        # deployment identity authorities relative to it and refuses anything
+        # not owned by root, which a fixture cannot fabricate. That is why this
+        # suite is host-only and gates on the coordinator identity first.
         roots={policy_mod.EXECUTION_ROOT: execution,
-               policy_mod.HANDOFF_ROOT: handoff},
+               policy_mod.HANDOFF_ROOT: handoff,
+               policy_mod.COORDINATOR_AUTHORITY_PATH.rpartition('/')[0]:
+                   policy_mod.COORDINATOR_AUTHORITY_PATH.rpartition('/')[0]},
         backend=None)
 
 def backend_for(env, **kwargs):
@@ -325,18 +388,19 @@ def backend_for(env, **kwargs):
 
 def authenticated(env, **kwargs):
     backend = backend_for(env, **kwargs) if env.backend is None else env.backend
-    return action.authenticate_launch(env.policy, backend=backend)
+    return action.authenticate_launch(local(env.policy), backend=backend)
 
 def run(env, quota=None, root=True, launch=None, **kwargs):
     backend = backend_for(env, **kwargs) if env.backend is None else env.backend
     try:
         authorisation = launch if launch is not None else \\
-            action.authenticate_launch(env.policy, backend=backend)
+            action.authenticate_launch(local(env.policy), backend=backend)
     except policy_mod.TransitionRefused as error:
         return error
     try:
         action.perform_transition(
-            env.policy, launch_authorisation=authorisation, backend=backend,
+            local(env.policy), launch_authorisation=authorisation,
+            backend=backend,
             quota=Quota() if quota is None else quota, assume_root=root)
     except action.WorkerExecuted:
         return 'executed'
@@ -698,7 +762,8 @@ for stand_in in (forged, dict(vars(forged)), 'CIMP-000009', None, 42,
                  ('CINV-000042', 'CIMP-000009')):
     backend = backend_for(env)
     try:
-        action.perform_transition(env.policy, launch_authorisation=stand_in,
+        action.perform_transition(local(env.policy),
+                                  launch_authorisation=stand_in,
                                   backend=backend, quota=Quota(),
                                   assume_root=True)
     except policy_mod.TransitionRefused:
@@ -806,8 +871,17 @@ env = scene('root-once')
 backend = backend_for(env)
 assert run(env) == 'executed'
 opens = [c for c in backend.calls if c[0] == 'open_directory']
-assert opens == [('open_directory', policy_mod.EXECUTION_ROOT),
-                 ('open_directory', policy_mod.HANDOFF_ROOT)], opens
+# The invariant is WHERE the roots come from, not how many times they are
+# opened. §13 added the output-leaf transfer, which opens the handoff root for
+# itself, and the identity authority added /etc/kyri -- so the handoff root is
+# now opened twice and the authority root once per read. Every one of them is a
+# compiled-in constant, and that is what this asserts; a caller-supplied root
+# would show up here as a path outside the governed set.
+GOVERNED_ROOTS = {policy_mod.EXECUTION_ROOT, policy_mod.HANDOFF_ROOT,
+                  policy_mod.COORDINATOR_AUTHORITY_PATH.rpartition('/')[0]}
+assert opens, opens
+assert {call[1] for call in opens} <= GOVERNED_ROOTS, opens
+assert [call[1] for call in opens].count(policy_mod.EXECUTION_ROOT) == 1, opens
 env = scene('root-unusable')
 outcome = run(env, root_error=OSError(13, 'permission denied'))
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
@@ -948,8 +1022,15 @@ env = scene('ordering')
 backend = backend_for(env)
 quota = Quota()
 assert run(env, quota=quota) == 'executed'
+# The accepted order as the released transition performs it: the roots are
+# opened, the output leaf is transferred while still root, the profile is
+# authenticated and placed, the extra descriptors are closed, the working
+# directory is entered, and only then is privilege spent -- setgroups, setgid,
+# setuid, each verified through credentials, then no_new_privs set and read
+# back, then the exec.
 assert names(backend) == [
-    'open_directory', 'open_directory', 'close_extra_descriptors',
+    'open_directory', 'open_directory', 'open_directory', 'fchown',
+    'open_directory', 'open_directory', 'close_extra_descriptors', 'chdir',
     'setgroups', 'setgid', 'setuid', 'credentials', 'set_no_new_privs',
     'get_no_new_privs', 'credentials', 'execve'], names(backend)
 assert quota.calls == [('apply', env.cinv)], quota.calls
@@ -960,9 +1041,19 @@ run_case "the source ordering of the transition is the accepted ordering" "${PRE
 import inspect
 # The docstring names several of these steps while explaining them, and a scan
 # that cannot tell prose from a call would forbid explaining the reason.
-source = inspect.getsource(action.perform_transition).split(chr(34) * 3)[2]
+# The credential steps moved out of perform_transition into drop_privilege,
+# which perform_transition calls. Scanning only the caller made every one of
+# these markers absent, and the case had been reporting that as 'the transition
+# never calls setgroups' -- unrun -- ever since. The drop's body is spliced in
+# at its call site so the scan reads the order the process actually performs,
+# rather than the order one function happens to contain.
+_transition = inspect.getsource(action.perform_transition).split(chr(34) * 3)[2]
+_drop = inspect.getsource(action.drop_privilege).split(chr(34) * 3)[2]
+assert 'drop_privilege(policy, backend=backend)' in _transition
+source = _transition.replace('drop_privilege(policy, backend=backend)', _drop, 1)
 markers = [
     ('quota', 'quota.apply'),
+    ('output', 'transfer_output_leaf'),
     ('source', 'authenticate_profile_source'),
     ('seal', 'seal_profile_object'),
     ('place', 'place_profile_descriptor'),
@@ -985,7 +1076,11 @@ print('OK')
 
 run_case "no profile or policy work happens after the credential drop" "${PRELUDE}
 import inspect
-source = inspect.getsource(action.perform_transition)
+# Same splice as the ordering case: the credential drop is a separate function
+# now, so 'after the drop' means after setuid wherever setuid actually is.
+_transition = inspect.getsource(action.perform_transition)
+_drop = inspect.getsource(action.drop_privilege)
+source = _transition.replace('drop_privilege(policy, backend=backend)', _drop, 1)
 after = source.split('setuid')[-1]
 for banned in ('memfd_create', 'F_ADD_SEALS', 'seal_profile_object',
                'authenticate_profile_source', 'place_profile_descriptor',
@@ -1060,7 +1155,8 @@ launch = authenticated(env)
 # module's own constant, and has no default. Both are compiled-in and neither
 # is caller-reachable; what the keyword buys is that the transition acts on the
 # decision it was authorised to act on.
-target = policy_mod.policy_for(['prog', 'CINV-000042']).worker_script
+target = policy_mod.policy_for(['prog', 'CINV-000042'],
+                              identity=IDENTITY).worker_script
 argv = policy_mod.worker_argv(launch, worker_script=target)
 assert argv == ('/usr/bin/python3', '/usr/libexec/kyri-exec-worker.py',
                 'CINV-000042', 'CIMP-000001', env.profile_digest), argv
@@ -1370,9 +1466,21 @@ for node in ast.walk(tree):
         del body[0]
 ast.fix_missing_locations(tree)
 code = ast.unparse(tree)
-for token in ('podman', 'Podman', 'create_argv', 'oci_image_id', '--mount',
-              'subprocess'):
+# G6 IS OPEN, AND THIS CASE REQUIRED THAT IT WAS NOT. It banned 'podman',
+# 'Podman' and 'create_argv' from the production worker -- the pre-G6.1 gate --
+# and went on banning them, unrun, after G6.1 deliberately opened the gate and
+# bound the governed backend here at the boundary. Stage 3 executes through
+# exactly that binding, so the ban is dropped rather than quietly inverted.
+#
+# What survives is what the ban was protecting: the worker binds the backend
+# WITHOUT restating the container contract. The image, the mounts, the limits
+# and the network live in tools/capability/execution/worker.py and are not
+# copied here, because a second copy of a Podman contract is one more than can
+# be kept correct.
+for token in ('oci_image_id', '--mount', 'mounts', 'tmpfs', 'pids_limit',
+              'network', 'subprocess'):
     assert token not in code, token
+assert 'create_argv' in code, 'the worker no longer binds the governed argv builder'
 assert 'PROFILE_FD' in code, 'the entrypoint does not name the governed descriptor'
 # The legacy three-element form is gone, not merely tolerated.
 assert 'profile_digest' in code, code[:200]

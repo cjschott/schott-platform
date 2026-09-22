@@ -42,8 +42,15 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # production code pins, so this suite runs only as that identity.
 # shellcheck source=tests/lib/host-only.sh
 . "${SCRIPT_DIR}/lib/host-only.sh"
-host_only_requires_identity "$(sed -n 's/^COORDINATOR_UID = \([0-9]*\)$/\1/p' \
-  "${ROOT}/provisioning/execution/kyri-exec-transition.py" | head -1)"
+# THIS SUITE WAS SILENTLY SKIPPING. It pinned the identity by sed'ing a
+# compiled-in `COORDINATOR_UID` out of the policy module, and f9d94ce removed
+# that constant in favour of the deployment coordinator identity authority. The
+# sed then matched nothing, the comparison was against an empty string, and
+# every run since reported HOST_ONLY_SKIP -- on the production host too, which
+# is the only place this suite can prove anything. The identity now comes from
+# the authority production itself reads, through the governed reader, which
+# refuses rather than defaults.
+host_only_requires_coordinator_identity "${ROOT}"
 
 VERIFICATION="tools/capability/execution/verification.py"
 IMAGE_STORE="tools/capability/execution/image_store.py"
@@ -217,8 +224,11 @@ print('OK')
 "
 
 run_case "the record builder hard-codes no identity or schema value" "${SCAN_PRELUDE}
-from tools.capability.execution.worker import WORKER_GID, WORKER_UID
+from tools.capability.execution.identity import read_execution_identity
 from tools.capability.execution.profile import PROFILE_SCHEMA_VERSION
+# The deployment's own numbers, so 'no literal identity' is checked against the
+# identity this host actually runs, not against a constant the suite invented.
+_WHO = read_execution_identity()
 builders = [node for node in ast.walk(ast.parse(comment_free('${VERIFICATION}')))
             if isinstance(node, ast.FunctionDef)
             and node.name in ('execution_record', 'success_record')]
@@ -229,11 +239,14 @@ for builder in builders:
     numbers = {node.value for node in ast.walk(builder)
                if isinstance(node, ast.Constant) and isinstance(node.value, int)
                and not isinstance(node.value, bool)}
-    for governed in (WORKER_UID, WORKER_GID, PROFILE_SCHEMA_VERSION):
+    for governed in (_WHO.uid, _WHO.gid, PROFILE_SCHEMA_VERSION):
         assert governed not in numbers, (builder.name, governed)
     # and they must be read from somewhere, rather than simply omitted.
     names = {node.id for node in ast.walk(builder) if isinstance(node, ast.Name)}
-    assert {'WORKER_UID', 'WORKER_GID'} <= names, builder.name
+    attributes = {node.attr for node in ast.walk(builder)
+                  if isinstance(node, ast.Attribute)}
+    assert 'identity' in names, builder.name
+    assert {'uid', 'gid'} <= attributes, builder.name
 print('OK')
 "
 
@@ -430,11 +443,22 @@ print('OK')
 # B2. The production boundary is unchanged
 # ===========================================================================
 
-run_case "the production worker still refuses for want of a runtime backend" "${SCAN_PRELUDE}
+# THIS CASE ASSERTED AN ARCHITECTURE THAT NO LONGER EXISTS. It required the
+# production worker to still be G6-GATED -- to bind no runtime backend at all --
+# and it went on requiring that, unrun, for every release after G6.1 deliberately
+# opened the gate. G6 is open, the governed Podman backend is bound at the
+# privileged boundary, and Stage 3 depends on exactly that. The voided premise is
+# dropped rather than quietly inverted; what survives is the invariant that still
+# holds and that the original case also carried -- the binding lives at the
+# boundary, not inside tools/capability/, and the production worker cannot reach
+# the verification path. The "no subprocess inside tools/capability/" half is
+# proven by test-capability-execution-lifecycle.sh and is not restated here.
+run_case "the production worker binds its backend at the boundary, never verification" "${SCAN_PRELUDE}
 text = source('${PROD_WORKER}')
-assert 'container execution is gated at G6' in text
+assert 'G6 is open, and this is where it opens' in text
 code = comment_free('${PROD_WORKER}')
-assert 'create_argv' not in code and 'verification' not in code
+assert 'create_argv' in code, 'the production worker binds no runtime backend'
+assert 'verification' not in code
 print('OK')
 "
 
@@ -510,6 +534,29 @@ from tools.capability.execution.payload import validate_payload
 from tools.capability.execution.handoff import publish_handoff
 from tools.capability.execution.backing_store import (
     verify_backing_store, ObservedFilesystem)
+
+from tools.capability.execution import identity as I
+
+# The execution principal, as a fixture rather than a constant. f9d94ce removed
+# worker.WORKER_UID/WORKER_GID because they were true of schai only by
+# coincidence; the deployment states them in /etc/kyri/execution-identity.json
+# and every governed builder now takes the loaded identity. The numbers here are
+# this deployment's, so the assertions keep the exact meaning they had when they
+# were written against the constants -- but they arrive through the governed
+# loader, so a suite that agreed with itself while disagreeing with the identity
+# would still fail.
+class _Status:
+    def __init__(self, mode=0o100444, uid=0, gid=0):
+        self.st_mode, self.st_uid, self.st_gid = mode, uid, gid
+
+def _identity(account='kyri-capability', uid=999, gid=987):
+    return I.load_execution_identity(
+        json.dumps({'execution_account': account, 'execution_gid': gid,
+                    'execution_uid': uid, 'schema_version': 1},
+                   sort_keys=True, separators=(',', ':')).encode(),
+        _Status(), resolve=lambda name: (uid, gid))
+
+IDENTITY = _identity()
 
 WORK = os.environ['WORKDIR']
 UUID = '12774bf1-cf2a-4c8c-ba19-42fd9a8a0a96'
@@ -685,15 +732,15 @@ print('OK')
 run_case "a successful verification yields the governed success record" "${CHAIN_PRELUDE}
 profile, handoff = published('record')
 chain(profile, handoff)
-record = V.execution_record(context(profile), profile)
-line = V.success_record(record)
+record = V.execution_record(context(profile), profile, identity=IDENTITY)
+line = V.success_record(record, identity=IDENTITY)
 assert snapshot_untouched()
 document = json.loads(line)
 assert document == {
     'cinv': 'CINV-000042',
     'cimp': 'CIMP-000001',
-    'execution_gid': W.WORKER_GID,
-    'execution_uid': W.WORKER_UID,
+    'execution_gid': IDENTITY.gid,
+    'execution_uid': IDENTITY.uid,
     'handoff_verified': True,
     'image_presence_probed': True,
     'podman_invoked': False,
@@ -713,10 +760,11 @@ try:
     # self-check must refuse -- and must refuse naming the governed identity
     # rather than anything about the profile.
     try:
-        V.verify_only(context(profile), profile, root_fd=root_fd, images=Images())
+        V.verify_only(context(profile), profile, root_fd=root_fd,
+                      images=Images(), identity=IDENTITY)
     except W.WorkerRefused as error:
         assert 'uid drop' in str(error), error
-        assert str(W.WORKER_UID) in str(error), error
+        assert str(IDENTITY.uid) in str(error), error
     else:
         raise AssertionError('verify_only ran outside the execution identity')
 finally:
@@ -738,20 +786,23 @@ V.require_no_new_privs = lambda: seen.append('nnp') or 1
 root_fd = os.open(handoff, os.O_RDONLY | os.O_DIRECTORY)
 try:
     record = V.verify_only(context(profile), profile, root_fd=root_fd,
-                           images=Images())
+                           images=Images(), identity=IDENTITY)
 finally:
     os.close(root_fd)
-assert seen[0][0] == 'creds' and seen[0][1] == {'uid': W.WORKER_UID, 'gid': W.WORKER_GID}
+assert seen[0][0] == 'creds' and seen[0][1] == {'uid': IDENTITY.uid, 'gid': IDENTITY.gid}
 assert seen[1] == 'fds' and seen[2] == 'nnp', seen
-assert record == V.execution_record(context(profile), profile)
-assert V.success_record(record)
+assert record == V.execution_record(context(profile), profile,
+                                   identity=IDENTITY)
+assert V.success_record(record, identity=IDENTITY)
 assert snapshot_untouched(), 'a successful verify_only loaded the snapshot module'
 print('OK')
 "
 
 run_case "the success record carries no material and no authority record" "${CHAIN_PRELUDE}
 profile, handoff = published('quiet')
-line = V.success_record(V.execution_record(context(profile), profile))
+line = V.success_record(V.execution_record(context(profile), profile,
+                                           identity=IDENTITY),
+                        identity=IDENTITY)
 for secret in (profile.payload_digest, profile.package_digest,
                profile.package_entrypoint, profile.oci_image_id,
                PAYLOAD_BYTES.decode(), 'main.py', '/kyri/package',
@@ -783,6 +834,47 @@ policy_mod = load('kyri_exec_transition', '${PROD_POLICY}')
 action = load('kyri_exec_transition_action', '${PROD_ACTION}')
 verify_mod = load('kyri_exec_verify', '${VERIFY_POLICY}')
 
+# The execution principal the transition policy is derived for. f9d94ce made
+# 'identity' a required keyword with no default, precisely so that no signature
+# produces a transition policy without one; the suite therefore states it once
+# here and passes it everywhere, rather than letting a default reappear.
+class _Status:
+    def __init__(self, mode=0o100444, uid=0, gid=0):
+        self.st_mode, self.st_uid, self.st_gid = mode, uid, gid
+
+def _identity(account='kyri-capability', uid=999, gid=987):
+    return policy_mod.load_execution_identity(
+        json.dumps({'execution_account': account, 'execution_gid': gid,
+                    'execution_uid': uid, 'schema_version': 1},
+                   sort_keys=True, separators=(',', ':')).encode(),
+        _Status(), resolve=lambda name: (uid, gid))
+
+IDENTITY = _identity()
+
+SELF_UID, SELF_GID = os.getuid(), os.getgid()
+
+def local(policy):
+    '''The same policy, retargeted at THIS process's identity.
+
+    §13 made the transition transfer the output leaf and then VERIFY the
+    transfer took effect. The only transfer an unprivileged process may make is
+    giving an object it already owns to itself, so a policy naming the governed
+    execution identity stops at that verification and the rest of the sequence
+    -- the drop, no_new_privs, the exec -- is never reached. Retargeting is what
+    keeps those steps exercised for real.
+
+    The governed numbers are NOT weakened by this: they are asserted from the
+    policy object itself, which is where they are a fact about the deployment,
+    rather than from what a fixture was able to become.
+    '''
+    return dataclasses.replace(policy, worker_uid=SELF_UID, worker_gid=SELF_GID)
+
+def local_recorder(**kwargs):
+    kwargs.setdefault('uid', SELF_UID)
+    kwargs.setdefault('gid', SELF_GID)
+    kwargs.setdefault('groups', (SELF_GID,))
+    return Recorder(**kwargs)
+
 WORK = os.environ['WORKDIR']
 PROFILE_BYTES = b'{\"opaque\":\"the privileged layer never parses this\"}'
 PROFILE_DIGEST = hashlib.sha256(PROFILE_BYTES).hexdigest()
@@ -806,9 +898,28 @@ def scene(cinv='CINV-000042'):
     with open(record, 'wb') as handle:
         handle.write(json.dumps(document).encode('utf-8'))
     os.chmod(record, 0o600)
+    # The §13 writable output leaf. The transition transfers its ownership
+    # while it is still root and refuses a leaf that is absent, symlinked, not
+    # a directory, or at the wrong mode -- so the fixture publishes it at the
+    # governed mode rather than letting the transition refuse for want of it.
+    output = os.path.join(invocation, action.OUTPUT_DIRECTORY_NAME)
+    os.makedirs(output)
+    os.chmod(output, action.OUTPUT_DIRECTORY_MODE)
     os.chmod(invocation, 0o555)
+    # The deployment identity authorities, mapped to the real /etc/kyri.
+    #
+    # The transition reads the coordinator and execution authorities through
+    # the backend, relative to a no-follow directory descriptor, and refuses
+    # any file not owned by root with no group or world write bit. A fixture
+    # cannot fabricate that ownership -- which is the point of the check -- so
+    # the governed directory is handed over as itself, read-only. This is
+    # exactly why the suite is host-only and requires the coordinator identity
+    # before it runs: off this host there is no authority to read, and on it
+    # the authority under test is the deployment's own.
+    authority = policy_mod.COORDINATOR_AUTHORITY_PATH.rpartition('/')[0]
     return {policy_mod.EXECUTION_ROOT: os.path.join(base, 'execution'),
-            policy_mod.HANDOFF_ROOT: os.path.join(base, 'handoff')}
+            policy_mod.HANDOFF_ROOT: os.path.join(base, 'handoff'),
+            authority: authority}
 
 class Recorder:
     '''Records what it was asked to do and performs none of it.'''
@@ -831,7 +942,12 @@ class Recorder:
         target = self.roots.get(path)
         if target is None:
             raise OSError(2, 'no such governed root', path)
-        return os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+        # O_PATH, exactly as SystemBackend.open_directory does. A governed root
+        # is an anchor for openat, which needs search and not read: /etc/kyri
+        # and the handoff root are 0711 by design, so asking O_RDONLY here
+        # requests a permission the deployment deliberately withholds and the
+        # fixture refuses where production succeeds.
+        return os.open(target, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
                        | os.O_DIRECTORY)
 
     def close_extra_descriptors(self, allowlist):
@@ -854,6 +970,15 @@ class Recorder:
                                   self._gid, self._gid, self._gid,
                                   tuple(self._groups))
 
+    def fchown(self, handle, uid, gid):
+        # Records, then performs ONLY the transfer an unprivileged process is
+        # allowed to make: giving an object it already owns to itself. The
+        # production code verifies after the call that the leaf really moved,
+        # and recording alone would leave that verification unexercised.
+        self._step('fchown', uid, gid)
+        if (uid, gid) == (os.getuid(), os.getgid()):
+            os.fchown(handle, uid, gid)
+
     def set_no_new_privs(self):
         self._step('set_no_new_privs')
 
@@ -861,6 +986,9 @@ class Recorder:
         if self._fail_at == 'get_no_new_privs':
             raise OSError(1, 'refused')
         return self._nnp
+
+    def chdir(self, path):
+        self._step('chdir', path)
 
     def execve(self, path, argv, environment):
         self.calls.append(('execve', path, tuple(argv), tuple(environment)))
@@ -902,8 +1030,8 @@ def run(policy, recorder, quota=None, root=True):
 "
 
 run_case "the two policies differ in the worker target and in nothing else" "${TRANSITION_PRELUDE}
-production = policy_mod.policy_for(['prog', 'CINV-000042'])
-verification = verify_mod.policy_for(['prog', 'CINV-000042'])
+production = policy_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
+verification = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 differing = {field.name for field in dataclasses.fields(production)
              if getattr(production, field.name) != getattr(verification, field.name)}
 assert differing == {'worker_script'}, differing
@@ -915,9 +1043,9 @@ print('OK')
 "
 
 run_case "the transition execs the verification worker with the ruled argv" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
-recorder = Recorder()
-assert run(policy, recorder) == 'executed'
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
+recorder = local_recorder()
+assert run(local(policy), recorder) == 'executed'
 calls = executed(recorder)
 assert len(calls) == 1, calls
 _, path, argv, environment = calls[0]
@@ -925,35 +1053,47 @@ assert path == '/usr/bin/python3'
 assert argv == ('/usr/bin/python3', '/usr/libexec/kyri-exec-verify-worker.py',
                 'CINV-000042', 'CIMP-000001', PROFILE_DIGEST), argv
 assert len(argv) == 5
-assert environment == policy_mod.ENVIRONMENT
+# The environment is adapter-owned and derived from the deployment identity,
+# never inherited from the caller. It moved from a module constant to
+# execution_environment(identity) with the identity authority.
+assert environment == policy_mod.execution_environment(IDENTITY)
 print('OK')
 "
 
 run_case "the production transition still execs the production worker" "${TRANSITION_PRELUDE}
-policy = policy_mod.policy_for(['prog', 'CINV-000042'])
-recorder = Recorder()
-assert run(policy, recorder) == 'executed'
+policy = policy_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
+recorder = local_recorder()
+assert run(local(policy), recorder) == 'executed'
 _, path, argv, _ = executed(recorder)[0]
 assert argv[1] == '/usr/libexec/kyri-exec-worker.py', argv
 print('OK')
 "
 
 run_case "the verification transition performs the production sequence exactly" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
-recorder = Recorder()
-assert run(policy, recorder) == 'executed'
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
+# The governed identity is a fact about the deployment and is asserted from the
+# policy the released code built, not from what this process was able to become.
+assert (policy.worker_uid, policy.worker_gid) == (IDENTITY.uid, IDENTITY.gid)
+recorder = local_recorder()
+assert run(local(policy), recorder) == 'executed'
 names = [call[0] for call in recorder.calls]
-assert names == ['close_extra_descriptors', 'setgroups', 'setgid', 'setuid',
-                 'set_no_new_privs', 'execve'], names
-assert ('setgroups', (987,)) in recorder.calls
-assert ('setgid', 987) in recorder.calls
-assert ('setuid', 999) in recorder.calls
+# The accepted order, as the released transition actually performs it: the
+# output leaf is transferred while still root, the extra descriptors are closed,
+# the working directory is entered, and only then is privilege spent --
+# setgroups before setgid before setuid, no_new_privs after the drop and before
+# the exec.
+assert names == ['fchown', 'close_extra_descriptors', 'chdir', 'setgroups',
+                 'setgid', 'setuid', 'set_no_new_privs', 'execve'], names
+assert ('chdir', policy.working_directory) in recorder.calls
+assert ('setgroups', (SELF_GID,)) in recorder.calls
+assert ('setgid', SELF_GID) in recorder.calls
+assert ('setuid', SELF_UID) in recorder.calls
 assert ('close_extra_descriptors', (0, 1, 2, 3)) in recorder.calls
 print('OK')
 "
 
 run_case "the argv builder refuses an ungoverned target and a forged record" "${TRANSITION_PRELUDE}
-launch = action.authenticate_launch(verify_mod.policy_for(['p', 'CINV-000042']),
+launch = action.authenticate_launch(verify_mod.policy_for(['p', 'CINV-000042'], identity=IDENTITY),
                                     backend=Recorder())
 for target in ('/tmp/worker.py', 'kyri-exec-worker.py', '', '/usr/bin/python3',
                '../usr/libexec/kyri-exec-worker.py'):
@@ -980,7 +1120,7 @@ run_case "a verification policy cannot be derived from a substituted production"
 original = policy_mod.WORKER_SCRIPT
 policy_mod.WORKER_SCRIPT = '/usr/libexec/somebody-elses-worker.py'
 try:
-    verify_mod.policy_for(['prog', 'CINV-000042'])
+    verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 except policy_mod.TransitionRefused as error:
     assert 'production worker' in str(error), error
 else:
@@ -1075,7 +1215,7 @@ print('OK')
 # ===========================================================================
 
 run_case "an unestablished quota prevents the verification exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 for quota in (Quota(error=OSError(1, 'no project')), Quota(project=7),
               Quota(project=None)):
     recorder = Recorder()
@@ -1087,21 +1227,21 @@ print('OK')
 "
 
 run_case "a wrong execution identity prevents the verification exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
-for kwargs in ({'uid': 1000}, {'gid': 100}, {'uid': 0}, {'gid': 0},
-               {'groups': (987, 27)}, {'groups': ()}):
-    recorder = Recorder(**kwargs)
-    outcome = run(policy, recorder)
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
+for kwargs in ({'uid': SELF_UID + 1}, {'gid': SELF_GID + 1}, {'uid': 0},
+               {'gid': 0}, {'groups': (SELF_GID, 27)}, {'groups': ()}):
+    recorder = local_recorder(**kwargs)
+    outcome = run(local(policy), recorder)
     assert isinstance(outcome, policy_mod.TransitionRefused), (kwargs, outcome)
     assert executed(recorder) == [], kwargs
 print('OK')
 "
 
 run_case "an incomplete credential drop prevents the verification exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 for step in ('setgroups', 'setgid', 'setuid'):
-    recorder = Recorder(fail_at=step)
-    outcome = run(policy, recorder)
+    recorder = local_recorder(fail_at=step)
+    outcome = run(local(policy), recorder)
     assert isinstance(outcome, policy_mod.TransitionRefused), outcome
     assert 'credential drop failed' in str(outcome), outcome
     assert executed(recorder) == []
@@ -1109,7 +1249,7 @@ print('OK')
 "
 
 run_case "a saved-set identity surviving the drop prevents the exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 
 class Partial(Recorder):
     def credentials(self):
@@ -1118,8 +1258,8 @@ class Partial(Recorder):
         # real and effective dropped; saved still root.
         return action.Credentials(999, 999, 0, 987, 987, 987, (987,))
 
-recorder = Partial()
-outcome = run(policy, recorder)
+recorder = Partial(uid=SELF_UID, gid=SELF_GID, groups=(SELF_GID,))
+outcome = run(local(policy), recorder)
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
 assert 'privilege survived the drop' in str(outcome), outcome
 assert executed(recorder) == []
@@ -1127,11 +1267,11 @@ print('OK')
 "
 
 run_case "no_new_privs failing to establish prevents the verification exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
-for recorder in (Recorder(fail_at='set_no_new_privs'),
-                 Recorder(fail_at='get_no_new_privs'),
-                 Recorder(nnp=0)):
-    outcome = run(policy, recorder)
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
+for recorder in (local_recorder(fail_at='set_no_new_privs'),
+                 local_recorder(fail_at='get_no_new_privs'),
+                 local_recorder(nnp=0)):
+    outcome = run(local(policy), recorder)
     assert isinstance(outcome, policy_mod.TransitionRefused), outcome
     assert 'no_new_privs' in str(outcome), outcome
     assert executed(recorder) == []
@@ -1139,9 +1279,9 @@ print('OK')
 "
 
 run_case "a failed descriptor closure prevents the verification exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
-recorder = Recorder(fail_at='close_extra_descriptors')
-outcome = run(policy, recorder)
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
+recorder = local_recorder(fail_at='close_extra_descriptors')
+outcome = run(local(policy), recorder)
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
 assert 'descriptor cleanup failed' in str(outcome), outcome
 assert executed(recorder) == []
@@ -1149,7 +1289,7 @@ print('OK')
 "
 
 run_case "a transition without root prevents the verification exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000042'])
+policy = verify_mod.policy_for(['prog', 'CINV-000042'], identity=IDENTITY)
 recorder = Recorder()
 outcome = run(policy, recorder, root=False)
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
@@ -1158,7 +1298,7 @@ print('OK')
 "
 
 run_case "an absent or unauthorised launch record prevents the exec" "${TRANSITION_PRELUDE}
-policy = verify_mod.policy_for(['prog', 'CINV-000099'])
+policy = verify_mod.policy_for(['prog', 'CINV-000099'], identity=IDENTITY)
 recorder = Recorder()
 outcome = run(policy, recorder)
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
@@ -1172,7 +1312,7 @@ document = json.loads(open(record, encoding='utf-8').read())
 document['cimp'] = 'CIMP-000000'
 open(record, 'w', encoding='utf-8').write(json.dumps(document))
 recorder = Recorder(roots=roots)
-outcome = run(verify_mod.policy_for(['prog', 'CINV-000043']), recorder)
+outcome = run(verify_mod.policy_for(['prog', 'CINV-000043'], identity=IDENTITY), recorder)
 assert isinstance(outcome, policy_mod.TransitionRefused), outcome
 assert 'unallocated CIMP' in str(outcome), outcome
 assert executed(recorder) == []
@@ -1513,10 +1653,10 @@ run_case "the credential check requires a permanent drop to the ruled identity" 
 # This process is the coordinator. Every component of the check must refuse it,
 # and must refuse naming the identity the contract requires.
 try:
-    V.require_dropped_credentials(uid=W.WORKER_UID, gid=W.WORKER_GID)
+    V.require_dropped_credentials(uid=IDENTITY.uid, gid=IDENTITY.gid)
 except W.WorkerRefused as error:
     assert 'not permanent' in str(error), error
-    assert str(W.WORKER_UID) in str(error), error
+    assert str(IDENTITY.uid) in str(error), error
 else:
     raise AssertionError('the credential check passed outside the worker identity')
 # It reads the saved set, not only the effective identity.
@@ -1532,14 +1672,14 @@ print('OK')
 
 run_case "the success record refuses every deviation from the proof" "${CHAIN_PRELUDE}
 profile, handoff = published('deviation')
-good = V.execution_record(context(profile), profile)
-assert V.success_record(good)
+good = V.execution_record(context(profile), profile, identity=IDENTITY)
+assert V.success_record(good, identity=IDENTITY)
 
 def rejects(**changes):
     record = dict(good)
     record.update(changes)
     try:
-        V.success_record(record)
+        V.success_record(record, identity=IDENTITY)
     except W.WorkerRefused:
         return True
     raise AssertionError('the record was emitted with ' + repr(changes))
@@ -1569,7 +1709,7 @@ for name in list(good):
     partial = dict(good)
     del partial[name]
     try:
-        V.success_record(partial)
+        V.success_record(partial, identity=IDENTITY)
     except W.WorkerRefused:
         continue
     raise AssertionError('the record was emitted without ' + name)
@@ -1582,7 +1722,7 @@ for context_value, profile_value in (
         (None, profile), ('CINV-000042', profile),
         (context(profile), None), (context(profile), {'cinv': 'CINV-000042'})):
     try:
-        V.execution_record(context_value, profile_value)
+        V.execution_record(context_value, profile_value, identity=IDENTITY)
     except W.WorkerRefused:
         continue
     raise AssertionError('the record builder accepted unvalidated input')
