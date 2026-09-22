@@ -109,7 +109,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -230,7 +230,7 @@ GENERATION_DELTA=(
 "tools/capability/execution/protocol.py|REPLACE|613ff30d5999e47e615ac28023b2e9a6e799439154b0e353eb385888b2484cfb|c2040807fa26c349f6948b7c44ca28aeea6e2fdd8f57cb54d0e608c12c9d09c1"
 "tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
 "tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
-"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03,fdad3cecdf72eeb7b00c21f0ba04ee9bbc4ca3ebd6d6c4a571037518c2c567f0,d044cb29a32714945d0d76db59ca3c44cd77d4978e5781fedc073e675b897173"
+"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03,fdad3cecdf72eeb7b00c21f0ba04ee9bbc4ca3ebd6d6c4a571037518c2c567f0,d044cb29a32714945d0d76db59ca3c44cd77d4978e5781fedc073e675b897173,5efec912fdf27add88dadefd2afcb50c698bae4db3296f9926897e272aad9490"
 "tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb,74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07,78da8519db99fa06e809755808397fe36bb8c83872deab142987c98308b38a4f"
 #
 # G11-AX. `helpers.py` again, and this time as a REPLACE off its own installed
@@ -389,10 +389,10 @@ GENERATION_DELTA=(
 # ceremony that G11-BC-V is not authorised to perform and has not written. The
 # CINV-000002 reclamation ceremony runs the coordinator CLI out of this
 # checkout, which is why it is executable before that publication.
-"tools/capability/execution/types.py|REPLACE|7dc35046fafdb4e7218739cdbc86deff18ed804b2a37d66a173df58016258b5c|da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae"
-"tools/capability/execution/state.py|REPLACE|f0b00112db5090f1885149e4eaee0df79ef03fa3c72a5b618d51cf9263486241|88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b"
-"tools/capability/execution/capacity.py|REPLACE|25bab08cd2f517e28d5a9add58a4d0fff6d6d720cd20df241d4a4003eaa27afb|f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e"
-"tools/capability/execution/admin.py|REPLACE|be899d7a193f6aa5c80d3887109fa07212d757f94503ba994bac104f217633d5,2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3|2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606"
+"tools/capability/execution/types.py|REPLACE|7dc35046fafdb4e7218739cdbc86deff18ed804b2a37d66a173df58016258b5c,da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae|da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae,6f0c8fa63333cb2880ba195c25fac35f15ad81a9fe82811e112d89f706520f44"
+"tools/capability/execution/state.py|REPLACE|f0b00112db5090f1885149e4eaee0df79ef03fa3c72a5b618d51cf9263486241,88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b|88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b,9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980"
+"tools/capability/execution/capacity.py|REPLACE|25bab08cd2f517e28d5a9add58a4d0fff6d6d720cd20df241d4a4003eaa27afb,f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e|f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e,650c05dd3c5ebe3496c468181c7c8770954f79fe73675eec6efa210b01472eb3"
+"tools/capability/execution/admin.py|REPLACE|be899d7a193f6aa5c80d3887109fa07212d757f94503ba994bac104f217633d5,2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606|2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606,b4ea351b3e34e5d4674c72fce14465761eff1eb8444edb7019fcd7d1c0dc7be9"
 "tools/capability/execution/abandonment.py|CREATE|ABSENT|4fb431ca5f74e45aba8cb4ed7f80699e9a16b4743b5c554e992747926f9b1903,7d2f1857f16c54dda9f39658857a0d03b94198af75a04d21cef942bf2a224f24"
 
 # Generation 20, ENG-0005 G11-BC-Y. Explicit mutation targets, and a way to
@@ -429,6 +429,32 @@ GENERATION_DELTA=(
 # is the ceremony that publishes them, and it has not been run.
 "tools/capability/execution/backing_store.py|REPLACE|03331aa8b974d636a39710c53867af5a4ae6e1480cc68404009df118e24c4c32|e82aa24b6fe2ef2336737ca344bb5d6b35af9c95b70f0c2ce78bc8dcb786259f"
 "tools/capability/execution/provenance.py|CREATE|ABSENT|2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6"
+
+# --- GENERATION 21: post-execution lifecycle conclusion (ADR-0017) -----------
+#
+# CINV-000003 executed successfully and is still `launch_authorized`. That is
+# designed behaviour -- the journal is written before the privilege boundary and
+# the states past `launch_authorized` live on the wire -- but the consequence
+# had never been stated: EVERY successful supervised execution strands, holding
+# a slot for ever, because `released` is reachable only through states nothing
+# writes.
+#
+# Journalling the progression and letting `cleanup` finish does not work. §13
+# gives the output leaf to the execution identity (uid 999, mode 0700) and the
+# coordinator is uid 1000, so `cleanup` refuses with `CleanupIncomplete` and
+# nothing in the system removes that leaf. `cleaned` is structurally
+# unreachable, and `released` with it.
+#
+# SEVEN OBJECTS, ONE COHERENCE GROUP. `types.py` appends `CONCLUDED`;
+# `state.py` permits `launch_authorized -> concluded`; `capacity.py` names it in
+# the occupancy exclusion; `recovery.py` treats it as administratively closed;
+# `admin.py` adds the closed-set `conclude` verb; `conclusion.py` is the
+# operation; `cli.py` carries the surface and closes a supervised execution
+# inline. `conclusion.py` is this generation's CREATE.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-21.sh`
+# is the ceremony that publishes them, and it has not been run.
+"tools/capability/execution/conclusion.py|CREATE|ABSENT|d55bca52b515085a6665ed84225beb931611e2a703a0f89611ce65badeab82b8"
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
