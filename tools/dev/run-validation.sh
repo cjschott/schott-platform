@@ -698,6 +698,16 @@ run "Capability execution abandonment" \
 run "Capability execution provenance correction" \
   bash tests/test-capability-execution-provenance-correction.sh
 
+# ADR-0017. Post-execution lifecycle conclusion: the normal closure for an
+# execution that ran. The supervised path journals nothing past
+# `launch_authorized`, so every successful execution otherwise holds a slot for
+# ever -- and `released` is unreachable, because §13 gives the output leaf to
+# the execution identity and `cleaned` cannot truthfully be recorded. Most of
+# this proves what the verb CANNOT do: no result fabricated, no container
+# touched, nothing written on any refusal. Portable: fixtures only.
+run "Capability execution conclusion" \
+  bash tests/test-capability-execution-conclusion.sh
+
 # G11-BC-Y. Which store a mutating command actually writes through. Reproduces
 # the 2026-09-20 incident against the INSTALLED runtime without touching
 # production, then proves the explicit-target surface that replaced it. The
