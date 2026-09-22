@@ -326,7 +326,57 @@ refuses it by construction, and it remains in the recovery enumeration.
 
 ## 12. Verification
 
-VERIFICATION_PLACEHOLDER
+| Run | Result |
+|---|---|
+| `test-capability-execution-conclusion.sh` (new) | **29/29 PASS** |
+| Stage-0 / Stage-1 / Stage-2 / Stage-3 rehearsals | **15 / 26 / 34 / 161**, all passing |
+| Lifecycle / capacity / capacity-race / admin / abandonment / cleanup | 45 / 31 / 5 / 35 / 26 / 24 |
+| Recovery, launch-bridge, launch-cli, provenance-correction, execution | all passing |
+| G5 preflight | **36/36** |
+| Generation-21 `--verify-source` | passed — 7 objects (6 REPLACE, 1 CREATE) |
+| Quick validator | **132/132**, zero `HOST_ONLY_SKIP` |
+| Full validator | **157/157**, zero `HOST_ONLY_SKIP` |
+| Clean-clone full validator | **157/157**, 18 by-design pinned-checkout skips |
+| ShellCheck (CI-pinned 0.9.0) | clean, rc 0 |
+| GitHub CI | **6/6 success** at `1c2d843` |
+
+### What the validator found, and none of it was noise
+
+Five successive runs each stopped on a different real gap:
+
+1. **Step 68 — four rehearsals assumed Stage 3 had not run.** §13's ownership
+   transfer made `cp -a` of the handoff subtree fail with `EACCES` for the
+   coordinator; the Stage-3 rehearsal drove the coordinator against a copy that
+   now carries `CRES-000002`, so the duplicate-result gate refused before it
+   could drive anything; and several guards asserted "no result exists". **Not
+   caused by this checkpoint** — re-running at `422a457`, the pre-change
+   authority, fails identically.
+
+   The output leaf is now excluded and recreated empty (`_verify_handoff`
+   requires it to exist and be a directory, and checks neither mode nor owner),
+   and the invocation directory is restored to production's `0555` last because
+   BLOCK B checks it. The Stage-3 fixture is **rewound** to before Stage 3
+   rather than discarding 161 assertions — and G11-BC-AA warned that subtracting
+   later artefacts from a hand-kept list is the G11-BC-Y defect, so **the rewind
+   is checked, not trusted**: the rewound copy must reproduce `648066f6…e133a`
+   exactly or the fixture stops. The "no result" guards became "the result Stage
+   3 wrote is unchanged", pinned by content.
+
+2. **Step 120 — two of my own comments pinned deployment identity numbers** as
+   if they were properties of Kyri. That is exactly what G11-AH removed the
+   compiled-in constants for. The prose now names the roles, not the numbers.
+   That changed `conclusion.py`'s digest, so the Generation-21 matrix, the G5
+   preflight declaration and the closure ceremony's installed-generation gate
+   were repinned together, and the installer's reviewed commit with them.
+
+3. **Step 143 — the new suite existed and local validation never ran it.**
+
+4. **Step 144 — registering it locally but not in CI** is the drift the
+   developer-experience check enforces in both directions.
+
+5. **157/156 — the declared step total.** Measured in both modes rather than
+   incremented, as the comment above it requires: the suite runs in quick mode
+   too, so both totals moved (131 → 132, 156 → 157).
 
 ## 13. Production
 
