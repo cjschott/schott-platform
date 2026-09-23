@@ -136,8 +136,8 @@ REPO_OWNER="cschott"
 LIBRARY_ROOT="/usr/lib/kyri/python"
 LIBEXEC_ROOT="/usr/libexec"
 
-# This transaction's own namespace. Generation 21's retained journal at
-# /root/kyri-gen18-transaction is predecessor evidence: it records how the host
+# This transaction's own namespace. Generation 20's retained journal at
+# /root/kyri-gen20-transaction is predecessor evidence: it records how the host
 # reached the state this transaction starts from, it is never read as this
 # transaction's state, and nothing here writes to or removes it. Deriving an
 # installer from its predecessor and leaving the predecessor's path in place is
@@ -1256,6 +1256,63 @@ require_privileged_surface_excluded() {
     && ok "no matrix row names a helper, a grant or a deployment identity: $(( ${#EXCLUDED_PRIVILEGED[@]} + ${#EXCLUDED_HELPER_LIBRARY[@]} + 5 )) privileged objects are outside this ceremony"
 }
 
+# Publication cannot reach a governed store, and that is proved from the matrix
+# rather than from a snapshot taken either side of the install.
+#
+# A before/after comparison would only show that nothing DID move. This shows
+# that nothing COULD: every row publishes beneath the library root, and no row
+# names a path under the capability runtime, the handoff, Fabric, Trust, or the
+# implementation-authority namespaces. An installer that gained the ability to
+# write a governed store would fail here rather than at the moment it used it.
+require_governed_stores_unreachable() {
+  local row target prefix reach=0
+  local -a governed=(
+    "/data/kyri/capability-runtime"
+    "/data/kyri/capability-handoff"
+    "/var/lib/kyri/fabric"
+    "/var/lib/kyri/trust"
+    "${AUTHORITY_ROOT}"
+    "${CONTROL_ROOT}"
+  )
+  for row in "${MATRIX[@]}"; do
+    target="$(field "${row}" 1)"
+    [[ "${target}" == "${LIBRARY_ROOT}/"* ]] \
+      || { bad "the matrix publishes ${target}, which is outside the library root"; reach=$((reach + 1)); }
+    for prefix in "${governed[@]}"; do
+      [[ "${target}" == "${prefix}"* ]] \
+        && { bad "the matrix would publish ${target} into the governed store ${prefix}"; reach=$((reach + 1)); }
+    done
+  done
+  (( reach == 0 )) \
+    && ok "publication is confined to ${LIBRARY_ROOT}: no row can reach the capability runtime, the handoff, Fabric, Trust or the authority namespaces"
+}
+
+# The shape of the matrix, asserted rather than described. The counts are in the
+# header prose and in EXPECTED_LIBRARY_FILES_*; this is where they are checked
+# against the rows themselves, so the three cannot drift apart.
+require_operation_shape() {
+  local row operation replaces=0 creates=0 created_target=""
+  for row in "${MATRIX[@]}"; do
+    operation="$(field "${row}" 3)"
+    case "${operation}" in
+      REPLACE) replaces=$((replaces + 1)) ;;
+      CREATE)  creates=$((creates + 1)); created_target="$(field "${row}" 1)" ;;
+      *) bad "matrix row $(field "${row}" 0) declares the unknown operation ${operation}" ;;
+    esac
+  done
+  (( replaces == 6 )) \
+    || bad "the matrix holds ${replaces} REPLACE rows, expected 6"
+  (( creates == 1 )) \
+    || bad "the matrix holds ${creates} CREATE rows, expected 1"
+  [[ "${created_target}" == "${LIBRARY_ROOT}/tools/capability/execution/conclusion.py" ]] \
+    || bad "this generation's CREATE is ${created_target:-absent}, expected conclusion.py"
+  local expected_move=$(( EXPECTED_LIBRARY_FILES_TARGET - EXPECTED_LIBRARY_FILES_BASELINE ))
+  (( expected_move == creates )) \
+    || bad "the declared library count moves by ${expected_move} but the matrix holds ${creates} CREATE row(s)"
+  (( FAILURES == 0 )) \
+    && ok "the matrix is 6 REPLACE and 1 CREATE, the CREATE is conclusion.py, and the declared count moves ${EXPECTED_LIBRARY_FILES_BASELINE} -> ${EXPECTED_LIBRARY_FILES_TARGET} by exactly that one row"
+}
+
 # Installable is not execution-ready, and an operator sizing up this
 # transaction needs both facts stated separately. Nothing here is required to
 # INSTALL a runtime: the runtime imports fine without either authority, because
@@ -1782,140 +1839,367 @@ case "${MODE}" in
   require_source_digests
   require_closed_closure
   require_privileged_surface_excluded
+  require_governed_stores_unreachable
+  require_operation_shape
   require_fail_closed_first
   require_carryover_unmoved
 
   require_group_names_known
 
-  # THE CORRECTION THIS GENERATION EXISTS TO DEPLOY, PROVED FROM THE REVIEWED
+  # THE ARCHITECTURE THIS GENERATION EXISTS TO DEPLOY, PROVED FROM THE REVIEWED
   # BYTES -- as PROPERTIES, not as the presence of a word.
   #
-  # A grep for "correct-provenance" would pass on a verb that could edit its
-  # subject, move a slot, or reach a lifecycle field. Each property is checked
-  # where it is decided.
-  backing_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/backing_store.py")"
+  # A grep for "conclude" would pass on a verb that fabricated a result, claimed
+  # a cleanup that never ran, or released a slot by some route other than
+  # entering CONCLUDED. Each ADR-0017 property is checked where it is decided,
+  # and the checks that a grep would be too weak for are done structurally
+  # against the parsed source.
   admin_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/admin.py")"
-  abandonment_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/abandonment.py")"
-  provenance_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/provenance.py")"
   cli_source="$(git_as_owner show "${COMMIT}:tools/capability/cli.py")"
+  types_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/types.py")"
+  capacity_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/capacity.py")"
 
-  # 1. The target is asked of the KERNEL, not reconstructed from a path. And
-  #    `RootDescriptor` still carries no `path`: a fingerprint that handed back
-  #    a name would hand back a way to reopen by name.
-  grep -q "^def target_fingerprint" <<<"${backing_source}" \
-    || halt "the reviewed backing_store.py defines no target_fingerprint"
-  grep -A30 "^def target_fingerprint" <<<"${backing_source}" | grep -q "os.fstat(root.fd)" \
-    || halt "the reviewed target_fingerprint does not stat the descriptor it was given"
-  if grep -A20 "^class RootDescriptor" <<<"${backing_source}" | grep -qE "^    path: "; then
-    halt "the reviewed RootDescriptor carries a path: nothing may reopen a verified root by name"
-  fi
-  ok "the reviewed backing_store.py fingerprints the descriptor itself, and RootDescriptor still carries no path"
+  # The reviewed bytes are staged so the structural checks parse exactly what
+  # the matrix publishes, rather than whatever happens to be in the checkout.
+  gen21_stage="$(mktemp -d)" || halt "cannot stage the reviewed Generation-21 source"
+  for relative in tools/capability/execution/types.py \
+                  tools/capability/execution/state.py \
+                  tools/capability/execution/capacity.py \
+                  tools/capability/execution/recovery.py \
+                  tools/capability/execution/admin.py \
+                  tools/capability/execution/conclusion.py \
+                  tools/capability/cli.py; do
+    mkdir -p "${gen21_stage}/$(dirname "${relative}")"
+    git_as_owner show "${COMMIT}:${relative}" > "${gen21_stage}/${relative}" \
+      || { rm -rf "${gen21_stage}"; halt "the reviewed commit carries no ${relative}"; }
+  done
 
-  # 2. The verb is closed-set and carries NO destruction authority. ABANDON is
-  #    checked too: a regression there would be silent.
+  gen21_report="$(python3 - "${gen21_stage}" <<'GEN21_PY'
+"""Prove ADR-0017 from the reviewed source, structurally.
+
+Printed one verdict per property: `ok <text>` or `FAIL <text>`. The caller
+halts on the first FAIL. Nothing here imports the reviewed modules -- they are
+parsed, because importing would run them.
+"""
+import ast
+import os
+import sys
+
+STAGE = sys.argv[1]
+findings = []
+
+
+def parse(relative):
+    with open(os.path.join(STAGE, relative), encoding="utf-8") as handle:
+        return ast.parse(handle.read()), handle
+
+
+def source(relative):
+    with open(os.path.join(STAGE, relative), encoding="utf-8") as handle:
+        return handle.read()
+
+
+def check(condition, text):
+    findings.append(("ok" if condition else "FAIL", text))
+    return bool(condition)
+
+
+def enum_members(tree, name):
+    """The `NAME = "value"` members of a class, in declaration order."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            out = []
+            for item in node.body:
+                if (isinstance(item, ast.Assign) and len(item.targets) == 1
+                        and isinstance(item.targets[0], ast.Name)
+                        and isinstance(item.value, ast.Constant)):
+                    out.append((item.targets[0].id, item.value.value))
+            return out
+    return []
+
+
+def module_assign(tree, name):
+    """The value node of a module-level `name = ...`."""
+    for item in tree.body:
+        if (isinstance(item, ast.Assign) and len(item.targets) == 1
+                and isinstance(item.targets[0], ast.Name)
+                and item.targets[0].id == name):
+            return item.value
+        if (isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+                and item.target.id == name):
+            return item.value
+    return None
+
+
+def state_names(node):
+    """Every `LifecycleState.X` named anywhere under `node`."""
+    return {n.attr for n in ast.walk(node)
+            if isinstance(n, ast.Attribute)
+            and isinstance(n.value, ast.Name)
+            and n.value.id == "LifecycleState"}
+
+
+def function(tree, name):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    return None
+
+
+def dict_entry(node, key):
+    """The value node for a string key in any dict literal under `node`.
+
+    Structural on purpose. Matching the unparsed text would depend on how the
+    printer quotes a key, which is a property of the printer and not of the
+    reviewed source.
+    """
+    for literal in ast.walk(node):
+        if isinstance(literal, ast.Dict):
+            for k, value in zip(literal.keys, literal.values):
+                if isinstance(k, ast.Constant) and k.value == key:
+                    return value
+    return None
+
+
+# --- 1. the state exists, and is appended rather than inserted -------------
+types_tree, _ = parse("tools/capability/execution/types.py")
+members = enum_members(types_tree, "LifecycleState")
+values = [value for _, value in members]
+check("concluded" in values, "types.py declares CONCLUDED")
+# Declaration order is read positionally when a transition is checked, so an
+# INSERTION would silently redefine which transitions are legal.
+check(values[:12] == ["reserved", "launch_authorized", "created",
+                      "container_verified", "start_authorized", "started",
+                      "running", "terminal", "classified", "collected",
+                      "cleaned", "released"],
+      "the linear progression is unchanged: CONCLUDED is appended, not inserted")
+
+# --- 2/3. exactly one new edge, and it is terminal -------------------------
+state_tree, _ = parse("tools/capability/execution/state.py")
+allowed = module_assign(state_tree, "_ALLOWED")
+edges = {}
+if isinstance(allowed, ast.Dict):
+    for key, value in zip(allowed.keys, allowed.values):
+        if (isinstance(key, ast.Attribute) and isinstance(key.value, ast.Name)
+                and key.value.id == "LifecycleState"):
+            edges[key.attr] = state_names(value)
+expected = {
+    "RESERVED": {"LAUNCH_AUTHORIZED", "ABANDONED"},
+    "LAUNCH_AUTHORIZED": {"CREATED", "ABANDONED", "CONCLUDED"},
+    "CREATED": {"CONTAINER_VERIFIED"},
+    "CONTAINER_VERIFIED": {"START_AUTHORIZED"},
+    "START_AUTHORIZED": {"STARTED"},
+    "STARTED": {"RUNNING"},
+    "RUNNING": {"TERMINAL"},
+    "TERMINAL": {"CLASSIFIED"},
+    "CLASSIFIED": {"COLLECTED"},
+    "COLLECTED": {"CLEANED"},
+    "CLEANED": {"RELEASED"},
+    "RELEASED": set(),
+    "ABANDONED": set(),
+    "CONCLUDED": set(),
+}
+check(edges == expected,
+      "the transition relation is exactly the accepted one: launch_authorized "
+      "gains concluded and NO other edge anywhere changes")
+check(edges.get("CONCLUDED") == set(), "CONCLUDED is terminal: nothing leaves it")
+reaching = {frm for frm, targets in edges.items() if "CONCLUDED" in targets}
+check(reaching == {"LAUNCH_AUTHORIZED"},
+      "launch_authorized is the ONLY state that reaches concluded")
+
+# --- 4/5. capacity -----------------------------------------------------------
+capacity_tree, _ = parse("tools/capability/execution/capacity.py")
+non_holding = module_assign(capacity_tree, "NON_SLOT_HOLDING_STATES")
+excluded = state_names(non_holding) if non_holding is not None else set()
+check(excluded == {"RELEASED", "ABANDONED", "CONCLUDED"},
+      "capacity excludes exactly RELEASED, ABANDONED and CONCLUDED from occupancy")
+maximum = module_assign(capacity_tree, "MAXIMUM_SLOTS")
+check(isinstance(maximum, ast.Constant) and maximum.value == 2,
+      "MAXIMUM_SLOTS remains 2")
+
+# --- 6. recovery -------------------------------------------------------------
+recovery_tree, _ = parse("tools/capability/execution/recovery.py")
+closed = module_assign(recovery_tree, "_ADMINISTRATIVELY_CLOSED")
+closed_states = state_names(closed) if closed is not None else set()
+check("CONCLUDED" in closed_states,
+      "recovery treats CONCLUDED as administratively closed, never resumable")
+order = module_assign(recovery_tree, "_LIFECYCLE_ORDER")
+check("CONCLUDED" not in (state_names(order) if order is not None else set()),
+      "CONCLUDED is off the linear order, so it is refused explicitly rather "
+      "than by a positional lookup falling through")
+
+# --- 7. the closed-set verb --------------------------------------------------
+admin_tree, _ = parse("tools/capability/execution/admin.py")
+verbs = dict(enum_members(admin_tree, "Verb"))
+check(verbs.get("CONCLUDE") == "conclude", "admin declares the CONCLUDE verb")
+destroys = module_assign(admin_tree, "_DESTROYS_UNDER")
+check("CONCLUDE" not in {n.attr for n in ast.walk(destroys)
+                         if isinstance(n, ast.Attribute)} if destroys is not None else False,
+      "CONCLUDE carries NO destruction authority")
+
+# --- 8. the operation itself -------------------------------------------------
+conclusion_tree, _ = parse("tools/capability/execution/conclusion.py")
+conclusion_text = source("tools/capability/execution/conclusion.py")
+conclude_fn = function(conclusion_tree, "conclude")
+body = ast.unparse(conclude_fn) if conclude_fn is not None else ""
+
+check(conclude_fn is not None, "conclusion.py defines conclude")
+startable = module_assign(conclusion_tree, "STARTABLE_STATE")
+check(state_names(startable) == {"LAUNCH_AUTHORIZED"} if startable is not None else False,
+      "the only state a conclusion may close is launch_authorized")
+check("_terminal_result(store, identity)" in body
+      and "has no terminal result" in body,
+      "a terminal result for the SAME invocation is required, and its absence "
+      "is a refusal that points at recovery")
+check("result_record_id" in body and "capability_result_id" not in body.split("_terminal_result")[0],
+      "the result is referenced by identity, not reconstructed")
+# It must not allocate a result, mutate one, or reach a result writer.
+for forbidden, why in (
+        ("record_terminal_result", "fabricates a result"),
+        ("allocate_cres", "allocates a result identity"),
+        ("RESULT_KIND_WRITE", "writes through a result writer"),
+        ("shutil", "reaches a tree remover"),
+        ("unlink", "deletes"),
+        ("rmdir", "removes a directory"),
+        ("subprocess", "starts a process"),
+        ("podman", "reaches a container runtime")):
+    check(forbidden not in conclusion_text,
+          f"conclusion.py never {why} ({forbidden} absent)")
+# Exactly one lifecycle transition, and it is the one that releases the slot.
+transitions = [n for n in ast.walk(conclude_fn or ast.Module(body=[], type_ignores=[]))
+               if isinstance(n, ast.Call)
+               and getattr(n.func, "attr", "") in ("transition", "transition_locked")]
+check(len(transitions) == 1, "conclude writes exactly ONE lifecycle transition")
+check(transitions and "CONCLUDED" in state_names(transitions[0]),
+      "that one transition is the one into CONCLUDED, which is what releases "
+      "the slot -- there is no separate release step")
+check("allocate_cadm" in body and body.count("allocate_cadm") == 1,
+      "conclude allocates exactly ONE CADM")
+retained = dict_entry(conclude_fn, "handoff_retained") if conclude_fn else None
+check(isinstance(retained, ast.Constant) and retained.value is True,
+      "the handoff residue is RECORDED rather than implied: handoff_retained is written true")
+# It must claim neither a cleanup, nor released, nor abandoned.
+for claimed in ("CLEANED", "RELEASED", "ABANDONED"):
+    check(claimed not in state_names(conclude_fn) if conclude_fn is not None else False,
+          f"conclude never names {claimed}: it claims no cleanup and no other closure")
+check("cleanup" not in conclusion_text.split('"""', 2)[-1],
+      "conclusion.py reaches no cleanup module outside its own prose")
+
+# --- 9/10/11. the two callers, and which claim each makes --------------------
+cli_tree, _ = parse("tools/capability/cli.py")
+cli_text = source("tools/capability/cli.py")
+check('conclude.add_argument("--store-root", required=True' in cli_text,
+      "capability conclude requires an explicit --store-root, with no default")
+command_conclude = function(cli_tree, "command_conclude")
+command_execute = function(cli_tree, "command_execute")
+conclude_body = ast.unparse(command_conclude) if command_conclude else ""
+execute_body = ast.unparse(command_execute) if command_execute else ""
+check("conclusion.conclude(" in conclude_body,
+      "the operator verb calls the SAME conclusion primitive")
+check("conclusion.conclude(" in execute_body,
+      "the inline closure calls the SAME conclusion primitive")
+check("DERIVATION_OBSERVED" in execute_body,
+      "the inline closure records derivation=observed: it supervised what it closes")
+check("DERIVATION_RECONSTRUCTED" in conclude_body,
+      "the operator verb records derivation=reconstructed: it did not observe the run")
+check("CAPABILITY_RUNTIME_ROOT" not in conclude_body,
+      "command_conclude cannot resolve the compiled-in production root")
+
+# --- 12. a closure that fails must not cost the result -----------------------
+result_at = execute_body.find("execute_supervised")
+closure_at = execute_body.find("conclusion.conclude(")
+check(result_at != -1 and closure_at != -1 and result_at < closure_at,
+      "the result is recorded BEFORE the closure is attempted, so a closure "
+      "that fails cannot lose a recorded execution")
+handler = execute_body[closure_at:] if closure_at != -1 else ""
+check("except Exception" in handler and "conclusion_refused" in handler,
+      "a failed closure is caught and REPORTED, not raised over a durable result")
+reported = dict_entry(command_execute, "lifecycle_state") if command_execute else None
+check(reported is not None and "launch_authorized" in ast.unparse(reported),
+      "and the invocation is reported as still launch_authorized -- slot-holding, "
+      "never falsely marked concluded")
+
+for verdict, text in findings:
+    print(verdict, text)
+sys.exit(1 if any(v == "FAIL" for v, _ in findings) else 0)
+GEN21_PY
+  )" || { printf '%s\n' "${gen21_report}" | sed -n 's/^FAIL /STOP: the reviewed Generation-21 source does not prove: /p' >&2
+          rm -rf "${gen21_stage}"
+          halt "the reviewed source does not carry the ADR-0017 properties this generation publishes"; }
+  rm -rf "${gen21_stage}"
+  printf '%s\n' "${gen21_report}" | sed 's/^ok /ok       /'
+  ok "ADR-0017 proved from the reviewed bytes: $(printf '%s' "${gen21_report}" | grep -c '^ok ') properties"
+
+  # --- carried forward from Generation 20 / ADR-0015, as regression ---------
+  #
+  # RETAINED, AND ONLY THESE. Generation 20's own purpose -- the provenance
+  # correction -- was proved when Generation 20 was accepted, and its evidence
+  # lives in that ceremony. What is kept here is the subset that touches a file
+  # THIS generation republishes: `admin.py`, `cli.py`, `types.py` and
+  # `capacity.py` all move, so a regression in them would ship under this
+  # matrix and belongs in this verifier.
+  #
+  # The checks that referenced `backing_store.py`, `abandonment.py` and
+  # `provenance.py` are gone: this generation does not publish those files, so
+  # asserting their internals here claimed an authority this matrix does not
+  # have.
   grep -q 'CORRECT_PROVENANCE = "correct-provenance"' <<<"${admin_source}" \
-    || halt "the reviewed admin.py declares no CORRECT_PROVENANCE verb"
+    || halt "regression: the reviewed admin.py no longer declares CORRECT_PROVENANCE"
   grep -q 'ABANDON = "abandon"' <<<"${admin_source}" \
-    || halt "the reviewed admin.py no longer declares ABANDON"
-  if grep -A10 "_DESTROYS_UNDER = {" <<<"${admin_source}" | grep -qE "Verb.(CORRECT_PROVENANCE|ABANDON)"; then
-    halt "the reviewed admin.py grants an administrative-closure verb destruction authority"
+    || halt "regression: the reviewed admin.py no longer declares ABANDON"
+  if grep -A10 "_DESTROYS_UNDER = {" <<<"${admin_source}" | grep -qE "Verb.(CORRECT_PROVENANCE|ABANDON|CONCLUDE)"; then
+    halt "regression: the reviewed admin.py grants an administrative-closure verb destruction authority"
   fi
-  ok "the reviewed admin.py adds CORRECT_PROVENANCE to the closed set with no destruction authority"
+  ok "regression: the closed verb set still holds ABANDON and CORRECT_PROVENANCE, and no closure verb may destroy"
 
-  # 3. THE CORRECTION CANNOT BECOME A REVERSAL. This is the property the whole
-  #    generation turns on, so it is checked four ways: it reaches no capacity
-  #    module, it writes no transition, it never takes the capacity lock, and
-  #    its correctable set holds no lifecycle claim.
-  for forbidden in "import capacity" "from . import capacity" "transition_locked" \
-                   "acquire_capacity" "shutil" "unlink"; do
-    if grep -q -- "${forbidden}" <<<"${provenance_source}"; then
-      halt "the reviewed provenance.py reaches ${forbidden}: a correction must not be able to move a lifecycle or a slot"
-    fi
-  done
-  grep -q 'CORRECTABLE_FIELDS = frozenset({FIELD_ACTOR})' <<<"${provenance_source}" \
-    || halt "the reviewed provenance.py does not restrict corrections to the actor claim"
-  for lifecycle_claim in '"state"' '"previous_state"' '"reason"' '"slot_released"' '"result_record_id"'; do
-    if grep -q "CORRECTABLE_FIELDS.*${lifecycle_claim}" <<<"${provenance_source}"; then
-      halt "the reviewed provenance.py makes ${lifecycle_claim} correctable: that is a dispute about what happened, not about who is recorded"
-    fi
-  done
-  grep -q "locks.acquire_cinv" <<<"${provenance_source}" \
-    || halt "the reviewed provenance.py takes no CINV lock"
-  ok "the reviewed provenance.py takes the CINV lock only, writes no transition, and corrects no lifecycle claim"
-
-  # 4. The subject is never opened for writing, and its digest is recorded so a
-  #    later change to it shows.
-  if grep -q "O_RDWR\|O_WRONLY" <<<"${provenance_source}"; then
-    halt "the reviewed provenance.py opens something for writing: the subject record must stay evidence"
-  fi
-  grep -q 'subject_digest' <<<"${provenance_source}" \
-    || halt "the reviewed provenance.py records no digest of the record it disputes"
-  grep -q '"action_reversed": False' <<<"${provenance_source}" \
-    || halt "the reviewed provenance.py does not state that the action is not reversed"
-  grep -q 'EFFECT_RETAINED = "retained"' <<<"${provenance_source}" \
-    || halt "the reviewed provenance.py does not state that the effect is retained"
-  ok "the reviewed provenance.py digests its subject, opens nothing for writing, and states retention explicitly"
-
-  # 5. THE ROOT CAUSE. `abandon` must take an explicit store root, and
-  #    `command_abandon` must no longer be able to resolve the constant. The
-  #    count is pinned: three remain, and they are the three documented verbs.
+  # The root cause of the 2026-09-20 incident, re-checked because this
+  # generation edits the file that carries it -- and because it adds a third
+  # administrative mutator that had to obey the same rule.
   grep -q 'abandon.add_argument("--store-root", required=True' <<<"${cli_source}" \
-    || halt "the reviewed cli.py does not require an explicit --store-root for abandon"
+    || halt "regression: the reviewed cli.py does not require an explicit --store-root for abandon"
   grep -q 'correct.add_argument("--store-root", required=True' <<<"${cli_source}" \
-    || halt "the reviewed cli.py does not require an explicit --store-root for correct-provenance"
+    || halt "regression: the reviewed cli.py does not require an explicit --store-root for correct-provenance"
   grep -q "^def _explicit_root" <<<"${cli_source}" \
-    || halt "the reviewed cli.py has no explicit-root guard"
+    || halt "regression: the reviewed cli.py has no explicit-root guard"
   compiled_roots="$(grep -c "CapabilityStore(CAPABILITY_RUNTIME_ROOT" <<<"${cli_source}" || true)"
   [[ "${compiled_roots}" == "3" ]] \
-    || halt "the reviewed cli.py resolves the compiled-in store root ${compiled_roots} times, expected exactly 3 -- authorise-launch, execute and recover"
+    || halt "regression: the reviewed cli.py resolves the compiled-in store root ${compiled_roots} times, expected exactly 3 -- authorise-launch, execute and recover"
   if grep -A16 "^def command_abandon" <<<"${cli_source}" | grep -q "CAPABILITY_RUNTIME_ROOT"; then
-    halt "the reviewed command_abandon still resolves the compiled-in production root"
+    halt "regression: the reviewed command_abandon still resolves the compiled-in production root"
   fi
   if grep -A16 "^def command_correct_provenance" <<<"${cli_source}" | grep -q "CAPABILITY_RUNTIME_ROOT"; then
-    halt "the reviewed command_correct_provenance resolves the compiled-in production root"
+    halt "regression: the reviewed command_correct_provenance resolves the compiled-in production root"
   fi
-  ok "the reviewed cli.py requires an explicit target for both administrative mutators, and neither can resolve the constant"
+  ok "regression: all three administrative mutators take an explicit target, and none can resolve the constant"
 
-  # 6. Both mutators report the target they actually held, so a rehearsal can
-  #    assert it instead of asserting that a path is absent from a script.
   grep -q '"target": outcome.target' <<<"${cli_source}" \
-    || halt "the reviewed cli.py does not report the target a mutation was written through"
-  grep -q "target = target_fingerprint(execution_root)" <<<"${abandonment_source}" \
-    || halt "the reviewed abandonment.py does not fingerprint the root it was handed"
-  grep -q "target = target_fingerprint(execution_root)" <<<"${provenance_source}" \
-    || halt "the reviewed provenance.py does not fingerprint the root it was handed"
-  ok "both reviewed mutators fingerprint the root they hold, and the surface reports it"
+    || halt "regression: the reviewed cli.py does not report the target a mutation was written through"
+  ok "regression: the surface still reports the root a mutation was written through"
 
-  # 7. The operator surface still offers no target state. Carried forward from
-  #    Generation 20 and re-checked, because this generation edits that file.
+  # The operator surface still offers no target state -- now across three verbs.
   for forbidden in "--force" "--to" "--target-state"; do
     if grep -q -- "\"${forbidden}\"" <<<"${cli_source}"; then
-      halt "the reviewed cli.py exposes ${forbidden}: neither administrative verb may become a force-transition surface"
+      halt "regression: the reviewed cli.py exposes ${forbidden}: no administrative verb may become a force-transition surface"
     fi
   done
   grep -q 'add_parser("abandon")' <<<"${cli_source}" \
-    || halt "the reviewed cli.py exposes no abandon subcommand"
+    || halt "regression: the reviewed cli.py exposes no abandon subcommand"
   grep -q 'add_parser("correct-provenance")' <<<"${cli_source}" \
-    || halt "the reviewed cli.py exposes no correct-provenance subcommand"
-  ok "the reviewed cli.py exposes both administrative verbs and no target-state flag"
+    || halt "regression: the reviewed cli.py exposes no correct-provenance subcommand"
+  grep -q 'add_parser("conclude")' <<<"${cli_source}" \
+    || halt "the reviewed cli.py exposes no conclude subcommand"
+  ok "regression: all three administrative verbs are exposed and none takes a target state"
 
-  # 8. ADR-0015 is not regressed by the file this generation edits.
-  grep -q "ELIGIBLE_SOURCE_STATES = frozenset({" <<<"${abandonment_source}" \
-    || halt "the reviewed abandonment.py no longer names its eligible states"
-  for forbidden in "allocate_id" "write_atomic" "shutil"; do
-    if grep -q "${forbidden}" <<<"${abandonment_source}"; then
-      halt "the reviewed abandonment.py reaches ${forbidden}: it must allocate nothing and delete nothing"
-    fi
-  done
-  types_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/types.py")"
-  capacity_source="$(git_as_owner show "${COMMIT}:tools/capability/execution/capacity.py")"
+  # ADR-0015 is not regressed by the two files this generation edits that
+  # carry it. `abandonment.py` itself does not move, so its internals are not
+  # asserted here.
   grep -q 'ABANDONED = "abandoned"' <<<"${types_source}" \
-    || halt "the reviewed types.py no longer declares ABANDONED"
+    || halt "regression: the reviewed types.py no longer declares ABANDONED"
   grep -q 'RELEASED = "released"' <<<"${types_source}" \
-    || halt "the reviewed types.py no longer declares RELEASED"
+    || halt "regression: the reviewed types.py no longer declares RELEASED"
   grep -q "MAXIMUM_SLOTS = 2" <<<"${capacity_source}" \
-    || halt "the reviewed capacity.py does not keep MAXIMUM_SLOTS at 2"
-  ok "carried forward: ADR-0015 intact -- ABANDONED alongside RELEASED, MAXIMUM_SLOTS still 2, abandonment still allocates and deletes nothing"
+    || halt "regression: the reviewed capacity.py does not keep MAXIMUM_SLOTS at 2"
+  ok "regression: ADR-0015 intact -- ABANDONED alongside RELEASED, and MAXIMUM_SLOTS still 2"
 
   # --- carried forward from Generation 18, as regression --------------------
   #
@@ -1983,6 +2267,8 @@ case "${MODE}" in
   require_source_digests
   require_closed_closure
   require_privileged_surface_excluded
+  require_governed_stores_unreachable
+  require_operation_shape
   require_fail_closed_first
   require_carryover_unmoved
 
@@ -2029,11 +2315,18 @@ case "${MODE}" in
   require_source_digests
   require_closed_closure
   require_privileged_surface_excluded
+  require_governed_stores_unreachable
+  require_operation_shape
   require_fail_closed_first
   require_carryover_unmoved
   require_gates_closed
 
-  TRANSACTION_ID="gen18-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  # The generation that created it. This read `gen18-` through Generations 19,
+  # 20 and 21: the prefix was carried forward with the installer and never
+  # renamed, so every transaction since has identified itself as Generation 18's.
+  # Transaction evidence that misnames its own generation is evidence an
+  # operator has to correct by hand before it can be read.
+  TRANSACTION_ID="gen21-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir -p "${TRANSACTION_ROOT}"
   chmod 0700 "${TRANSACTION_ROOT}"
   state="$(journal_state)"
@@ -2091,12 +2384,24 @@ case "${MODE}" in
 --verify-installed)
   require_repository
   require_fail_closed_first
+  require_operation_shape
+  require_privileged_surface_excluded
+  require_governed_stores_unreachable
   verify_installed_set
   verify_excluded_absent
-  # Both halves of coherence group R, and each by the check that can actually
-  # fail for it. `verify_unchanged_surface` judges cli.py because it is NOT a
-  # matrix target; `require_carryover_unmoved` proves the source side did not
-  # move underneath it.
+  # THE TWO HALVES OF THE INSTALLED SURFACE, each by the check that can
+  # actually fail for it.
+  #
+  # `verify_installed_set` judges the seven MATRIX TARGETS -- including
+  # `cli.py`, which IS a target in this generation -- against the reviewed
+  # Generation-21 digests. Every one of them being at its target digest is what
+  # "no mixed-generation publication" means: a half-published matrix leaves at
+  # least one target at its Generation-20 digest and fails there.
+  #
+  # `verify_unchanged_surface` judges EVERYTHING ELSE. It skips matrix targets
+  # deliberately -- they are judged above -- and proves no other installed
+  # object moved. `require_carryover_unmoved` then proves the source side did
+  # not move underneath either of them.
   verify_unchanged_surface
   require_carryover_unmoved
   require_group_coherence
@@ -2104,6 +2409,8 @@ case "${MODE}" in
   state="$(journal_state)"
   [[ "${state}" == "COMMITTED" ]] \
     || bad "the transaction journal is ${state}, expected COMMITTED"
+  [[ -f "${LIBRARY_ROOT}/tools/capability/execution/conclusion.py" ]] \
+    || bad "conclusion.py is absent: this generation's CREATE did not land"
   [[ -f "${GEN21_LIBRARY_EVIDENCE}" ]] \
     || bad "the Generation-21 library evidence is missing"
   [[ -f "${GEN21_HELPER_EVIDENCE}" ]] \
