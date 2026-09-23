@@ -1,7 +1,8 @@
 # ADR-0017: Post-Execution Lifecycle Conclusion
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-22
+- **Accepted:** 2026-09-23, at G11-BC-AE
 - **Decision Makers:** Schott Platform Engineering
 
 > **Scope.** This ADR adds one lifecycle state, one governed operation, one CLI

@@ -164,9 +164,10 @@ CONTROL_ROOT="/var/lib/kyri/implementation-authority-control"
 COORDINATOR_IDENTITY="/etc/kyri/coordinator-identity.json"
 EXECUTION_IDENTITY="/etc/kyri/execution-identity.json"
 
-# No CREATE, so the count does not move. Both ends are stated ANYWAY and are
-# deliberately equal: a matrix that quietly grew a CREATE row would change the
-# installed object count, and stating the expectation on both sides is what
+# ONE CREATE, so the count moves by one: `conclusion.py` does not exist at
+# Generation 20. Both ends are stated so the move is declared rather than
+# discovered -- a matrix that quietly gained or lost a CREATE row would change
+# the installed object count, and stating the expectation on both sides is what
 # turns that into a refusal here rather than a surprise at publication.
 EXPECTED_LIBRARY_FILES_BASELINE=82
 EXPECTED_LIBRARY_FILES_TARGET=83
@@ -217,33 +218,41 @@ BASELINE_COUNT=0; TARGET_COUNT=0; UNKNOWN_COUNT=0; UNKNOWN_TARGETS=()
 CLOSURE_STAGING=""
 PREPARING=0
 
-# --- the five generation-20 objects, pinned both ways ----------------------
+# --- the seven generation-21 objects, pinned both ways ---------------------
 #
 # source | target | mode | operation | gen20-sha256 | gen21-sha256 | group
 #
-# Four targets sit in directories that already exist at Generation 21. The
-# fifth, `provenance.py`, is a CREATE into an existing directory, so there is
+# Six targets sit in directories that already exist at Generation 20. The
+# seventh, `conclusion.py`, is a CREATE into an existing directory, so there is
 # still no directory to make and none to remove on rollback -- rollback deletes
 # the created file.
 #
 # THE ONE GROUP, AND WHY IT IS ONE.
 #
-#   P  provenance correction and explicit mutation targets (ADR-0016).
-#      `backing_store.py` owns the target fingerprint every mutator reports;
-#      `admin.py` owns the closed-set verb; `abandonment.py` owns the reporting
-#      of the root it held; `provenance.py` is the correction operation;
-#      `cli.py` is the only operator surface that can reach it, and the only
-#      object that makes the store root explicit.
+#   P  post-execution lifecycle conclusion (ADR-0017).
+#      `types.py` owns the `CONCLUDED` state itself; `state.py` owns the one
+#      transition that reaches it; `capacity.py` owns whether it holds a slot;
+#      `recovery.py` owns whether it may be offered as resumable; `admin.py`
+#      owns the closed-set verb; `conclusion.py` is the operation; `cli.py` is
+#      the only operator surface that can reach it.
 #
-#      No member is a valid complete Generation 21 on its own. `abandonment.py`
-#      or `provenance.py` at 20 against `backing_store.py` at 19 is an
-#      ImportError on `target_fingerprint` -- and `cli.py` imports
-#      `abandonment` at module level, so that lands on EVERY command including
-#      `recover`. `provenance.py` at 20 against `admin.py` at 19 is an
-#      AttributeError on `Verb.CORRECT_PROVENANCE`. `cli.py` at 20 against
-#      `provenance.py` absent is a ModuleNotFoundError on every command.
+#      No member is a valid complete Generation 21 on its own, and each way it
+#      breaks is different. `state.py` at 21 against `types.py` at 20 is an
+#      AttributeError on `LifecycleState.CONCLUDED` -- and `state.py` is
+#      imported by everything that reads a lifecycle, so that lands on every
+#      command. `capacity.py` at 20 against a store holding a `concluded`
+#      record would count it as holding a slot, which is an occupancy answer
+#      that is wrong rather than an error. `recovery.py` at 20 would fall
+#      through its positional lookup for a state that is not on the linear
+#      order. `conclusion.py` at 21 against `admin.py` at 20 is an
+#      AttributeError on `Verb.CONCLUDE`. `cli.py` at 21 against
+#      `conclusion.py` absent is an ImportError -- and because `cli.py` imports
+#      it LAZILY, not at module level, that one does not land until the verb is
+#      used or an execution tries to close itself, which is why publication
+#      order puts `conclusion.py` first and `cli.py` last.
 #
-# THE LETTER. P for provenance, and it is unused across Generations 13 to 19.
+# THE LETTER. P was Generation 20's, and it is reused here deliberately: this
+# generation publishes one group and the letter names it for this matrix.
 #
 # There is no CARRYOVER: every member of P is a row here.
 #
@@ -320,7 +329,7 @@ group_name() {
     A) printf 'the container-runtime binding' ;;
     T) printf 'the terminal-result authority' ;;
     B) printf 'governed administrative abandonment' ;;
-    P) printf 'provenance correction and explicit mutation targets' ;;
+    P) printf 'post-execution lifecycle conclusion' ;;
     *) printf 'unknown group %s' "$1" ;;
   esac
 }
