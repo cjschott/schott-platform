@@ -475,8 +475,20 @@ build_fixture() {
   # copy must reproduce the accepted pre-Stage-3 aggregate exactly, or this
   # fixture is not what it claims and the suite stops. A future stage that
   # writes something else makes this fail here rather than pass quietly.
+  #
+  # G11-BC-AG: THAT IS EXACTLY WHAT HAPPENED, AND THE CHECK CAUGHT IT. The
+  # operator concluded CINV-000003 on 2026-09-24, so the copy now also carries
+  # the closure. The rewind reported 939a3660... against the pinned 648066f6...
+  # and stopped, rather than driving the rehearsal against a store that was not
+  # the one it claims. The closure's six objects and two counters are subtracted
+  # here too, and the same check still proves the result.
   rm -f "${base}/runtime/capability-results/CRES-000002.yaml"
   printf '1\n' > "${base}/runtime/sequences/capability-result.seq"
+  rm -rf "${base}/runtime/execution/admin-records/CADM-000003"
+  rm -rf "${base}/runtime/execution/mutations/CMUT-000000000011"
+  rm -f  "${base}/runtime/execution/transitions/CINV-000003.000003"
+  printf '000002\n'       > "${base}/runtime/execution/cadm-counter"
+  printf '000000000010\n' > "${base}/runtime/execution/cmut-counter"
   local rewound
   rewound="$( cd "${base}/runtime" && find . -type f -print0 | sort -z \
               | xargs -0 sha256sum | sed "s|  \./|  ${PRODUCTION}/|" \
