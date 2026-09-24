@@ -86,6 +86,47 @@ FAILURES=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
+# G11-BC-AH. `fail` ACCUMULATES, which is right for read-only assertions and
+# catastrophic once the next thing is an executable command against a fixture
+# that was never published. On 2026-09-24 the fixture `--install` failed, this
+# suite carried on, and the historical CLI it then launched resolved a
+# compiled-in production root and abandoned CINV-000001 in production.
+#
+# `fatal` is for the publication steps. Once fixture construction or
+# publication has failed there is nothing left that can be asked safely, so it
+# stops rather than reporting and continuing.
+FIXTURE_PUBLISHED=0
+fatal() {
+  printf 'FAIL: %s\n' "$1" >&2
+  FAILURES=$((FAILURES + 1))
+  printf 'FATAL: fixture publication failed; no fixture surface is executed.\n' >&2
+  printf 'Generation 20 installer suite FAILED: %d\n' "${FAILURES}" >&2
+  exit 1
+}
+
+# Nothing may execute inside the fixture unless publication actually succeeded.
+# Belt and braces: `fatal` already exits, and this refuses anyway, so a future
+# edit that reorders the checks cannot reopen the path.
+require_fixture_published() {
+  (( FIXTURE_PUBLISHED == 1 )) \
+    || fatal "a fixture surface was reached before publication succeeded"
+}
+
+# E.3/E.4. The closed set of CLI operations that can mutate a governed store.
+# A historical CLI carrying an implicit production root is exactly what escaped,
+# so no fixture-executed command may name one -- checked by name rather than by
+# reviewing each call site, because the call sites are what drift.
+MUTATING_ADMIN_VERBS=(abandon correct-provenance conclude invoke authorise-launch execute recover)
+refuse_mutating_verb() {
+  local argument verb
+  for argument in "$@"; do
+    for verb in "${MUTATING_ADMIN_VERBS[@]}"; do
+      [[ "${argument}" == "${verb}" ]] \
+        && fatal "a fixture command named the mutating verb '${verb}': a historical CLI may carry an implicit production root and must never be dispatched from a test"
+    done
+  done
+}
+
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"' EXIT
 
@@ -144,6 +185,42 @@ build_fixture() {
   succession_rewind "${lib}" "${ROOT}" "${GEN19_COMMIT}" "${INSTALLER}" \
     || { printf 'FIXTURE: the Generation-19 reconstruction failed\n' >&2; return 1; }
 
+  # HISTORICALLY CORRECT, NOT PERMISSIVE. G11-BC-AH.
+  #
+  # `succession_rewind` only touches pathnames THIS generation's ceremony names.
+  # An object introduced by a LATER generation -- conclusion.py at Generation 21
+  # -- is neither removed nor rewound, so the fixture carried an object that did
+  # not exist at Generation 19 and the Generation-20 installer refused it:
+  # `the installed library holds 83 objects, expected the Generation-19 81 plus
+  # 1 published helper module(s)`.
+  #
+  # The answer is not to loosen that count. It is to build the tree the count
+  # describes: every object absent from the reviewed Generation-19 commit is
+  # removed, unless a helper ceremony published it, because those are
+  # legitimately outside the generation succession. Derived from the commit, so
+  # a Generation 22 adding three more objects needs no edit here.
+  # SCOPED TO THE GENERATION-MANAGED SUBTREE, and only that. The library root
+  # also carries kyri_exec_*.py, which are published by the helper ceremonies
+  # and by provisioning rather than by the generation succession -- they live at
+  # different repository paths, so they are absent from this commit while being
+  # entirely legitimate. Pruning by "absent from the commit" alone removed four
+  # of them and left a 79-object tree the installer refused just as firmly.
+  # Only `tools/` is the succession's to reconstruct.
+  local object_path kept=0 pruned=0
+  while IFS= read -r object_path; do
+    if [[ "${object_path}" != tools/* ]]; then
+      kept=$((kept + 1)); continue
+    fi
+    if git -C "${ROOT}" cat-file -e "${GEN19_COMMIT}:${object_path}" 2>/dev/null; then
+      kept=$((kept + 1))
+    else
+      rm -f "${lib}/${object_path}"
+      pruned=$((pruned + 1))
+    fi
+  done < <( cd "${lib}" && find . -type f -name '*.py' -printf '%P\n' | sort )
+  printf 'FIXTURE: reconstructed Generation 19 -- %d object(s) kept, %d absent from %s pruned\n' \
+    "${kept}" "${pruned}" "${GEN19_COMMIT:0:12}" >&2
+
   # The predecessor evidence, which records exactly that surface.
   local evidence="${root}/root/kyri-gen19-library-digests.txt"
   : > "${evidence}"
@@ -187,6 +264,69 @@ run_installer() {
       bash "${INSTALLER}" "${mode}" --fixture "${root}" ) \
     > "${WORK}/last-run.log" 2>&1
 }
+
+# ===========================================================================
+# 0. THE ESCAPE THIS SUITE CAUSED, AND CANNOT CAUSE AGAIN
+# ===========================================================================
+#
+# On 2026-09-24 this suite abandoned CINV-000001 in PRODUCTION. The chain:
+# the fixture was built from the installed Generation-21 library; the rewind
+# only touches pathnames Generation 20's ceremony names, so conclusion.py
+# survived; the Generation-20 installer refused the resulting tree; `fail`
+# reported and the suite CARRIED ON; the fixture's cli.py was therefore still
+# Generation 19; and the historical `abandon` it then launched -- with no
+# --store-root, because Generation 19 had no such flag -- resolved the
+# compiled-in /data/kyri/capability-runtime.
+#
+# These checks are first on purpose. They are static, they cost nothing, and
+# they fail before any fixture is built.
+
+printf -- '--- no production escape ---\n'
+
+# E.3/E.4. Nothing in this file may dispatch a CLI verb that can mutate a
+# governed store. Checked over the source, with this section's own prose
+# excluded, so the documentation of what was removed does not trip it.
+escape_scan="$(
+  awk 'NR > 1 && !/^#/' "${BASH_SOURCE[0]}" \
+    | grep -nE 'cli[[:space:]]+(abandon|conclude|correct-provenance|invoke|authorise-launch|execute|recover)\b' \
+    || true )"
+if [[ -z "${escape_scan}" ]]; then
+  pass "this suite dispatches no mutating CLI verb: a historical one may carry an implicit production root"
+else
+  fail "a mutating CLI dispatch is present: ${escape_scan}"
+fi
+
+# E.5. A failed fixture publication must be FATAL, not accumulated. Proved from
+# the source: every publication step's failure branch calls `fatal`, and
+# `fatal` exits.
+publication_failures="$(grep -cE '^  fatal "--(verify|install)' "${BASH_SOURCE[0]}" || true)"
+if [[ "${publication_failures}" == "2" ]]; then
+  pass "both fixture publication steps are fatal: --verify and --install"
+else
+  fail "expected 2 fatal publication branches, found ${publication_failures}"
+fi
+if grep -qE '^  exit 1$' <<<"$(sed -n '/^fatal()/,/^}/p' "${BASH_SOURCE[0]}")"; then
+  pass "fatal exits rather than returning to the next check"
+else
+  fail "fatal does not exit"
+fi
+if grep -q 'require_fixture_published' "${BASH_SOURCE[0]}"; then
+  pass "fixture surfaces are guarded by require_fixture_published"
+else
+  fail "no publication guard protects the fixture surfaces"
+fi
+
+# E.6. The condition that caused the incident, reproduced WITHOUT the dangerous
+# command: this host carries objects that did not exist at Generation 19, and
+# the fixture builder must prune them rather than hand the installer a tree it
+# will refuse. Generation 21's conclusion.py is the live example.
+later_objects=0
+while IFS= read -r object; do
+  git -C "${ROOT}" cat-file -e "${GEN19_COMMIT}:${object}" 2>/dev/null \
+    || later_objects=$((later_objects + 1))
+done < <( cd "${INSTALLED}" && find . -type f -name '*.py' ! -path '*__pycache__*' \
+            -printf 'tools/%P\n' | sed 's|^tools/tools/|tools/|' | sort )
+printf 'note: the installed library carries %d object(s) absent from Generation 19\n' "${later_objects}"
 
 # ===========================================================================
 # 1. The declaration
@@ -261,15 +401,52 @@ for source in "${GEN20_SOURCES[@]}"; do
 done
 (( drift == 0 )) && pass "every declared baseline matches the reviewed Generation-19 commit ${GEN19_COMMIT:0:7}"
 
-# And the targets are what IS installed, because the operator installed them.
+# And the targets are what IS installed -- or what a LATER REVIEWED GENERATION
+# republished them as. G11-BC-AH.
+#
+# This read "the targets are what IS installed, because the operator installed
+# them", which was true for exactly as long as Generation 20 was the installed
+# generation. Generation 21 republished admin.py and cli.py, so the claim became
+# false on a host that had moved on, and it said so by failing.
+#
+# Widened by DECLARATION, not by tolerance: a digest is acceptable here only if
+# some later generation installer in this repository names it as that object's
+# target. There is no "anything newer" and nothing is derived from the host --
+# an unexplained digest still fails, and so does a Generation-20 object the
+# operator quietly changed.
+later_target_digests() {
+  local source="$1" installer generation
+  for installer in "${ROOT}"/provisioning/execution/install-generation-*.sh; do
+    [[ -f "${installer}" ]] || continue
+    generation="$(basename "${installer}")"
+    generation="${generation#install-generation-}"; generation="${generation%.sh}"
+    [[ "${generation}" =~ ^[0-9]+$ ]] || continue
+    (( generation > 20 )) || continue
+    sed -n '/^MATRIX=(/,/^)$/p' "${installer}" \
+      | sed -n 's/^"'"${source//\//\\/}"'|[^|]*|[^|]*|[^|]*|[^|]*|\([0-9a-f]\{64\}\)|.*"$/\1/p'
+  done
+}
 drift=0
 for source in "${GEN20_SOURCES[@]}"; do
   declared="$(want_of "${source}")"
   actual="$(sha256sum "${INSTALLED}/${source}" 2>/dev/null | cut -d' ' -f1)"
-  [[ "${declared}" == "${actual}" ]] \
-    || { fail "${source}: declared target ${declared}, installed ${actual:-absent}"; drift=1; }
+  if [[ "${declared}" == "${actual}" ]]; then
+    continue
+  fi
+  if grep -qx "${actual}" <<<"$(later_target_digests "${source}")"; then
+    note_later="${note_later:-}${source} "
+    continue
+  fi
+  fail "${source}: declared target ${declared}, installed ${actual:-absent}, and no later generation declares that digest"
+  drift=1
 done
-(( drift == 0 )) && pass "every declared target matches what the operator installed"
+if (( drift == 0 )); then
+  if [[ -n "${note_later:-}" ]]; then
+    pass "every declared target is installed, or republished by a later reviewed generation: ${note_later}"
+  else
+    pass "every declared target matches what the operator installed"
+  fi
+fi
 
 drift=0
 for source in "${GEN20_SOURCES[@]}"; do
@@ -331,20 +508,47 @@ build_fixture "${root}"
 before_manifest="$(manifest "${root}")"
 before_count="$(library_count "${root}")"
 
-# The live library, less the one object this generation creates. Derived, so
-# that a later generation adding an object does not make this a lie.
-live_count="$(find "${INSTALLED}" -type f -name '*.py' ! -path '*__pycache__*' | wc -l)"
-expected_before=$(( live_count - $(matrix_rows | grep -c '|CREATE|') ))
+# The Generation-19 object count, DERIVED FROM THE COMMIT. G11-BC-AH.
+#
+# This read "the live library, less the one object this generation creates",
+# and its comment said that was derived so a later generation adding an object
+# would not make it a lie. It did exactly that: Generation 21 added
+# conclusion.py, so both the live count and this expectation moved together and
+# the check kept passing over a fixture that was NOT Generation 19 -- which the
+# installer then refused, and the suite carried on into the escape.
+#
+# The truthful count is a fact about Generation 19, so it is read from the
+# Generation-19 commit: every tools/**.py it carries, plus the library-root
+# modules the helper ceremonies and provisioning publish, which are outside the
+# generation succession and legitimately absent from that commit.
+# Read from the INSTALLER'S OWN REVIEWED DECLARATION, which is where the size
+# of Generation 19 is actually stated, plus the library objects the helper
+# ceremonies publish -- counted exactly as the installer counts them. Not from
+# the live library, which is what made the old derivation move with the host.
+gen19_declared="$(sed -n 's/^EXPECTED_LIBRARY_FILES_BASELINE=\([0-9]\+\)$/\1/p' "${INSTALLER}")"
+[[ -n "${gen19_declared}" ]] \
+  || fatal "the Generation-20 installer declares no baseline library count"
+helper_library_creates=0
+while IFS= read -r ceremony_relative; do
+  [[ -n "${ceremony_relative}" ]] || continue
+  while read -r _relative operation _source; do
+    [[ "${operation}" == "CREATE" ]] && helper_library_creates=$((helper_library_creates + 1))
+  done < <(succession_library_rows "${ROOT}/${ceremony_relative}")
+done < <(sed -n '/^CEREMONIES_BEFORE_THIS_GENERATION=(/,/^)$/p' "${INSTALLER}" \
+           | sed -n 's/^  "\(.*\)"$/\1/p')
+expected_before=$(( gen19_declared + helper_library_creates ))
 if [[ "${before_count}" == "${expected_before}" ]]; then
   pass "the reconstructed Generation-19 fixture holds ${before_count} objects"
 else
-  fail "the fixture holds ${before_count} objects; the installed ${live_count} less this generation's creates gives ${expected_before}"
+  fail "the fixture holds ${before_count} objects; the installer declares Generation 19 at ${gen19_declared} plus ${helper_library_creates} helper-published module(s), giving ${expected_before}"
 fi
 
 if run_installer "${root}" --verify; then
   pass "--verify reports the fixture ready for the Generation-20 installation"
 else
-  fail "--verify refused a clean baseline: $(tail -3 "${WORK}/last-run.log" | tr '\n' ' ')"
+  # FATAL, not accumulated: a fixture the installer refuses is not a fixture
+  # anything may be executed inside.
+  fatal "--verify refused a clean baseline: $(tail -3 "${WORK}/last-run.log" | tr '\n' ' ')"
 fi
 if [[ "$(manifest "${root}")" == "${before_manifest}" ]]; then
   pass "--verify wrote nothing"
@@ -354,8 +558,12 @@ fi
 
 if run_installer "${root}" --install; then
   pass "--install completes"
+  FIXTURE_PUBLISHED=1
 else
-  fail "--install failed: $(tail -5 "${WORK}/last-run.log" | tr '\n' ' ')"
+  # THE STEP THAT LET THE 2026-09-24 ESCAPE THROUGH. It reported and carried on,
+  # leaving a Generation-19 cli.py in the fixture for the executable test below
+  # to launch. It stops now.
+  fatal "--install failed: $(tail -5 "${WORK}/last-run.log" | tr '\n' ' ')"
 fi
 
 drift=0
@@ -419,18 +627,64 @@ else
   fail "the installed semantics are wrong"
 fi
 
-# The breaking change, asserted where it matters: an old call mutates nothing.
-if out="$(fixture_python -m tools.capability.cli abandon --expected-uid 1000 \
-          --expected-gid 1000 --cinv CINV-000001 --actor x --request-id y \
-          --recorded-at 2026-09-20T20:00:00-05:00 \
-          --reason historical-incomplete-execution 2>&1)"; then
-  fail "the installed abandon accepted a call with no target"
+# THE BREAKING CHANGE, PROVED WITHOUT DISPATCHING THE VERB. G11-BC-AH.
+#
+# This used to run the historical call for real:
+#
+#   fixture_python -m tools.capability.cli abandon --expected-uid 1000 \
+#     --expected-gid 1000 --cinv CINV-000001 --actor x --request-id y \
+#     --recorded-at 2026-09-20T20:00:00-05:00 \
+#     --reason historical-incomplete-execution
+#
+# expecting a usage error. On 2026-09-24 the fixture still held a Generation-19
+# cli.py, whose `command_abandon` resolves the compiled-in
+# /data/kyri/capability-runtime, and the call SUCCEEDED -- abandoning
+# CINV-000001 in production. The assertion was about a PARSER, and a parser can
+# be asked without dispatching the command behind it.
+#
+# It is asked here through argparse, in-process, against the fixture's own
+# cli.py: the parser is built, `abandon` is parsed WITHOUT --store-root, and
+# argparse's SystemExit is the evidence. No handler runs, so no root -- implicit
+# or explicit -- is ever resolved.
+require_fixture_published
+if out="$(fixture_python - <<'PARSERPY' 2>&1
+import contextlib, io, sys
+sys.path.insert(0, ".")
+from tools.capability import cli
+
+parser = cli.build_parser()
+verbs = next(a.choices for a in parser._actions if getattr(a, "choices", None))
+flags = {o for a in verbs["abandon"]._actions for o in a.option_strings}
+if "--store-root" not in flags:
+    print("PARSER-ACCEPTS-NO-TARGET"); raise SystemExit(0)
+
+# The Generation-19-shaped call, PARSED and never dispatched.
+buf = io.StringIO()
+try:
+    with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+        parser.parse_args([
+            "abandon", "--expected-uid", "1000", "--expected-gid", "1000",
+            "--cinv", "CINV-000001", "--actor", "x", "--request-id", "y",
+            "--recorded-at", "2026-09-20T20:00:00-05:00",
+            "--reason", "historical-incomplete-execution"])
+except SystemExit as exit_error:
+    if exit_error.code in (0, None):
+        print("PARSER-ACCEPTED"); raise SystemExit(0)
+    print("REFUSED", "--store-root" in buf.getvalue())
+    raise SystemExit(0)
+print("PARSER-ACCEPTED")
+PARSERPY
+)"; then
+  case "${out}" in
+    "REFUSED True")
+      pass "a Generation-19-shaped abandon call is a usage error naming --store-root, proved by parsing and never dispatching" ;;
+    "REFUSED False")
+      fail "the refusal did not name --store-root" ;;
+    *)
+      fail "the fixture parser accepted a call with no target: ${out}" ;;
+  esac
 else
-  if [[ "${out}" == *"--store-root"* ]]; then
-    pass "a Generation-19-shaped abandon call is now a usage error naming what is missing"
-  else
-    fail "the refusal did not name --store-root: ${out}"
-  fi
+  fail "the parser inspection did not run: ${out}"
 fi
 
 # ===========================================================================
