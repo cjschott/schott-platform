@@ -204,10 +204,18 @@ exercised, and closes every future success automatically.
 - `conclusion.py` — the operation;
 - `cli.py` — `capability conclude`, and the inline closure after `execute`.
 
-**One transition and one `CADM`.** The slot is released by the transition
-itself. The `CADM` records `derivation` — `observed` inline, `reconstructed`
-administratively — and `handoff_retained: true`, so the residue is stated rather
-than implied.
+**One transition, its `CMUT`, and one `CADM`.** *(Corrected at G11-BC-AG: this
+originally read "One transition and one `CADM`", which omitted the mutation
+record. Every lifecycle transition is committed through the T5 substrate by
+`state._commit`, so it opens a `CMUT` naming it — the store already showed this
+for all eight of its transitions, including CINV-000002's abandonment. The
+closure ceremony carried the same omission as an executable assertion and it
+failed against production. See
+`2026-09-24-g11-bc-ag-conclusion-mutation-accounting.md`.)*
+
+The slot is released by the transition itself. The `CADM` records `derivation` —
+`observed` inline, `reconstructed` administratively — and `handoff_retained:
+true`, so the residue is stated rather than implied.
 
 **A defect of my own, found by the ordering analysis and fixed.** The inline
 closure caught only `ValueError`. A half-published generation would have let an

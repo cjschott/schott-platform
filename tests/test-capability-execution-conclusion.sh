@@ -138,7 +138,7 @@ assert recovery._container_possible(L.LAUNCH_AUTHORIZED) is True
 # ===========================================================================
 
 PRELUDE="
-import os, shutil, sys
+import json, os, shutil, sys
 sys.path.insert(0, '.')
 from datetime import datetime, timedelta, timezone
 from tools.capability.errors import CapabilityError
@@ -198,6 +198,25 @@ def at_launch_authorized(root, cinv):
 def occupancy(root):
     holding = capacity_module.slot_holding_states()
     return sum(1 for v in sm.all_states(root).values() if v in holding)
+
+def cmut_counter(base):
+    with open(os.path.join(base, 'root', CMUT_COUNTER), 'rb') as handle:
+        return handle.read().decode().strip()
+
+def cmuts(base):
+    directory = os.path.join(base, 'root', 'mutations')
+    return sorted(os.listdir(directory)) if os.path.isdir(directory) else []
+
+def transition_targets(base):
+    '''Which transition each CMUT was opened for, read from its own intent.'''
+    out = {}
+    for name in cmuts(base):
+        intent = os.path.join(base, 'root', 'mutations', name, 'intent')
+        if not os.path.isfile(intent):
+            continue
+        document = json.loads(open(intent, encoding='utf-8').read())
+        out[name] = (document.get('target_kind'), document.get('target_name'))
+    return out
 
 class FakeStore:
     def __init__(self, invocations, results):
@@ -311,6 +330,99 @@ for field, kw in (('actor', {'actor': 'someone-else'}),
 # Each sabotage must reach ITS OWN gate. A refusal for the right reason is the
 # assertion; a refusal for any other reason would mean the gate under test was
 # never reached and something earlier answered for it.
+
+# ===========================================================================
+# 1b. The mutation substrate the transition rides on
+# ===========================================================================
+#
+# G11-BC-AG. The closure ceremony asserted `cmut-counter MUST still be
+# 000000000010` and production came back at 000000000011. The assertion was
+# hard-coded from an assumption about the mutation shape; this suite had the
+# substrate live in its fixture and never once read it.
+#
+# The truthful expectation is DERIVED, not written down: `state._commit` --
+# which every lifecycle transition goes through -- opens a Mutation, so the
+# CMUT count moves by exactly the number of transitions written. These cases
+# assert that relationship, so a future change to the substrate fails here
+# rather than in production.
+
+printf -- '\n--- the mutation substrate ---\n'
+
+run_case "a conclusion spends exactly one CMUT, and it names the transition it wrote" "${PRELUDE}
+base, root = ready('m1')
+at_launch_authorized(root, 'CINV-000003')
+before = cmut_counter(base)
+before_set = set(cmuts(base))
+out = accepted(root)
+after = cmut_counter(base)
+# Derived from the substrate, not asserted as a literal: one transition was
+# written, so exactly one CMUT was opened.
+assert int(after) == int(before) + 1, (before, after)
+new = set(cmuts(base)) - before_set
+assert len(new) == 1, sorted(new)
+name = new.pop()
+kind, target = transition_targets(base)[name]
+assert kind == 'execution-transition', kind
+# ...and it names THIS invocation's newest transition, not some other object.
+assert target.startswith('CINV-000003.'), target
+assert target == 'CINV-000003.%06d' % len([
+    t for t in os.listdir(os.path.join(base, 'root', TRANSITIONS_DIRECTORY))
+    if t.startswith('CINV-000003.')]), target
+"
+
+run_case "the CMUT pins the bytes the transition actually committed" "${PRELUDE}
+import hashlib
+base, root = ready('m2')
+at_launch_authorized(root, 'CINV-000003')
+before_set = set(cmuts(base))
+accepted(root)
+name = (set(cmuts(base)) - before_set).pop()
+intent = json.loads(open(os.path.join(base, 'root', 'mutations', name, 'intent'),
+                         encoding='utf-8').read())
+written = open(os.path.join(base, 'root', TRANSITIONS_DIRECTORY,
+                            intent['target_name']), 'rb').read()
+assert intent['expected_sha256'] == hashlib.sha256(written).hexdigest(), intent
+outcome = json.loads(open(os.path.join(base, 'root', 'mutations', name, 'outcome'),
+                          encoding='utf-8').read())
+assert outcome['installed'] is True, outcome
+"
+
+run_case "the CMUT count tracks transitions one for one, across the whole history" "${PRELUDE}
+base, root = ready('m3')
+# reserve + authorise are two transitions, the conclusion is a third.
+at_launch_authorized(root, 'CINV-000003')
+accepted(root)
+transitions = [t for t in os.listdir(os.path.join(base, 'root', TRANSITIONS_DIRECTORY))]
+targets = [t for _, t in transition_targets(base).values()]
+# Every transition on disk is named by exactly one CMUT, and nothing else is.
+assert sorted(targets) == sorted(transitions), (sorted(targets), sorted(transitions))
+assert int(cmut_counter(base)) == len(transitions), (cmut_counter(base), transitions)
+"
+
+run_case "the conclusion's whole durable footprint is the three things it writes" "${PRELUDE}
+base, root = ready('m4')
+at_launch_authorized(root, 'CINV-000003')
+def snapshot():
+    out = {}
+    for here, _, names in os.walk(os.path.join(base, 'root')):
+        for name in names:
+            path = os.path.join(here, name)
+            out[os.path.relpath(path, os.path.join(base, 'root'))] = open(path, 'rb').read()
+    return out
+before = snapshot()
+accepted(root)
+after = snapshot()
+created = sorted(set(after) - set(before))
+changed = sorted(k for k in set(after) & set(before) if after[k] != before[k])
+# One transition, one CMUT (intent + outcome), one CADM (intent + detail +
+# outcome) -- and the two counters they advanced. Nothing else, proved by
+# content rather than by listing what was expected to move.
+assert len(created) == 6, created
+assert sum(1 for k in created if k.startswith(TRANSITIONS_DIRECTORY)) == 1, created
+assert sum(1 for k in created if k.startswith('mutations/')) == 2, created
+assert sum(1 for k in created if k.startswith('admin-records/')) == 3, created
+assert changed == ['cadm-counter', CMUT_COUNTER], changed
+"
 
 printf -- '\n--- the failure matrix ---\n'
 
@@ -520,6 +632,10 @@ at_launch_authorized(root, 'CINV-000003')
 records = os.path.join(base, 'root', 'admin-records')
 counter = os.path.join(base, 'root', 'cadm-counter')
 before_counter = open(counter, 'rb').read()
+# BOTH counters. G11-BC-AG: this case was titled 'no counter move' and read
+# only the CADM one, so a refusal that had spent a CMUT would have passed it.
+before_cmut = cmut_counter(base)
+before_cmuts = cmuts(base)
 before_states = dict(sm.all_states(root))
 for kw in ({'store': store_with(result=False)}, {'actor': ''},
            {'recorded_at': 'not-a-time'}, {'derivation': 'guessed'}):
@@ -531,6 +647,8 @@ for kw in ({'store': store_with(result=False)}, {'actor': ''},
         raise AssertionError('expected a refusal for ' + repr(kw))
 assert os.listdir(records) == [], os.listdir(records)
 assert open(counter, 'rb').read() == before_counter
+assert cmut_counter(base) == before_cmut, cmut_counter(base)
+assert cmuts(base) == before_cmuts, cmuts(base)
 assert dict(sm.all_states(root)) == before_states
 assert occupancy(root) == 1, occupancy(root)
 "

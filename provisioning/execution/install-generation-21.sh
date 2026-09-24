@@ -2073,6 +2073,27 @@ check(len(transitions) == 1, "conclude writes exactly ONE lifecycle transition")
 check(transitions and "CONCLUDED" in state_names(transitions[0]),
       "that one transition is the one into CONCLUDED, which is what releases "
       "the slot -- there is no separate release step")
+
+# G11-BC-AG. "Exactly one transition" was proved above and its JOURNAL
+# CONSEQUENCE was not, so an accounting that expected no CMUT passed every
+# check here and then failed against production. The consequence is a property
+# of the substrate, so it is read from the substrate: every transition is
+# committed by `state._commit`, and that function opens a Mutation. One
+# transition therefore spends exactly one CMUT, and an installer that stopped
+# being true would fail here rather than in a ceremony's AFTER block.
+state_text = source("tools/capability/execution/state.py")
+commit_fn = function(state_tree, "_commit")
+commit_body = ast.unparse(commit_fn) if commit_fn is not None else ""
+check(commit_fn is not None and "Mutation(root)" in commit_body,
+      "every lifecycle transition is committed through the T5 mutation "
+      "substrate: state._commit opens a Mutation")
+for stage in ("begin", "install", "commit"):
+    check(f".{stage}(" in commit_body,
+          f"state._commit drives the mutation through {stage}, so the transition "
+          f"is journalled rather than written behind the substrate")
+check("MutationTarget(kind=TargetKind.EXECUTION_TRANSITION" in commit_body,
+      "the CMUT a transition opens names it as an execution-transition target, "
+      "which is what makes one transition cost exactly one CMUT")
 check("allocate_cadm" in body and body.count("allocate_cadm") == 1,
       "conclude allocates exactly ONE CADM")
 retained = dict_entry(conclude_fn, "handoff_retained") if conclude_fn else None
