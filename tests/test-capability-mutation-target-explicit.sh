@@ -67,12 +67,23 @@ fixture() {
 # behaviour working, and is not what this suite is asking about. Removing that
 # record and rewinding the counter reproduces the store the correction ran
 # against, exactly, which G11-BC-Z proved by aggregate.
+#
+# G11-BC-AG: the rewind is DERIVED rather than listed. It used to name
+# CADM-000002 alone, and when the CINV-000003 conclusion wrote CADM-000003 the
+# copy was left holding a record the rewound counter did not account for --
+# `the CADM counter stands at 1 behind recorded 3`. Every administrative record
+# after the first is removed, so a later one does not break this again.
+LAST_CADM_BEFORE_CORRECTION=1
 uncorrected_fixture() {
-  local path
+  local path record ordinal
   path="$(fixture "$1")"
   chmod -R u+w "${path}"
-  rm -rf "${path}/execution/admin-records/CADM-000002"
-  printf '000001\n' > "${path}/execution/cadm-counter"
+  for record in "${path}/execution/admin-records"/CADM-*; do
+    [[ -e "${record}" ]] || continue
+    ordinal="$(basename "${record}")"; ordinal="${ordinal#CADM-}"
+    (( 10#${ordinal} > LAST_CADM_BEFORE_CORRECTION )) && rm -rf "${record}"
+  done
+  printf '%06d\n' "${LAST_CADM_BEFORE_CORRECTION}" > "${path}/execution/cadm-counter"
   printf '%s' "${path}"
 }
 
@@ -480,9 +491,11 @@ if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
 else
   fail "THE PRODUCTION RUNTIME CHANGED"
 fi
-# Two now: the abandonment and the operator's accepted correction of it.
-if [[ "$(find "${PRODUCTION}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" == "2" ]]; then
-  pass "production still holds exactly its two administrative records"
+# Three now: the abandonment, the operator's accepted correction of it, and
+# the CINV-000003 conclusion of 2026-09-24. Pinned as an exact count rather
+# than read from the store, so a fourth appearing is a failure here.
+if [[ "$(find "${PRODUCTION}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" == "3" ]]; then
+  pass "production still holds exactly its three administrative records"
 else
   fail "the production administrative records changed"
 fi
