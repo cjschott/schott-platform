@@ -54,10 +54,31 @@ trap 'chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"' EXIT
 aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
 PRODUCTION_BEFORE="$(aggregate "${PRODUCTION}")"
 
+# A copy of production, rewound past the 2026-09-24 incident. G11-BC-AH.
+#
+# This suite abandons CINV-000001 IN A FIXTURE to prove the mutator writes
+# through the root it was handed. The incident abandoned CINV-000001 in
+# PRODUCTION under actor 'x', so a copy cut today carries that closure and the
+# released code refuses a fresh abandonment as a conflicting repeat -- correct
+# behaviour, and not what this suite is asking about.
+#
+# The incident's three durable objects are removed and the two counters it
+# advanced are rewound, which is exactly the set G11-BC-AH proved by
+# reconstruction. The effect the reviewer retained in PRODUCTION is untouched;
+# only this copy is rewound, and only so the question can still be asked.
+INCIDENT_CADM=CADM-000004
+INCIDENT_CMUT=CMUT-000000000012
+INCIDENT_TRANSITION=CINV-000001.000003
 fixture() {
   local path="${WORK}/$1"
   [[ -e "${path}" ]] && { chmod -R u+w "${path}"; rm -rf "${path}"; }
   cp -a "${PRODUCTION}" "${path}"
+  chmod -R u+w "${path}"
+  rm -rf "${path}/execution/admin-records/${INCIDENT_CADM}"
+  rm -rf "${path}/execution/mutations/${INCIDENT_CMUT}"
+  rm -f  "${path}/execution/transitions/${INCIDENT_TRANSITION}"
+  printf '000003\n'       > "${path}/execution/cadm-counter"
+  printf '000000000011\n' > "${path}/execution/cmut-counter"
   printf '%s' "${path}"
 }
 
@@ -83,6 +104,7 @@ uncorrected_fixture() {
     ordinal="$(basename "${record}")"; ordinal="${ordinal#CADM-}"
     (( 10#${ordinal} > LAST_CADM_BEFORE_CORRECTION )) && rm -rf "${record}"
   done
+  true
   printf '%06d\n' "${LAST_CADM_BEFORE_CORRECTION}" > "${path}/execution/cadm-counter"
   printf '%s' "${path}"
 }
@@ -222,11 +244,42 @@ common=(--expected-uid 1000 --expected-gid 1000 --cinv CINV-000001
         --recorded-at 2026-09-20T20:00:00-05:00
         --reason historical-incomplete-execution)
 
-out="$(cd "${ROOT}" && python3 -m tools.capability.cli abandon "${common[@]}" 2>&1)" && status=0 || status=$?
-if (( status == 2 )) && [[ "${out}" == *"the following arguments are required: --store-root"* ]]; then
+# ASKED OF THE PARSER, NOT DISPATCHED. G11-BC-AH.
+#
+# This used to run `abandon` with no --store-root as a SUBPROCESS and rely on
+# the refusal. The refusal is real under Generation 20 and later -- but a
+# subprocess re-imports the module and gets the COMPILED-IN root, so the shape
+# is one CLI generation away from resolving production. That is precisely how
+# CINV-000001 was abandoned on 2026-09-24, from a fixture holding a
+# Generation-19 cli.py.
+#
+# The claim is about a parser, so the parser is asked. `parse_args` raises
+# SystemExit(2) for a missing required argument and no handler ever runs, so no
+# root -- implicit or explicit -- is resolved.
+out="$(cd "${ROOT}" && python3 - <<'NO_TARGET_PY' 2>&1
+import contextlib, io, sys
+sys.path.insert(0, ".")
+from tools.capability import cli
+
+buf = io.StringIO()
+try:
+    with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+        cli.build_parser().parse_args([
+            "abandon", "--expected-uid", "1000", "--expected-gid", "1000",
+            "--cinv", "CINV-000001", "--actor", "an-operator",
+            "--request-id", "g11bcy-green",
+            "--recorded-at", "2026-09-20T20:00:00-05:00",
+            "--reason", "historical-incomplete-execution"])
+except SystemExit as exit_error:
+    print(exit_error.code, buf.getvalue().strip().splitlines()[-1] if buf.getvalue().strip() else "")
+    raise SystemExit(0)
+print("ACCEPTED", "")
+NO_TARGET_PY
+)"
+if [[ "${out}" == 2* && "${out}" == *"the following arguments are required: --store-root"* ]]; then
   pass "omitting the target is a usage error, not a quiet resolution to production"
 else
-  fail "omission gave status ${status}: ${out}"
+  fail "omission gave: ${out}"
 fi
 
 if (cd "${INSTALLED}" && python3 -c '
@@ -491,11 +544,14 @@ if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
 else
   fail "THE PRODUCTION RUNTIME CHANGED"
 fi
-# Three now: the abandonment, the operator's accepted correction of it, and
-# the CINV-000003 conclusion of 2026-09-24. Pinned as an exact count rather
-# than read from the store, so a fourth appearing is a failure here.
-if [[ "$(find "${PRODUCTION}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" == "3" ]]; then
-  pass "production still holds exactly its three administrative records"
+# Four now: the CINV-000002 abandonment, the operator's accepted correction of
+# it, the CINV-000003 conclusion of 2026-09-24, and CADM-000004 -- the
+# CINV-000001 abandonment this suite itself caused on 2026-09-24 before it was
+# disarmed. The reviewer retained that lifecycle effect; its asserted authority
+# is disputed and recorded at G11-BC-AH. Pinned as an exact count rather than
+# read from the store, so a fifth appearing is a failure here.
+if [[ "$(find "${PRODUCTION}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" == "4" ]]; then
+  pass "production still holds exactly its four administrative records"
 else
   fail "the production administrative records changed"
 fi

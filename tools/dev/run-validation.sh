@@ -700,6 +700,13 @@ run "Capability execution abandonment" \
 run "Capability execution provenance correction" \
   bash tests/test-capability-execution-provenance-correction.sh
 
+# G11-BC-AH. No test may dispatch a governed mutator that can resolve
+# production. Static: it reads the suites rather than running anything. First in
+# this group on purpose -- if the class has returned, that is what a run should
+# say before it spends an hour proving other things.
+run "No production escape" \
+  bash tests/test-no-production-escape.sh
+
 # ADR-0017. Post-execution lifecycle conclusion: the normal closure for an
 # execution that ran. The supervised path journals nothing past
 # `launch_authorized`, so every successful execution otherwise holds a slot for

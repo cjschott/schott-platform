@@ -610,6 +610,11 @@ jobs:
       - name: Capability execution abandonment tests
         run: bash tests/test-capability-execution-abandonment.sh
 
+      # G11-BC-AH. No test may dispatch a governed mutator that can resolve a
+      # production root. Static, so it runs anywhere.
+      - name: No production escape
+        run: bash tests/test-no-production-escape.sh
+
       # Post-execution lifecycle conclusion (ADR-0017): the NORMAL closure for
       # an execution that ran. Distinct from abandonment, and deliberately so --
       # the supervised path strands every success, so reusing the exceptional
