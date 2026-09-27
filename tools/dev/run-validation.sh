@@ -122,12 +122,21 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both totals moved by one: 131 -> 132 and 156 -> 157. ADR-0018's multi-field
 # suite is portable and unconditional, so it too runs in BOTH, and both totals
 # moved by one again: 132 -> 133 and 157 -> 158. Measured in both modes, not
-# incremented on the assumption.
+# incremented on the assumption. The Generation-22 installer suite is portable
+# and unconditional too.
+#
+# AND THE ARITHMETIC WAS WRONG, WHICH IS WHY THESE ARE MEASURED. At G11-BC-AI a
+# measured run put quick mode at 135 and full at 160, where adding two suites to
+# the declared 132 and 157 predicts 134 and 159. The missing one is G11-BC-AH's
+# `No production escape`, registered without moving either total -- and invisible
+# until now, because the validator has halted on stale host-only rehearsals since
+# G11-BC-AG and so never reached its own closing count. These two numbers are
+# what a run printed, not what an increment implied.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=133
+  TOTAL_STEPS=135
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=158
+  TOTAL_STEPS=160
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -710,6 +719,13 @@ run "Capability execution provenance correction" \
 # no slot. Portable: fixtures only.
 run "Capability provenance multi-field correction" \
   bash tests/test-capability-provenance-multifield.sh
+
+# G11-BC-AI. The Generation-22 installer proves ADR-0018 rather than its
+# predecessor's purpose, and 21 sabotages of the reviewed source are each
+# caught by a named property. Static by construction: nothing here runs
+# --install, and there are no fixtures to drive. Portable.
+run "Capability execution generation-22 installer" \
+  bash tests/test-capability-execution-generation22-installer.sh
 
 # G11-BC-AH. No test may dispatch a governed mutator that can resolve
 # production. Static: it reads the suites rather than running anything. First in

@@ -1,0 +1,601 @@
+#!/usr/bin/env bash
+# CADM-000004 PROVENANCE CORRECTION, ALL THREE FIELDS, exactly as it is to be
+# typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# =====================================================================
+# DO NOT RUN THIS UNTIL BOTH ARE TRUE
+# =====================================================================
+#   1. Generation 22 is INSTALLED and accepted.
+#   2. The reviewer has accepted ADR-0018 and this ceremony.
+#
+# Gate 0 below refuses if (1) is not true. Nothing can check (2) but you.
+#
+# WHAT THIS DOES, IN ONE SENTENCE
+# ===============================
+# It records that all three of CADM-000004's authority assertions -- `actor`,
+# `request_id` and `recorded_at` -- are not truthful provenance, while leaving
+# CADM-000004, the lifecycle, the occupancy and every other record exactly as
+# they are.
+#
+# THREE CORRECTIONS, NOT ONE
+# ==========================
+# One correction record disputes one claim. Three false claims therefore take
+# three records, and that is the design rather than a limitation: a single record
+# disputing three fields could not be read back as "which claim is disputed, and
+# on what evidence", and a later dispute of a fourth claim would have nowhere to
+# go. Each is create-once per (subject, field), so re-running this ceremony after
+# a partial run RESUMES -- it reports the records that already exist and writes
+# only the ones that do not.
+#
+# WHAT IT IS NOT
+# ==============
+# It is NOT ratification. It does not say an operator approved the abandonment,
+# it names no substitute actor, and it makes no claim that the original action
+# was correct to take. It is NOT a reversal: CINV-000001 stays `abandoned`, the
+# released slot stays released, and no transition is written.
+#
+# IT DOES NOT DISPUTE `reason`. `historical-incomplete-execution` stands, and
+# that is a decision, not an omission. The abandonment validated that category
+# against the store before writing -- CINV-000001 has no terminal result -- so
+# the category is a FACT about what happened, not an assertion about who claimed
+# it. `reason` is not in CORRECTABLE_FIELDS and the verb would refuse it.
+#
+# WHY THE STORE IS IN THIS STATE
+# ==============================
+# On 2026-09-24 at 06:40:43-05:00 a test sweep ran
+# tests/test-capability-execution-generation20-installer.sh. On a
+# Generation-21 host that suite's fixture left a Generation-19 `cli.py` in place
+# and then dispatched `abandon --cinv CINV-000001 --actor x --request-id y` with
+# NO `--store-root`, so the compiled-in production root resolved and CADM-000004
+# was written against production.
+#
+# The reviewer RETAINED the lifecycle effect -- CINV-000001 had no terminal
+# result and `historical-incomplete-execution` is the category the store admits
+# -- and REJECTED the asserted authority. So the effect is truthful and the
+# three assertions are not:
+#
+#   actor        x                            a value no authority asserted
+#   request_id   y                            a value no authority asserted
+#   recorded_at  2026-09-20T20:00:00-05:00    backdated four days, to BEFORE
+#                                             the Generation-20 publication that
+#                                             was meant to make this impossible
+#
+# All three are therefore `assertion-synthetic` rather than
+# `attribution-not-authorised`: `attribution-not-authorised` names a real
+# authority that did not authorise the action, which is CADM-000001's case.
+# These name nothing at all.
+#
+# THE THIRD INSTANT, AND WHY IT IS SEPARATE
+# =========================================
+# `--actual-occurrence-at 2026-09-24T06:40:43-05:00` is when the abandonment
+# observably happened, taken from the mtime of the record the escape wrote and
+# from the sweep's own output. `--recorded-at` is when THIS correction is being
+# written. They are different events and neither is the disputed value, so there
+# are three instants and they have three names. `--actual-occurrence-at` asserts
+# no authority: it is an observation, and it is the reason the backdating can be
+# recorded as backdating rather than merely as "wrong".
+#
+# THE TARGET IS NAMED, AND THE WRITER IS ASKED WHERE IT WROTE
+# ===========================================================
+# `--store-root /data/kyri/capability-runtime` is spelled out below, and the
+# emitted `target` is checked against the inode this ceremony measured itself.
+# That check exists because of this very incident: everything the escaped suite
+# checked was a check about TEXT, and the one thing that mattered was which
+# object the writer held.
+
+set -Eeuo pipefail
+
+INSTALLED=/usr/lib/kyri/python
+RUNTIME=/data/kyri/capability-runtime
+
+SUBJECT=CADM-000004
+TARGET_CINV=CINV-000001
+ACTOR=primary-platform-operator
+INITIATOR=unauthorised-test-harness
+FINDING=assertion-synthetic
+OCCURRED_AT='2026-09-24T06:40:43-05:00'
+
+INCIDENT_REPORT='docs/development/reports/eng-0005/2026-09-24-g11-bc-ah-production-test-escape.md@d8f95d4477e8d3f3bc5ea13567e260397489de27'
+ARCHITECTURE='docs/decisions/ADR-0018-provenance-correction-of-synthetic-authority.md@646b12799a0b5438d1d346f56a9a9a9f9e65299a'
+HARNESS='tests/test-capability-execution-generation20-installer.sh dispatched abandon with no --store-root on a Generation-21 host; the suite is disarmed at 646b127 and tests/test-no-production-escape.sh refuses the class'
+
+# The pre-correction state, pinned. Every one of these was measured at G11-BC-AI.
+RUNTIME_BEFORE=35e33adc98a777964f56c626b58ff5d6945594946862ec7d6a233be98b276c4f
+FABRIC_BEFORE=a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+TRUST_BEFORE=53605e4e738d941ad5f1d2d2d08fe5cb776e484f6fee07f1123859d07828b63f
+
+# CADM-000004, the subject. `abandonment` carries ALL THREE disputed claims, so
+# all three corrections bind to this one member and this one digest.
+CADM4_ABANDONMENT_SHA=c6af9f8a377a6d8506546381321f60179e052c2db0f815d2e928d5d7ee7ef0e5
+CADM4_INTENT_SHA=e7dd5f2dca30df0abe8e59b4df859a74d93b91039caddcfc9e5381b40359006e
+CADM4_OUTCOME_SHA=d273627bc13db8d7b40fb790dda64695b3e5bb6934396b18d8c5a612792882c5
+
+SHA_CINV1=1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa
+SHA_CINV2=923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa
+SHA_CINV3=c0941b7d45dcccac4bb28d00f942ea63aa90cd46ed55767797363f1ed1accaf2
+SHA_CRES1=18ba4c3428f3b87a033abdeb54feb63a4cda6c8c41597e5ab591e7e7a7396f2d
+SHA_CRES2=2d908b866e4f953cc8c53f7f5b367015f9cc75cb1bcbea518261f4997aafaebf
+
+CINV_SEQ=3
+CRES_SEQ=2
+CADM_COUNTER_BEFORE=000004
+CADM_COUNTER_AFTER=000007
+CMUT_COUNTER_BEFORE=000000000012
+TRANSITIONS_BEFORE=9
+ADMIN_RECORDS_BEFORE=4
+
+GATE_DIR="$(mktemp -d)"
+trap 'rm -rf "${GATE_DIR}"' EXIT
+
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+
+# =========================================================================
+# BLOCK A -- OBSERVATION. READ-ONLY. Nothing below this line writes.
+# =========================================================================
+printf -- '=== BLOCK A: what the store says now ===\n'
+printf 'runtime aggregate   %s\n' "$(aggregate "${RUNTIME}")"
+printf 'fabric aggregate    %s\n' "$(aggregate /var/lib/kyri/fabric)"
+printf 'trust aggregate     %s\n' "$(aggregate /var/lib/kyri/trust)"
+printf 'cadm-counter        %s\n' "$(cat "${RUNTIME}/execution/cadm-counter")"
+printf 'cmut-counter        %s\n' "$(cat "${RUNTIME}/execution/cmut-counter")"
+printf 'transitions         %s\n' "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)"
+printf 'admin records       %s\n' "$(find "${RUNTIME}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)"
+printf 'CINV seq / CRES seq %s / %s\n' \
+  "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" \
+  "$(cat "${RUNTIME}/sequences/capability-result.seq")"
+printf '\nthe subject, verbatim:\n'
+cat "${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment"; printf '\n'
+
+# =========================================================================
+# BLOCK B -- GATES. READ-ONLY. Every one refuses rather than reports.
+# =========================================================================
+
+# ---- GATE 0: THE INSTALLED RUNTIME IS WHOLLY GENERATION 22 --------------
+#
+# A Generation-21 runtime has `CORRECTABLE_FIELDS == {actor}` and no
+# `--actual-occurrence-at`, so two of these three corrections would refuse and
+# the third would be recorded WITHOUT the occurrence instant -- a partial,
+# silently weaker record. That is why this gate is first.
+printf -- '\n=== BLOCK B: gates ===\n'
+printf -- '\n--- installed generation gate ---\n'
+check_installed() {
+  local relative="$1" wanted="$2" got
+  got="$(sha256sum "${INSTALLED}/${relative}" 2>/dev/null | cut -d' ' -f1)"
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${INSTALLED}/${relative} is ${got:-absent}, not the reviewed Generation-22 ${wanted}"; exit 1; }
+  printf 'ok  %-28s %s\n' "$(basename "${relative}")" "${got}"
+}
+# The two objects Generation 22 publishes.
+check_installed tools/capability/execution/provenance.py e0f6ffeb57f78db460a126e6e1e8b58a7575401c13e681ac0d7d6e8cd21c0435
+check_installed tools/capability/cli.py                  9459b09f2d0545c3a490f21e5223c2cfe95f2f4431132e275b6eae0b4502927f
+# And the objects Generation 22 must NOT have moved, so a host that took this
+# generation plus something else is refused here rather than discovered later.
+check_installed tools/capability/execution/abandonment.py 7d2f1857f16c54dda9f39658857a0d03b94198af75a04d21cef942bf2a224f24
+check_installed tools/capability/execution/admin.py       b4ea351b3e34e5d4674c72fce14465761eff1eb8444edb7019fcd7d1c0dc7be9
+check_installed tools/capability/execution/conclusion.py  d24ad855e787fce1720df1f8d15f068f65aba46464c1e1382b5e3b68749297b2
+check_installed tools/capability/execution/state.py       9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980
+check_installed tools/capability/execution/capacity.py    650c05dd3c5ebe3496c468181c7c8770954f79fe73675eec6efa210b01472eb3
+check_installed tools/capability/execution/types.py       6f0c8fa63333cb2880ba195c25fac35f15ad81a9fe82811e112d89f706520f44
+
+# And the installed library is asked what it understands, from ITS OWN
+# directory, so a digest that matched a file Python would not import cannot
+# pass. Nothing here reads or writes a governed store.
+if ! ( cd "${INSTALLED}" && python3 - <<'INSTALLED_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import provenance
+from tools.capability.execution.admin import Verb, _DESTROYS_UNDER
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+if os.path.realpath(cli.__file__) != os.path.realpath("tools/capability/cli.py"):
+    refuse(f"the answering cli is {cli.__file__}, not the installed one")
+if provenance.CORRECTABLE_FIELDS != frozenset({"actor", "request_id",
+                                               "recorded_at"}):
+    refuse(f"the installed correctable set is {sorted(provenance.CORRECTABLE_FIELDS)}, "
+           "not the three ADR-0018 authority assertions")
+if "reason" in provenance.CORRECTABLE_FIELDS:
+    refuse("the installed runtime would let an EFFECT be disputed as an attribution")
+if provenance.FINDING_SYNTHETIC not in provenance.FINDINGS:
+    refuse("the installed runtime has no finding for a value no authority asserted")
+if Verb.CORRECT_PROVENANCE in _DESTROYS_UNDER:
+    refuse("the installed correction verb carries destruction authority")
+verbs = next(a.choices for a in cli.build_parser()._actions
+             if getattr(a, "choices", None))
+if "correct-provenance" not in verbs:
+    refuse("the installed CLI exposes no correct-provenance verb")
+flags = {o for a in verbs["correct-provenance"]._actions for o in a.option_strings}
+for needed in ("--store-root", "--recorded-at", "--actual-occurrence-at"):
+    if needed not in flags:
+        refuse(f"the installed correct-provenance takes no {needed}")
+choices = {a.dest: a.choices for a in verbs["correct-provenance"]._actions
+           if a.choices}
+if set(choices.get("disputed_field") or ()) != {"actor", "request_id",
+                                                "recorded_at"}:
+    refuse(f"the surface offers {choices.get('disputed_field')}, not the three fields")
+abandon_flags = {o for a in verbs["abandon"]._actions for o in a.option_strings}
+if "--store-root" not in abandon_flags:
+    refuse("the installed abandon still has no explicit store root")
+print("ok  installed: correct-provenance takes three fields and three instants")
+print("ok  installed: reason is NOT correctable, and the verb has no destruction authority")
+print("ok  installed: every administrative mutator requires an explicit target")
+INSTALLED_PY
+)
+then
+  echo "REFUSE: the installed runtime does not carry the reviewed Generation-22 semantics"
+  exit 1
+fi
+
+# ---- GATE 1: NOTHING HAS MOVED -----------------------------------------
+printf -- '\n--- baseline gate ---\n'
+NOW="$(aggregate "${RUNTIME}")"
+test "${NOW}" = "${RUNTIME_BEFORE}" \
+  || { echo "REFUSE: the capability-runtime store has moved: ${NOW}, expected ${RUNTIME_BEFORE}"; exit 1; }
+printf 'ok  runtime  %s\n' "${NOW}"
+
+# FABRIC IS EXPIRED, AND THAT IS NOT A REASON TO SKIP IT. An expired authority
+# is still evidence, and a correction must not touch one byte of it. Do NOT
+# renew it to make this pass: a difference here is a fault to report.
+FABRIC_NOW="$(aggregate /var/lib/kyri/fabric)"
+test "${FABRIC_NOW}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: Fabric has moved: ${FABRIC_NOW}, expected the byte-identical ${FABRIC_BEFORE}"; exit 1; }
+TRUST_NOW="$(aggregate /var/lib/kyri/trust)"
+test "${TRUST_NOW}" = "${TRUST_BEFORE}" \
+  || { echo "REFUSE: Trust has moved: ${TRUST_NOW}, expected ${TRUST_BEFORE}"; exit 1; }
+printf 'ok  fabric %s (expired, byte-identical)\n' "${FABRIC_NOW}"
+printf 'ok  trust  %s\n' "${TRUST_NOW}"
+
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "${CINV_SEQ}" \
+  || { echo "REFUSE: capability-invocation.seq is not ${CINV_SEQ}"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "${CRES_SEQ}" \
+  || { echo "REFUSE: capability-result.seq is not ${CRES_SEQ}"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cadm-counter")" = "${CADM_COUNTER_BEFORE}" \
+  || { echo "REFUSE: cadm-counter is not ${CADM_COUNTER_BEFORE}"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cmut-counter")" = "${CMUT_COUNTER_BEFORE}" \
+  || { echo "REFUSE: cmut-counter is not ${CMUT_COUNTER_BEFORE}"; exit 1; }
+printf 'ok  sequences %s/%s, cadm-counter %s, cmut-counter %s\n' \
+  "${CINV_SEQ}" "${CRES_SEQ}" "${CADM_COUNTER_BEFORE}" "${CMUT_COUNTER_BEFORE}"
+
+# ---- GATE 2: THE IMMUTABLE RECORDS -------------------------------------
+printf -- '\n--- immutable records gate ---\n'
+check_sha() {
+  local path="$1" wanted="$2" got
+  got="$(sha256sum "${path}" 2>/dev/null | cut -d' ' -f1)"
+  test -n "${got}" || { echo "REFUSE: ${path} is absent"; exit 1; }
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${path} is ${got}, expected ${wanted}"; exit 1; }
+  printf 'ok  %-34s %s\n' "$(basename "${path}")" "${got}"
+}
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" "${SHA_CINV1}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" "${SHA_CINV2}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000003.yaml" "${SHA_CINV3}"
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml"     "${SHA_CRES1}"
+check_sha "${RUNTIME}/capability-results/CRES-000002.yaml"     "${SHA_CRES2}"
+
+# ---- GATE 3: THE SUBJECT, EXACTLY AS IT STANDS -------------------------
+printf -- '\n--- subject gate ---\n'
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment" "${CADM4_ABANDONMENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/intent"      "${CADM4_INTENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/outcome"     "${CADM4_OUTCOME_SHA}"
+
+test "$(find "${RUNTIME}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" = "${ADMIN_RECORDS_BEFORE}" \
+  || { echo "REFUSE: there are not ${ADMIN_RECORDS_BEFORE} administrative records"; exit 1; }
+
+# All three disputed claims, checked against the record itself. This is the
+# same comparison the verb makes, made here first so a mismatch is a refusal
+# before anything is written rather than a refusal three quarters of the way
+# through.
+SUBJECT_FILE="${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment"
+grep -q '"actor":"x"' "${SUBJECT_FILE}" \
+  || { echo "REFUSE: ${SUBJECT} does not record actor x"; exit 1; }
+grep -q '"request_id":"y"' "${SUBJECT_FILE}" \
+  || { echo "REFUSE: ${SUBJECT} does not record request_id y"; exit 1; }
+grep -q '"recorded_at":"2026-09-20T20:00:00-05:00"' "${SUBJECT_FILE}" \
+  || { echo "REFUSE: ${SUBJECT} does not record the backdated recorded_at"; exit 1; }
+grep -q '"cinv":"CINV-000001"' "${SUBJECT_FILE}" \
+  || { echo "REFUSE: ${SUBJECT} is not about ${TARGET_CINV}"; exit 1; }
+grep -q '"reason":"historical-incomplete-execution"' "${SUBJECT_FILE}" \
+  || { echo "REFUSE: ${SUBJECT} does not record the reason this ceremony leaves standing"; exit 1; }
+printf 'ok  %s records actor x, request_id y and recorded_at 2026-09-20T20:00:00-05:00 for %s\n' \
+  "${SUBJECT}" "${TARGET_CINV}"
+printf 'ok  %s records reason historical-incomplete-execution, which STANDS\n' "${SUBJECT}"
+
+# No correction of any of the three exists yet. Scanned the way the runtime
+# scans it -- from the records, not from an index.
+if ! ( cd "${INSTALLED}" && python3 - "${RUNTIME}" "${SUBJECT}" <<'PRIOR_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import provenance
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    for field in sorted(provenance.CORRECTABLE_FIELDS):
+        prior = provenance.existing_correction(root, sys.argv[2], field)
+        if prior is not None:
+            print(f"NOTE: {sys.argv[2]}/{field} is already corrected by "
+                  f"{prior['cadm']}; this ceremony will RESUME that one and "
+                  f"write nothing for it")
+        else:
+            print(f"ok  {sys.argv[2]}/{field} has no correction yet")
+finally:
+    root.close()
+PRIOR_PY
+)
+then
+  echo "REFUSE: the existing-correction scan failed"
+  exit 1
+fi
+
+# ---- GATE 4: THE EFFECT THIS CORRECTS IS STANDING ----------------------
+printf -- '\n--- lifecycle gate ---\n'
+test "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)" = "${TRANSITIONS_BEFORE}" \
+  || { echo "REFUSE: the transition journal does not hold ${TRANSITIONS_BEFORE} records"; exit 1; }
+test ! -e "${RUNTIME}/capability-results/CRES-000003.yaml" \
+  || { echo "REFUSE: a third result exists; this ceremony's baseline is wrong"; exit 1; }
+
+# THE REASON THIS CEREMONY LEAVES STANDING, checked against the records that
+# make it true. `historical-incomplete-execution` is admitted for an invocation
+# with NO terminal result, so if a result naming CINV-000001 had appeared since,
+# the reason would no longer be the truthful one and `reason` being uncorrectable
+# would become a problem rather than a boundary. Read straight out of the result
+# namespace, so an operator can repeat it by eye.
+grep -l 'invocation_record_id: CINV-000001' "${RUNTIME}"/capability-results/*.yaml >/dev/null 2>&1 \
+  && { echo "REFUSE: a terminal result names CINV-000001; the reason this ceremony leaves standing is no longer the truthful one"; exit 1; }
+printf 'ok  no terminal result names CINV-000001: the retained reason stands\n'
+
+if ! ( cd "${INSTALLED}" && python3 - "${RUNTIME}" <<'LIFECYCLE_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import capacity as cap
+from tools.capability.execution import state as sm
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    states = {k: v.value for k, v in sm.all_states(root).items()}
+    expected = {"CINV-000001": "abandoned", "CINV-000002": "abandoned",
+                "CINV-000003": "concluded"}
+    if states != expected:
+        print(f"REFUSE: the lifecycle is {states}, expected {expected}")
+        sys.exit(1)
+    held = sum(1 for v in sm.all_states(root).values()
+               if v in cap.slot_holding_states())
+    if held != 0 or cap.MAXIMUM_SLOTS != 2:
+        print(f"REFUSE: occupancy is {held} of {cap.MAXIMUM_SLOTS}, expected 0 of 2")
+        sys.exit(1)
+    print(f"ok  CINV-000001 abandoned, CINV-000002 abandoned, "
+          f"CINV-000003 concluded, {held} of {cap.MAXIMUM_SLOTS} slots held")
+finally:
+    root.close()
+LIFECYCLE_PY
+)
+then
+  echo "REFUSE: the lifecycle this correction describes is not the one in the store"
+  exit 1
+fi
+
+# The object the writer must end up holding, measured HERE so the check below
+# compares two things this ceremony obtained independently.
+EXECUTION_INODE="$(stat -c '%i' "${RUNTIME}/execution")"
+EXECUTION_DEV="$(stat -c '%d' "${RUNTIME}/execution")"
+printf 'ok  production execution root is device %s inode %s\n' "${EXECUTION_DEV}" "${EXECUTION_INODE}"
+
+printf '\n========================================================\n'
+printf 'ALL GATES PASSED. THE NEXT THREE COMMANDS ARE IRREVERSIBLE.\n'
+printf 'They append three administrative records disputing\n'
+printf '  %s/actor, %s/request_id, %s/recorded_at\n' "${SUBJECT}" "${SUBJECT}" "${SUBJECT}"
+printf 'They change NO lifecycle, NO occupancy, NO existing record,\n'
+printf 'and they leave reason historical-incomplete-execution STANDING.\n'
+printf 'A correction cannot be withdrawn, only superseded by another\n'
+printf 'correction, which is itself a record.\n'
+printf '========================================================\n'
+
+# =========================================================================
+# BLOCK C -- THE THREE CORRECTIONS. THIS IS THE ONLY PART THAT WRITES.
+# =========================================================================
+#
+# Run from ${INSTALLED} so the INSTALLED Generation-22 package is what Python
+# imports, and with the store root SPELLED OUT, because there is no default and
+# a call that names no target refuses.
+#
+# ONE `--recorded-at` FOR ALL THREE. They are one operator act, recorded at one
+# instant, and giving each its own `date -Is` would put three different times on
+# one decision. `--actual-occurrence-at` is the same for all three too, and for a
+# different reason: there was one abandonment.
+RECORDED_AT="$(date -Is)"
+printf -- '\n=== BLOCK C: the three corrections ===\n'
+printf 'recorded-at          %s\n' "${RECORDED_AT}"
+printf 'actual-occurrence-at %s\n' "${OCCURRED_AT}"
+
+correct_one() {
+  local field="$1" value="$2" expected_cadm="$3"
+  local out="${GATE_DIR}/${field}.json"
+  printf -- '\n--- capability correct-provenance %s (production, installed runtime) ---\n' "${field}"
+  set +e
+  ( cd "${INSTALLED}" && python3 -m tools.capability.cli correct-provenance \
+      --store-root "${RUNTIME}" \
+      --subject-cadm "${SUBJECT}" \
+      --cinv "${TARGET_CINV}" \
+      --disputed-field "${field}" \
+      --disputed-value "${value}" \
+      --finding "${FINDING}" \
+      --actual-initiator "${INITIATOR}" \
+      --actor "${ACTOR}" \
+      --request-id "g11bcai-correct-cadm-000004-${field}" \
+      --recorded-at "${RECORDED_AT}" \
+      --actual-occurrence-at "${OCCURRED_AT}" \
+      --evidence-reference "${INCIDENT_REPORT}" \
+      --evidence-reference "${ARCHITECTURE}" \
+      --evidence-reference "${HARNESS}" ) > "${out}"
+  local rc=$?
+  set -e
+  cat "${out}"
+  test "${rc}" = "0" \
+    || { echo "STOP: the process exited ${rc}. Do not run the remaining fields. Report the output."; exit 1; }
+
+  local got
+  verdict() {
+    got="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${out}" "$1")"
+    test "${got}" = "$2" || { echo "STOP: $1 is ${got}, expected $2"; exit 1; }
+    printf 'ok  %-22s %s\n' "$1" "${got}"
+  }
+  verdict cadm                 "${expected_cadm}"
+  verdict subject_cadm         "${SUBJECT}"
+  verdict subject_member       abandonment
+  verdict subject_digest       "${CADM4_ABANDONMENT_SHA}"
+  verdict cinv                 "${TARGET_CINV}"
+  verdict disputed_field       "${field}"
+  verdict disputed_value       "${value}"
+  verdict finding              "${FINDING}"
+  verdict actual_initiator     "${INITIATOR}"
+  verdict actual_occurrence_at "${OCCURRED_AT}"
+  verdict effect               retained
+  verdict lifecycle_state      abandoned
+  verdict resumed              False
+  verdict store_root           "${RUNTIME}"
+
+  # WHERE IT WROTE, not where it was told to write.
+  local wrote_inode wrote_dev
+  wrote_inode="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["target"]["st_ino"])' "${out}")"
+  wrote_dev="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["target"]["st_dev"])' "${out}")"
+  if [[ "${wrote_inode}" != "${EXECUTION_INODE}" || "${wrote_dev}" != "${EXECUTION_DEV}" ]]; then
+    echo "STOP: the writer held device ${wrote_dev} inode ${wrote_inode}, not the production execution root ${EXECUTION_DEV}/${EXECUTION_INODE}"
+    exit 1
+  fi
+  printf 'ok  the writer held the production execution root, asked of the kernel\n'
+
+  # The three instants are three, IN THE DURABLE RECORD -- not in the emitted
+  # summary, which does not carry `recorded_at` at all. What was written is the
+  # thing that has to be right.
+  python3 - "${RUNTIME}/execution/admin-records/${expected_cadm}/provenance-correction" <<'INSTANTS_PY' || exit 1
+import json
+import sys
+
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+occurrence = document["actual_occurrence_at"]
+recorded = document["recorded_at"]
+if occurrence == recorded:
+    print("STOP: the occurrence and the recording are the same instant")
+    sys.exit(1)
+print("ok  the occurrence is not the recording")
+if document["disputed_field"] == "recorded_at":
+    disputed = document["disputed_value"]
+    if len({disputed, occurrence, recorded}) != 3:
+        print(f"STOP: the three instants are not three: disputed={disputed} "
+              f"occurrence={occurrence} recorded={recorded}")
+        sys.exit(1)
+    print("ok  three instants, three distinct values, in the written record")
+if document.get("action_reversed") is not False:
+    print("STOP: the record does not state that nothing was reversed")
+    sys.exit(1)
+if document.get("lifecycle_unchanged") is not True:
+    print("STOP: the record does not state that the lifecycle did not move")
+    sys.exit(1)
+print("ok  the record states action_reversed false and lifecycle_unchanged true")
+INSTANTS_PY
+}
+
+correct_one actor       x                           CADM-000005
+correct_one request_id  y                           CADM-000006
+correct_one recorded_at 2026-09-20T20:00:00-05:00   CADM-000007
+
+# ---- WHAT MUST NOT HAVE CHANGED ----------------------------------------
+printf -- '\n--- the corrections corrected nothing else ---\n'
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment" "${CADM4_ABANDONMENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/intent"      "${CADM4_INTENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/outcome"     "${CADM4_OUTCOME_SHA}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" "${SHA_CINV1}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" "${SHA_CINV2}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000003.yaml" "${SHA_CINV3}"
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml"     "${SHA_CRES1}"
+check_sha "${RUNTIME}/capability-results/CRES-000002.yaml"     "${SHA_CRES2}"
+
+test "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)" = "${TRANSITIONS_BEFORE}" \
+  || { echo "STOP: A TRANSITION WAS WRITTEN"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cmut-counter")" = "${CMUT_COUNTER_BEFORE}" \
+  || { echo "STOP: THE MUTATION COUNTER MOVED: a correction journals no lifecycle"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "${CINV_SEQ}" \
+  || { echo "STOP: the invocation sequence moved"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "${CRES_SEQ}" \
+  || { echo "STOP: the result sequence moved"; exit 1; }
+test ! -e "${RUNTIME}/capability-results/CRES-000003.yaml" \
+  || { echo "STOP: A SYNTHETIC RESULT WAS WRITTEN"; exit 1; }
+test "$(aggregate /var/lib/kyri/fabric)" = "${FABRIC_BEFORE}" \
+  || { echo "STOP: FABRIC MOVED"; exit 1; }
+test "$(aggregate /var/lib/kyri/trust)" = "${TRUST_BEFORE}" \
+  || { echo "STOP: TRUST MOVED"; exit 1; }
+printf 'ok  no transition, no CMUT, no CRES, no sequence movement, Fabric and Trust byte-identical\n'
+
+if ! ( cd "${INSTALLED}" && python3 - "${RUNTIME}" <<'AFTER_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import capacity as cap
+from tools.capability.execution import state as sm
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    states = {k: v.value for k, v in sm.all_states(root).items()}
+    held = sum(1 for v in sm.all_states(root).values()
+               if v in cap.slot_holding_states())
+    if states != {"CINV-000001": "abandoned", "CINV-000002": "abandoned",
+                  "CINV-000003": "concluded"}:
+        print(f"STOP: the lifecycle changed: {states}")
+        sys.exit(1)
+    if held != 0:
+        print(f"STOP: occupancy changed to {held}")
+        sys.exit(1)
+    print(f"ok  lifecycle unchanged, {held} of {cap.MAXIMUM_SLOTS} slots held")
+finally:
+    root.close()
+AFTER_PY
+)
+then
+  echo "STOP: the lifecycle or the occupancy moved. Report immediately."
+  exit 1
+fi
+
+# The three corrections are where they should be, and say what they should say.
+printf -- '\n--- the three new records ---\n'
+for cadm in CADM-000005 CADM-000006 CADM-000007; do
+  for member in intent outcome provenance-correction; do
+    test -f "${RUNTIME}/execution/admin-records/${cadm}/${member}" \
+      || { echo "STOP: ${cadm} has no ${member}"; exit 1; }
+  done
+  printf '\n%s:\n' "${cadm}"
+  cat "${RUNTIME}/execution/admin-records/${cadm}/provenance-correction"; printf '\n'
+done
+test "$(cat "${RUNTIME}/execution/cadm-counter")" = "${CADM_COUNTER_AFTER}" \
+  || { echo "STOP: cadm-counter is not ${CADM_COUNTER_AFTER}"; exit 1; }
+test "$(find "${RUNTIME}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" = "7" \
+  || { echo "STOP: there are not 7 administrative records"; exit 1; }
+printf '\nok  three corrections carry intent, outcome and the finding; cadm-counter %s -> %s\n' \
+  "${CADM_COUNTER_BEFORE}" "${CADM_COUNTER_AFTER}"
+
+printf '\n========================================================\n'
+printf 'ALL THREE ASSERTIONS ARE CORRECTED. THE EFFECT STANDS.\n'
+printf 'reason historical-incomplete-execution is UNDISPUTED.\n'
+printf 'STOP HERE. Report the new capability-runtime aggregate:\n'
+aggregate "${RUNTIME}"
+printf '\n'
+printf 'DO NOT renew Fabric. DO NOT reclaim, recover or clean any\n'
+printf 'invocation. DO NOT begin ENG-0006. Each awaits a separate\n'
+printf 'reviewer decision.\n'
+printf '========================================================\n'

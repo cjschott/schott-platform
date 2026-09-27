@@ -465,6 +465,11 @@ jobs:
       - name: Capability provenance multi-field correction tests
         run: bash tests/test-capability-provenance-multifield.sh
 
+      # The Generation-22 installer proves ADR-0018, and 21 sabotages of the
+      # reviewed source are each caught. Static: nothing runs --install.
+      - name: Capability execution generation-22 installer tests
+        run: bash tests/test-capability-execution-generation22-installer.sh
+
       # Which store a mutating command actually writes through. Host-only: it
       # reproduces the 2026-09-20 incident against the installed runtime.
       - name: Capability mutation target tests
