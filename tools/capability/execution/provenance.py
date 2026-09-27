@@ -51,23 +51,42 @@ from . import canonical_json
 from . import state as state_module
 from .backing_store import RootDescriptor, target_fingerprint
 
-# The claims this verb may dispute. Provenance attributions only, and today
-# exactly one of them. A lifecycle claim is deliberately absent: see the module
-# docstring.
+# The claims this verb may dispute. ADR-0018 widened this from {actor} to the
+# three assertions that together make up a record's claimed AUTHORITY: who
+# decided, under what request, and when. Every one is a claim about provenance.
+#
+# A LIFECYCLE CLAIM IS STILL ABSENT, and `reason` with it. `reason` says what
+# happened to the invocation, not who said so -- and the released abandonment
+# validates it against the store before writing, so a category that survived
+# that check is a fact rather than an attribution. Making it correctable would
+# let an EFFECT be disputed through a mechanism built for an ATTRIBUTION, which
+# is the one thing this verb must never become.
 FIELD_ACTOR = "actor"
-CORRECTABLE_FIELDS = frozenset({FIELD_ACTOR})
+FIELD_REQUEST_ID = "request_id"
+FIELD_RECORDED_AT = "recorded_at"
+CORRECTABLE_FIELDS = frozenset({FIELD_ACTOR, FIELD_REQUEST_ID, FIELD_RECORDED_AT})
 
 # What is wrong with the claim. Closed, because "the audit is answerable only by
 # reading prose" is the failure mode the administrative namespace already
 # avoids everywhere else.
+#
+# The two findings say different things. `attribution-not-authorised` means a
+# real party is named who did not authorise it. `assertion-synthetic` (ADR-0018)
+# means the value was never asserted by any authority at all -- a literal that
+# reached the record through something with no standing to assert anything, like
+# `x`, `y`, or a timestamp copied out of a test.
 FINDING_NOT_AUTHORISED = "attribution-not-authorised"
-FINDINGS = frozenset({FINDING_NOT_AUTHORISED})
+FINDING_SYNTHETIC = "assertion-synthetic"
+FINDINGS = frozenset({FINDING_NOT_AUTHORISED, FINDING_SYNTHETIC})
 
 # Who actually initiated the corrected action. Closed for the same reason, and
 # `unknown` is a first-class answer rather than an invitation to guess.
 INITIATOR_UNAUTHORISED_REHEARSAL = "unauthorised-rehearsal-harness"
+INITIATOR_UNAUTHORISED_TEST_HARNESS = "unauthorised-test-harness"
 INITIATOR_UNKNOWN = "unknown"
-INITIATORS = frozenset({INITIATOR_UNAUTHORISED_REHEARSAL, INITIATOR_UNKNOWN})
+INITIATORS = frozenset({INITIATOR_UNAUTHORISED_REHEARSAL,
+                        INITIATOR_UNAUTHORISED_TEST_HARNESS,
+                        INITIATOR_UNKNOWN})
 
 # The effect of the corrected action is retained. This is the only value the
 # field may take, and it is written out rather than implied so that a reader
@@ -110,6 +129,7 @@ class Correction:
     disputed_value: str
     finding: str
     actual_initiator: str
+    actual_occurrence_at: str
     effect: str
     lifecycle_state: str
     resumed: bool
@@ -122,16 +142,22 @@ def _text(value: Any, what: str) -> str:
     return value
 
 
-def _instant(value: Any) -> str:
-    raw = _text(value, "recorded_at")
+def _instant(value: Any, what: str = "recorded_at") -> str:
+    """One ISO-8601 instant carrying an offset, or refuse.
+
+    ``what`` names the field so a refusal says which instant was wrong. ADR-0018
+    added a second one, and a message that said `recorded_at` for either would
+    send a reader to the wrong field.
+    """
+    raw = _text(value, what)
     try:
         parsed = datetime.fromisoformat(raw)
     except (TypeError, ValueError) as error:
         raise ProvenanceRefused(
-            f"recorded_at is not an ISO-8601 instant ({error})") from None
+            f"{what} is not an ISO-8601 instant ({error})") from None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ProvenanceRefused(
-            "recorded_at carries no timezone offset; refusing to guess one")
+            f"{what} carries no timezone offset; refusing to guess one")
     return raw
 
 
@@ -268,7 +294,7 @@ def _subject_member(members: dict[str, bytes], subject_cadm: str,
 def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
                        disputed_field: Any, disputed_value: Any, finding: Any,
                        actual_initiator: Any, actor: Any, request_id: Any,
-                       recorded_at: Any,
+                       recorded_at: Any, actual_occurrence_at: Any,
                        evidence_references: Any = None) -> Correction:
     """Record that one claim in an earlier `CADM` is not truthful provenance.
 
@@ -293,6 +319,18 @@ def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
             f"{field!r} is not a correctable provenance claim; this verb "
             f"corrects {sorted(CORRECTABLE_FIELDS)} and no lifecycle claim")
     claimed = _text(disputed_value, "disputed_value")
+    # THREE INSTANTS, THREE NAMES. ADR-0018.
+    #
+    # `disputed_value` may itself be the subject's false `recorded_at`;
+    # `recorded_at` below is when THIS correction is written; and
+    # `actual_occurrence_at` is when the disputed action observably happened.
+    # One field carrying two of those would be the defect being corrected.
+    #
+    # Required, not optional: when the action actually happened is a fact about
+    # the subject, so it is recorded on every correction rather than only on the
+    # one that disputes a timestamp. It is an OBSERVATION and carries no
+    # authority claim -- nothing here says anyone was authorised at that instant.
+    occurrence_text = _instant(actual_occurrence_at, "actual_occurrence_at")
     finding_text = _text(finding, "finding")
     if finding_text not in FINDINGS:
         raise ProvenanceRefused(f"{finding_text!r} is not a controlled finding")
@@ -351,7 +389,8 @@ def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
                                ("actual_initiator", initiator),
                                ("actor", actor_text),
                                ("request_id", request_text),
-                               ("recorded_at", recorded_text)):
+                               ("recorded_at", recorded_text),
+                               ("actual_occurrence_at", occurrence_text)):
                 if prior.get(key) != value:
                     raise ProvenanceRefused(
                         f"{subject}/{field} is already corrected under "
@@ -362,6 +401,7 @@ def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
                 subject_member=member_name, subject_digest=digest,
                 cinv=identity, disputed_field=field, disputed_value=claimed,
                 finding=finding_text, actual_initiator=initiator,
+            actual_occurrence_at=occurrence_text,
                 effect=EFFECT_RETAINED, lifecycle_state=current.value,
                 resumed=True, target=target)
 
@@ -377,6 +417,7 @@ def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
             "action_reversed": False,
             "actor": actor_text,
             "actual_initiator": initiator,
+            "actual_occurrence_at": occurrence_text,
             "cadm": cadm,
             "causal_references": sorted({subject, identity}),
             "cinv": identity,
@@ -413,7 +454,8 @@ def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
             cadm=cadm, subject_cadm=subject, subject_member=member_name,
             subject_digest=digest, cinv=identity, disputed_field=field,
             disputed_value=claimed, finding=finding_text,
-            actual_initiator=initiator, effect=EFFECT_RETAINED,
+            actual_initiator=initiator,
+            actual_occurrence_at=occurrence_text, effect=EFFECT_RETAINED,
             lifecycle_state=current.value, resumed=False, target=target)
     finally:
         locks.release_all()

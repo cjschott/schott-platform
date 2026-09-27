@@ -1,13 +1,33 @@
 # ADR-0018: Provenance Correction of Synthetic Authority
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-24
+- **Accepted:** 2026-09-27, at G11-BC-AI
 - **Decision Makers:** Schott Platform Engineering
 
 > **Scope.** This ADR widens one closed set and adds one finding category to the
 > ADR-0016 correction. It adds **no lifecycle state**, **no verb**, changes **no
 > record schema**, reverses **nothing**, and does **not** change
 > `MAXIMUM_SLOTS`.
+
+## The four things this ADR keeps apart
+
+Every difficulty in this record comes from conflating them, so they are named
+first and never merged afterwards.
+
+| | what it is | for `CADM-000004` |
+|---|---|---|
+| **1. lifecycle truth / effect** | what actually happened to the invocation | `CINV-000001` is `abandoned`, it had no terminal result, and `historical-incomplete-execution` is the category the store admits. **True, and retained.** |
+| **2. asserted administrative authority** | who the record claims decided it, under what request, and when | `actor x`, `request_id y`, `recorded_at 2026-09-20T20:00:00-05:00`. **Rejected.** |
+| **3. disputed synthetic provenance** | the recorded values themselves, preserved as evidence | the three literals above, kept byte-for-byte in a record nothing rewrites. |
+| **4. actual occurrence evidence** | what is observably true about when and by what the action happened | `2026-09-24T06:40:43-05:00`, by an unauthorised test harness. |
+
+A correction under this ADR touches **2, 3 and 4 only**. It cannot reach 1. That
+is the whole boundary, and every refusal below exists to hold it.
+
+**This is not generic record rewriting.** There is no path here to editing a
+subject, no path to a lifecycle claim, and no path to a field outside a closed
+set of three. A correction adds evidence beside a record; it never replaces one.
 
 ## Context
 
@@ -126,16 +146,40 @@ the same subject.
 | `request_id` | `y` | `assertion-synthetic` |
 | `recorded_at` | `2026-09-20T20:00:00-05:00` | `assertion-synthetic` |
 
-### The occurrence time, recorded without inventing an authority
+### Three timestamps, three names, no overloading
 
-The correction of `recorded_at` records the **observed** occurrence —
-`2026-09-24T06:40:43-05:00`, the mtime of the durable record — as the
-`actual_initiator`'s action time, and states that the subject's own
-`recorded_at` was never asserted by an authority.
+A `recorded_at` correction involves three distinct instants, and a single field
+carrying two of them would be the same class of defect as the one being
+corrected. Each has its own name:
+
+| field | what it means |
+|---|---|
+| `disputed_value` | the subject's own `recorded_at` — the **false** literal, preserved |
+| `actual_occurrence_at` | when the action **observably** happened |
+| `recorded_at` | when **this correction** was written |
+
+`actual_occurrence_at` is new in this ADR and carries no authority claim: it is
+an observation, not a decision. It is recorded on **every** correction under this
+ADR, not only the `recorded_at` one, because *when the disputed action actually
+happened* is a fact about the subject rather than about which field is being
+disputed.
 
 It does **not** substitute a corrected timestamp into `CADM-000004`, and it does
-**not** claim an operator acted at either time. The false value is preserved as
-disputed evidence and the true occurrence is recorded beside it.
+**not** claim anyone was authorised at either instant. The false value is
+preserved as disputed evidence and the observed occurrence is recorded beside
+it.
+
+### Bound to the member, not just the record
+
+The released mechanism already resolves the **one** member of the subject that
+carries the disputed field and records `subject_member` with the SHA-256 of that
+member's bytes. A field appearing in two members is refused as ambiguous rather
+than guessed at. For `CADM-000004` all three disputed fields are carried by
+`abandonment` and by nothing else, verified against the record.
+
+That binding is what makes a correction falsifiable: if the subject member ever
+differed from the bytes a correction was written against, the mismatch is
+visible.
 
 ### What is never claimed
 
@@ -173,12 +217,8 @@ load-bearing for ordering. It is deliberately confined to disputing the value
 and recording an observed occurrence beside it — never to rewriting the subject,
 and never to reordering anything.
 
-## Implementation status
+## Implementation
 
-**The architecture is prepared; the generation is not built.** Widening
-`CORRECTABLE_FIELDS` changes `provenance.py`, which Generation 21 does not
-publish, so it would be a Generation-22 object alongside a `cli.py` that exposes
-the new fields. That build is deliberately deferred to a reviewer decision on
-this ADR, for the reason G11-BC-AD established: the shape of a closed-set
-widening is the reviewer's call, and building a generation around an unratified
-shape is how effort gets spent on the wrong thing.
+Ratified at G11-BC-AI with exactly this scope: three correctable fields, two
+findings, `reason` excluded. Published by **Generation 22**, prepared at
+G11-BC-AI and not installed.

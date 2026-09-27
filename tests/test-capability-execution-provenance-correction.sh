@@ -145,7 +145,10 @@ print(f'{len(list(Verb))} verbs, correct-provenance carries no destruction autho
 run_case "only provenance claims are correctable, and no lifecycle claim is" "
 import sys; sys.path.insert(0, '.')
 from tools.capability.execution.provenance import CORRECTABLE_FIELDS
-assert CORRECTABLE_FIELDS == frozenset({'actor'}), CORRECTABLE_FIELDS
+# ADR-0018 widened this to the three assertions that make up a record's claimed
+# AUTHORITY. Still an exact set: a fourth field added without review fails here.
+assert CORRECTABLE_FIELDS == frozenset({'actor', 'request_id', 'recorded_at'}), \
+    CORRECTABLE_FIELDS
 for lifecycle in ('state', 'previous_state', 'reason', 'slot_released',
                   'result_record_id', 'cinv', 'cadm'):
     assert lifecycle not in CORRECTABLE_FIELDS, lifecycle
@@ -265,6 +268,7 @@ CORRECTION = dict(subject_cadm='CADM-000001', cinv='CINV-000002',
                   actor='primary-platform-operator',
                   request_id='g11bcy-correct-cadm-000001',
                   recorded_at='2026-09-20T20:00:00-05:00',
+                  actual_occurrence_at='2026-09-20T18:54:33-05:00',
                   evidence_references=['docs/report.md@e5471e8'])
 "
 

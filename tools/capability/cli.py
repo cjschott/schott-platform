@@ -933,6 +933,7 @@ def command_correct_provenance(args) -> int:
             disputed_value=args.disputed_value, finding=args.finding,
             actual_initiator=args.actual_initiator, actor=args.actor,
             request_id=args.request_id, recorded_at=args.recorded_at,
+            actual_occurrence_at=args.actual_occurrence_at,
             evidence_references=args.evidence_reference or None)
     except ValueError as error:
         print(f"capability: {type(error).__name__}: {error}", file=sys.stderr)
@@ -946,6 +947,7 @@ def command_correct_provenance(args) -> int:
         "subject_member": outcome.subject_member,
         "subject_digest": outcome.subject_digest,
         "cinv": outcome.cinv,
+        "actual_occurrence_at": outcome.actual_occurrence_at,
         "disputed_field": outcome.disputed_field,
         "disputed_value": outcome.disputed_value,
         "finding": outcome.finding,
@@ -1186,7 +1188,14 @@ def build_parser() -> argparse.ArgumentParser:
     correct.add_argument("--actor", required=True,
                          help="who is recording this correction")
     correct.add_argument("--request-id", required=True)
-    correct.add_argument("--recorded-at", required=True)
+    correct.add_argument("--recorded-at", required=True,
+                         help="when THIS correction is being recorded")
+    # ADR-0018. A separate instant, because it means a different event: when the
+    # disputed action actually happened. Overloading --recorded-at to carry both
+    # would be the defect the correction exists to record.
+    correct.add_argument("--actual-occurrence-at", required=True,
+                         help="when the disputed action observably happened; an "
+                              "observation, not an authorisation")
     correct.add_argument("--evidence-reference", action="append", default=[],
                          help="repeatable; where the incident evidence lives")
     correct.set_defaults(handler=command_correct_provenance)
