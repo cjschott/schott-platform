@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# The Generation-22 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# THIS IS ONE STAGE, NOT TWO. This generation moves no helper object and no
+# readiness authority: helper compatibility stays `compatible`, blocking stays
+# 0, supervision_ready stays true, and there is no second ceremony to follow.
+#
+# WHAT IT DEPLOYS. Two objects in one coherence group, C -- provenance, then cli,
+# in that order. No CREATE: both already exist at Generation 21.
+#
+# WHAT IT FIXES. On 2026-09-24 at 06:40:43 -05:00 an unauthorised test harness
+# abandoned CINV-000001 in production. The reviewer RETAINED that lifecycle
+# effect -- the invocation had no terminal result and
+# `historical-incomplete-execution` is the category the store admits -- and
+# REJECTED the asserted authority. CADM-000004 therefore records a truthful
+# effect under three false assertions:
+#
+#   actor        = x
+#   request_id   = y
+#   recorded_at  = 2026-09-20T20:00:00-05:00   (backdated four days)
+#
+# ADR-0016 could record ONE of them: `CORRECTABLE_FIELDS` was `{actor}`. Two
+# thirds of the falsehood was unrecordable, and the backdating -- which places
+# the action BEFORE the Generation-20 publication that was meant to prevent it
+# -- could not be disputed at all. ADR-0018 widens the set to exactly the three
+# assertions that make up a record's claimed AUTHORITY, and adds one finding for
+# a value no authority ever asserted.
+#
+# WHAT IT DELIBERATELY DOES NOT MAKE CORRECTABLE. `reason` stays out. It is a
+# claim about WHAT HAPPENED rather than about who claimed it, and the
+# abandonment validates it against the store before writing, so a category that
+# survived that check is a fact. Making it correctable would let an EFFECT be
+# disputed through a mechanism built for an ATTRIBUTION. Neither is any lifecycle
+# claim correctable: not `state`, `previous_state`, `slot_released`,
+# `result_record_id`, `cinv` or `effect`. `--verify-source` refuses if any of
+# them appears in the set.
+#
+# THREE INSTANTS, THREE NAMES. A `recorded_at` correction involves the subject's
+# false timestamp (`disputed_value`), when the action observably happened
+# (`--actual-occurrence-at`, new here), and when the correction itself is written
+# (`--recorded-at`). One field carrying two of them would be the defect being
+# corrected, so the occurrence is its own required field. It asserts no
+# authority: it is an observation.
+#
+# THIS IS NOT A BREAKING CHANGE FOR ANY EXISTING RECORD. No lifecycle state, no
+# transition, no record schema and no existing verb changes shape. A correction
+# never rewrites the record it disputes; it records a separate CADM that names
+# the subject record, the subject MEMBER, and that member's digest.
+#
+# WHAT IT DOES NOT DO. IT CORRECTS NOTHING. No CADM is written, no invocation
+# changes state, no slot changes hands, no CMUT is spent, and the runtime store
+# is byte-identical across this publication. It publishes the ABILITY to record
+# the correction, under a separate reviewed ceremony, and performs none of it.
+#
+# Do NOT run the CADM-000004 correction ceremony until the reviewer accepts this
+# installation.
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen22-transaction/journal \
+  || { printf 'STOP: a Generation-22 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen22-transaction \
+  || { printf 'STOP: Generation-22 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 21 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 21 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen21-library-digests.txt
+sudo test -f /root/kyri-gen21-helper-digests.txt
+
+# The governed runtime store, before. This generation must not touch one byte of
+# it, and the same command after the installation must print the same digest.
+# Record both. A difference is a FAULT, and it is the incident this whole
+# generation exists to make recordable.
+find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+# EXPECTED: 35e33adc98a777964f56c626b58ff5d6945594946862ec7d6a233be98b276c4f
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-22.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-22.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-22.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-22.sh --verify-installed
+
+find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+# EXPECTED: 35e33adc98a777964f56c626b58ff5d6945594946862ec7d6a233be98b276c4f
+#           -- the same digest, unchanged.
+
+# EXPECTED AFTER THIS CEREMONY:
+#   helper compatibility  compatible      (UNCHANGED -- nothing here moves it)
+#   helpers blocking      0               (UNCHANGED)
+#   supervision_ready     true            (UNCHANGED)
+#   library objects       83 + 1 helper   (UNCHANGED -- there is no CREATE)
+#   CINV sequence         3               CRES sequence  2   (UNCHANGED)
+#   CINV-000001           abandoned       CINV-000002    abandoned   (UNCHANGED)
+#   CINV-000003           concluded       (UNCHANGED)
+#   administrative records 4              (CADM-000001..000004, ALL UNTOUCHED)
+#   cadm-counter          000004          (UNCHANGED -- no CADM is written here)
+#   cmut-counter          000000000012    (UNCHANGED -- no mutation is spent here)
+#   transition records    9               (UNCHANGED)
+#   occupancy             0 of 2          (UNCHANGED -- nothing is closed here)
+#   capability correct-provenance --help
+#                         now offers --disputed-field {actor,recorded_at,request_id}
+#                         and requires --actual-occurrence-at
+#
+# An `incompatible` verdict here is a FAULT, not an expected intermediate: it
+# would mean something outside this matrix moved. Return the output either way.
+#
+# BOTH INTERMEDIATE STATES FAIL CLOSED, so an interruption cannot leave a verb
+# that writes a malformed correction. `cli.py` reads the correctable set from
+# `provenance.py` when it builds its parser, so the two are coupled in both
+# directions:
+#   provenance new / cli old -> TypeError: missing 1 required keyword-only
+#                               argument: 'actual_occurrence_at'
+#   cli new / provenance old -> TypeError: got an unexpected keyword argument
+#                               'actual_occurrence_at'
+# Both raise before any lock is taken: no CADM is allocated and nothing is
+# recorded. `correct-provenance` is simply unavailable until the transaction
+# finishes or is rolled back.
+#
+# If the run is interrupted, do NOT rerun --install. Run:
+#   sudo bash /opt/schott-platform/provisioning/execution/install-generation-22.sh --recover
+# and return its output. Do not delete the transaction directory.
+#
+# ONLY AFTER THE REVIEWER ACCEPTS THIS INSTALLATION: the CADM-000004 correction
+# ceremony records the three false assertions. It is a separate reviewed file and
+# it is irreversible -- a correction cannot be withdrawn, only superseded by
+# another correction, which is itself a record. Do not run it from this ceremony.

@@ -119,12 +119,15 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # both modes rather than incremented on the assumption that it runs in both --
 # the Fabric resource-semantics suite, for instance, runs in full mode only.
 # ADR-0017's conclusion suite was measured the same way and runs in BOTH, so
-# both totals moved by one: 131 -> 132 and 156 -> 157.
+# both totals moved by one: 131 -> 132 and 156 -> 157. ADR-0018's multi-field
+# suite is portable and unconditional, so it too runs in BOTH, and both totals
+# moved by one again: 132 -> 133 and 157 -> 158. Measured in both modes, not
+# incremented on the assumption.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=132
+  TOTAL_STEPS=133
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=157
+  TOTAL_STEPS=158
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -699,6 +702,14 @@ run "Capability execution abandonment" \
 # to the record it is about. Portable: fixtures only.
 run "Capability execution provenance correction" \
   bash tests/test-capability-execution-provenance-correction.sh
+
+# ADR-0018. The same verb, widened to the three assertions that make up a
+# record's claimed AUTHORITY. Most of this suite proves the BOUNDARY rather than
+# the widening: that `reason` and every lifecycle claim stay out, that the three
+# instants stay three, and that a correction still spends no mutation and takes
+# no slot. Portable: fixtures only.
+run "Capability provenance multi-field correction" \
+  bash tests/test-capability-provenance-multifield.sh
 
 # G11-BC-AH. No test may dispatch a governed mutator that can resolve
 # production. Static: it reads the suites rather than running anything. First in

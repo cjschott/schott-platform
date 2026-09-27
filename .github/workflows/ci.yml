@@ -460,6 +460,11 @@ jobs:
       - name: Capability execution provenance correction tests
         run: bash tests/test-capability-execution-provenance-correction.sh
 
+      # ADR-0018, the same verb widened to three fields -- and the boundary that
+      # keeps `reason` and every lifecycle claim out of it. Portable.
+      - name: Capability provenance multi-field correction tests
+        run: bash tests/test-capability-provenance-multifield.sh
+
       # Which store a mutating command actually writes through. Host-only: it
       # reproduces the 2026-09-20 incident against the installed runtime.
       - name: Capability mutation target tests

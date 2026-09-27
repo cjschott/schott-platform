@@ -109,7 +109,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c,9459b09f2d0545c3a490f21e5223c2cfe95f2f4431132e275b6eae0b4502927f"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -428,7 +428,7 @@ GENERATION_DELTA=(
 # Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-20.sh`
 # is the ceremony that publishes them, and it has not been run.
 "tools/capability/execution/backing_store.py|REPLACE|03331aa8b974d636a39710c53867af5a4ae6e1480cc68404009df118e24c4c32|e82aa24b6fe2ef2336737ca344bb5d6b35af9c95b70f0c2ce78bc8dcb786259f"
-"tools/capability/execution/provenance.py|CREATE|ABSENT|2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6"
+"tools/capability/execution/provenance.py|REPLACE|ABSENT,2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6|2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6,e0f6ffeb57f78db460a126e6e1e8b58a7575401c13e681ac0d7d6e8cd21c0435"
 
 # --- GENERATION 21: post-execution lifecycle conclusion (ADR-0017) -----------
 #
@@ -455,6 +455,35 @@ GENERATION_DELTA=(
 # Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-21.sh`
 # is the ceremony that publishes them, and it has not been run.
 "tools/capability/execution/conclusion.py|CREATE|ABSENT|d24ad855e787fce1720df1f8d15f068f65aba46464c1e1382b5e3b68749297b2"
+
+# --- GENERATION 22: multi-field provenance correction (ADR-0018) -------------
+#
+# On 2026-09-24 an unauthorised test harness abandoned CINV-000001 in production.
+# The reviewer RETAINED the lifecycle effect and REJECTED the asserted authority,
+# so CADM-000004 records a truthful effect under three false assertions: `actor`,
+# `request_id`, and a `recorded_at` backdated four days. ADR-0016 could record
+# ONE of them -- `CORRECTABLE_FIELDS` was `{actor}` -- so two thirds of the
+# falsehood was unrecordable and the backdating could not be disputed at all.
+#
+# TWO OBJECTS, ONE COHERENCE GROUP. `provenance.py` widens the correctable set to
+# exactly {actor, request_id, recorded_at} and adds the third instant; `cli.py`
+# is the only operator surface that reaches the verb, and it BUILDS ITS PARSER
+# FROM that set, so the two are coupled in both directions.
+#
+# NO ROW IS ADDED, AND NOTHING IS RELAXED. Both objects are already declared:
+# `cli.py` moves its Generation-21 digest into the baseline list and gains its
+# Generation-22 digest as a successor, exactly as at G11-BC-E and G11-BC-K.
+#
+# `provenance.py` STOPS BEING A CREATE, which is the truthful shape now that
+# Generation 20 has published it: the row becomes a REPLACE and keeps ABSENT
+# among its baselines, because a tree that predates Generation 20 does not carry
+# the object at all and one declaration is checked against both kinds of host.
+# That is the G11-AS case, stated above, and not a loosening: the checkout must
+# still carry exactly the declared bytes, and a host that HAS the object must
+# still hold either a named baseline or the new bytes.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-22.sh`
+# is the ceremony that publishes them, and it has not been run.
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it
