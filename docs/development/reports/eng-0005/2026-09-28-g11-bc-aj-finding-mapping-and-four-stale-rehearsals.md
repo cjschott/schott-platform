@@ -257,7 +257,26 @@ A direct audit of the four repaired suites, run separately:
 |---|---|
 | `tools/dev/run-validation.sh --quick` | **135/135**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
 | `tools/dev/run-validation.sh` (full) | **160/160**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
-| clean clone at `77c4ebb`, full | *(see the table below)* |
+| clean clone at `6f8627e`, full | **160/160**, 0 `FAIL:`, **18 `HOST_ONLY_SKIP`** |
+
+**The clean clone's 18 skips are all one thing**, and none is counted as a host
+pass: `checkout <clone> is not the pinned /opt/schott-platform` — the intentional
+pinned-checkout refusal, on the eleven historical generation installers, the four
+G5 suites, the helper ceremony, the Generation-13 packaging suite, the Fabric
+evidence-authority suite and the Artifact-authority suite. Every one of them ran
+for real in the host run above, which had **0 skips**. The four repaired
+rehearsals, the multi-field suite, the Generation-22 installer suite and the
+escape guard all RAN in the clone — 32, 31, 34, 33, 24, 50 and 4 PASS, 0 FAIL —
+because none of them is pinned to the checkout path.
+
+**A first clean-clone attempt failed at step 66, and the cause was mine.** The
+Generation-20 installer hard-codes `REPOSITORY="/opt/schott-platform"`, so even
+when the validator runs from a clone that suite inspects the REAL repository —
+and I had written this report into it, untracked, while the run was in flight.
+Its clean-tree gate refused, correctly: `the working tree is not clean; a
+ceremony runs from reviewed bytes only`. The run above was redone with the host
+tree committed and clean, and it is the one reported. Worth knowing: a
+clean-clone validation is not isolated from the real checkout's working tree.
 
 No scratchpad copy, no stubbed suite, no "measured with these four disabled". The
 instrument used at G11-BC-AI to obtain a count is gone; these are the committed
