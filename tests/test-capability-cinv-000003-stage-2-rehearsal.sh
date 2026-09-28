@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 # The CINV-000003 Stage 2 ceremony, rehearsed.
 #
-# HOST-ONLY. It reads the installed Generation-20 runtime and the governed
+# HOST-ONLY. It reads the INSTALLED runtime -- whichever generation the host
+# carries -- and the governed
 # stores. See tests/host-only.manifest.
 #
 # WHAT IS REHEARSED, AND WHAT DELIBERATELY IS NOT
@@ -172,11 +173,41 @@ if (( status != 0 )); then
 else
   fail "the spent ceremony ran again"
 fi
-if [[ "${out}" == *"already has execution state"* ]] \
-   || [[ "${out}" == *"the capability-runtime store has moved"* ]]; then
-  pass "it refuses on a durable fact: the store has moved past it"
+# THE CLOSED SET OF DURABLE REASONS. Each one is a fact about the host having
+# moved irreversibly past this ceremony, and each is matched exactly. A refusal
+# for anything else -- a crash, a missing file, a permission error -- is not
+# spentness and fails here.
+#
+# G11-BC-AJ ADDED THE THIRD. The ceremony pins the Generation-20 runtime it was
+# reviewed against, and this host is at Generation 21, so that gate fires first
+# and the ceremony stops before it can reach the store at all. That pin is
+# HISTORICAL EVIDENCE of what the ceremony ran against and is not edited to
+# match today's host; what changes is that the suite now names it as the durable
+# reason it truthfully is. The store-level facts are proved independently below,
+# so spentness is not inferred from this refusal alone.
+refusal_reason=""
+if [[ "${out}" == *"already has execution state"* ]]; then
+  refusal_reason="CINV-000003 already has execution state"
+elif [[ "${out}" == *"the capability-runtime store has moved"* ]]; then
+  refusal_reason="the capability-runtime store has moved past it"
+elif [[ "${out}" == *"not the reviewed Generation-20"* ]]; then
+  refusal_reason="the installed runtime is no longer the Generation 20 this ceremony pins"
+fi
+if [[ -n "${refusal_reason}" ]]; then
+  pass "it refuses on a durable fact: ${refusal_reason}"
 else
   fail "it refused for another reason: $(printf '%s' "${out}" | tail -2 | tr '\n' ' ')"
+fi
+# And if it was the generation gate, that gate is answering truthfully: the
+# installed runtime really is past Generation 20, measured here rather than
+# taken from the refusal text.
+if [[ "${refusal_reason}" == "the installed runtime"* ]]; then
+  if [[ "$(sha256sum "${INSTALLED}/tools/capability/cli.py" | cut -d' ' -f1)" \
+        != "90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23" ]]; then
+    pass "and the host really has moved past Generation 20: the installed cli.py is not 90979a02"
+  else
+    fail "the ceremony claimed a generation mismatch against a host that IS at Generation 20"
+  fi
 fi
 if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
   pass "the refusal wrote nothing"
@@ -218,7 +249,17 @@ else
   fail "the invocation sequence is below 3"
 fi
 
-if ( cd "${INSTALLED}" && python3 - "${PRODUCTION}" <<'STATEPY'
+# THE STATE STAGE 2 LEFT, AND WHAT MAY HAVE HAPPENED TO IT SINCE.
+#
+# Stage 2 left CINV-000003 `launch_authorized`, holding one of two slots. That
+# is not a state the store must stay in for ever: Stage 3 executed it and
+# ADR-0017's conclusion closed it, both accepted. So the assertion is not "it is
+# still launch_authorized" -- which would make an accepted later ceremony look
+# like damage -- but "it is launch_authorized, or it is one of the closures the
+# reviewer accepted, and the AUTHORISATION RECORD Stage 2 wrote is byte-identical
+# either way". That record is checked above and is the durable evidence of what
+# Stage 2 did; the lifecycle beyond it belongs to the ceremonies that followed.
+CINV3_STATE="$( cd "${INSTALLED}" && python3 - "${PRODUCTION}" <<'STATEPY'
 import os
 import sys
 
@@ -229,18 +270,28 @@ from tools.capability.execution import capacity as cap, state as sm
 root = cli._anchored(os.path.join(sys.argv[1], "execution"))
 try:
     states = sm.all_states(root)
-    if states["CINV-000003"].value != "launch_authorized":
-        raise SystemExit(1)
     held = sum(1 for v in states.values() if v in cap.slot_holding_states())
-    raise SystemExit(0 if held == 2 else 1)
+    print(f"{states['CINV-000003'].value} {held}")
 finally:
     root.close()
 STATEPY
-); then
-  pass "${TARGET} is launch_authorized and occupancy is 2 of 2"
-else
-  fail "the lifecycle or occupancy is not what Stage 2 left"
-fi
+)"
+state_now="${CINV3_STATE%% *}"; held_now="${CINV3_STATE##* }"
+case "${state_now}" in
+  launch_authorized)
+    if [[ "${held_now}" == "2" ]]; then
+      pass "${TARGET} is launch_authorized and occupancy is 2 of 2: Stage 2's effect is standing"
+    else
+      fail "${TARGET} is launch_authorized but occupancy is ${held_now} of 2"
+    fi
+    ;;
+  concluded)
+    pass "${TARGET} is concluded: Stage 2's effect was superseded by the accepted ADR-0017 closure, and occupancy is ${held_now} of 2"
+    ;;
+  *)
+    fail "${TARGET} is ${state_now}, which is neither the state Stage 2 left nor an accepted closure of it"
+    ;;
+esac
 
 # ===========================================================================
 # 3. A repeat RESUMES. The one Stage-2 behaviour that is still live.
@@ -249,7 +300,24 @@ fi
 # Run against a byte copy, with the roots passed explicitly -- which is what
 # the CLI cannot do and why BLOCK C is not rehearsable through it.
 
-printf -- '\n--- a repeat resumes ---\n'
+# G11-BC-AJ. WHICH BEHAVIOUR IS LIVE DEPENDS ON THE CLOSURE.
+#
+# While CINV-000003 is `launch_authorized`, a repeat of Stage 2 RESUMES: the
+# bridge recognises the authorisation it already wrote and returns the same
+# digests without spending anything. That is the original assertion and it is
+# kept verbatim below.
+#
+# Once the invocation is CONCLUDED, resuming is not what the released code does
+# and asserting it would be asserting a behaviour that no longer exists. What it
+# does instead is REFUSE -- `is concluded and is no longer awaiting launch
+# authorisation` -- and that refusal is the stronger property: it is the closure
+# being respected by the one verb that could otherwise reopen it. So the
+# concluded host proves the refusal, by name, and proves it wrote nothing.
+if [[ "${state_now}" == "concluded" ]]; then
+  printf -- '\n--- a repeat is REFUSED: the closure holds ---\n'
+else
+  printf -- '\n--- a repeat resumes ---\n'
+fi
 
 FIX="${WORK}/resume"
 [[ -e "${FIX}" ]] && { chmod -R u+w "${FIX}"; rm -rf "${FIX}"; }
@@ -321,29 +389,58 @@ finally:
     execution_root.close(); handoff_root.close()
 RESUMEPY
 ); then
-  pass "the released bridge accepts the repeat"
+  repeat_status=accepted
 else
-  fail "the repeat failed: $(tail -3 "${resume}" | tr '\n' ' ')"
+  repeat_status=refused
 fi
 
 field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${resume}" "$1"; }
-for key_want in "resumed=True" "profile_digest=${PROFILE_DIGEST}" \
-                "commitment_digest=${COMMITMENT_DIGEST}" \
-                "package_digest=${ARTIFACT_DIGEST}" \
-                "payload_digest=${PAYLOAD_DIGEST}" "occupancy=2"; do
-  key="${key_want%%=*}"; want="${key_want#*=}"
-  got="$(field "${key}" 2>/dev/null || echo '<unreadable>')"
-  if [[ "${got}" == "${want}" ]]; then
-    pass "the repeat reports ${key} = ${got}"
-  else
-    fail "the repeat reports ${key} = ${got}, expected ${want}"
-  fi
-done
 
+if [[ "${state_now}" == "concluded" ]]; then
+  if [[ "${repeat_status}" == "refused" ]]; then
+    pass "the released bridge refuses a repeat against a concluded invocation"
+  else
+    fail "the bridge ACCEPTED a repeat against a concluded invocation: the closure does not hold"
+  fi
+  # The refusal is named, and it is the released refusal -- not a crash, not a
+  # missing file, not a permission error.
+  if grep -q 'LaunchRefused' "${resume}" \
+     && grep -q 'is concluded and is no longer awaiting launch authorisation' "${resume}"; then
+    pass "it refuses as LaunchRefused, naming the closure: 'is concluded and is no longer awaiting launch authorisation'"
+  else
+    fail "the refusal is not the released one: $(tail -3 "${resume}" | tr '\n' ' ')"
+  fi
+  if ! grep -q 'Traceback' <<<"$(grep -v LaunchRefused "${resume}" | tail -1)"; then
+    pass "the refusal is a judgement, not an accident"
+  else
+    fail "something crashed instead of refusing"
+  fi
+else
+  if [[ "${repeat_status}" == "accepted" ]]; then
+    pass "the released bridge accepts the repeat"
+  else
+    fail "the repeat failed: $(tail -3 "${resume}" | tr '\n' ' ')"
+  fi
+  for key_want in "resumed=True" "profile_digest=${PROFILE_DIGEST}" \
+                  "commitment_digest=${COMMITMENT_DIGEST}" \
+                  "package_digest=${ARTIFACT_DIGEST}" \
+                  "payload_digest=${PAYLOAD_DIGEST}" "occupancy=2"; do
+    key="${key_want%%=*}"; want="${key_want#*=}"
+    got="$(field "${key}" 2>/dev/null || echo '<unreadable>')"
+    if [[ "${got}" == "${want}" ]]; then
+      pass "the repeat reports ${key} = ${got}"
+    else
+      fail "the repeat reports ${key} = ${got}, expected ${want}"
+    fi
+  done
+fi
+
+# Either way -- resumed or refused -- the store is byte-identical. That is the
+# assertion that matters most, and it is the same one in both branches.
 if diff -r "${FIX}/runtime.orig" "${FIX}/runtime" >/dev/null 2>&1; then
   pass "and it wrote nothing at all: no second transition, no second CMUT, no second identity"
 else
-  fail "the resume mutated the store"
+  fail "the repeat mutated the store"
 fi
 
 

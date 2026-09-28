@@ -400,6 +400,32 @@ correct=(--subject-cadm CADM-000001 --cinv CINV-000002
          --actor an-operator --request-id g11bcy-fixture-correct
          --recorded-at 2026-09-20T20:00:00-05:00)
 
+# G11-BC-AJ. THE REQUIRED FLAGS ARE READ OFF THE CHECKOUT'S OWN PARSER, not
+# written down from the generation this suite was authored against. ADR-0018
+# adds a REQUIRED `--actual-occurrence-at`, and a hard-coded argument list
+# started failing the moment that landed -- which is exactly the staleness this
+# checkpoint exists to end. The subject of this suite is WHICH STORE the writer
+# holds; the argument list is scaffolding, so it is derived.
+#
+# The parser is built, never dispatched: nothing here runs a handler.
+if (cd "${ROOT}" && PYTHONDONTWRITEBYTECODE=1 python3 - <<'HASOCCURRENCE'
+import sys
+sys.path.insert(0, ".")
+from tools.capability import cli
+verbs = next(a.choices for a in cli.build_parser()._actions
+             if getattr(a, "choices", None))
+flags = {o for a in verbs["correct-provenance"]._actions for o in a.option_strings}
+raise SystemExit(0 if "--actual-occurrence-at" in flags else 1)
+HASOCCURRENCE
+); then
+  # The disputed action's own instant: the rehearsal harness ran at 18:54:33 on
+  # 2026-09-20. An observation, not an authorisation.
+  correct+=(--actual-occurrence-at 2026-09-20T18:54:33-05:00)
+  pass "the checkout's correct-provenance requires --actual-occurrence-at, so the call carries it"
+else
+  pass "the checkout's correct-provenance takes no --actual-occurrence-at, so the call omits it"
+fi
+
 out="$(cd "${ROOT}" && python3 -m tools.capability.cli correct-provenance "${correct[@]}" 2>&1)" && status=0 || status=$?
 if (( status == 2 )) && [[ "${out}" == *"--store-root"* ]]; then
   pass "correct-provenance omitting its target is a usage error too"

@@ -57,16 +57,30 @@
 # -- and REJECTED the asserted authority. So the effect is truthful and the
 # three assertions are not:
 #
-#   actor        x                            a value no authority asserted
-#   request_id   y                            a value no authority asserted
-#   recorded_at  2026-09-20T20:00:00-05:00    backdated four days, to BEFORE
-#                                             the Generation-20 publication that
-#                                             was meant to make this impossible
+#   field        disputed value               finding (ADR-0018)
+#   -----------  ---------------------------  -------------------------------
+#   actor        x                            attribution-not-authorised
+#   request_id   y                            assertion-synthetic
+#   recorded_at  2026-09-20T20:00:00-05:00    assertion-synthetic
 #
-# All three are therefore `assertion-synthetic` rather than
-# `attribution-not-authorised`: `attribution-not-authorised` names a real
-# authority that did not authorise the action, which is CADM-000001's case.
-# These name nothing at all.
+# THE FINDING IS PER FIELD, AND THE TWO ARE NOT INTERCHANGEABLE.
+#
+#   `attribution-not-authorised` says: this record claims an ACTOR, and that
+#   actor did not authorise the action. `actor` is the field whose whole job is
+#   to name who acted, so a false one is an unauthorised attribution whatever
+#   literal it holds -- `x` is a claim about an actor, and the claim is not
+#   authorised.
+#
+#   `assertion-synthetic` says: the recorded value was never asserted by ANY
+#   authority -- a literal that reached the record through a mechanism with no
+#   standing to assert anything. `y` is that, and so is a timestamp copied out
+#   of a test.
+#
+# ADR-0018 fixes the mapping in a table, and the ceremony reads it from a table
+# for the same reason: a single global finding applied to all three -- which is
+# what this ceremony carried when it was first prepared at G11-BC-AI -- would
+# record `actor` under the wrong category, and a correction recorded under the
+# wrong finding is itself untruthful provenance.
 #
 # THE THIRD INSTANT, AND WHY IT IS SEPARATE
 # =========================================
@@ -95,8 +109,14 @@ SUBJECT=CADM-000004
 TARGET_CINV=CINV-000001
 ACTOR=primary-platform-operator
 INITIATOR=unauthorised-test-harness
-FINDING=assertion-synthetic
 OCCURRED_AT='2026-09-24T06:40:43-05:00'
+
+# THE REVIEWED FINDING MAPPING, one row per field, exactly as ADR-0018 fixes it.
+# Read rather than repeated: the call below takes the finding from here, and the
+# gate below refuses if the table and ADR-0018 have drifted apart.
+FINDING_ACTOR=attribution-not-authorised
+FINDING_REQUEST_ID=assertion-synthetic
+FINDING_RECORDED_AT=assertion-synthetic
 
 INCIDENT_REPORT='docs/development/reports/eng-0005/2026-09-24-g11-bc-ah-production-test-escape.md@d8f95d4477e8d3f3bc5ea13567e260397489de27'
 ARCHITECTURE='docs/decisions/ADR-0018-provenance-correction-of-synthetic-authority.md@646b12799a0b5438d1d346f56a9a9a9f9e65299a'
@@ -183,7 +203,10 @@ check_installed tools/capability/execution/types.py       6f0c8fa63333cb2880ba19
 # And the installed library is asked what it understands, from ITS OWN
 # directory, so a digest that matched a file Python would not import cannot
 # pass. Nothing here reads or writes a governed store.
-if ! ( cd "${INSTALLED}" && python3 - <<'INSTALLED_PY'
+if ! ( cd "${INSTALLED}" && python3 - \
+         "actor=${FINDING_ACTOR}" \
+         "request_id=${FINDING_REQUEST_ID}" \
+         "recorded_at=${FINDING_RECORDED_AT}" <<'INSTALLED_PY'
 import os
 import sys
 
@@ -208,6 +231,30 @@ if "reason" in provenance.CORRECTABLE_FIELDS:
     refuse("the installed runtime would let an EFFECT be disputed as an attribution")
 if provenance.FINDING_SYNTHETIC not in provenance.FINDINGS:
     refuse("the installed runtime has no finding for a value no authority asserted")
+if provenance.FINDING_NOT_AUTHORISED not in provenance.FINDINGS:
+    refuse("the installed runtime has no finding for an unauthorised attribution")
+# THE MAPPING IS PER FIELD. The three findings this ceremony passes are read
+# back from the shell below and checked against the installed closed set, and
+# `actor` must not carry the same finding as the other two -- a global finding
+# is the shape this ceremony carried when it was first prepared, and it recorded
+# `actor` under the wrong category.
+passed = dict(pair.split("=", 1) for pair in sys.argv[1:])
+if set(passed) != {"actor", "request_id", "recorded_at"}:
+    refuse(f"the ceremony offered findings for {sorted(passed)}")
+for field, finding in passed.items():
+    if finding not in provenance.FINDINGS:
+        refuse(f"{field} would be recorded under {finding!r}, which the "
+               f"installed runtime does not admit")
+if passed["actor"] != provenance.FINDING_NOT_AUTHORISED:
+    refuse(f"actor would be recorded under {passed['actor']!r}; ADR-0018 gives "
+           f"it {provenance.FINDING_NOT_AUTHORISED!r}")
+if passed["request_id"] != provenance.FINDING_SYNTHETIC \
+        or passed["recorded_at"] != provenance.FINDING_SYNTHETIC:
+    refuse("request_id and recorded_at must both be recorded as "
+           f"{provenance.FINDING_SYNTHETIC!r}")
+print("ok  the finding mapping is per field: actor "
+      f"{passed['actor']}, request_id and recorded_at "
+      f"{provenance.FINDING_SYNTHETIC}")
 if Verb.CORRECT_PROVENANCE in _DESTROYS_UNDER:
     refuse("the installed correction verb carries destruction authority")
 verbs = next(a.choices for a in cli.build_parser()._actions
@@ -423,7 +470,7 @@ printf 'recorded-at          %s\n' "${RECORDED_AT}"
 printf 'actual-occurrence-at %s\n' "${OCCURRED_AT}"
 
 correct_one() {
-  local field="$1" value="$2" expected_cadm="$3"
+  local field="$1" value="$2" finding="$3" expected_cadm="$4"
   local out="${GATE_DIR}/${field}.json"
   printf -- '\n--- capability correct-provenance %s (production, installed runtime) ---\n' "${field}"
   set +e
@@ -433,7 +480,7 @@ correct_one() {
       --cinv "${TARGET_CINV}" \
       --disputed-field "${field}" \
       --disputed-value "${value}" \
-      --finding "${FINDING}" \
+      --finding "${finding}" \
       --actual-initiator "${INITIATOR}" \
       --actor "${ACTOR}" \
       --request-id "g11bcai-correct-cadm-000004-${field}" \
@@ -461,7 +508,7 @@ correct_one() {
   verdict cinv                 "${TARGET_CINV}"
   verdict disputed_field       "${field}"
   verdict disputed_value       "${value}"
-  verdict finding              "${FINDING}"
+  verdict finding              "${finding}"
   verdict actual_initiator     "${INITIATOR}"
   verdict actual_occurrence_at "${OCCURRED_AT}"
   verdict effect               retained
@@ -510,9 +557,9 @@ print("ok  the record states action_reversed false and lifecycle_unchanged true"
 INSTANTS_PY
 }
 
-correct_one actor       x                           CADM-000005
-correct_one request_id  y                           CADM-000006
-correct_one recorded_at 2026-09-20T20:00:00-05:00   CADM-000007
+correct_one actor       x                          "${FINDING_ACTOR}"       CADM-000005
+correct_one request_id  y                          "${FINDING_REQUEST_ID}"  CADM-000006
+correct_one recorded_at 2026-09-20T20:00:00-05:00  "${FINDING_RECORDED_AT}" CADM-000007
 
 # ---- WHAT MUST NOT HAVE CHANGED ----------------------------------------
 printf -- '\n--- the corrections corrected nothing else ---\n'

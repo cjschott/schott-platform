@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 # The CINV-000003 Stage 3 ceremony, rehearsed.
 #
-# HOST-ONLY. It reads the installed Generation-20 runtime and the governed
+# HOST-ONLY. It reads the INSTALLED runtime -- whichever generation the host
+# carries -- and the governed
 # stores. See tests/host-only.manifest.
 #
 # WHAT IS REHEARSED, AND WHAT IS NOT
@@ -32,6 +33,31 @@ set -Eeuo pipefail
 # THE PAYLOAD IS REAL. The released package is run against the published
 # canonical payload, so the expected result bytes are produced rather than
 # predicted.
+#
+# SPENT MODE (G11-BC-AJ). This suite has two halves and the host decides which
+# runs. The reconstruction half copies production and rewinds it to the
+# pre-Stage-3 condition, then drives the released coordinator over the real
+# protocol; it is right while Stage 3 has NOT been run. Once Stage 3 is spent --
+# CRES-000002 exact and CINV-000003 concluded -- that substrate no longer exists,
+# and rebuilding it means subtracting every later thing production has gained
+# from a hand-kept list. That list had already been extended once, and the
+# 2026-09-24 escape would have required extending it again.
+#
+# So on a spent host this suite VERIFIES THE ACCEPTED HISTORICAL RESULT instead:
+# the result record, the authorisation, the whole lifecycle journal, the
+# sequence, and that the stored digest is the digest the released package
+# produces from the published payload on this run.
+#
+# WHAT SPENT MODE DOES NOT COVER, said plainly: the coordinator half driven end
+# to end, the eight failure paths, the duplicate-result gate against a fixture,
+# and BLOCK B's gates and their sabotage matrix. Those need the pre-Stage-3
+# substrate. The protocol and the supervision refusals are covered against
+# purpose-built fixtures by the supervised-execution and evidence suites, which
+# need no production substrate; BLOCK B's gate matrix is not covered anywhere
+# else, and that is the cost of not rebuilding a store that no longer exists.
+#
+# NO PIN IS WEAKENED EITHER WAY. The pre-Stage-3 aggregate still governs the
+# unspent path exactly as it did, and the spent path pins by content too.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -226,6 +252,251 @@ if [[ ! -e "${PKG}/output/wrong-result.json" ]]; then
 else
   fail "a refused payload still wrote a result"
 fi
+
+
+# ===========================================================================
+# 2a. IS STAGE 3 SPENT? -- decided from durable facts, before anything builds
+#     a fixture
+# ===========================================================================
+#
+# WHY THIS BRANCH EXISTS. Everything below that drives the released coordinator
+# needs a store in the PRE-STAGE-3 condition, and it used to get one by copying
+# production and subtracting what Stage 3 wrote. That subtraction has already
+# been extended once, at G11-BC-AG, for the CONCLUDED closure; the 2026-09-24
+# escape would require extending it again. Each extension rebuilds a store that
+# is further from anything that ever existed, and a hand-kept list drifts -- the
+# defect the comment on the rewind itself warns about.
+#
+# So the question is asked once, of the durable record: HAS STAGE 3 HAPPENED? If
+# it has, its substrate is gone, and reconstructing it is the wrong instrument.
+# What remains verifiable is the accepted historical RESULT: durable, exact, and
+# the thing Stage 3 existed to produce.
+#
+# NOTHING IS WEAKENED BY THIS. The pre-Stage-3 aggregate pin stays exactly where
+# it is and still governs the unspent path; the spent path pins the result, the
+# authorisation and the closure by content. Neither branch asks "whatever is
+# there", and no historical digest is updated to a current value.
+
+printf -- '\n--- is Stage 3 spent? ---\n'
+
+CRES_000002_DIGEST=2d908b866e4f953cc8c53f7f5b367015f9cc75cb1bcbea518261f4997aafaebf
+STAGE3_SPENT=0
+spent_result=0
+spent_closed=0
+
+if [[ "$(sha256sum "${PRODUCTION}/capability-results/CRES-000002.yaml" 2>/dev/null \
+         | cut -d' ' -f1)" == "${CRES_000002_DIGEST}" ]]; then
+  spent_result=1
+fi
+# The closure, read from the lifecycle journal rather than inferred from a state
+# file -- a second reader would be a second thing that can disagree with it.
+closing_state="$(python3 - "${PRODUCTION}/execution/transitions" <<'CLOSED'
+import json, os, sys
+directory = sys.argv[1]
+names = sorted(n for n in os.listdir(directory) if n.startswith("CINV-000003."))
+if not names:
+    print("none"); raise SystemExit(0)
+with open(os.path.join(directory, names[-1]), encoding="utf-8") as handle:
+    print(json.load(handle).get("state", "unreadable"))
+CLOSED
+)"
+[[ "${closing_state}" == "concluded" ]] && spent_closed=1
+
+if (( spent_result == 1 && spent_closed == 1 )); then
+  STAGE3_SPENT=1
+  pass "Stage 3 is SPENT: CRES-000002 is ${CRES_000002_DIGEST} and CINV-000003 is concluded"
+elif (( spent_result == 0 && spent_closed == 0 )); then
+  pass "Stage 3 is UNSPENT: no accepted CRES-000002, and CINV-000003 is ${closing_state}"
+else
+  fail "Stage 3 is half-spent: accepted result=${spent_result}, concluded=${spent_closed}. A store in this condition is neither rehearsable nor verifiable and needs an operator."
+  exit 1
+fi
+
+# ===========================================================================
+# 6. The ceremony's shape, and its gates
+# ===========================================================================
+
+printf -- '\n--- the ceremony, as written ---\n'
+
+GATES="${WORK}/gates.sh"
+awk "/^bash <<'GATES'\$/{on=1;next} /^GATES\$/{on=0} on" "${CEREMONY}" > "${GATES}"
+STAGE3="${WORK}/stage3.sh"
+awk "/^bash <<'STAGE3'\$/{on=1;next} /^STAGE3\$/{on=0} on" "${CEREMONY}" > "${STAGE3}"
+for block in "${GATES}" "${STAGE3}"; do
+  if [[ -s "${block}" ]]; then
+    pass "$(basename "${block}" .sh) extracted whole ($(wc -l < "${block}") lines)"
+  else
+    fail "$(basename "${block}" .sh) could not be extracted"
+    exit 1
+  fi
+done
+if grep -q 'cli execute' "${GATES}"; then
+  fail "BLOCK B can reach the mutation"
+else
+  pass "BLOCK B contains no execute: the gates cannot run anything"
+fi
+if [[ "$(grep -c 'tools.capability.cli execute' "${STAGE3}")" == "1" ]]; then
+  pass "BLOCK C runs exactly one execute"
+else
+  fail "BLOCK C runs $(grep -c 'tools.capability.cli execute' "${STAGE3}") executes"
+fi
+if grep -q 'STOP: the supervision did not conclude' "${STAGE3}"; then
+  pass "BLOCK C reads the JSON verdict before the exit status"
+else
+  fail "BLOCK C treats rc as the verdict"
+fi
+if grep -q 'stranded condition ADR-0015 names' "${STAGE3}"; then
+  pass "BLOCK C says what the store will be left in"
+else
+  fail "BLOCK C does not state the stranded outcome"
+fi
+
+
+# ===========================================================================
+# 3s. SPENT: the accepted historical result, verified rather than re-run
+# ===========================================================================
+#
+# WHAT THIS COVERS, AND WHAT IT DOES NOT. It does NOT drive the coordinator
+# half, the protocol conversation, the refusal matrix or BLOCK B's gates
+# against a fixture: all four need the pre-Stage-3 substrate, and on a spent
+# host there is not one. What it proves is that the execution this ceremony
+# authorised produced the REVIEWED result, that those are the bytes the released
+# package produces from the published payload -- measured above, in section 2,
+# on this run -- and that the closure which followed is the one ADR-0017
+# specifies.
+#
+# The coordinator half is not left uncovered. The protocol, the supervision
+# refusals and the duplicate-result gate are exercised against purpose-built
+# fixtures by tests/test-capability-supervised-execution-e2e.sh and the
+# execution-evidence suite, neither of which needs a production substrate.
+
+printf -- '\n--- SPENT: the accepted result, as durable facts ---\n'
+
+check_exact() {
+  local what="$1" path="$2" wanted="$3" got
+  got="$(sha256sum "${path}" 2>/dev/null | cut -d' ' -f1)"
+  if [[ "${got}" == "${wanted}" ]]; then
+    pass "${what} is ${wanted}"
+  else
+    fail "${what} is ${got:-absent}, expected the accepted ${wanted}"
+  fi
+}
+
+check_exact "CRES-000002" "${PRODUCTION}/capability-results/CRES-000002.yaml" \
+            "${CRES_000002_DIGEST}"
+check_exact "CINV-000003.yaml" \
+            "${PRODUCTION}/capability-invocations/CINV-000003.yaml" \
+            c0941b7d45dcccac4bb28d00f942ea63aa90cd46ed55767797363f1ed1accaf2
+check_exact "the launch authorisation" \
+            "${PRODUCTION}/execution/CINV-000003/launch-authorisation" \
+            885801a1362dcf99faaacdcdf457b7a9cecac99104012c24cfb6cfa5284f31df
+
+# THE STORED RESULT IS THE BYTES THE PACKAGE PRODUCED. Section 2 ran the released
+# package over the published payload on this run and got RESULT_DIGEST. The
+# stored result must carry that digest and that checksum, which is what makes
+# CRES-000002 evidence of THIS capability over THIS payload rather than a file
+# that happens to exist.
+recorded="$(python3 - "${PRODUCTION}/capability-results/CRES-000002.yaml" <<'RECORDED'
+import json, sys
+# Top-level scalars only. `evidence` is a nested mapping and is read separately
+# below, so a nested key cannot be mistaken for a top-level one of the same name.
+found = {}
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line[:1].isspace() or ":" not in line:
+        continue
+    key, _, value = line.partition(":")
+    found[key.strip()] = value.strip().strip("'").strip('"')
+print(json.dumps(found, sort_keys=True))
+RECORDED
+)"
+recorded_field() {
+  python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2]))' \
+    "${recorded}" "$1"
+}
+
+if [[ "$(recorded_field invocation_record_id)" == "${TARGET}" ]]; then
+  pass "CRES-000002 names ${TARGET} and nothing else"
+else
+  fail "CRES-000002 names $(recorded_field invocation_record_id), not ${TARGET}"
+fi
+if [[ "$(recorded_field result_digest)" == *"${RESULT_DIGEST}"* ]]; then
+  pass "the recorded result digest is the one the released package produced on this run: ${RESULT_DIGEST}"
+else
+  fail "the recorded result digest is $(recorded_field result_digest), not ${RESULT_DIGEST}"
+fi
+# THE RESULT RECORD CARRIES NO CHECKSUM FIELD, and that is stated rather than
+# asserted around: `RESULT_CHECKSUM` is the checksum the PAYLOAD RESULT carries,
+# proved in section 2 against the bytes the package produced on this run. What
+# the record carries is the digest of those bytes, checked above, and the
+# outcome, checked here.
+if [[ "$(recorded_field outcome_class)" == "completed" ]]; then
+  pass "the record's outcome_class is completed: a concluded execution that succeeded"
+else
+  fail "the record's outcome_class is $(recorded_field outcome_class)"
+fi
+if [[ "$(recorded_field attempt_number)" == "1" ]]; then
+  pass "attempt_number is 1: the execution was performed once and recorded once"
+else
+  fail "attempt_number is $(recorded_field attempt_number)"
+fi
+if [[ "$(recorded_field reason)" == "null" \
+   && "$(recorded_field result_artifact_reference)" == "null" ]]; then
+  pass "the record carries no failure reason and no artifact reference, as a completed in-line result does"
+else
+  fail "the record carries reason=$(recorded_field reason) artifact=$(recorded_field result_artifact_reference)"
+fi
+# The nested evidence, read as its own mapping.
+if grep -A2 '^evidence:' "${PRODUCTION}/capability-results/CRES-000002.yaml" \
+     | grep -q '^  outcome: completed$'; then
+  pass "the nested evidence agrees: outcome completed"
+else
+  fail "the nested evidence does not record outcome completed"
+fi
+
+# THE CLOSURE THAT FOLLOWED. `concluded` -- not `released`, which would claim a
+# cleanup progression that the ownership transfer in §13 makes unreachable, and
+# not `abandoned`, which would record a success as an exceptional closure.
+closure="$(python3 - "${PRODUCTION}/execution/transitions" <<'CLOSURE'
+import json, os, sys
+directory = sys.argv[1]
+names = sorted(n for n in os.listdir(directory) if n.startswith("CINV-000003."))
+states = []
+for name in names:
+    with open(os.path.join(directory, name), encoding="utf-8") as handle:
+        states.append(json.load(handle).get("state"))
+print(" ".join(states))
+CLOSURE
+)"
+if [[ "${closure}" == "reserved launch_authorized concluded" ]]; then
+  pass "CINV-000003's whole journal is: ${closure}"
+else
+  fail "CINV-000003's journal is '${closure}', not the accepted 'reserved launch_authorized concluded'"
+fi
+
+if [[ "$(cat "${PRODUCTION}/sequences/capability-result.seq")" == "2" ]]; then
+  pass "the result sequence is 2: Stage 3 spent one identity and no more"
+else
+  fail "the result sequence is $(cat "${PRODUCTION}/sequences/capability-result.seq"), expected 2"
+fi
+if [[ ! -e "${PRODUCTION}/capability-results/CRES-000003.yaml" ]]; then
+  pass "there is no CRES-000003: the execution was performed once"
+else
+  fail "a third result exists"
+fi
+
+# A RE-RUN IS REFUSED BY THE RELEASED CODE, not merely discouraged: the
+# duplicate-result gate sits ahead of the provider, which is the G11-BC-K
+# correction and the reason a spent Stage 3 cannot execute twice.
+if grep -q 'require_no_terminal_result' "${INSTALLED}/tools/capability/coordinator.py"; then
+  pass "the installed coordinator still gates on an existing terminal result, ahead of the provider"
+else
+  fail "the installed coordinator has no duplicate-result gate: a re-run would reach the provider"
+fi
+
+# The reconstruction-dependent half. It runs only where the substrate it
+# needs still exists -- see 2a. Left unindented on purpose: the blocks below
+# carry quoted heredocs whose terminators must stay at column 0.
+if (( STAGE3_SPENT == 0 )); then
 
 # ===========================================================================
 # 3. The coordinator half, driven for real
@@ -689,45 +960,6 @@ else
   fail "the refused repeat spent a sequence"
 fi
 
-# ===========================================================================
-# 6. The ceremony's shape, and its gates
-# ===========================================================================
-
-printf -- '\n--- the ceremony, as written ---\n'
-
-GATES="${WORK}/gates.sh"
-awk "/^bash <<'GATES'\$/{on=1;next} /^GATES\$/{on=0} on" "${CEREMONY}" > "${GATES}"
-STAGE3="${WORK}/stage3.sh"
-awk "/^bash <<'STAGE3'\$/{on=1;next} /^STAGE3\$/{on=0} on" "${CEREMONY}" > "${STAGE3}"
-for block in "${GATES}" "${STAGE3}"; do
-  if [[ -s "${block}" ]]; then
-    pass "$(basename "${block}" .sh) extracted whole ($(wc -l < "${block}") lines)"
-  else
-    fail "$(basename "${block}" .sh) could not be extracted"
-    exit 1
-  fi
-done
-if grep -q 'cli execute' "${GATES}"; then
-  fail "BLOCK B can reach the mutation"
-else
-  pass "BLOCK B contains no execute: the gates cannot run anything"
-fi
-if [[ "$(grep -c 'tools.capability.cli execute' "${STAGE3}")" == "1" ]]; then
-  pass "BLOCK C runs exactly one execute"
-else
-  fail "BLOCK C runs $(grep -c 'tools.capability.cli execute' "${STAGE3}") executes"
-fi
-if grep -q 'STOP: the supervision did not conclude' "${STAGE3}"; then
-  pass "BLOCK C reads the JSON verdict before the exit status"
-else
-  fail "BLOCK C treats rc as the verdict"
-fi
-if grep -q 'stranded condition ADR-0015 names' "${STAGE3}"; then
-  pass "BLOCK C says what the store will be left in"
-else
-  fail "BLOCK C does not state the stranded outcome"
-fi
-
 printf -- '\n--- the gates, against a fixture ---\n'
 render_gates() {
   local base="$1" out="$2"
@@ -896,6 +1128,12 @@ for case in "${SABOTAGE[@]}"; do
     pass "${name}: no traceback"
   fi
 done
+
+
+else
+note_skipped="the coordinator half, the refusal matrix and BLOCK B against a fixture"
+printf -- '\nnote: skipped (Stage 3 is spent): %s\n' "${note_skipped}"
+fi
 
 # ===========================================================================
 # 8. Production, after everything

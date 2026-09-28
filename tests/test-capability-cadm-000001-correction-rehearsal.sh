@@ -3,23 +3,32 @@ set -Eeuo pipefail
 
 # The CADM-000001 provenance-correction ceremony, rehearsed whole.
 #
-# HOST-ONLY. It drives the real operator ceremony, with the real INSTALLED
-# Generation-20 library, against a reconstruction of the store the operator ran
-# it against. See tests/host-only.manifest.
+# HOST-ONLY. It drives the real operator ceremony against the real INSTALLED
+# library -- whichever generation the host carries -- and asserts the durable
+# facts of the correction the operator already performed.
+# See tests/host-only.manifest.
 #
 # THE CEREMONY IS SPENT, AND THE REHEARSAL IS NOT RETIRED
 # ======================================================
 # The operator performed the correction on 2026-09-21, so the ceremony now
-# refuses: it pins the pre-correction runtime baseline and production is past
-# it. That refusal is asserted here, at the gate it belongs to.
+# refuses. It refuses on a durable fact -- the runtime baseline it pins is
+# behind the store, and on a host past Generation 20 its installed-generation
+# gate fires first -- and that refusal is asserted here, at the gate it belongs
+# to, together with the two facts themselves, measured independently of the
+# refusal text.
 #
-# The rehearsal itself still runs, because the correction's whole mutation was
-# one CADM and one counter increment -- so removing them reproduces the store
-# the operator ran against, exactly, which G11-BC-Z proved by aggregate. The
-# ceremony is then driven against that reconstruction with the real installed
-# library, which is a stronger claim than a list of assertions about what the
-# record says: it shows the accepted production record is reproducible from the
-# reviewed ceremony.
+# What remains live is asserted rather than re-run: the accepted correction's
+# own bytes, the subject it did NOT write to, and the two behaviours of the
+# correction verb that still have an answer on a spent store -- a conflicting
+# correction is refused, and an identical one resumes. Both are driven against a
+# byte copy, so the accepted production record is never the thing under test.
+#
+# WHAT IS PINNED AND WHAT IS MEASURED (G11-BC-AJ). The SUBJECT is pinned:
+# CADM-000001's three members and CADM-000002's finding keep their exact
+# digests. Everything else is measured against what this run found, because
+# accepted later ceremonies legitimately add records -- CADM-000003 from the
+# ADR-0017 conclusion, CADM-000004 from the 2026-09-24 escape -- and asserting
+# the absence of a named identity would make each of them look like damage.
 #
 # THIS IS THE SUITE THE LAST ONE COULD NOT BE
 # ===========================================
@@ -35,7 +44,7 @@ set -Eeuo pipefail
 # the FIXTURE's, and production must be byte-identical afterwards.
 #
 # WHAT IS SUBSTITUTED, AND NOTHING ELSE
-#   INSTALLED=/usr/lib/kyri/python   -> a Generation-20 library the installer built
+#   INSTALLED=/usr/lib/kyri/python   -> the library the installer built
 #   RUNTIME=/data/kyri/capability-runtime -> a byte copy inside the fixture
 #   RUNTIME_BEFORE                   -> that copy's own aggregate
 #
@@ -65,6 +74,28 @@ PRODUCTION_BEFORE="$(aggregate "${PRODUCTION}")"
 LIBRARY_BEFORE="$(find "${INSTALLED}" -type f -name '*.py' -print0 | sort -z \
                   | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
 
+# G11-BC-AJ. THE ADMINISTRATIVE NAMESPACE AS THIS RUN FOUND IT.
+#
+# This suite used to assert `CADM-000003 does not exist` -- in production and in
+# its own fixture copy -- as its proof that nothing was written. That was true
+# when CADM-000002 was the last record, and it stopped being true when the
+# ADR-0017 conclusion wrote CADM-000003 and the 2026-09-24 escape wrote
+# CADM-000004, both of which this suite has nothing to do with. Asserting the
+# absence of a specific identity makes every later accepted ceremony look like
+# damage.
+#
+# THE ASSERTION THAT WAS ALWAYS MEANT is "this run wrote nothing", so that is
+# what is measured: the record names and the counter as they are at the start,
+# compared at the end. The records this suite is ABOUT -- CADM-000001 and its
+# correction CADM-000002 -- keep their exact pinned digests below, because those
+# are its subject and a pin is the right instrument for a subject.
+admin_names() {
+  find "$1/execution/admin-records" -mindepth 1 -maxdepth 1 -printf '%f\n' \
+    2>/dev/null | sort | tr '\n' ' '
+}
+ADMIN_BEFORE="$(admin_names "${PRODUCTION}")"
+CADM_COUNTER_BEFORE="$(cat "${PRODUCTION}/execution/cadm-counter")"
+
 # ===========================================================================
 # 1. The ceremony is SPENT, and says so where it should
 # ===========================================================================
@@ -82,15 +113,38 @@ if (( status != 0 )); then
 else
   fail "the spent ceremony ran again"
 fi
+# THE CLOSED SET OF DURABLE REASONS, each matched exactly. Refusing for anything
+# else -- a crash, a missing file, a permission error -- is not spentness.
+#
+# G11-BC-AJ ADDED THE SECOND. The ceremony pins the Generation-20 runtime it was
+# reviewed against and this host is at Generation 21, so that gate fires first
+# and the ceremony stops before it reaches the store. That pin is HISTORICAL
+# EVIDENCE of what the operator actually ran against; it is not edited to match
+# today's host. What changed is that the suite now names it as the durable
+# reason it is, and then proves the store-level fact independently below.
+ceremony_refusal=""
 if [[ "${out}" == *"the capability-runtime store has moved"* ]]; then
-  pass "it refuses at the runtime-baseline gate, before touching the subject"
+  ceremony_refusal="the runtime baseline it pins is behind the store"
+elif [[ "${out}" == *"not the reviewed Generation-20"* ]]; then
+  ceremony_refusal="the installed runtime is no longer the Generation 20 it pins"
+fi
+if [[ -n "${ceremony_refusal}" ]]; then
+  pass "it refuses on a durable fact, before touching the subject: ${ceremony_refusal}"
 else
   fail "it refused for another reason: $(printf '%s' "${out}" | tail -2 | tr '\n' ' ')"
 fi
-if [[ "${out}" == *"not the reviewed Generation-20"* ]]; then
-  fail "it refused on the installed generation; Generation 20 is installed"
+# Whichever gate fired, BOTH facts are true, and both are measured here rather
+# than read out of the refusal text.
+if [[ "$(sha256sum "${INSTALLED}/tools/capability/cli.py" | cut -d' ' -f1)" \
+      != "90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23" ]]; then
+  pass "the host really has moved past Generation 20: the installed cli.py is not 90979a02"
 else
-  pass "the installed-generation gate passes: the host is at Generation 20"
+  fail "the host is at Generation 20, so the generation gate should not have fired"
+fi
+if [[ "${PRODUCTION_BEFORE}" != "9374b56870759ebccbbb74a38ada5905bcd5ce3bd1418428b72e148cdc662d68" ]]; then
+  pass "and the store really has moved past the pre-correction baseline the ceremony pins"
+else
+  fail "the store is still at the pre-correction baseline: the ceremony is not spent"
 fi
 if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
   pass "the refusal wrote nothing: production is byte-identical"
@@ -199,6 +253,8 @@ FIXTURE="${WORK}/conflict"
 [[ -e "${FIXTURE}" ]] && { chmod -R u+w "${FIXTURE}"; rm -rf "${FIXTURE}"; }
 cp -a "${PRODUCTION}" "${FIXTURE}"
 pass "a byte copy of production was taken, correction and all"
+FIXTURE_ADMIN_BEFORE="$(admin_names "${FIXTURE}")"
+FIXTURE_COUNTER_BEFORE="$(cat "${FIXTURE}/execution/cadm-counter")"
 
 if ( cd "${INSTALLED}" && python3 - "${FIXTURE}" <<'CONFLICTPY'
 import os
@@ -208,17 +264,32 @@ sys.path.insert(0, ".")
 from tools.capability import cli
 from tools.capability.execution import provenance
 
+# G11-BC-AJ. THE CALL IS BUILT FROM THE INSTALLED SIGNATURE, not from a
+# generation this suite assumes. Generation 22 adds a REQUIRED
+# `actual_occurrence_at`; a call that hard-codes Generation 21's argument list
+# would start failing the moment the operator installs it, which is the staleness
+# this checkpoint exists to end. The occurrence is the incident's own instant --
+# the rehearsal harness ran at 18:54:33 on 2026-09-20 -- and it is passed only
+# where the released verb accepts it.
+def call_kwargs(provenance, **kwargs):
+    import inspect
+    accepted = inspect.signature(provenance.correct_provenance).parameters
+    if "actual_occurrence_at" in accepted:
+        kwargs["actual_occurrence_at"] = "2026-09-20T18:54:33-05:00"
+    return kwargs
+
 root = cli._anchored(os.path.join(sys.argv[1], "execution"))
 try:
     try:
-        provenance.correct_provenance(
+        provenance.correct_provenance(**call_kwargs(
+            provenance,
             execution_root=root, subject_cadm="CADM-000001",
             cinv="CINV-000002", disputed_field="actor",
             disputed_value="primary-platform-operator",
             finding=provenance.FINDING_NOT_AUTHORISED,
             actual_initiator=provenance.INITIATOR_UNKNOWN,
             actor="somebody-else", request_id="a-different-request",
-            recorded_at="2026-09-22T09:00:00-05:00")
+            recorded_at="2026-09-22T09:00:00-05:00"))
     except provenance.ProvenanceRefused as error:
         print(f"refused: {error}")
         raise SystemExit(0)
@@ -231,10 +302,13 @@ CONFLICTPY
 else
   fail "a conflicting correction was accepted"
 fi
-if [[ ! -e "${FIXTURE}/execution/admin-records/CADM-000003" ]]; then
-  pass "and the refusal allocated nothing"
+# Measured, not named. The next free identity is whatever the counter says, and
+# an accepted ceremony may have taken several since this suite was written.
+if [[ "$(admin_names "${FIXTURE}")" == "${FIXTURE_ADMIN_BEFORE}" \
+   && "$(cat "${FIXTURE}/execution/cadm-counter")" == "${FIXTURE_COUNTER_BEFORE}" ]]; then
+  pass "and the refusal allocated nothing: the record set and the counter are where they were"
 else
-  fail "the refused correction allocated a record"
+  fail "the refused correction allocated a record: ${FIXTURE_ADMIN_BEFORE}-> $(admin_names "${FIXTURE}"), counter ${FIXTURE_COUNTER_BEFORE} -> $(cat "${FIXTURE}/execution/cadm-counter")"
 fi
 
 # An identical repeat resumes rather than writing a second finding. Asked of
@@ -247,16 +321,31 @@ sys.path.insert(0, ".")
 from tools.capability import cli
 from tools.capability.execution import provenance
 
+# G11-BC-AJ. THE CALL IS BUILT FROM THE INSTALLED SIGNATURE, not from a
+# generation this suite assumes. Generation 22 adds a REQUIRED
+# `actual_occurrence_at`; a call that hard-codes Generation 21's argument list
+# would start failing the moment the operator installs it, which is the staleness
+# this checkpoint exists to end. The occurrence is the incident's own instant --
+# the rehearsal harness ran at 18:54:33 on 2026-09-20 -- and it is passed only
+# where the released verb accepts it.
+def call_kwargs(provenance, **kwargs):
+    import inspect
+    accepted = inspect.signature(provenance.correct_provenance).parameters
+    if "actual_occurrence_at" in accepted:
+        kwargs["actual_occurrence_at"] = "2026-09-20T18:54:33-05:00"
+    return kwargs
+
 root = cli._anchored(os.path.join(sys.argv[1], "execution"))
 try:
-    outcome = provenance.correct_provenance(
+    outcome = provenance.correct_provenance(**call_kwargs(
+        provenance,
         execution_root=root, subject_cadm="CADM-000001", cinv="CINV-000002",
         disputed_field="actor", disputed_value="primary-platform-operator",
         finding=provenance.FINDING_NOT_AUTHORISED,
         actual_initiator=provenance.INITIATOR_UNAUTHORISED_REHEARSAL,
         actor="primary-platform-operator",
         request_id="g11bcy-correct-cadm-000001-attribution",
-        recorded_at="2026-09-21T06:42:08-05:00")
+        recorded_at="2026-09-21T06:42:08-05:00"))
     raise SystemExit(0 if (outcome.resumed and outcome.cadm == "CADM-000002")
                      else 1)
 finally:
@@ -267,10 +356,11 @@ RESUMEPY
 else
   fail "the identical repeat did not resume"
 fi
-if [[ "$(cat "${FIXTURE}/execution/cadm-counter")" == "000002" ]]; then
-  pass "and it allocated no identity"
+if [[ "$(cat "${FIXTURE}/execution/cadm-counter")" == "${FIXTURE_COUNTER_BEFORE}" \
+   && "$(admin_names "${FIXTURE}")" == "${FIXTURE_ADMIN_BEFORE}" ]]; then
+  pass "and it allocated no identity: the counter is still ${FIXTURE_COUNTER_BEFORE%$'\n'}"
 else
-  fail "the resume spent a CADM"
+  fail "the resume spent a CADM: counter ${FIXTURE_COUNTER_BEFORE} -> $(cat "${FIXTURE}/execution/cadm-counter")"
 fi
 
 # ===========================================================================
@@ -295,10 +385,16 @@ if [[ "$(sha256sum "${PRODUCTION}/execution/admin-records/CADM-000002/provenance
 else
   fail "PRODUCTION'S CORRECTION RECORD CHANGED"
 fi
-if [[ ! -e "${PRODUCTION}/execution/admin-records/CADM-000003" ]]; then
-  pass "and no further administrative record was created"
+# "No CADM-000003" was the right assertion until the operator concluded
+# CINV-000003 and the 2026-09-24 escape wrote CADM-000004 -- neither of which
+# this suite has anything to do with. What must still be true is that THIS RUN
+# created nothing, so the record set and the counter are compared against what
+# this run found, and the subject's own records stay pinned by content above.
+if [[ "$(admin_names "${PRODUCTION}")" == "${ADMIN_BEFORE}" \
+   && "$(cat "${PRODUCTION}/execution/cadm-counter")" == "${CADM_COUNTER_BEFORE}" ]]; then
+  pass "and no further administrative record was created: production still holds ${ADMIN_BEFORE}"
 else
-  fail "A PRODUCTION ADMINISTRATIVE RECORD WAS CREATED"
+  fail "A PRODUCTION ADMINISTRATIVE RECORD WAS CREATED: ${ADMIN_BEFORE}-> $(admin_names "${PRODUCTION}")"
 fi
 
 printf '\n'

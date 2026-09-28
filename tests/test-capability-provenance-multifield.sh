@@ -433,6 +433,179 @@ assert detail['action_reversed'] is False
 assert 'corrected_value' not in detail and 'true_actor' not in detail
 "
 
+printf -- '\n--- the finding mapping is one mapping, in three places ---\n'
+
+# WHY THIS SECTION EXISTS. When the CADM-000004 ceremony was first prepared at
+# G11-BC-AI it carried ONE finding and passed it to all three corrections, which
+# recorded `actor` as `assertion-synthetic` where ADR-0018 says
+# `attribution-not-authorised`. This suite's own helper had the mapping right, so
+# nothing disagreed with anything it could see. The reviewer caught it by reading
+# the ADR against the ceremony -- exactly the comparison no test was making. It
+# is made here.
+#
+# Three independent statements of one mapping: the ADR's table, the prepared
+# ceremony's constants, and this suite's helper. Each is parsed from its own
+# file, so agreement is measured rather than assumed.
+
+run_case "ADR-0018, the ceremony and this suite state one finding mapping" "
+import re, sys
+sys.path.insert(0, '.')
+from tools.capability.execution.provenance import (
+    FINDING_NOT_AUTHORISED, FINDING_SYNTHETIC)
+
+REVIEWED = {'actor': FINDING_NOT_AUTHORISED,
+            'request_id': FINDING_SYNTHETIC,
+            'recorded_at': FINDING_SYNTHETIC}
+
+# 1. The ADR's table, read out of the markdown row by row.
+adr = open('docs/decisions/'
+           'ADR-0018-provenance-correction-of-synthetic-authority.md',
+           encoding='utf-8').read()
+rows = re.findall(r'^\| \`(actor|request_id|recorded_at)\` \| \`(.+?)\` \| '
+                  r'\`([a-z-]+)\` \|\$', adr, re.M)
+adr_map = {field: finding for field, _value, finding in rows}
+adr_values = {field: value for field, value, _finding in rows}
+assert adr_map == REVIEWED, f'the ADR table says {adr_map}'
+assert adr_values == {'actor': 'x', 'request_id': 'y',
+                      'recorded_at': '2026-09-20T20:00:00-05:00'}, adr_values
+
+# 2. The prepared ceremony's constants.
+ceremony = open('provisioning/execution/'
+                'g11-bc-ai-cadm-000004-provenance-correction-ceremony.txt',
+                encoding='utf-8').read()
+constants = dict(re.findall(r'^FINDING_([A-Z_]+)=([a-z-]+)\$', ceremony, re.M))
+ceremony_map = {name.lower(): value for name, value in constants.items()}
+assert ceremony_map == REVIEWED, f'the ceremony constants say {ceremony_map}'
+
+# 3. And the ceremony USES them, one per field, in the right place. A table
+#    nothing reads would be decoration.
+calls = re.findall(r'^correct_one (\S+) +(\S+) +\"\\\${(FINDING_[A-Z_]+)}\" +'
+                   r'(CADM-\d{6})\$', ceremony, re.M)
+assert len(calls) == 3, f'the ceremony makes {len(calls)} correction calls'
+used = {field: constants[name[len('FINDING_'):]] for field, _v, name, _c in calls}
+assert used == REVIEWED, f'the ceremony passes {used}'
+allocated = [cadm for _f, _v, _n, cadm in calls]
+assert allocated == ['CADM-000005', 'CADM-000006', 'CADM-000007'], allocated
+
+# 4. No single global finding survives anywhere in the ceremony: that shape is
+#    the defect, so its absence is the property.
+assert not re.search(r'^FINDING=', ceremony, re.M), \
+    'the ceremony still carries one global finding'
+print('one mapping, three statements, in agreement')
+"
+
+run_case "every reviewed finding is one the released runtime admits" "${PRELUDE}
+from tools.capability.execution.provenance import FINDINGS
+for field, finding in (('actor', FINDING_NOT_AUTHORISED),
+                       ('request_id', FINDING_SYNTHETIC),
+                       ('recorded_at', FINDING_SYNTHETIC)):
+    assert finding in FINDINGS, (field, finding)
+# And the two findings are genuinely two: a mapping where they collapsed would
+# make the distinction unrecordable rather than merely unrecorded.
+assert FINDING_NOT_AUTHORISED != FINDING_SYNTHETIC
+"
+
+printf -- '\n--- the production chain, numbered as production numbers it ---\n'
+
+# The fixture is seeded so the harness's abandonment allocates CADM-000004 and
+# the three corrections land on CADM-000005, 000006 and 000007 -- the identities
+# the prepared ceremony expects. Proving the numbering here is what makes those
+# `expected_cadm` arguments a checked claim rather than a hope.
+PRODUCTION_PRELUDE="${PRELUDE}
+def production(name):
+    # The store as production carries it: cadm-counter at 000003, so the
+    # harness's abandonment becomes CADM-000004.
+    base = make(name)
+    with open(os.path.join(base, 'root', 'cadm-counter'), 'wb') as handle:
+        handle.write(b'000003\n')
+    root = anchor(base)
+    reserve(root, 'CINV-000001')
+    transition(root, 'CINV-000001', LifecycleState.RESERVED,
+               LifecycleState.LAUNCH_AUTHORIZED)
+    outcome = abandon(store=FakeStore(), execution_root=root, cinv='CINV-000001',
+                      actor=DISPUTED['actor'], request_id=DISPUTED['request_id'],
+                      recorded_at=DISPUTED['recorded_at'],
+                      reason=REASON_HISTORICAL_INCOMPLETE_EXECUTION)
+    return base, root, outcome
+
+REVIEWED_FINDING = {'actor': FINDING_NOT_AUTHORISED,
+                    'request_id': FINDING_SYNTHETIC,
+                    'recorded_at': FINDING_SYNTHETIC}
+"
+
+run_case "the three corrections are CADM-000005/6/7, each under its own finding" "${PRODUCTION_PRELUDE}
+base, root, abandonment = production('p1')
+assert abandonment.cadm == 'CADM-000004', abandonment.cadm
+
+expected_cadm = {'actor': 'CADM-000005', 'request_id': 'CADM-000006',
+                 'recorded_at': 'CADM-000007'}
+for field in ('actor', 'request_id', 'recorded_at'):
+    out = correct_provenance(execution_root=root,
+                             **correction(field, subject_cadm='CADM-000004',
+                                          finding=REVIEWED_FINDING[field]))
+    assert out.cadm == expected_cadm[field], (field, out.cadm)
+    assert out.subject_cadm == 'CADM-000004'
+    assert out.subject_member == 'abandonment'
+    assert out.disputed_field == field
+    assert out.disputed_value == DISPUTED[field]
+    assert out.finding == REVIEWED_FINDING[field], (field, out.finding)
+    assert out.actual_initiator == INITIATOR_UNAUTHORISED_TEST_HARNESS
+    assert out.actual_occurrence_at == OCCURRED
+    assert out.effect == EFFECT_RETAINED
+    assert out.lifecycle_state == 'abandoned'
+    assert out.resumed is False
+
+# Read back from the durable records, because what was written is the thing that
+# has to be right.
+for field, cadm in expected_cadm.items():
+    detail = existing_correction(root, 'CADM-000004', field)
+    assert detail['cadm'] == cadm, (field, detail['cadm'])
+    assert detail['finding'] == REVIEWED_FINDING[field], (field, detail['finding'])
+    assert detail['actual_initiator'] == INITIATOR_UNAUTHORISED_TEST_HARNESS
+    assert detail['actual_occurrence_at'] == OCCURRED
+    assert detail['action_reversed'] is False
+    assert detail['lifecycle_unchanged'] is True
+    assert detail['slot_changed'] is False
+    assert detail['lifecycle_state'] == 'abandoned'
+assert existing_correction(root, 'CADM-000004', 'actor')['finding'] \
+    != existing_correction(root, 'CADM-000004', 'request_id')['finding'], \
+    'actor and request_id were recorded under the same finding'
+print('CADM-000005/6/7, each under the finding ADR-0018 gives it')
+"
+
+run_case "the chain moves no lifecycle, no mutation, no result and no sequence" "${PRODUCTION_PRELUDE}
+import glob
+base, root, abandonment = production('p2')
+
+def snapshot():
+    return {
+        'cmut': open(os.path.join(base, 'root', CMUT_COUNTER), 'rb').read(),
+        'transitions': sorted(os.listdir(os.path.join(base, 'root',
+                                                      TRANSITIONS_DIRECTORY))),
+        'states': {k: v.value for k, v in sm.all_states(root).items()},
+        'held': sum(1 for v in sm.all_states(root).values()
+                    if v in capacity_module.slot_holding_states()),
+        'subject': hashlib.sha256(open(os.path.join(
+            base, 'root', 'admin-records', 'CADM-000004',
+            'abandonment'), 'rb').read()).hexdigest(),
+    }
+
+before = snapshot()
+for field in ('actor', 'request_id', 'recorded_at'):
+    correct_provenance(execution_root=root,
+                       **correction(field, subject_cadm='CADM-000004',
+                                    finding=REVIEWED_FINDING[field]))
+after = snapshot()
+assert before == after, {k: (before[k], after[k])
+                         for k in before if before[k] != after[k]}
+assert after['held'] == 0, after['held']
+assert after['states'] == {'CINV-000001': 'abandoned'}, after['states']
+# No result namespace was created, and the counter that would journal a
+# lifecycle move is byte-identical.
+assert not glob.glob(os.path.join(base, 'root', 'capability-results', '*'))
+print('three corrections, and nothing that decides anything moved')
+"
+
 printf -- '\n'
 if (( FAILURES == 0 )); then
   printf 'ADR-0018 multi-field provenance correction validation passed.\n'
