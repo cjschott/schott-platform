@@ -311,9 +311,39 @@ else
   fail "the refused correction allocated a record: ${FIXTURE_ADMIN_BEFORE}-> $(admin_names "${FIXTURE}"), counter ${FIXTURE_COUNTER_BEFORE} -> $(cat "${FIXTURE}/execution/cadm-counter")"
 fi
 
-# An identical repeat resumes rather than writing a second finding. Asked of
-# the copy, so the accepted production record is never the thing under test.
-if ( cd "${INSTALLED}" && python3 - "${FIXTURE}" <<'RESUMEPY'
+# AN IDENTICAL REPEAT, AND WHICH ANSWER IS THE TRUTHFUL ONE.
+#
+# Under ADR-0016 this resumed: the verb recognised the record it had already
+# written and reported it without spending anything. Asked of a byte copy, so the
+# accepted production record is never the thing under test.
+#
+# G11-BC-AK FOUND THAT IT NO LONGER CAN, AND WHY. ADR-0018 added
+# `actual_occurrence_at` to the written detail, and the conflict check compares
+# EVERY recorded field. CADM-000002 was written under ADR-0016 and carries no
+# such member, so against a Generation-22 runtime there is no call that resumes
+# it:
+#
+#   supply --actual-occurrence-at  -> ProvenanceRefused: already corrected under
+#                                     different authority (actual_occurrence_at
+#                                     None, not '2026-09-20T18:54:33-05:00')
+#   omit it                        -> TypeError: missing 1 required keyword-only
+#                                     argument
+#
+# Both fail closed and write nothing, so no record can be damaged by it. But the
+# refusal names the WRONG CAUSE -- the authority is identical; only the schema
+# differs -- and in a provenance subsystem a refusal that misdescribes itself is
+# the class of defect this whole arc exists to remove.
+#
+# THIS SUITE DOES NOT PRETEND EITHER WAY. It asks the prior record whether it
+# carries the field, and asserts whichever behaviour is actually correct for the
+# pair in front of it: resume where the schemas agree, and a fail-closed refusal
+# that writes nothing where they do not. The gap is reported as an ENG-0005
+# obligation at
+# docs/development/reports/eng-0005/2026-10-01-g11-bc-ak-post-correction-acceptance.md
+# and is NOT repaired here: the repair is in `provenance.py`, which is installed,
+# and changing it means a Generation 23 the reviewer has not authorised.
+resume_shape="$( cd "${INSTALLED}" && python3 - "${FIXTURE}" <<'SHAPEPY'
+import inspect
 import os
 import sys
 
@@ -321,40 +351,80 @@ sys.path.insert(0, ".")
 from tools.capability import cli
 from tools.capability.execution import provenance
 
-# G11-BC-AJ. THE CALL IS BUILT FROM THE INSTALLED SIGNATURE, not from a
-# generation this suite assumes. Generation 22 adds a REQUIRED
-# `actual_occurrence_at`; a call that hard-codes Generation 21's argument list
-# would start failing the moment the operator installs it, which is the staleness
-# this checkpoint exists to end. The occurrence is the incident's own instant --
-# the rehearsal harness ran at 18:54:33 on 2026-09-20 -- and it is passed only
-# where the released verb accepts it.
-def call_kwargs(provenance, **kwargs):
-    import inspect
-    accepted = inspect.signature(provenance.correct_provenance).parameters
-    if "actual_occurrence_at" in accepted:
-        kwargs["actual_occurrence_at"] = "2026-09-20T18:54:33-05:00"
-    return kwargs
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    prior = provenance.existing_correction(root, "CADM-000001", "actor")
+    required = "actual_occurrence_at" in inspect.signature(
+        provenance.correct_provenance).parameters
+    carried = prior is not None and "actual_occurrence_at" in prior
+    print("resumable" if (carried or not required) else "schema-divergent")
+finally:
+    root.close()
+SHAPEPY
+)"
+if [[ "${resume_shape}" == "resumable" ]]; then
+  pass "the prior record and the installed verb agree on the record schema"
+else
+  pass "the prior record predates ADR-0018 and the installed verb requires its new member: a repeat CANNOT resume, and this suite asserts the refusal instead (see G11-BC-AK obligation 1)"
+fi
+
+resume_out="${WORK}/resume.txt"
+set +e
+( cd "${INSTALLED}" && python3 - "${FIXTURE}" <<'RESUMEPY' > "${resume_out}" 2>&1
+import inspect
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import provenance
+
+ACCEPTED = dict(
+    subject_cadm="CADM-000001", cinv="CINV-000002",
+    disputed_field="actor", disputed_value="primary-platform-operator",
+    finding=provenance.FINDING_NOT_AUTHORISED,
+    actual_initiator=provenance.INITIATOR_UNAUTHORISED_REHEARSAL,
+    actor="primary-platform-operator",
+    request_id="g11bcy-correct-cadm-000001-attribution",
+    recorded_at="2026-09-21T06:42:08-05:00")
 
 root = cli._anchored(os.path.join(sys.argv[1], "execution"))
 try:
-    outcome = provenance.correct_provenance(**call_kwargs(
-        provenance,
-        execution_root=root, subject_cadm="CADM-000001", cinv="CINV-000002",
-        disputed_field="actor", disputed_value="primary-platform-operator",
-        finding=provenance.FINDING_NOT_AUTHORISED,
-        actual_initiator=provenance.INITIATOR_UNAUTHORISED_REHEARSAL,
-        actor="primary-platform-operator",
-        request_id="g11bcy-correct-cadm-000001-attribution",
-        recorded_at="2026-09-21T06:42:08-05:00"))
-    raise SystemExit(0 if (outcome.resumed and outcome.cadm == "CADM-000002")
-                     else 1)
+    kwargs = dict(execution_root=root, **ACCEPTED)
+    if "actual_occurrence_at" in inspect.signature(
+            provenance.correct_provenance).parameters:
+        kwargs["actual_occurrence_at"] = "2026-09-20T18:54:33-05:00"
+    try:
+        outcome = provenance.correct_provenance(**kwargs)
+    except provenance.ProvenanceRefused as error:
+        print(f"REFUSED {error}")
+    else:
+        print(f"RETURNED resumed={outcome.resumed} cadm={outcome.cadm}")
 finally:
     root.close()
 RESUMEPY
-); then
-  pass "the identical correction resumes and reports the record already written"
+)
+set -e
+if [[ "${resume_shape}" == "resumable" ]]; then
+  if grep -q "RETURNED resumed=True cadm=CADM-000002" "${resume_out}"; then
+    pass "the identical correction resumes and reports the record already written"
+  else
+    fail "the identical repeat did not resume: $(tail -1 "${resume_out}")"
+  fi
 else
-  fail "the identical repeat did not resume"
+  # The refusal must be the RELEASED refusal -- a judgement naming the field that
+  # differs -- and not a crash.
+  if grep -q "^REFUSED .*already corrected under different authority" "${resume_out}" \
+     && grep -q "actual_occurrence_at" "${resume_out}"; then
+    pass "the repeat is refused as a judgement, naming actual_occurrence_at as the field that differs"
+  else
+    fail "the repeat neither resumed nor refused for the recorded reason: $(tail -1 "${resume_out}")"
+  fi
+  if grep -q "Traceback" "${resume_out}"; then
+    fail "something crashed instead of refusing"
+  else
+    pass "it refused rather than crashing: nothing was raised out of the verb"
+  fi
 fi
 if [[ "$(cat "${FIXTURE}/execution/cadm-counter")" == "${FIXTURE_COUNTER_BEFORE}" \
    && "$(admin_names "${FIXTURE}")" == "${FIXTURE_ADMIN_BEFORE}" ]]; then

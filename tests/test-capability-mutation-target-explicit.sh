@@ -53,6 +53,14 @@ trap 'chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"' EXIT
 
 aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
 PRODUCTION_BEFORE="$(aggregate "${PRODUCTION}")"
+# The administrative namespace as this run found it. Compared at the end, because
+# the question is whether THIS RUN wrote anything -- not how many records the
+# accepted history happens to contain.
+admin_names() {
+  find "$1/execution/admin-records" -mindepth 1 -maxdepth 1 -printf '%f\n' \
+    2>/dev/null | sort | tr '\n' ' '
+}
+ADMIN_BEFORE="$(admin_names "${PRODUCTION}")"
 
 # A copy of production, rewound past the 2026-09-24 incident. G11-BC-AH.
 #
@@ -69,15 +77,61 @@ PRODUCTION_BEFORE="$(aggregate "${PRODUCTION}")"
 INCIDENT_CADM=CADM-000004
 INCIDENT_CMUT=CMUT-000000000012
 INCIDENT_TRANSITION=CINV-000001.000003
+# The last administrative record that existed BEFORE the incident. Everything
+# after it is removed, rather than the incident's own record being named alone.
+#
+# G11-BC-AK: NAMING ONE RECORD WAS NOT ENOUGH, FOR THE SECOND TIME. This builder
+# removed `${INCIDENT_CADM}` and rewound the counter to 3. On 2026-10-01 the
+# operator recorded the three ADR-0018 corrections of that very record, so a copy
+# cut today carried CADM-000005, 000006 and 000007 above a counter that said 3,
+# and the released integrity check refused the whole fixture:
+# `the CADM counter stands at 3 behind recorded 7`. That is the same drift
+# `uncorrected_fixture` below was already repaired for at G11-BC-AG, so the
+# derivation is now shared rather than written twice.
+#
+# Removing the corrections WITH their subject is the truthful thing to do: they
+# are about ${INCIDENT_CADM}, and a fixture that kept them while dropping the
+# record they dispute would hold three findings pointing at nothing.
+LAST_CADM_BEFORE_INCIDENT=3
+
+# Rewind a copy's administrative namespace to just after CADM-<ordinal>, by
+# derivation. Every record above the ordinal goes, and the counter is set to the
+# ordinal, so the two can never disagree -- which is the failure mode this
+# function exists to make impossible.
+rewind_admin_records() {
+  local path="$1" keep="$2" record ordinal
+  for record in "${path}/execution/admin-records"/CADM-*; do
+    [[ -e "${record}" ]] || continue
+    ordinal="$(basename "${record}")"; ordinal="${ordinal#CADM-}"
+    (( 10#${ordinal} > keep )) && rm -rf "${record}"
+  done
+  printf '%06d\n' "${keep}" > "${path}/execution/cadm-counter"
+  # Asserted, not assumed: the highest surviving record must be the counter.
+  local highest=0
+  for record in "${path}/execution/admin-records"/CADM-*; do
+    [[ -e "${record}" ]] || continue
+    ordinal="$(basename "${record}")"; ordinal="${ordinal#CADM-}"
+    (( 10#${ordinal} > highest )) && highest=$(( 10#${ordinal} ))
+  done
+  (( highest == keep )) \
+    || { printf 'FIXTURE BROKEN: rewound to %d but the highest record is %d\n' \
+           "${keep}" "${highest}" >&2; return 1; }
+}
+
 fixture() {
   local path="${WORK}/$1"
   [[ -e "${path}" ]] && { chmod -R u+w "${path}"; rm -rf "${path}"; }
   cp -a "${PRODUCTION}" "${path}"
   chmod -R u+w "${path}"
-  rm -rf "${path}/execution/admin-records/${INCIDENT_CADM}"
   rm -rf "${path}/execution/mutations/${INCIDENT_CMUT}"
   rm -f  "${path}/execution/transitions/${INCIDENT_TRANSITION}"
-  printf '000003\n'       > "${path}/execution/cadm-counter"
+  rewind_admin_records "${path}" "${LAST_CADM_BEFORE_INCIDENT}" || return 1
+  # The derivation must have taken the incident's own record with it. Named, so
+  # the rewind is checked against what it is for rather than only against a
+  # counter.
+  [[ ! -e "${path}/execution/admin-records/${INCIDENT_CADM}" ]] \
+    || { printf 'FIXTURE BROKEN: %s survived the rewind\n' "${INCIDENT_CADM}" >&2
+         return 1; }
   printf '000000000011\n' > "${path}/execution/cmut-counter"
   printf '%s' "${path}"
 }
@@ -96,16 +150,10 @@ fixture() {
 # after the first is removed, so a later one does not break this again.
 LAST_CADM_BEFORE_CORRECTION=1
 uncorrected_fixture() {
-  local path record ordinal
+  local path
   path="$(fixture "$1")"
   chmod -R u+w "${path}"
-  for record in "${path}/execution/admin-records"/CADM-*; do
-    [[ -e "${record}" ]] || continue
-    ordinal="$(basename "${record}")"; ordinal="${ordinal#CADM-}"
-    (( 10#${ordinal} > LAST_CADM_BEFORE_CORRECTION )) && rm -rf "${record}"
-  done
-  true
-  printf '%06d\n' "${LAST_CADM_BEFORE_CORRECTION}" > "${path}/execution/cadm-counter"
+  rewind_admin_records "${path}" "${LAST_CADM_BEFORE_CORRECTION}" || return 1
   printf '%s' "${path}"
 }
 
@@ -570,16 +618,22 @@ if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
 else
   fail "THE PRODUCTION RUNTIME CHANGED"
 fi
-# Four now: the CINV-000002 abandonment, the operator's accepted correction of
-# it, the CINV-000003 conclusion of 2026-09-24, and CADM-000004 -- the
-# CINV-000001 abandonment this suite itself caused on 2026-09-24 before it was
-# disarmed. The reviewer retained that lifecycle effect; its asserted authority
-# is disputed and recorded at G11-BC-AH. Pinned as an exact count rather than
-# read from the store, so a fifth appearing is a failure here.
-if [[ "$(find "${PRODUCTION}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" == "4" ]]; then
-  pass "production still holds exactly its four administrative records"
+# G11-BC-AK: THE COUNT WAS PINNED AT FOUR, AND THEN THE ACCEPTED HISTORY GREW.
+#
+# The four were the CINV-000002 abandonment, the operator's accepted correction
+# of it, the CINV-000003 conclusion, and CADM-000004 -- the CINV-000001
+# abandonment this suite itself caused on 2026-09-24 before it was disarmed. On
+# 2026-10-01 the operator recorded the three ADR-0018 corrections of that record,
+# so there are seven, and a pinned four made an accepted ceremony look like
+# damage. That is the same defect repaired in two other suites at G11-BC-AJ.
+#
+# The tripwire this was meant to be is "THIS RUN wrote nothing", so it is
+# compared against what the run itself found. The subject's own records stay
+# pinned by content, above and below.
+if [[ "$(admin_names "${PRODUCTION}")" == "${ADMIN_BEFORE}" ]]; then
+  pass "production still holds exactly the records this run found: ${ADMIN_BEFORE}"
 else
-  fail "the production administrative records changed"
+  fail "the production administrative records changed: ${ADMIN_BEFORE}-> $(admin_names "${PRODUCTION}")"
 fi
 if [[ "$(sha256sum "${PRODUCTION}/execution/admin-records/CADM-000002/provenance-correction" | cut -d' ' -f1)" \
       == "47b977d83b164ee9056527d99ec40d995b8e9b26e4b63b992df1ac8da8b0e58e" ]]; then
