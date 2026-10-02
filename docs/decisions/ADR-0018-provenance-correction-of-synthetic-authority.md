@@ -192,14 +192,43 @@ visible.
 
 ## Compatibility
 
-- No record schema changes. `provenance.py`'s detail members are unchanged; only
-  which `disputed_field` values are admissible moves.
-- Existing `CADM-000002` (the ADR-0016 correction of `CADM-000001`) is untouched
-  and still valid: `actor` remains correctable and
-  `attribution-not-authorised` remains a finding.
+**Corrected at G11-BC-AL.** This section previously said *"No record schema
+changes. `provenance.py`'s detail members are unchanged"*. That was wrong, and it
+contradicted this ADR's own §Semantics, which says `actual_occurrence_at` is new.
+The runtime writes that member into every correction detail, so the
+provenance-correction **detail shape did change**. The error was not harmless: it
+is what let the ADR-0016 resume gap ship unnoticed. What is true, stated as four
+separate things that the old wording ran together:
+
+- **No subject record is rewritten.** A correction opens nothing for writing. The
+  record it disputes — `CADM-000004`'s `abandonment` member — is read, digested,
+  and left exactly as it is. That is the claim the old wording was reaching for.
+- **No lifecycle schema changes.** No state, no transition record, no result
+  record, no `CINV` or `CRES` field moves. `MAXIMUM_SLOTS` is unchanged at 2 and
+  occupancy is unchanged.
+- **The provenance-correction DETAIL SHAPE gained `actual_occurrence_at`.** Every
+  correction written under this ADR carries it; `correction_schema_version`
+  remains `1`, so **the version does not distinguish the two shapes — the presence
+  of the member does.** That is unambiguous in both directions, because this ADR's
+  source writes the member unconditionally and ADR-0016 had no such member.
+- **ADR-0016 records without it remain valid historical records.**
+  `CADM-000002` is untouched and still means what it meant: `actor` remains
+  correctable, `attribution-not-authorised` remains a finding. Nothing is
+  retrofitted into it, then or ever.
+
+**A reader of this ADR or newer must handle the older shape deliberately, and
+that is now a rule rather than an expectation.** Absence of a member that a later
+ADR introduced is a **legacy record shape**, never evidence of different
+authority. The create-once resume comparison therefore compares only the members
+the prior durable record actually carries, and reports what that record holds —
+for `CADM-000002`, no occurrence at all — rather than echoing back what the caller
+supplied. A member absent from a prior record and *not* named in the closed set of
+later-schema additions is a shape the runtime has no comparison rule for, and it
+refuses on that ground with a schema reason. See
+`LATER_SCHEMA_MEMBERS` in `provenance.py`, published by **Generation 23**.
+
 - A reader older than this ADR refuses an unknown `disputed_field` or `finding`
   rather than misreading it, which is the correct direction.
-- `MAXIMUM_SLOTS` unchanged at 2; occupancy unchanged at 0 of 2.
 
 ## Consequences
 

@@ -428,7 +428,7 @@ GENERATION_DELTA=(
 # Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-20.sh`
 # is the ceremony that publishes them, and it has not been run.
 "tools/capability/execution/backing_store.py|REPLACE|03331aa8b974d636a39710c53867af5a4ae6e1480cc68404009df118e24c4c32|e82aa24b6fe2ef2336737ca344bb5d6b35af9c95b70f0c2ce78bc8dcb786259f"
-"tools/capability/execution/provenance.py|REPLACE|ABSENT,2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6|2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6,e0f6ffeb57f78db460a126e6e1e8b58a7575401c13e681ac0d7d6e8cd21c0435"
+"tools/capability/execution/provenance.py|REPLACE|ABSENT,2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6,e0f6ffeb57f78db460a126e6e1e8b58a7575401c13e681ac0d7d6e8cd21c0435|2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6,e0f6ffeb57f78db460a126e6e1e8b58a7575401c13e681ac0d7d6e8cd21c0435,39141cd453d74c8cfb4fee7348f45fff4dfa68b5155edaff6886daf990387647"
 
 # --- GENERATION 21: post-execution lifecycle conclusion (ADR-0017) -----------
 #
@@ -482,8 +482,40 @@ GENERATION_DELTA=(
 # still carry exactly the declared bytes, and a host that HAS the object must
 # still hold either a named baseline or the new bytes.
 #
-# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-22.sh`
-# is the ceremony that publishes them, and it has not been run.
+# Declared here as pending. NOT INSTALLED at the time of writing; Generation 22
+# was published by `provisioning/execution/install-generation-22.sh` on
+# 2026-10-01 and both digests above are now the installed ones.
+
+# --- GENERATION 23: ADR-0016 correction shape compatibility (ADR-0018 §C) -----
+#
+# `CADM-000002` was written under ADR-0016 and carries no `actual_occurrence_at`.
+# The Generation-22 resume check compares every recorded member, so a prior
+# record simply missing a LATER member was refused as "already corrected under
+# different authority" -- untrue twice: the authority is identical, and what
+# differs is the record SHAPE. Omitting the argument instead raised a TypeError.
+# Both failed closed, but a refusal that misdescribes itself is the defect this
+# subsystem exists to remove.
+#
+# ONE OBJECT, DERIVED RATHER THAN ASSUMED. `provenance.py` gains the closed set
+# of later-schema members, a resume comparison that skips the ones a prior record
+# does not carry, and a return that reports what the record HOLDS instead of
+# echoing the request. `cli.py` does NOT move: it reads the field and serialises
+# it, so a `None` becomes `null` with no code change, and nothing else in the
+# installed tree imports what changed. Measured, not assumed: exactly one
+# installed object differs from the reviewed tree.
+#
+# NO VERSION BUMP, and that was proved rather than preferred.
+# `correction_schema_version` is 1 on BOTH shapes, so the version discriminates
+# nothing; the presence of `actual_occurrence_at` discriminates totally, because
+# the ADR-0018 source writes it unconditionally and the ADR-0016 source had no
+# such member. The smallest reader-side rule is therefore sufficient, and no old
+# record is rewritten.
+#
+# `provenance.py` moves its Generation-22 digest into the baseline list and gains
+# its Generation-23 digest as a successor, exactly as at G11-BC-E and G11-BC-K.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-23.sh`
+# is the ceremony that publishes it, and it has not been run.
 )
 
 # The reviewed operator modules. Pinned so root is told exactly which bytes it

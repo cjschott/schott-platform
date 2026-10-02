@@ -66,6 +66,25 @@ FIELD_REQUEST_ID = "request_id"
 FIELD_RECORDED_AT = "recorded_at"
 CORRECTABLE_FIELDS = frozenset({FIELD_ACTOR, FIELD_REQUEST_ID, FIELD_RECORDED_AT})
 
+# A recorded detail member, not a correctable claim. Named because the resume
+# comparison below has to reason about whether a prior record carries it.
+MEMBER_ACTUAL_OCCURRENCE_AT = "actual_occurrence_at"
+
+# THE DETAIL MEMBERS INTRODUCED AFTER ADR-0016, each with the ADR that added it.
+#
+# ADR-0018 (G11-BC-AL). `CADM-000002` was written under ADR-0016 and carries no
+# `actual_occurrence_at`. The create-once resume check compares every recorded
+# member, so a prior record simply missing a LATER member was reported as
+# "already corrected under different authority" -- which is untrue twice over:
+# the authority is identical, and what differs is the record SHAPE. A refusal
+# that misdescribes itself is the defect this subsystem exists to remove.
+#
+# So absence of a member named here is a LEGACY RECORD SHAPE and is skipped by
+# the comparison. The set is CLOSED: a prior record missing anything NOT named
+# here is a shape this runtime has no rule for, and that refuses on its schema
+# rather than guessing. Nothing is ever written back into an older record.
+LATER_SCHEMA_MEMBERS: dict[str, str] = {MEMBER_ACTUAL_OCCURRENCE_AT: "ADR-0018"}
+
 # What is wrong with the claim. Closed, because "the audit is answerable only by
 # reading prose" is the failure mode the administrative namespace already
 # avoids everywhere else.
@@ -129,7 +148,11 @@ class Correction:
     disputed_value: str
     finding: str
     actual_initiator: str
-    actual_occurrence_at: str
+    # `None` where the resumed record predates ADR-0018 and carries no such
+    # member. The alternative would be echoing back the value the CALLER
+    # supplied, which would report a legacy record as holding an occurrence it
+    # does not hold. G11-BC-AL.
+    actual_occurrence_at: str | None
     effect: str
     lifecycle_state: str
     resumed: bool
@@ -291,6 +314,37 @@ def _subject_member(members: dict[str, bytes], subject_cadm: str,
     return carrying[0]
 
 
+def _compare_for_resume(prior: dict[str, Any], subject: str, field: str,
+                        compared: tuple[tuple[str, Any], ...]) -> tuple[str, ...]:
+    """Judge an identical-looking repeat against the record already written.
+
+    Returns the members the prior record does NOT carry, which are its legacy
+    shape and are not compared. Raises `ProvenanceRefused` when a member the
+    record DOES carry disagrees, or when it is missing a member no ADR ever
+    added -- a shape with no comparison rule, refused rather than guessed at.
+
+    **Absence of a later-added member is never an authority difference.** That
+    conflation is the G11-BC-AL defect, and keeping the two reasons apart is the
+    whole point of this function existing separately from its caller.
+    """
+    absent = tuple(key for key, _ in compared if key not in prior)
+    unknown = tuple(key for key in absent if key not in LATER_SCHEMA_MEMBERS)
+    if unknown:
+        raise ProvenanceRefused(
+            f"{subject}/{field} holds a correction record this runtime cannot "
+            f"compare: {list(unknown)} absent, and absent from no schema change "
+            f"this runtime knows about. The record is historical evidence; it is "
+            f"neither rewritten nor guessed at, so this refuses on its shape.")
+    for key, value in compared:
+        if key in absent:
+            continue
+        if prior.get(key) != value:
+            raise ProvenanceRefused(
+                f"{subject}/{field} is already corrected under different "
+                f"authority ({key} {prior.get(key)!r}, not {value!r})")
+    return absent
+
+
 def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
                        disputed_field: Any, disputed_value: Any, finding: Any,
                        actual_initiator: Any, actor: Any, request_id: Any,
@@ -381,27 +435,27 @@ def correct_provenance(*, execution_root: Any, subject_cadm: Any, cinv: Any,
 
         prior = existing_correction(execution_root, subject, field)
         if prior is not None:
-            for key, value in (("subject_member", member_name),
-                               ("subject_digest", digest),
-                               ("cinv", identity),
-                               ("disputed_value", claimed),
-                               ("finding", finding_text),
-                               ("actual_initiator", initiator),
-                               ("actor", actor_text),
-                               ("request_id", request_text),
-                               ("recorded_at", recorded_text),
-                               ("actual_occurrence_at", occurrence_text)):
-                if prior.get(key) != value:
-                    raise ProvenanceRefused(
-                        f"{subject}/{field} is already corrected under "
-                        f"different authority ({key} {prior.get(key)!r}, not "
-                        f"{value!r})")
+            _compare_for_resume(prior, subject, field, (
+                ("subject_member", member_name),
+                ("subject_digest", digest),
+                ("cinv", identity),
+                ("disputed_value", claimed),
+                ("finding", finding_text),
+                ("actual_initiator", initiator),
+                ("actor", actor_text),
+                ("request_id", request_text),
+                ("recorded_at", recorded_text),
+                (MEMBER_ACTUAL_OCCURRENCE_AT, occurrence_text)))
+            # READ BACK FROM THE RECORD, not echoed from the request. For an
+            # ADR-0018 record the two are equal -- the comparison above has just
+            # proved it -- and for an ADR-0016 record there is nothing to report,
+            # which is the truthful answer and not a value to invent.
             return Correction(
                 cadm=prior["cadm"], subject_cadm=subject,
                 subject_member=member_name, subject_digest=digest,
                 cinv=identity, disputed_field=field, disputed_value=claimed,
                 finding=finding_text, actual_initiator=initiator,
-            actual_occurrence_at=occurrence_text,
+                actual_occurrence_at=prior.get(MEMBER_ACTUAL_OCCURRENCE_AT),
                 effect=EFFECT_RETAINED, lifecycle_state=current.value,
                 resumed=True, target=target)
 
