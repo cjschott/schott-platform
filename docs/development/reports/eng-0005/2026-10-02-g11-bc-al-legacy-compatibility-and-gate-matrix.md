@@ -215,8 +215,20 @@ makes reporting the blocker acceptable rather than a quiet deferral.
 |---|---|
 | `run-validation.sh --quick` | **138/138**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
 | `run-validation.sh` (full) | **163/163**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
-| clean clone, full | *(CLONE)* |
-| GitHub CI | *(CI)* |
+| clean clone at `4b3b66f`, full | **163/163**, 0 `FAIL:`, **18 `HOST_ONLY_SKIP`** |
+| GitHub CI at `4b3b66f` | CI, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy — **6/6 success** |
+
+The clean clone's 18 skips are all the intentional pinned-checkout refusal —
+`checkout <clone> is not the pinned /opt/schott-platform` — on the historical
+generation installers, the four G5 suites, the helper ceremony, the Generation-13
+packaging suite, the Fabric evidence-authority suite and the Artifact-authority
+suite. Every one ran for real in the host run, which had **0 skips**.
+
+**All three new suites RAN in the clone**, with the same results as on the host:
+legacy compatibility 13, Generation-23 installer 52, Stage-3 gate matrix 74 — the
+last with its 39 explanatory notes, 14 of which name a masked case. The gate matrix
+is host-only because it needs the host's reviewed OBJECTS, not the pinned checkout
+path, so a clone on this machine exercises it fully.
 
 Suites, against the real post-correction state: legacy compatibility **13** ·
 multi-field **24** · provenance correction **22** · Generation-23 installer
