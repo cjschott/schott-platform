@@ -470,6 +470,21 @@ jobs:
       - name: Capability execution generation-22 installer tests
         run: bash tests/test-capability-execution-generation22-installer.sh
 
+      # ADR-0016/ADR-0018 shape compatibility: a missing later member is a shape,
+      # not a different authority. Portable.
+      - name: Capability provenance legacy compatibility tests
+        run: bash tests/test-capability-provenance-legacy-compatibility.sh
+
+      # The Generation-23 installer proves that rule, with 17 sabotages. Static.
+      - name: Capability execution generation-23 installer tests
+        run: bash tests/test-capability-execution-generation23-installer.sh
+
+      # BLOCK B of the Stage-3 ceremony and its 22-case matrix. Host-only: the
+      # fixture is assembled from the reviewed objects the host holds, so on a
+      # runner it reports HOST_ONLY_SKIP and the local validator is authority.
+      - name: CINV-000003 Stage-3 gate matrix tests
+        run: bash tests/test-capability-cinv-000003-stage-3-gate-matrix.sh
+
       # Which store a mutating command actually writes through. Host-only: it
       # reproduces the 2026-09-20 incident against the installed runtime.
       - name: Capability mutation target tests

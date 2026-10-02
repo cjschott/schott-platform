@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# The Generation-23 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# THIS IS ONE STAGE, AND IT MOVES ONE FILE. No helper object, no readiness
+# authority, no operator surface: helper compatibility stays `compatible`,
+# blocking stays 0, supervision_ready stays true, and there is no second ceremony
+# to follow.
+#
+# WHAT IT DEPLOYS. One object in one coherence group, L --
+# `tools/capability/execution/provenance.py`. No CREATE.
+#
+# WHAT IT FIXES. `CADM-000002` was written under ADR-0016 and carries no
+# `actual_occurrence_at`. Generation 22's create-once resume check compares every
+# recorded member, so a prior record simply MISSING a later member was refused as
+#
+#   ProvenanceRefused: CADM-000001/actor is already corrected under different
+#   authority (actual_occurrence_at None, not '2026-09-20T18:54:33-05:00')
+#
+# and omitting the argument instead raised
+#
+#   TypeError: correct_provenance() missing 1 required keyword-only argument
+#
+# Both fail closed and write nothing, so no record has ever been at risk from
+# this. What was wrong is the REASON. The authority is identical -- same actor,
+# same request id, same finding, same initiator -- and what differs is the record
+# SHAPE. A refusal that misdescribes itself is the class of defect the ADR-0015
+# through ADR-0018 arc exists to remove, which is why this is a generation rather
+# than a footnote.
+#
+# THE RULE. `LATER_SCHEMA_MEMBERS` names each detail member a later ADR
+# introduced, with the ADR that introduced it. Absence of a member named there is
+# a legacy record shape and is skipped by the comparison. Absence of anything else
+# is a shape the runtime has no rule for, and it refuses on the schema with a
+# truthful reason rather than guessing. A member the prior record DOES carry must
+# still match, or it still refuses, naming the member.
+#
+# NO SCHEMA VERSION BUMP, and that was proved rather than preferred.
+# `correction_schema_version` is 1 on BOTH shapes, so the version discriminates
+# nothing; the presence of `actual_occurrence_at` discriminates totally, because
+# the ADR-0018 source writes it unconditionally and ADR-0016 had no such member.
+#
+# NO OLD RECORD IS REWRITTEN. `CADM-000002` is historical evidence and stays
+# exactly as the operator wrote it in 2026-09. Nothing is retrofitted into it,
+# then or ever.
+#
+# ONE THING THIS CEREMONY RATIFIES BY BEING RUN.
+# `Correction.actual_occurrence_at` becomes `str | None`, because a legacy resume
+# has nothing to report there. The alternatives were worse: echoing back the
+# caller's value would report `CADM-000002` as holding an occurrence it does not
+# hold, and an empty string would be a sentinel dressed as data. If the reviewer
+# has not accepted that widening, DO NOT RUN THIS.
+#
+# WHAT IT DOES NOT DEPLOY. No lifecycle state, no transition, no capacity change,
+# no `MAXIMUM_SLOTS` change, no abandonment semantics, no conclusion semantics,
+# no result semantics, no helper object, no entrypoint, no worker, no readiness
+# authority, no container-runtime binding, no sudoers grant, no execution image,
+# no deployment identity, no privileged transition path, and not one byte of
+# Fabric, Trust or invocation history.
+#
+# WHAT IT DOES NOT DO. IT CORRECTS NOTHING AND RESUMES NOTHING. No CADM is read
+# or written, no invocation changes state, no slot changes hands, no CMUT is
+# spent, and the runtime store is byte-identical across this publication.
+
+# An unexpected transaction is the one condition that must stop everything before
+# any installer runs. It would mean a previous ceremony did not finish, and the
+# correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen23-transaction/journal \
+  || { printf 'STOP: a Generation-23 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen23-transaction \
+  || { printf 'STOP: Generation-23 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 22 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 22 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen22-library-digests.txt
+sudo test -f /root/kyri-gen22-helper-digests.txt
+
+# The governed runtime store, before. This generation must not touch one byte of
+# it, and the same command after must print the same digest. Record both.
+find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+# EXPECTED: 7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-23.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-23.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-23.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-23.sh --verify-installed
+
+find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+# EXPECTED: 7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+#           -- the same digest, unchanged.
+
+# EXPECTED AFTER THIS CEREMONY:
+#   helper compatibility  compatible      (UNCHANGED)
+#   helpers blocking      0               (UNCHANGED)
+#   supervision_ready     true            (UNCHANGED)
+#   library objects       83 + 1 helper   (UNCHANGED -- there is no CREATE)
+#   CINV sequence         3               CRES sequence  2   (UNCHANGED)
+#   CINV-000001           abandoned       CINV-000002    abandoned   (UNCHANGED)
+#   CINV-000003           concluded       (UNCHANGED)
+#   administrative records 7              (CADM-000001..000007, ALL UNTOUCHED)
+#   cadm-counter          000007          (UNCHANGED -- no CADM is written here)
+#   cmut-counter          000000000012    (UNCHANGED -- no mutation is spent here)
+#   transition records    9               (UNCHANGED)
+#   occupancy             0 of 2          (UNCHANGED)
+#
+# AND ONE OBSERVABLE DIFFERENCE, which is the whole point. An identical repeat of
+# the accepted CADM-000001/actor correction now RESUMES instead of being refused
+# as a different authority, and reports `"actual_occurrence_at": null` -- because
+# the record it resumes genuinely has none. Verifying that is a read-only
+# observation against a byte COPY, never against production, and
+# tests/test-capability-provenance-legacy-compatibility.sh is where it is proved.
+#
+# AN INTERRUPTION CANNOT LEAVE A HALF-PUBLISHED MATRIX. One row means the
+# transaction holds either the new bytes or the old ones. If the run is
+# interrupted, do NOT rerun --install. Run:
+#   sudo bash /opt/schott-platform/provisioning/execution/install-generation-23.sh --recover
+# and return its output. Do not delete the transaction directory.
+#
+# AFTER THIS INSTALLATION the remaining ENG-0005 closure work is the §36
+# criterion-by-criterion audit and then reviewer gate G7. Fabric renewal is a
+# separate decision and is deliberately held until after the closure gate.

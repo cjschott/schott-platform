@@ -132,11 +132,16 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # until now, because the validator has halted on stale host-only rehearsals since
 # G11-BC-AG and so never reached its own closing count. These two numbers are
 # what a run printed, not what an increment implied.
+#
+# G11-BC-AL added three: the legacy-compatibility suite and the Generation-23
+# installer suite are portable and unconditional, and the Stage-3 gate matrix is
+# host-only but still a STEP -- it skips inside itself rather than being skipped
+# here. Both totals are re-measured by a run below rather than incremented.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=135
+  TOTAL_STEPS=138
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=160
+  TOTAL_STEPS=163
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -720,6 +725,20 @@ run "Capability execution provenance correction" \
 run "Capability provenance multi-field correction" \
   bash tests/test-capability-provenance-multifield.sh
 
+# G11-BC-AL. ADR-0016 records carry no `actual_occurrence_at`, and a prior record
+# simply missing a later member was being refused as a different authority. The
+# rule that keeps a SHAPE difference and an AUTHORITY difference apart, with the
+# legacy fixture checked key-for-key against production's real CADM-000002.
+# Portable: fixtures only.
+run "Capability provenance legacy compatibility" \
+  bash tests/test-capability-provenance-legacy-compatibility.sh
+
+# G11-BC-AL. The Generation-23 installer proves the compatibility rule, and 17
+# sabotages of the reviewed source are each caught by a named property. Static by
+# construction: nothing runs --install. Portable.
+run "Capability execution generation-23 installer" \
+  bash tests/test-capability-execution-generation23-installer.sh
+
 # G11-BC-AI. The Generation-22 installer proves ADR-0018 rather than its
 # predecessor's purpose, and 21 sabotages of the reviewed source are each
 # caught by a named property. Static by construction: nothing here runs
@@ -733,6 +752,14 @@ run "Capability execution generation-22 installer" \
 # say before it spends an hour proving other things.
 run "No production escape" \
   bash tests/test-no-production-escape.sh
+
+# G11-BC-AL. BLOCK B of the Stage-3 ceremony and its 22-case failure matrix,
+# against a fixture ASSEMBLED by high-water mark rather than rewound from
+# production -- and proved complete because it reproduces the accepted
+# pre-Stage-3 aggregate exactly. Host-only: it is assembled from the reviewed
+# objects the host still holds. The production-host rehearsal stays spent.
+run "CINV-000003 Stage-3 gate matrix" \
+  bash tests/test-capability-cinv-000003-stage-3-gate-matrix.sh
 
 # ADR-0017. Post-execution lifecycle conclusion: the normal closure for an
 # execution that ran. The supervised path journals nothing past
