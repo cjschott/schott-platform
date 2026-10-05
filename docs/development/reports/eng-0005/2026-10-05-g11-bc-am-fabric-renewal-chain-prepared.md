@@ -271,8 +271,20 @@ in the repository.
 |---|---|
 | `run-validation.sh --quick` | **140/140**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
 | `run-validation.sh` (full) | **165/165**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
-| clean clone, full | *(CLONE)* |
-| GitHub CI | *(CI)* |
+| clean clone at `3db9f2a`, full | **165/165**, 0 `FAIL:`, **18 `HOST_ONLY_SKIP`** |
+| GitHub CI at `6455293` | CI, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy — **6/6 success** |
+
+The clean clone's 18 skips are all the intentional pinned-checkout refusal, and
+every one of them ran for real in the host run, which had **0 skips**. All three
+of this checkpoint's suites RAN in the clone with identical results — 58, 66 and
+74 — because they need the host's governed stores, not the pinned checkout path.
+
+**CI went red once on `1ea9b31`, and three of the four reds were not mine.**
+ShellCheck was a genuine finding — the repository runs it at `info` level and
+caught an SC2016 in a grep pattern of my own, since fixed. Semgrep, Trivy and CI
+all failed with *"The job was not acquired by Runner of type hosted even after
+multiple attempts"*, a GitHub runner-capacity failure. Recorded here rather than
+left looking like a code problem; the fixed commit is 6/6.
 
 Fabric plane: runtime **8336** · capability-fabric **538** · freeze-artifacts
 **241** · g11-integrity **91** · freeze-gate-execution **75** ·
