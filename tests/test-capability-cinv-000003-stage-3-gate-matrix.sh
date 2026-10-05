@@ -64,6 +64,34 @@ host_only_requires /data/kyri/capability-runtime /usr/lib/kyri/python \
 CEREMONY="${ROOT}/provisioning/execution/g11-bc-aa-cinv-000003-stage-3-ceremony.txt"
 PRODUCTION=/data/kyri/capability-runtime          # prod-path-reference
 PRODUCTION_FABRIC=/var/lib/kyri/fabric            # prod-path-reference
+
+# WHICH FABRIC AUTHORITY THE GATES ARE ASKED ABOUT. Production by default, and
+# nothing about the gates changes when it is overridden -- the released verifier
+# still runs at the real wall clock against a real chain, which is the whole
+# point. What an override lets a reviewer do is ask the SAME gates about a
+# renewed chain that has not been written to production yet.
+#
+# This is a substitution of the kind `render_gates` already performs on the roots,
+# and it is NOT one of the things G11-BC-AM's §I forbids: BLOCK B is not
+# reordered, no verification is bypassed, no window is injected, expired
+# production is not special-cased, and no intended-refusal requirement becomes a
+# generic nonzero-exit assertion. The chain an override points at is a real chain
+# the released write verbs produced.
+FABRIC_SOURCE="${KYRI_STAGE3_FABRIC_SOURCE:-${PRODUCTION_FABRIC}}"
+AUTHORITY_SELECTION="${KYRI_STAGE3_SELECTION:-CSEL-000004}"
+AUTHORITY_INSTANCE="${KYRI_STAGE3_INSTANCE:-CINST-000006}"
+# BLOCK B pins the route head and the advertisement separately from the
+# selection, and it is right to: a chain whose selection still resolves can
+# still have been superseded underneath, which is exactly what it refuses. All
+# four move together or none of them do.
+AUTHORITY_ROUTE="${KYRI_STAGE3_ROUTE:-CROUTE-0006}"
+AUTHORITY_ADVERTISEMENT="${KYRI_STAGE3_ADVERTISEMENT:-CADV-000007}"
+if [[ "${FABRIC_SOURCE}" != "${PRODUCTION_FABRIC}" ]]; then
+  printf 'note     Fabric authority under test: %s (selection %s, instance %s)\n' \
+    "${FABRIC_SOURCE}" "${AUTHORITY_SELECTION}" "${AUTHORITY_INSTANCE}"
+  printf 'note     route head %s, advertisement %s\n' \
+    "${AUTHORITY_ROUTE}" "${AUTHORITY_ADVERTISEMENT}"
+fi
 PRODUCTION_HANDOFF=/data/kyri/capability-handoff  # prod-path-reference
 # The worker-owned output leaf, which the coordinator cannot read once §13 has
 # transferred it. Named once so the exclusion is a stated fact, not a glob.
@@ -86,7 +114,11 @@ trap 'chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"' EXIT
 
 aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
 PRODUCTION_BEFORE="$(aggregate "${PRODUCTION}")"
-FABRIC_BEFORE="$(aggregate "${PRODUCTION_FABRIC}")"
+FABRIC_BEFORE="$(aggregate "${FABRIC_SOURCE}")"
+# Production's own aggregate, kept separately, because the final check asks
+# whether PRODUCTION moved -- which must hold whichever chain the gates were
+# asked about.
+PRODUCTION_FABRIC_BEFORE="$(aggregate "${PRODUCTION_FABRIC}")"
 
 # The ceremony's own BLOCK B, extracted whole. The logic under test is the
 # operator's, not a paraphrase of it.
@@ -125,7 +157,7 @@ build_synthetic_fixture() {
   [[ -e "${base}" ]] && { chmod -R u+w "${base}"; rm -rf "${base}"; }
   mkdir -p "${base}/handoff" "${base}/work"
   cp -a "${PRODUCTION}" "${base}/runtime"
-  cp -a "${PRODUCTION_FABRIC}" "${base}/fabric"
+  cp -a "${FABRIC_SOURCE}" "${base}/fabric"
   chmod -R u+w "${base}/runtime"
 
   # RESTRICT BY MARK, not by name. Every identity above a mark is excluded by the
@@ -298,12 +330,12 @@ fi
 # Paths are part of the aggregate, so the copy's are rewritten to the production
 # prefix before it is compared -- the same method the runtime check above uses.
 fixture_fabric="$( cd "${FIX}/fabric" && find . -type f -print0 | sort -z \
-                   | xargs -0 sha256sum | sed "s|  \./|  ${PRODUCTION_FABRIC}/|" \
+                   | xargs -0 sha256sum | sed "s|  \./|  ${FABRIC_SOURCE}/|" \
                    | sha256sum | cut -d' ' -f1 )"
 if [[ "${fixture_fabric}" == "${FABRIC_BEFORE}" ]]; then
   pass "the reviewed Fabric chain is present, byte-identical -- expired, and NOT renewed to make a gate pass"
 else
-  fail "the fixture's Fabric is ${fixture_fabric}, not the reviewed ${FABRIC_BEFORE}"
+  fail "the fixture's Fabric is ${fixture_fabric}, not the source's ${FABRIC_BEFORE}"
 fi
 printf -- '\n--- the gates, against a fixture ---\n'
 render_gates() {
@@ -314,6 +346,10 @@ render_gates() {
     -e "s#^FABRIC=/var/lib/kyri/fabric\$#FABRIC=${base}/fabric#" \
     -e "s#^WITNESS=/data/kyri/work/g11bcaa-stage-3-witness\$#WITNESS=${base}/work/witness#" \
     -e "s#^PAYLOAD_ROOT=/data/kyri/work/g11bcn\$#PAYLOAD_ROOT=${base}/work#" \
+    -e "s#^SELECTION=CSEL-000004\$#SELECTION=${AUTHORITY_SELECTION}#" \
+    -e "s#^INSTANCE=CINST-000006\$#INSTANCE=${AUTHORITY_INSTANCE}#" \
+    -e "s#^ROUTE=CROUTE-0006\$#ROUTE=${AUTHORITY_ROUTE}#" \
+    -e "s#^ADVERTISEMENT=CADV-000007\$#ADVERTISEMENT=${AUTHORITY_ADVERTISEMENT}#" \
     -e "s#^INSTALLED=/usr/lib/kyri/python\$#INSTALLED=${REVIEWED_LIBRARY}#" \
     -e "s#^RUNTIME_BEFORE=.*#RUNTIME_BEFORE=$(aggregate "${base}/runtime")#" \
     -e "s#^FABRIC_BEFORE=.*#FABRIC_BEFORE=$(aggregate "${base}/fabric")#" \
@@ -409,41 +445,70 @@ done
 
 printf -- '\n--- fail closed, by gate ---\n'
 
+# THE THREE AUTHORITY SABOTAGES MUST SABOTAGE THE CHAIN UNDER TEST.
+#
+# They used to name CADV-000007, CROUTE-0006 and CSEL-000004 literally, which is
+# right while those are the heads and useless the moment they are not: against a
+# renewed chain the edit lands on a record BLOCK B no longer consults, so the
+# gates pass and the case silently proves nothing. They now derive their target
+# from the authority under test, and each ASSERTS that the record it is about to
+# break is the one the gates will read.
 expire_advertisement() {
-  chmod u+w "${FIX}/fabric/capability-advertisements/CADV-000007.yaml"
-  python3 - "${FIX}/fabric/capability-advertisements/CADV-000007.yaml" <<'EXPIRE'
+  local path="${FIX}/fabric/capability-advertisements/${AUTHORITY_ADVERTISEMENT}.yaml"
+  chmod u+w "${path}"
+  python3 - "${path}" <<'EXPIRE'
 import sys
+from datetime import datetime, timedelta
 path = sys.argv[1]
-body = open(path).read()
-assert "2026-09-23T06:00:00-05:00" in body, "the advertisement does not carry the expected validity"
-open(path, "w").write(body.replace("2026-09-23T06:00:00-05:00",
-                                   "2026-09-19T06:00:00-05:00"))
+body = open(path, encoding="utf-8").read()
+# Read the window out of the record and close it, rather than matching a literal
+# date that belongs to one generation of the chain.
+line = [l for l in body.splitlines() if l.startswith("valid_until:")]
+assert len(line) == 1, line
+was = line[0].split(": ", 1)[1].strip().strip("'")
+closed = (datetime.fromisoformat(was) - timedelta(days=30)).isoformat()
+open(path, "w", encoding="utf-8").write(
+    body.replace(line[0], f"valid_until: '{closed}'"))
 EXPIRE
 }
 supersede_route() {
   local routes="${FIX}/fabric/capability-routes"
-  chmod u+w "${routes}"; cp "${routes}/CROUTE-0006.yaml" "${routes}/CROUTE-0007.yaml"
-  chmod u+w "${routes}/CROUTE-0007.yaml"
-  python3 - "${routes}/CROUTE-0007.yaml" <<'ROUTE'
+  # A successor to whatever the head is, so the head stops being the head.
+  local head="${AUTHORITY_ROUTE}"
+  local ordinal="${head##*-}"
+  local successor
+  successor="$(printf 'CROUTE-%04d' "$(( 10#${ordinal} + 1 ))")"
+  chmod u+w "${routes}"
+  cp "${routes}/${head}.yaml" "${routes}/${successor}.yaml"
+  chmod u+w "${routes}/${successor}.yaml"
+  python3 - "${routes}/${successor}.yaml" "${head}" "${successor}" <<'ROUTE'
+import re
 import sys
-path = sys.argv[1]
-body = open(path).read()
-assert "route_id: CROUTE-0006" in body, "the copied route does not name CROUTE-0006"
-body = body.replace("route_id: CROUTE-0006", "route_id: CROUTE-0007")
-body = body.replace("supersedes: CROUTE-0005", "supersedes: CROUTE-0006")
-open(path, "w").write(body)
+path, head, successor = sys.argv[1:4]
+body = open(path, encoding="utf-8").read()
+assert f"route_id: {head}" in body, f"the copied route does not name {head}"
+body = body.replace(f"route_id: {head}", f"route_id: {successor}")
+body = re.sub(r"^supersedes: .*$", f"supersedes: {head}", body, count=1,
+              flags=re.M)
+open(path, "w", encoding="utf-8").write(body)
 ROUTE
 }
 change_selection() {
-  local selection="${FIX}/fabric/capability-selections/CSEL-000004.yaml"
+  local selection="${FIX}/fabric/capability-selections/${AUTHORITY_SELECTION}.yaml"
   chmod u+w "${selection}"
-  python3 - "${selection}" <<'SELECT'
+  python3 - "${selection}" "${AUTHORITY_INSTANCE}" <<'SELECT'
 import sys
-path = sys.argv[1]
-body = open(path).read()
-assert "selected_instance_id: CINST-000006" in body, "the selection does not name CINST-000006"
-open(path, "w").write(body.replace("selected_instance_id: CINST-000006",
-                                   "selected_instance_id: CINST-000005"))
+path, instance = sys.argv[1:3]
+body = open(path, encoding="utf-8").read()
+assert f"selected_instance_id: {instance}" in body, \
+    f"the selection does not name {instance}"
+# Point it at the predecessor it superseded, which is a real identity and not a
+# plausible one: an unparseable record would be a different test.
+ordinal = int(instance.split("-")[-1])
+other = f"CINST-{ordinal - 1:06d}"
+open(path, "w", encoding="utf-8").write(
+    body.replace(f"selected_instance_id: {instance}",
+                 f"selected_instance_id: {other}"))
 SELECT
 }
 corrupt() { chmod u+w "$1"; printf 'x' >> "$1"; }
@@ -583,8 +648,10 @@ if [[ "$(aggregate "${PRODUCTION}")" == "${PRODUCTION_BEFORE}" ]]; then
 else
   fail "THE PRODUCTION RUNTIME CHANGED"
 fi
-if [[ "$(aggregate "${PRODUCTION_FABRIC}")" == "${FABRIC_BEFORE}" ]]; then
-  pass "the production Fabric is byte-identical, and still expired"
+# PRODUCTION, whichever chain the gates were asked about. An override points the
+# fixture at another tree; it must never let production move.
+if [[ "$(aggregate "${PRODUCTION_FABRIC}")" == "${PRODUCTION_FABRIC_BEFORE}" ]]; then
+  pass "the production Fabric is byte-identical: ${PRODUCTION_FABRIC_BEFORE}"
 else
   fail "THE PRODUCTION FABRIC CHANGED"
 fi

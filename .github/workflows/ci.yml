@@ -485,6 +485,15 @@ jobs:
       - name: CINV-000003 Stage-3 gate matrix tests
         run: bash tests/test-capability-cinv-000003-stage-3-gate-matrix.sh
 
+      # The Fabric renewal chain, rehearsed with the released write verbs against
+      # a byte copy. Host-only: it copies the production Fabric it rehearses.
+      - name: Fabric renewal chain rehearsal tests
+        run: bash tests/test-fabric-renewal-chain-rehearsal.sh
+
+      # The four freeze artifacts, checked statically. Portable.
+      - name: Fabric renewal freeze-artifact tests
+        run: bash tests/test-fabric-renewal-freeze-artifacts.sh
+
       # Which store a mutating command actually writes through. Host-only: it
       # reproduces the 2026-09-20 incident against the installed runtime.
       - name: Capability mutation target tests

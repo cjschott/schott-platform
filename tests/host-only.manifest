@@ -62,3 +62,4 @@ test-fabric-freeze-csel-000004-rehearsal.sh	runs the whole CSEL-000004 freeze bl
 test-capability-cinv-000003-stage-0-rehearsal.sh	runs the whole CINV-000003 Stage 0 ceremony against a fixture copied from the production Fabric and capability-runtime stores
 test-capability-cinv-000003-stage-1-rehearsal.sh	runs the whole CINV-000003 Stage 1 ceremony against a fixture copied from the production Fabric, capability-runtime and accepted Stage 0 work area
 test-capability-cinv-000003-stage-3-gate-matrix.sh	assembles the accepted pre-Stage-3 store from the reviewed objects the host holds -- the launch authorisation, the handoff, the staged tree and the Fabric chain -- and runs BLOCK B and its 22-case matrix against it
+test-fabric-renewal-chain-rehearsal.sh	rehearses the renewal chain with the released write verbs against a byte copy of the production Fabric, and runs the Stage-3 gate matrix against the result

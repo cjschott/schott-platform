@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# The CINST-000007 freeze, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# STEP 2 OF 4 IN THE G11-BC-AM RENEWAL CHAIN. It freezes one reviewed input and
+# runs a READ-ONLY preflight. The admit-instance WRITE is a separate
+# authorisation and is NOT in this block.
+#
+# It writes exactly one file, into /etc/kyri/fabric. It does not touch
+# /var/lib/kyri/fabric, and proves so.
+#
+# WHY THIS RECORD IS REQUIRED. `admission-window-not-open` is the FIRST reason the released verifier
+# gives, and it persists with the advertisement renewed alone. This is the
+# record that clears it.
+#
+# WHAT THE CHAIN IS FOR. The restored Stage-3 BLOCK-B matrix has 22 sabotage
+# cases. Against the expired authority all 22 fail closed but only 8 reach their
+# own named refusal -- BLOCK B checks the Fabric validity window before anything
+# about the runtime store, so 14 are masked. A scratch rehearsal of this whole
+# chain, with the released write verbs against a byte copy, takes the matrix to
+# 22 of 22 intended refusals with nothing masked. See
+# tests/test-fabric-renewal-chain-rehearsal.sh.
+#
+# NO AUTHORITY IS BROADENED. CAPDEF-0001, CPKG-0001, CHOST-0001, CCON-0001,
+# contract version 1.0.0, x86-64, operation `execute`, classification `internal`,
+# target HOST-0001 and locality `local-only` are all equal to the accepted
+# pre-expiry chain, and the rehearsal asserts that field by field.
+#
+# THE NEW WINDOW IS NOT AN EXTENSION. The expired records are not rewritten and
+# not reused. CADV-000008 is valid 2026-10-05T15:00:00-05:00 through
+# 2026-10-12T06:00:00-05:00, and CINST-000007's admission ends at the same
+# instant so it cannot outlive the advertisement that governs it.
+#
+# THE CURRENT-TIME FRESHNESS GATE, AND WHY IT IS HERE AND NOT IN THE ENGINE. The
+# Fabric engine judges at the instant a request names, never at a clock, because
+# an append-only engine must be replay-deterministic -- see
+# tools/fabric/admission.py. So nothing inside it will ever tell an operator that
+# the window they are about to rely on has already closed. This block carries
+# that check instead, against the operator's wall clock, reading the instants back
+# out of the rendered body so the gate cannot drift from the bytes it guards.
+#
+# IF THIS BLOCK REFUSES ON FRESHNESS, the chain must be re-prepared with fresh
+# instants rather than edited. That is the whole point of a window.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/cinst-000007.json
+REVIEWED=ce4f67fad131af757801ea550e44596ac5fe75264ac592454daa8ccd56ccfd27
+REVIEWED_BYTES=1270
+SOURCE=provisioning/fabric/g11-bc-am-cinst-000007-input.json
+
+# The Fabric store as this step requires it: the chain up to and including the
+# previous step, and nothing of this one. Pinned so the preflight below cannot be
+# read as proof against a store that moved underneath it.
+FABRIC_BEFORE=31f49e1299afe3864d877fbde9507c08e852ef9db03f24cb337b725538538161
+
+# Bodies that are NOT this one, refused BY NAME rather than by a generic
+# mismatch. Each is an accepted input still sitting in /etc/kyri/fabric, so each
+# is a plausible mis-paste, and the Fabric engine would have nothing to say about
+# the mistake.
+ACCEPTED_CINST_000005=850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da  # the CINST-000005 input, two generations back
+ACCEPTED_CINST_000006=6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162  # the CINST-000006 input, whose admission EXPIRED 2026-09-23T06:00:00-05:00
+
+printf '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+sudo test -f /etc/kyri/fabric/cadv-000008.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cadv-000008.json is absent; CINST-000007 is frozen against it"; exit 1; }
+sudo test -f /etc/kyri/fabric/cinst-000006.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cinst-000006.json is absent; CINST-000007 is frozen against it"; exit 1; }
+# The reviewed body comes from the repository, not retyped here: a body retyped
+# into a ceremony is a body nobody reviewed.
+test -f "${SOURCE}" || { echo "REFUSE: ${SOURCE} is absent"; exit 1; }
+TMP="$(mktemp)"
+cp "${SOURCE}" "${TMP}"
+
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+for pair in "the CINST-000005 input, two generations back:850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da" "the CINST-000006 input, whose admission EXPIRED 2026-09-23T06:00:00-05:00:6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162"; do
+  name="${pair%%:*}"; sha="${pair##*:}"
+  if [[ "${ACTUAL}" == "${sha}" ]]; then
+    echo "REFUSE: this is ${name}, not the CINST-000007 input"
+    rm -f "${TMP}"; exit 1
+  fi
+done
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+printf 'ok  reviewed body %s, %s bytes\n' "${ACTUAL}" "${REVIEWED_BYTES}"
+
+# ---- CURRENT-TIME FRESHNESS GATE, BEFORE ANYTHING IS INSTALLED ------------
+printf '\n--- current-time freshness gate ---\n'
+GATE="$(python3 - "${TMP}" <<'GATE_PY'
+import json
+import sys
+from datetime import datetime
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+now = datetime.now().astimezone()
+print(f"now          {now.isoformat()}")
+
+# Whichever window fields this body carries, judged as the engine judges them:
+# a half-open interval, opened at or before the instant and closing after it.
+opens = body.get("observed_at") or body.get("admitted_at") or body.get("recorded_at")
+closes = body.get("valid_until") or body.get("admitted_until")
+print(f"opens        {opens}")
+print(f"closes       {closes or '(this record kind carries no window)'}")
+if opens is None:
+    print("REFUSE: the body carries no opening instant"); sys.exit(1)
+if now < datetime.fromisoformat(opens):
+    print("REFUSE: this record's window has not opened yet"); sys.exit(1)
+if closes is not None and now >= datetime.fromisoformat(closes):
+    print("REFUSE: the window closed; this authority is EXPIRED at the current clock")
+    print("REFUSE: do not extend it -- re-prepare the chain with fresh instants")
+    sys.exit(1)
+
+# And a record that depends on a window must sit inside the one that governs it.
+governing = "/var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml"
+import os
+if os.path.exists(governing) and closes is not None:
+    import re
+    text = open(governing, encoding="utf-8").read()
+    found = re.search(r"^valid_until: '(.+)'$", text, re.M)
+    if found and datetime.fromisoformat(closes) > datetime.fromisoformat(found.group(1)):
+        print(f"REFUSE: {closes} outlives the governing advertisement's {found.group(1)}")
+        sys.exit(1)
+    if found:
+        print(f"ok  within the governing advertisement, which closes {found.group(1)}")
+print("ok  the operator clock is inside this record's window")
+GATE_PY
+)" || { printf '%s\n' "${GATE}"; echo "REFUSE: current-time freshness gate failed"; rm -f "${TMP}"; exit 1; }
+printf '%s\n' "${GATE}"
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf '\n--- read-only preflight (NO Fabric write) ---\n'
+cd /opt/schott-platform
+PREFLIGHT="$(python3 -m tools.fabric.cli admit-instance \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --trust-store-root /var/lib/kyri/trust \
+  --input-file cinst-000007.json --approved-directory /etc/kyri/fabric --preflight)"
+printf '%s\n' "${PREFLIGHT}"
+
+# The two facts pinned SEPARATELY. `would_accept` alone says a body is well
+# formed; it does not say the engine resolved it to the record this ceremony is
+# authorised to create.
+PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["predicted_record_id"])')"
+DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
+test "${PREDICTED}" = "CINST-000007" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CINST-000007"; exit 1; }
+test "${DIGEST}" = "sha256:e2224ba5defb542565bda24772feafdef956486ea45f47370d35881ddeee0fee" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the rehearsed one"; exit 1; }
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+
+printf '\n--- production Fabric must be byte-identical to before ---\n'
+AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+printf '%s\n' "${AFTER}"
+test "${AFTER}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the freeze (${AFTER}, expected ${FABRIC_BEFORE})"; exit 1; }
+printf 'ok  /var/lib/kyri/fabric unchanged at %s\n' "${FABRIC_BEFORE}"
+
+printf '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+FREEZE
+
+# EXPECTED:
+#   gate           the operator clock inside this record's window
+#   frozen input   ce4f67fad131af757801ea550e44596ac5fe75264ac592454daa8ccd56ccfd27
+#                  /etc/kyri/fabric/cinst-000007.json  root:cschott  640  1270 bytes
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CINST-000007,
+#                  request_digest sha256:e2224ba5defb542565bda24772feafdef956486ea45f47370d35881ddeee0fee
+#   fabric         31f49e1299afe3864d877fbde9507c08e852ef9db03f24cb337b725538538161  (unchanged)
+#
+# CHAIN BASELINES FOR THIS STEP, measured in the scratch rehearsal:
+#   PRE_BASELINE              31f49e1299afe3864d877fbde9507c08e852ef9db03f24cb337b725538538161
+#   EXPECTED_RECORD           CINST-000007
+#   EXPECTED_SEQUENCE_BEFORE  instance 6
+#   EXPECTED_SEQUENCE_AFTER   instance 7
+#   POST_BASELINE             2c40e7057d3b76b7977c4403d24c5222e38ea832e5cd8358c3204fae21b64612   (rehearsed; UNKNOWN until the operator writes)
+#
+# Return this output. The admit-instance WRITE is a separate authorisation.

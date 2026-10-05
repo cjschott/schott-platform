@@ -1,0 +1,43 @@
+{
+  "request_id": "g11bcam-admit-instance-cpkg-0001-chost-0001-cadv-000008-supersedes-cinst-000006",
+  "actor": "primary-platform-operator",
+  "approving_authority": "primary-platform-operator",
+  "recorded_at": "2026-10-05T15:15:00-05:00",
+  "evaluated_at": "2026-10-05T15:15:00-05:00",
+  "capability_id": "CAPDEF-0001",
+  "capability_package_id": "CPKG-0001",
+  "capability_host_id": "CHOST-0001",
+  "contract_id": "CCON-0001",
+  "satisfied_contract_versions": [
+    "1.0.0"
+  ],
+  "verified_resource_profile": {
+    "architecture": "x86-64"
+  },
+  "admission_decision_id": "eng-0005-cinst-000007-admission",
+  "package_trust_record_id": "TREC-000002",
+  "host_trust_record_id": "TREC-000001",
+  "advertisement_id": "CADV-000008",
+  "supersedes": "CINST-000006",
+  "admission_scope": {
+    "permitted_capabilities": [
+      "CAPDEF-0001"
+    ],
+    "permitted_operations": [
+      "execute"
+    ],
+    "permitted_data_classifications": [
+      "internal"
+    ],
+    "permitted_targets": [
+      "HOST-0001"
+    ]
+  },
+  "admitted_at": "2026-10-05T15:15:00-05:00",
+  "admitted_until": "2026-10-12T06:00:00-05:00",
+  "provenance": {
+    "class": "declared",
+    "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
+    "recorded_at": "2026-10-05"
+  }
+}

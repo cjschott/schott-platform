@@ -125,6 +125,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # incremented on the assumption. The Generation-22 installer suite is portable
 # and unconditional too.
 #
+# G11-BC-AM added two: the renewal-chain rehearsal (host-only, but a step that
+# skips inside itself) and the freeze-artifact suite (portable). Measured below,
+# as always.
+#
 # AND THE ARITHMETIC WAS WRONG, WHICH IS WHY THESE ARE MEASURED. At G11-BC-AI a
 # measured run put quick mode at 135 and full at 160, where adding two suites to
 # the declared 132 and 157 predicts 134 and 159. The missing one is G11-BC-AH's
@@ -138,10 +142,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # host-only but still a STEP -- it skips inside itself rather than being skipped
 # here. Both totals are re-measured by a run below rather than incremented.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=138
+  TOTAL_STEPS=140
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=163
+  TOTAL_STEPS=165
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -752,6 +756,20 @@ run "Capability execution generation-22 installer" \
 # say before it spends an hour proving other things.
 run "No production escape" \
   bash tests/test-no-production-escape.sh
+
+# G11-BC-AM. The minimum Fabric renewal chain that restores current execution
+# authority, rehearsed whole with the RELEASED write verbs against a byte copy --
+# every predicted identity, every sequence step, and the Stage-3 matrix taken to
+# 22 of 22 intended refusals with nothing masked. Host-only: it rehearses against
+# the production Fabric it copies. Every write names an explicit scratch root.
+run "Fabric renewal chain rehearsal" \
+  bash tests/test-fabric-renewal-chain-rehearsal.sh
+
+# G11-BC-AM. The four freeze artifacts, against what a freeze is allowed to be:
+# one reviewed body into /etc, a read-only preflight, and a proof that production
+# Fabric did not move. Static: nothing here runs one. Portable.
+run "Fabric renewal freeze artifacts" \
+  bash tests/test-fabric-renewal-freeze-artifacts.sh
 
 # G11-BC-AL. BLOCK B of the Stage-3 ceremony and its 22-case failure matrix,
 # against a fixture ASSEMBLED by high-water mark rather than rewound from
