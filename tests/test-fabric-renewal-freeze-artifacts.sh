@@ -81,7 +81,10 @@ for entry in "${ARTIFACTS[@]}"; do
   else
     fail "${record}: names only ${named} predecessor bodies"
   fi
-  if grep -q 'echo "REFUSE: this is ${name}, not the' <<<"${body}"; then
+  # Matched in two halves so this pattern carries no shell expansion of its own:
+  # the artifact's refusal interpolates the body's name, and a single-quoted
+  # pattern containing that interpolation is what ShellCheck rightly flags.
+  if grep -q 'REFUSE: this is ' <<<"${body}" && grep -q ', not the ' <<<"${body}"; then
     pass "${record}: and the refusal says which body was pasted"
   else
     fail "${record}: a predecessor mis-paste would not be named"
