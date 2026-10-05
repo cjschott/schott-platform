@@ -334,14 +334,21 @@ fi
 # differs -- and in a provenance subsystem a refusal that misdescribes itself is
 # the class of defect this whole arc exists to remove.
 #
-# THIS SUITE DOES NOT PRETEND EITHER WAY. It asks the prior record whether it
-# carries the field, and asserts whichever behaviour is actually correct for the
-# pair in front of it: resume where the schemas agree, and a fail-closed refusal
-# that writes nothing where they do not. The gap is reported as an ENG-0005
-# obligation at
+# THIS SUITE DOES NOT PRETEND EITHER WAY, and the answer now depends on the host.
+# It asks the prior record which schema it carries AND the installed runtime
+# whether it has a legacy-shape rule for the member, then asserts whichever
+# behaviour is correct for the pair in front of it: a resume where the runtime can
+# resume, and a fail-closed refusal naming the member where it cannot.
+#
+# GENERATION 23 RESOLVED IT. `LATER_SCHEMA_MEMBERS` makes an absent later member a
+# record SHAPE rather than an authority difference, so on a Generation-23 host the
+# identical repeat resumes and reports `actual_occurrence_at: null` -- because the
+# record it resumes genuinely has none. The refusal branch is kept for a host that
+# predates it. See
 # docs/development/reports/eng-0005/2026-10-01-g11-bc-ak-post-correction-acceptance.md
-# and is NOT repaired here: the repair is in `provenance.py`, which is installed,
-# and changing it means a Generation 23 the reviewer has not authorised.
+# for the obligation and
+# docs/development/reports/eng-0005/2026-10-02-g11-bc-al-legacy-compatibility-and-gate-matrix.md
+# for the rule that closed it.
 resume_shape="$( cd "${INSTALLED}" && python3 - "${FIXTURE}" <<'SHAPEPY'
 import inspect
 import os
@@ -357,15 +364,25 @@ try:
     required = "actual_occurrence_at" in inspect.signature(
         provenance.correct_provenance).parameters
     carried = prior is not None and "actual_occurrence_at" in prior
-    print("resumable" if (carried or not required) else "schema-divergent")
+    # G11-BC-AM. THE DISCRIMINATOR IS THE COMPATIBILITY RULE, NOT THE SIGNATURE.
+    #
+    # This asked whether the verb REQUIRES the member, which described
+    # Generation 22 exactly: required and absent meant no call could resume.
+    # Generation 23 still requires the argument and resumes anyway, because it
+    # treats a member the prior record does not carry as a legacy SHAPE. So the
+    # question is whether the installed runtime carries that rule for this member.
+    forgiven = "actual_occurrence_at" in getattr(
+        provenance, "LATER_SCHEMA_MEMBERS", {})
+    print("resumable" if (carried or not required or forgiven)
+          else "schema-divergent")
 finally:
     root.close()
 SHAPEPY
 )"
 if [[ "${resume_shape}" == "resumable" ]]; then
-  pass "the prior record and the installed verb agree on the record schema"
+  pass "the installed runtime can resume this record: either the schemas agree, or it carries the legacy-shape rule Generation 23 published (G11-BC-AK obligation 1, resolved)"
 else
-  pass "the prior record predates ADR-0018 and the installed verb requires its new member: a repeat CANNOT resume, and this suite asserts the refusal instead (see G11-BC-AK obligation 1)"
+  pass "the prior record predates ADR-0018 and the installed runtime has no legacy-shape rule for its new member: a repeat CANNOT resume, and this suite asserts the refusal instead (G11-BC-AK obligation 1, open on Generation 22)"
 fi
 
 resume_out="${WORK}/resume.txt"
@@ -399,7 +416,8 @@ try:
     except provenance.ProvenanceRefused as error:
         print(f"REFUSED {error}")
     else:
-        print(f"RETURNED resumed={outcome.resumed} cadm={outcome.cadm}")
+        print(f"RETURNED resumed={outcome.resumed} cadm={outcome.cadm} "
+              f"occurrence={outcome.actual_occurrence_at!r}")
 finally:
     root.close()
 RESUMEPY
@@ -410,6 +428,15 @@ if [[ "${resume_shape}" == "resumable" ]]; then
     pass "the identical correction resumes and reports the record already written"
   else
     fail "the identical repeat did not resume: $(tail -1 "${resume_out}")"
+  fi
+  # AND IT INVENTS NOTHING, against the real accepted record rather than a
+  # fixture. CADM-000002 was written under ADR-0016 and carries no occurrence, so
+  # a resume that reported one would be reporting a value the record does not
+  # hold -- which is the defect Generation 23 exists to remove.
+  if grep -q "occurrence=None" "${resume_out}"; then
+    pass "and it reports no actual_occurrence_at: the legacy record carries none, and none was invented"
+  elif grep -q "RETURNED resumed=True" "${resume_out}"; then
+    fail "the resume reported an occurrence the record does not hold: $(tail -1 "${resume_out}")"
   fi
 else
   # The refusal must be the RELEASED refusal -- a judgement naming the field that
