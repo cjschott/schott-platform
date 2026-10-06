@@ -1,9 +1,9 @@
 {
-  "request_id": "g11bcam-admit-instance-cpkg-0001-chost-0001-cadv-000008-supersedes-cinst-000006",
+  "request_id": "g11bcan-admit-instance-cpkg-0001-chost-0001-cadv-000008-supersedes-cinst-000006",
   "actor": "primary-platform-operator",
   "approving_authority": "primary-platform-operator",
-  "recorded_at": "2026-10-05T15:15:00-05:00",
-  "evaluated_at": "2026-10-05T15:15:00-05:00",
+  "recorded_at": "2026-10-06T06:25:30-05:00",
+  "evaluated_at": "2026-10-06T06:25:30-05:00",
   "capability_id": "CAPDEF-0001",
   "capability_package_id": "CPKG-0001",
   "capability_host_id": "CHOST-0001",
@@ -33,11 +33,11 @@
       "HOST-0001"
     ]
   },
-  "admitted_at": "2026-10-05T15:15:00-05:00",
-  "admitted_until": "2026-10-12T06:00:00-05:00",
+  "admitted_at": "2026-10-06T06:25:30-05:00",
+  "admitted_until": "2026-10-13T06:25:00-05:00",
   "provenance": {
     "class": "declared",
     "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
-    "recorded_at": "2026-10-05"
+    "recorded_at": "2026-10-06"
   }
 }

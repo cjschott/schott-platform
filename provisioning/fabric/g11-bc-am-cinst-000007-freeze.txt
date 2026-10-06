@@ -29,8 +29,8 @@
 # pre-expiry chain, and the rehearsal asserts that field by field.
 #
 # THE NEW WINDOW IS NOT AN EXTENSION. The expired records are not rewritten and
-# not reused. CADV-000008 is valid 2026-10-05T15:00:00-05:00 through
-# 2026-10-12T06:00:00-05:00, and CINST-000007's admission ends at the same
+# not reused. CADV-000008 is valid 2026-10-06T06:25:00-05:00 through
+# 2026-10-13T06:25:00-05:00, and CINST-000007's admission ends at the same
 # instant so it cannot outlive the advertisement that governs it.
 #
 # THE CURRENT-TIME FRESHNESS GATE, AND WHY IT IS HERE AND NOT IN THE ENGINE. The
@@ -49,14 +49,14 @@ cd /opt/schott-platform
 bash <<'FREEZE'
 set -Eeuo pipefail
 DEST=/etc/kyri/fabric/cinst-000007.json
-REVIEWED=ce4f67fad131af757801ea550e44596ac5fe75264ac592454daa8ccd56ccfd27
+REVIEWED=cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78
 REVIEWED_BYTES=1270
 SOURCE=provisioning/fabric/g11-bc-am-cinst-000007-input.json
 
 # The Fabric store as this step requires it: the chain up to and including the
 # previous step, and nothing of this one. Pinned so the preflight below cannot be
 # read as proof against a store that moved underneath it.
-FABRIC_BEFORE=31f49e1299afe3864d877fbde9507c08e852ef9db03f24cb337b725538538161
+FABRIC_BEFORE=d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c
 
 # Bodies that are NOT this one, refused BY NAME rather than by a generic
 # mismatch. Each is an accepted input still sitting in /etc/kyri/fabric, so each
@@ -159,7 +159,7 @@ PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(jso
 DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
 test "${PREDICTED}" = "CINST-000007" \
   || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CINST-000007"; exit 1; }
-test "${DIGEST}" = "sha256:e2224ba5defb542565bda24772feafdef956486ea45f47370d35881ddeee0fee" \
+test "${DIGEST}" = "sha256:3105868cd2311fcc8284848491184e4584ff2e35c7d1f5b0a292fde8d668390a" \
   || { echo "REFUSE: the request digest is ${DIGEST}, not the rehearsed one"; exit 1; }
 printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
 printf 'ok  request_digest      %s\n' "${DIGEST}"
@@ -177,18 +177,18 @@ FREEZE
 
 # EXPECTED:
 #   gate           the operator clock inside this record's window
-#   frozen input   ce4f67fad131af757801ea550e44596ac5fe75264ac592454daa8ccd56ccfd27
+#   frozen input   cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78
 #                  /etc/kyri/fabric/cinst-000007.json  root:cschott  640  1270 bytes
 #   preflight      would_accept true, mutated false, destination_exists false,
 #                  predicted_record_id CINST-000007,
-#                  request_digest sha256:e2224ba5defb542565bda24772feafdef956486ea45f47370d35881ddeee0fee
-#   fabric         31f49e1299afe3864d877fbde9507c08e852ef9db03f24cb337b725538538161  (unchanged)
+#                  request_digest sha256:3105868cd2311fcc8284848491184e4584ff2e35c7d1f5b0a292fde8d668390a
+#   fabric         d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c  (unchanged)
 #
 # CHAIN BASELINES FOR THIS STEP, measured in the scratch rehearsal:
-#   PRE_BASELINE              31f49e1299afe3864d877fbde9507c08e852ef9db03f24cb337b725538538161
+#   PRE_BASELINE              d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c
 #   EXPECTED_RECORD           CINST-000007
 #   EXPECTED_SEQUENCE_BEFORE  instance 6
 #   EXPECTED_SEQUENCE_AFTER   instance 7
-#   POST_BASELINE             2c40e7057d3b76b7977c4403d24c5222e38ea832e5cd8358c3204fae21b64612   (rehearsed; UNKNOWN until the operator writes)
+#   POST_BASELINE             39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf   (rehearsed; UNKNOWN until the operator writes)
 #
 # Return this output. The admit-instance WRITE is a separate authorisation.

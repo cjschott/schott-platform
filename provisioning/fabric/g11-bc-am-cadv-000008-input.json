@@ -1,7 +1,7 @@
 {
-  "request_id": "g11bcam-register-advertisement-cpkg-0001-chost-0001-supersedes-cadv-000007",
+  "request_id": "g11bcan-register-advertisement-cpkg-0001-chost-0001-supersedes-cadv-000007",
   "actor": "CHOST-0001",
-  "recorded_at": "2026-10-05T15:00:00-05:00",
+  "recorded_at": "2026-10-06T06:25:00-05:00",
   "capability_host_id": "CHOST-0001",
   "capability_package_id": "CPKG-0001",
   "contract_id": "CCON-0001",
@@ -11,12 +11,12 @@
   "advertised_resource_profile": {
     "architecture": "x86-64"
   },
-  "observed_at": "2026-10-05T15:00:00-05:00",
-  "valid_until": "2026-10-12T06:00:00-05:00",
+  "observed_at": "2026-10-06T06:25:00-05:00",
+  "valid_until": "2026-10-13T06:25:00-05:00",
   "supersedes": "CADV-000007",
   "provenance": {
     "class": "declared",
     "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
-    "recorded_at": "2026-10-05"
+    "recorded_at": "2026-10-06"
   }
 }

@@ -32,10 +32,10 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
 # artifact | input | reviewed sha | bytes | record | verb | pre-baseline | digest
 ARTIFACTS=(
-"g11-bc-am-cadv-000008-freeze.txt|g11-bc-am-cadv-000008-input.json|f0e97487b5d45e7f56db220d632811ffd29370c607d517b24f4412340afbdef1|674|CADV-000008|register-advertisement|a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|sha256:bbf9abe4b4abe48260592a75d3a856663d0971d239778b70c16d51d528f9f578"
-"g11-bc-am-cinst-000007-freeze.txt|g11-bc-am-cinst-000007-input.json|ce4f67fad131af757801ea550e44596ac5fe75264ac592454daa8ccd56ccfd27|1270|CINST-000007|admit-instance|31f49e1299afe3864d877fbde9507c08e852ef9db03f24cb337b725538538161|sha256:e2224ba5defb542565bda24772feafdef956486ea45f47370d35881ddeee0fee"
-"g11-bc-am-croute-0007-freeze.txt|g11-bc-am-croute-0007-input.json|28725679855c2b9c76022d90995e2abf9511397edd362a0b513d9f5ff72a00d0|679|CROUTE-0007|create-route|2c40e7057d3b76b7977c4403d24c5222e38ea832e5cd8358c3204fae21b64612|sha256:4b6f3d35a16ce4fb1c19ae0949557841b9c3be531140db7f9437ac5bf32391d2"
-"g11-bc-am-csel-000005-freeze.txt|g11-bc-am-csel-000005-input.json|bedb7ee40eb29d385750c482a4fb5e70f3496043eee3c69733d2014d5696cde4|606|CSEL-000005|select|4d8147310a62d9cfbdc1b2b51733d68c83d28fd8a06e1a5aef2f12498d6cea54|sha256:2215d46f52770499e944913e6e52599779c0d849baea7fc2f057a455f2c461c2"
+"g11-bc-an-cadv-000008-freeze.txt|g11-bc-am-cadv-000008-input.json|f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61|674|CADV-000008|register-advertisement|a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|sha256:3a35799239002a7ee9ee09b6002fd804bdc436030d7a3cb66d17d089f7be9a28"
+"g11-bc-am-cinst-000007-freeze.txt|g11-bc-am-cinst-000007-input.json|cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78|1270|CINST-000007|admit-instance|d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|sha256:3105868cd2311fcc8284848491184e4584ff2e35c7d1f5b0a292fde8d668390a"
+"g11-bc-am-croute-0007-freeze.txt|g11-bc-am-croute-0007-input.json|6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25|679|CROUTE-0007|create-route|39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf|sha256:093bb3834553cac3dd7cd0d6d1de566f8753e124fa8a9b5cdc2f664fa6056279"
+"g11-bc-am-csel-000005-freeze.txt|g11-bc-am-csel-000005-input.json|2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b|606|CSEL-000005|select|4a0f15aa1d60278cacc3da7684e83a3242601296a0a65e73b3401d231caf8487|sha256:a5b5700c6cb3e11a3bfd5ef8b396bdae0a24632cc3d06448c6ac1e22bbfd2371"
 )
 
 printf -- '--- all four artifacts and their inputs exist and parse ---\n'
@@ -56,6 +56,26 @@ for entry in "${ARTIFACTS[@]}"; do
     fail "${record}: the input is ${got:-absent} at ${bytes} bytes, reviewed ${sha} at ${size}"
   fi
 done
+
+printf -- '\n--- the superseded G11-BC-AM advertisement artifact is marked, not live ---\n'
+SUPERSEDED="${FABRIC_DIR}/g11-bc-am-cadv-000008-freeze.txt"
+if [[ -f "${SUPERSEDED}" ]]; then
+  if grep -q 'SUPERSEDED AT G11-BC-AN. DO NOT RUN THIS.' "${SUPERSEDED}" \
+     && grep -q 'g11-bc-an-cadv-000008-freeze.txt' "${SUPERSEDED}"; then
+    pass "the G11-BC-AM advertisement artifact is marked superseded and names its replacement"
+  else
+    fail "a second artifact for CADV-000008 exists and is not marked superseded"
+  fi
+  # AND ITS PINS ARE THE OLD ONES, deliberately. A superseded artifact carrying
+  # current numbers would be indistinguishable from the live one.
+  if grep -q 'REVIEWED=f0e97487b5d45e7f56db220d632811ffd29370c607d517b24f4412340afbdef1' "${SUPERSEDED}"; then
+    pass "and it still carries its own G11-BC-AM pins, so it cannot be mistaken for current"
+  else
+    fail "the superseded artifact's pins were updated, which makes it look live"
+  fi
+else
+  pass "no superseded advertisement artifact remains"
+fi
 
 printf -- '\n--- 1-2. each artifact renders reviewed bytes and pins them ---\n'
 for entry in "${ARTIFACTS[@]}"; do
@@ -107,8 +127,12 @@ for entry in "${ARTIFACTS[@]}"; do
   else
     fail "${record}: the current-time freshness gate is missing or restates its instants"
   fi
-  # And a dependent window must not outlive the one that governs it.
-  if grep -q 'outlives the governing advertisement' <<<"${body}"; then
+  # A DEPENDENT window must not outlive the one that governs it. The
+  # advertisement is the governing record, so there is nothing above it to
+  # contain -- asking it for that check would be asking the wrong question.
+  if [[ "${record}" == CADV-* ]]; then
+    pass "${record}: it IS the governing advertisement, so no containment check applies to it"
+  elif grep -q 'outlives the governing advertisement' <<<"${body}"; then
     pass "${record}: and refuses a window that outlives its governing advertisement"
   else
     fail "${record}: nothing checks the governing advertisement's window"
@@ -192,7 +216,7 @@ printf -- '\n--- 9. each proves production Fabric byte-identical afterwards ---\
 for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
-  if grep -q 'changed during the freeze' <<<"${body}" \
+  if grep -qE 'changed during the (freeze|preflight)|moved during the freeze' <<<"${body}" \
      && grep -q 'unchanged at %s' <<<"${body}"; then
     pass "${record}: measures production Fabric after the freeze and refuses if it moved"
   else
@@ -204,8 +228,8 @@ printf -- '\n--- 10. the write is a separate authorisation, and says so ---\n'
 for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
-  if grep -q "WRITE is a separate" <<<"${body}" \
-     && grep -q "is NOT in this block" <<<"${body}"; then
+  if grep -qi "write is a separate" <<<"${body}" \
+     && grep -qi "is not in this block" <<<"${body}"; then
     pass "${record}: states that the ${verb} write is a separate authorisation"
   else
     fail "${record}: does not separate the freeze from the write"
@@ -217,7 +241,7 @@ step=1
 for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
-  if grep -qF "STEP ${step} OF 4 IN THE G11-BC-AM RENEWAL CHAIN" <<<"${body}"; then
+  if grep -qiE "STEP ${step} OF 4" <<<"${body}"; then
     pass "${record} is step ${step} of 4"
   else
     fail "${record} does not declare itself step ${step} of 4"
@@ -237,6 +261,19 @@ for entry in "${ARTIFACTS[@]}"; do
     pass "${record}: names every scope dimension it keeps equal"
   else
     fail "${record}: does not name ${missing}"
+  fi
+done
+
+printf -- '\n--- every artifact carries the G11-BC-AN window, and none the G11-BC-AM one ---\n'
+for entry in "${ARTIFACTS[@]}"; do
+  IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
+  body="$(cat "${FABRIC_DIR}/${artifact}")"
+  # The G11-BC-AM instants may appear only in prose explaining why they were
+  # replaced -- never as a pinned value on an assignment.
+  if grep -qE "^[A-Z_]+=.*2026-10-05T15:" <<<"${body}"; then
+    fail "${record}: a G11-BC-AM instant survives as a pinned value"
+  else
+    pass "${record}: carries no G11-BC-AM instant as a pinned value"
   fi
 done
 

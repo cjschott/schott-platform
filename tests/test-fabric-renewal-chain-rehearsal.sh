@@ -63,11 +63,19 @@ CHAIN=(
 )
 # The reviewed bytes, pinned. A body that changed would change its request digest
 # and its predicted identity, and this suite would be rehearsing something else.
+#
+# G11-BC-AN RE-PINNED ALL FOUR. The G11-BC-AM window was tied to its own
+# preparation instant, 2026-10-05T15:00:00-05:00, and a production observation
+# performed later must not carry it. The window is now the one observed at
+# G11-BC-AN -- 2026-10-06T06:25:00-05:00, closing 2026-10-13T06:25:00-05:00 --
+# so every body changed, and with it every request digest and every chain
+# baseline. None of the AM numbers is carried forward: the suite refused the
+# stale pins before these were recomputed, which is what the pins are for.
 declare -A REVIEWED=(
-[g11-bc-am-cadv-000008-input.json]=f0e97487b5d45e7f56db220d632811ffd29370c607d517b24f4412340afbdef1
-[g11-bc-am-cinst-000007-input.json]=ce4f67fad131af757801ea550e44596ac5fe75264ac592454daa8ccd56ccfd27
-[g11-bc-am-croute-0007-input.json]=28725679855c2b9c76022d90995e2abf9511397edd362a0b513d9f5ff72a00d0
-[g11-bc-am-csel-000005-input.json]=bedb7ee40eb29d385750c482a4fb5e70f3496043eee3c69733d2014d5696cde4
+[g11-bc-am-cadv-000008-input.json]=f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61
+[g11-bc-am-cinst-000007-input.json]=cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78
+[g11-bc-am-croute-0007-input.json]=6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25
+[g11-bc-am-csel-000005-input.json]=2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b
 )
 
 FAILURES=0

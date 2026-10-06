@@ -30,8 +30,8 @@
 # pre-expiry chain, and the rehearsal asserts that field by field.
 #
 # THE NEW WINDOW IS NOT AN EXTENSION. The expired records are not rewritten and
-# not reused. CADV-000008 is valid 2026-10-05T15:00:00-05:00 through
-# 2026-10-12T06:00:00-05:00, and CINST-000007's admission ends at the same
+# not reused. CADV-000008 is valid 2026-10-06T06:25:00-05:00 through
+# 2026-10-13T06:25:00-05:00, and CINST-000007's admission ends at the same
 # instant so it cannot outlive the advertisement that governs it.
 #
 # THE CURRENT-TIME FRESHNESS GATE, AND WHY IT IS HERE AND NOT IN THE ENGINE. The
@@ -50,14 +50,14 @@ cd /opt/schott-platform
 bash <<'FREEZE'
 set -Eeuo pipefail
 DEST=/etc/kyri/fabric/croute-0007.json
-REVIEWED=28725679855c2b9c76022d90995e2abf9511397edd362a0b513d9f5ff72a00d0
+REVIEWED=6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25
 REVIEWED_BYTES=679
 SOURCE=provisioning/fabric/g11-bc-am-croute-0007-input.json
 
 # The Fabric store as this step requires it: the chain up to and including the
 # previous step, and nothing of this one. Pinned so the preflight below cannot be
 # read as proof against a store that moved underneath it.
-FABRIC_BEFORE=2c40e7057d3b76b7977c4403d24c5222e38ea832e5cd8358c3204fae21b64612
+FABRIC_BEFORE=39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf
 
 # Bodies that are NOT this one, refused BY NAME rather than by a generic
 # mismatch. Each is an accepted input still sitting in /etc/kyri/fabric, so each
@@ -159,7 +159,7 @@ PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(jso
 DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
 test "${PREDICTED}" = "CROUTE-0007" \
   || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CROUTE-0007"; exit 1; }
-test "${DIGEST}" = "sha256:4b6f3d35a16ce4fb1c19ae0949557841b9c3be531140db7f9437ac5bf32391d2" \
+test "${DIGEST}" = "sha256:093bb3834553cac3dd7cd0d6d1de566f8753e124fa8a9b5cdc2f664fa6056279" \
   || { echo "REFUSE: the request digest is ${DIGEST}, not the rehearsed one"; exit 1; }
 printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
 printf 'ok  request_digest      %s\n' "${DIGEST}"
@@ -177,18 +177,18 @@ FREEZE
 
 # EXPECTED:
 #   gate           the operator clock inside this record's window
-#   frozen input   28725679855c2b9c76022d90995e2abf9511397edd362a0b513d9f5ff72a00d0
+#   frozen input   6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25
 #                  /etc/kyri/fabric/croute-0007.json  root:cschott  640  679 bytes
 #   preflight      would_accept true, mutated false, destination_exists false,
 #                  predicted_record_id CROUTE-0007,
-#                  request_digest sha256:4b6f3d35a16ce4fb1c19ae0949557841b9c3be531140db7f9437ac5bf32391d2
-#   fabric         2c40e7057d3b76b7977c4403d24c5222e38ea832e5cd8358c3204fae21b64612  (unchanged)
+#                  request_digest sha256:093bb3834553cac3dd7cd0d6d1de566f8753e124fa8a9b5cdc2f664fa6056279
+#   fabric         39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf  (unchanged)
 #
 # CHAIN BASELINES FOR THIS STEP, measured in the scratch rehearsal:
-#   PRE_BASELINE              2c40e7057d3b76b7977c4403d24c5222e38ea832e5cd8358c3204fae21b64612
+#   PRE_BASELINE              39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf
 #   EXPECTED_RECORD           CROUTE-0007
 #   EXPECTED_SEQUENCE_BEFORE  route 6
 #   EXPECTED_SEQUENCE_AFTER   route 7
-#   POST_BASELINE             4d8147310a62d9cfbdc1b2b51733d68c83d28fd8a06e1a5aef2f12498d6cea54   (rehearsed; UNKNOWN until the operator writes)
+#   POST_BASELINE             4a0f15aa1d60278cacc3da7684e83a3242601296a0a65e73b3401d231caf8487   (rehearsed; UNKNOWN until the operator writes)
 #
 # Return this output. The create-route WRITE is a separate authorisation.

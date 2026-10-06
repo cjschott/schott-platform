@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# SUPERSEDED AT G11-BC-AN. DO NOT RUN THIS.
+#
+# This artifact froze CADV-000008 against a window tied to G11-BC-AM's own
+# preparation instant, 2026-10-05T15:00:00-05:00. The reviewer ruled that a
+# production observation performed later must not carry an earlier preparation's
+# timestamp, so the window was re-derived at G11-BC-AN from an observation made
+# then, and every dependent digest and baseline was recomputed.
+#
+# THE LIVE ARTIFACT FOR THIS RECORD IS
+#   provisioning/fabric/g11-bc-an-cadv-000008-freeze.txt
+#
+# This file is kept as the record of what G11-BC-AM prepared, and because the
+# reviewer accepted that checkpoint. Its pins below are the OLD ones and are
+# deliberately not updated: a superseded artifact with current numbers would be
+# indistinguishable from a live one.
+#
+# ---------------------------------------------------------------------------
 # The CADV-000008 freeze, exactly as it is to be typed.
 #
 # This file is reference text, not a script to run: the operator pastes it into

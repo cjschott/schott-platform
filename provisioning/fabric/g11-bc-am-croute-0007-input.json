@@ -1,8 +1,8 @@
 {
-  "request_id": "g11bcam-create-route-capdef-0001-ccon-0001-cinst-000007-supersedes-croute-0006",
+  "request_id": "g11bcan-create-route-capdef-0001-ccon-0001-cinst-000007-supersedes-croute-0006",
   "actor": "primary-platform-operator",
   "approving_authority": "primary-platform-operator",
-  "recorded_at": "2026-10-05T15:30:00-05:00",
+  "recorded_at": "2026-10-06T06:26:00-05:00",
   "capability_id": "CAPDEF-0001",
   "contract_id": "CCON-0001",
   "accepted_contract_versions": [
@@ -18,6 +18,6 @@
   "provenance": {
     "class": "declared",
     "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
-    "recorded_at": "2026-10-05"
+    "recorded_at": "2026-10-06"
   }
 }
