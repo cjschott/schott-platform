@@ -177,8 +177,11 @@ artifacts refuse by name. The suite asserts all three of those things.
 |---|---|
 | `run-validation.sh --quick` | **140/140**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
 | `run-validation.sh` (full) | **165/165**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
-| clean clone, full | *(CLONE)* |
-| GitHub CI | *(CI)* |
+| clean clone at `34d2c28`, full | **165/165**, 0 `FAIL:`, **18 `HOST_ONLY_SKIP`** |
+| GitHub CI at `34d2c28` | CI, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy — **6/6 success** |
+
+The clean clone's 18 skips are the intentional pinned-checkout refusal, every one
+of which ran for real in the host run, which had 0 skips.
 
 This checkpoint's suites: renewal-chain rehearsal **58** · freeze artifacts
 **72** · Stage-3 gate matrix **74** (production: 8 reached, 14 masked, unchanged)
