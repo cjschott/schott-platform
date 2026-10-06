@@ -202,8 +202,11 @@ where `local-only` is carried, and now does.
 |---|---|
 | `run-validation.sh --quick` | **140/140**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
 | `run-validation.sh` (full) | **165/165**, 0 `FAIL:`, 0 `HOST_ONLY_SKIP` |
-| clean clone, full | *(CLONE)* |
-| GitHub CI | *(CI)* |
+| clean clone at `7561c22`, full | **165/165**, 0 `FAIL:`, **18 `HOST_ONLY_SKIP`** |
+| GitHub CI at `7561c22` | CI, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy — **6/6 success** |
+
+The clean clone's 18 skips are the intentional pinned-checkout refusal, every one
+of which ran for real in the host run, which had 0 skips.
 
 This checkpoint: freeze artifacts **78** · renewal-chain rehearsal **19** ·
 Stage-3 gate matrix **74** · no-production-escape **4** · fabric-runtime **8336**
