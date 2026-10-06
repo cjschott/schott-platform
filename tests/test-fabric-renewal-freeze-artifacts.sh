@@ -33,7 +33,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 # artifact | input | reviewed sha | bytes | record | verb | pre-baseline | digest
 ARTIFACTS=(
 "g11-bc-an-cadv-000008-freeze.txt|g11-bc-am-cadv-000008-input.json|f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61|674|CADV-000008|register-advertisement|a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|sha256:3a35799239002a7ee9ee09b6002fd804bdc436030d7a3cb66d17d089f7be9a28"
-"g11-bc-am-cinst-000007-freeze.txt|g11-bc-am-cinst-000007-input.json|cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78|1270|CINST-000007|admit-instance|d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|sha256:3105868cd2311fcc8284848491184e4584ff2e35c7d1f5b0a292fde8d668390a"
+"g11-bc-ao-cinst-000007-freeze.txt|g11-bc-ao-cinst-000007-input.json|e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17|1270|CINST-000007|admit-instance|d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|sha256:7eb452fd0113314fe07bc335da34da2b4c6ca937bd550d74f0a5fcae95fbf2b6"
 "g11-bc-am-croute-0007-freeze.txt|g11-bc-am-croute-0007-input.json|6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25|679|CROUTE-0007|create-route|39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf|sha256:093bb3834553cac3dd7cd0d6d1de566f8753e124fa8a9b5cdc2f664fa6056279"
 "g11-bc-am-csel-000005-freeze.txt|g11-bc-am-csel-000005-input.json|2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b|606|CSEL-000005|select|4a0f15aa1d60278cacc3da7684e83a3242601296a0a65e73b3401d231caf8487|sha256:a5b5700c6cb3e11a3bfd5ef8b396bdae0a24632cc3d06448c6ac1e22bbfd2371"
 )
@@ -57,7 +57,34 @@ for entry in "${ARTIFACTS[@]}"; do
   fi
 done
 
-printf -- '\n--- the superseded G11-BC-AM advertisement artifact is marked, not live ---\n'
+printf -- '\n--- the superseded G11-BC-AM artifacts are marked, not live ---\n'
+# G11-BC-AO: the instance artifact joined the advertisement one. Its admitted_at
+# was thirty seconds after the advertisement observation, chosen for cadence while
+# the chain was rehearsed whole -- and an admission is a decision, not a cadence
+# slot. Re-derived at G11-BC-AO, so the AM artifact is superseded.
+for superseded_pair in \
+  "g11-bc-am-cadv-000008-freeze.txt:g11-bc-an-cadv-000008-freeze.txt:f0e97487b5d45e7f56db220d632811ffd29370c607d517b24f4412340afbdef1" \
+  "g11-bc-am-cinst-000007-freeze.txt:g11-bc-ao-cinst-000007-freeze.txt:cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78"
+do
+  IFS=: read -r was now old_pin <<<"${superseded_pair}"
+  path="${FABRIC_DIR}/${was}"
+  [[ -f "${path}" ]] || { pass "${was} no longer exists"; continue; }
+  if grep -qE 'SUPERSEDED AT G11-BC-A[NO]\. DO NOT RUN THIS\.' "${path}" \
+     && grep -qF "${now}" "${path}"; then
+    pass "${was} is marked superseded and names ${now}"
+  else
+    fail "${was} is a second artifact for its record and is not marked superseded"
+  fi
+  # AND IT KEEPS ITS OLD PINS, deliberately. A superseded artifact carrying
+  # current numbers would be indistinguishable from the live one.
+  if grep -qF "REVIEWED=${old_pin}" "${path}"; then
+    pass "and ${was} still carries its own pins, so it cannot be mistaken for current"
+  else
+    fail "${was} had its pins updated, which makes it look live"
+  fi
+done
+
+printf -- '\n--- (the advertisement artifact, in detail) ---\n'
 SUPERSEDED="${FABRIC_DIR}/g11-bc-am-cadv-000008-freeze.txt"
 if [[ -f "${SUPERSEDED}" ]]; then
   if grep -q 'SUPERSEDED AT G11-BC-AN. DO NOT RUN THIS.' "${SUPERSEDED}" \
@@ -118,21 +145,23 @@ for entry in "${ARTIFACTS[@]}"; do
   ok=1
   grep -q 'current-time freshness gate' <<<"${body}" || { ok=0; }
   grep -q 'datetime.now().astimezone()' <<<"${body}" || { ok=0; }
-  grep -q 'this authority is EXPIRED at the current clock' <<<"${body}" || { ok=0; }
-  # The gate must read the instants out of the rendered body rather than restate
-  # them, or it can drift from the bytes it guards.
-  grep -q 'body.get("valid_until")' <<<"${body}" || { ok=0; }
+  # A closed window must be NAMED as closed at the current clock, in whatever
+  # words -- an advertisement expires, an admission closes, and binding to one
+  # phrasing would make this a spelling test.
+  grep -qiE '(EXPIRED|CLOSED) at the current clock' <<<"${body}" || { ok=0; }
+  # And the gate must read the window OUT OF THE BODY. Which field carries it
+  # depends on the record kind.
+  grep -qE 'body\.get\("(valid_until|admitted_until)"\)' <<<"${body}" || { ok=0; }
   if (( ok == 1 )); then
-    pass "${record}: gates on the operator clock, reading the instants out of the rendered body"
+    pass "${record}: gates on the operator clock, reading its window out of the rendered body"
   else
     fail "${record}: the current-time freshness gate is missing or restates its instants"
   fi
   # A DEPENDENT window must not outlive the one that governs it. The
-  # advertisement is the governing record, so there is nothing above it to
-  # contain -- asking it for that check would be asking the wrong question.
+  # advertisement is the governing record, so there is nothing above it.
   if [[ "${record}" == CADV-* ]]; then
     pass "${record}: it IS the governing advertisement, so no containment check applies to it"
-  elif grep -q 'outlives the governing advertisement' <<<"${body}"; then
+  elif grep -qiE 'outliv(es|ing) the (governing )?advertisement' <<<"${body}"; then
     pass "${record}: and refuses a window that outlives its governing advertisement"
   else
     fail "${record}: nothing checks the governing advertisement's window"
@@ -149,36 +178,84 @@ for entry in "${ARTIFACTS[@]}"; do
     fail "${record}: does not pin ${pre}"
   fi
 done
-# The four baselines must chain: each step's pre-baseline is the previous step's
-# rehearsed post-baseline. A chain that did not join would mean the steps were
-# measured against stores that never followed one another.
-printf -- '\n--- and the four baselines form one chain ---\n'
+# THE CHAIN JOINS ONLY ACROSS PREPARED STEPS. G11-BC-AO prepared the admission
+# and nothing after it, so CROUTE-0007 and CSEL-000005 carry baselines derived
+# from a CINST body that has since been re-derived. Their pins are STALE BY
+# CONSTRUCTION and are not asserted here -- they are re-prepared at their own
+# checkpoint, with their own rehearsal. Asserting a joined chain across an
+# unprepared step would be asserting a number nobody has measured.
+printf -- '\n--- the prepared steps chain, and the unprepared ones say they do not ---\n'
+PREPARED=(CADV-000008 CINST-000007)
 chain_ok=1
 previous=""
 for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
+  prepared=0
+  for name in "${PREPARED[@]}"; do [[ "${record}" == "${name}" ]] && prepared=1; done
+  if (( prepared == 0 )); then
+    if grep -qE 'STALE|SUPERSEDED|re-prepared' <<<"${body}"; then
+      pass "${record}: not prepared at this checkpoint, and the artifact says its pins are stale"
+    else
+      fail "${record}: carries pins derived from a re-derived body and does not say so"
+    fi
+    continue
+  fi
   if [[ -n "${previous}" ]]; then
     [[ "${pre}" == "${previous}" ]] || { chain_ok=0
       fail "${record}: its pre-baseline ${pre:0:16}… is not the previous step's post-baseline ${previous:0:16}…"; }
   fi
-  previous="$(grep -oE '^#   POST_BASELINE             [0-9a-f]{64}' <<<"${body}" | awk '{print $3}')"
+  previous="$(grep -oE '^#   POST_BASELINE +[0-9a-f]{64}' <<<"${body}" | awk '{print $3}')"
   [[ -n "${previous}" ]] || { chain_ok=0; fail "${record}: states no rehearsed post-baseline"; }
 done
-(( chain_ok == 1 )) && pass "each step's pre-baseline is the previous step's rehearsed post-baseline"
+(( chain_ok == 1 )) && pass "every prepared step's pre-baseline is the previous prepared step's rehearsed post-baseline"
 
 printf -- '\n--- 6. PREFLIGHT ONLY: no artifact may write production Fabric ---\n'
 for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
   # Every invocation of a Fabric write verb in the artifact must carry --preflight.
-  calls="$(grep -c "tools.fabric.cli ${verb}" <<<"${body}" || true)"
-  flagged="$(grep -c -- '--preflight' <<<"${body}" || true)"
-  if [[ "${calls}" == "1" && "${flagged}" == "1" ]]; then
-    pass "${record}: exactly one ${verb} invocation, and it is --preflight"
+  # Each invocation is classified by the ROOT it names. Against production it
+  # must carry --preflight; against a scratch root it is the eligibility
+  # rehearsal the reviewer asked for, which has to write to mean anything.
+  if python3 - "${FABRIC_DIR}/${artifact}" "${verb}" <<'CLASSIFY'
+import re
+import sys
+
+path, verb = sys.argv[1:3]
+text = open(path, encoding="utf-8").read()
+production = scratch = 0
+unflagged = []
+for match in re.finditer(rf"tools\.fabric\.cli\s+{re.escape(verb)}\b", text):
+    # The invocation and its continuation lines, up to the first line that does
+    # not end in a backslash.
+    tail = text[match.end():]
+    lines, consumed = [], 0
+    for line in tail.splitlines():
+        lines.append(line)
+        consumed += 1
+        if not line.rstrip().endswith("\\"):
+            break
+    window = " ".join(lines)
+    if "store-root /var/lib/kyri/fabric" in window:
+        production += 1
+        if "--preflight" not in window:
+            unflagged.append(window.strip()[:70])
+    else:
+        scratch += 1
+if production < 1:
+    sys.exit(f"no production {verb} invocation at all")
+if unflagged:
+    sys.exit(f"a production {verb} invocation carries no --preflight: {unflagged}")
+print(f"{production} production invocation(s), every one --preflight; "
+      f"{scratch} against a scratch root")
+CLASSIFY
+  then
+    pass "${record}: every production ${verb} invocation is a --preflight"
   else
-    fail "${record}: ${calls} ${verb} invocation(s), ${flagged} --preflight flag(s)"
+    fail "${record}: a production ${verb} invocation is not a preflight"
   fi
+
   # And the destination of the only install is /etc, never the store.
   installs="$(grep -cE '^sudo install ' <<<"${body}" || true)"
   if [[ "${installs}" == "1" ]] && grep -q 'DEST=/etc/kyri/fabric/' <<<"${body}"; then
@@ -204,7 +281,15 @@ for entry in "${ARTIFACTS[@]}"; do
   body="$(cat "${FABRIC_DIR}/${artifact}")"
   ok=1
   grep -qF "\${PREDICTED}\" = \"${record}\"" <<<"${body}" || { ok=0; }
-  grep -qF "\${DIGEST}\" = \"${digest}\"" <<<"${body}" || { ok=0; }
+  if grep -qF "\${DIGEST}\" = \"${digest}\"" <<<"${body}"; then
+    :
+  elif grep -qF "REQUEST_DIGEST=${digest}" <<<"${body}" \
+       && grep -qF 'DIGEST}" = "' <<<"${body}" \
+       && grep -qF 'REQUEST_DIGEST}"' <<<"${body}"; then
+    :
+  else
+    ok=0
+  fi
   if (( ok == 1 )); then
     pass "${record}: proves predicted_record_id and request_digest ${digest:7:16}… separately"
   else
@@ -228,8 +313,9 @@ printf -- '\n--- 10. the write is a separate authorisation, and says so ---\n'
 for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
-  if grep -qi "write is a separate" <<<"${body}" \
-     && grep -qi "is not in this block" <<<"${body}"; then
+  flattened="$(tr '\n' ' ' <<<"${body}" | sed 's/#//g' | tr -s ' ')"
+  if grep -qi "write is a separate" <<<"${flattened}" \
+     && grep -qi "is not in this block" <<<"${flattened}"; then
     pass "${record}: states that the ${verb} write is a separate authorisation"
   else
     fail "${record}: does not separate the freeze from the write"
@@ -254,9 +340,16 @@ for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
   missing=""
-  for term in CAPDEF-0001 CPKG-0001 CHOST-0001 CCON-0001 1.0.0 x86-64 execute internal HOST-0001 local-only; do
+  for term in CAPDEF-0001 CPKG-0001 CHOST-0001 CCON-0001 1.0.0 x86-64 execute internal HOST-0001; do
     grep -qF "${term}" <<<"${body}" || missing+="${term} "
   done
+  # Locality is carried by the route and the selection, never by an advertisement
+  # or an admission. Those artifacts must SAY where it lives rather than pin it.
+  case "${record}" in
+    CROUTE-*|CSEL-*) grep -qF local-only <<<"${body}" || missing+="local-only " ;;
+    *) grep -qF local-only <<<"${body}" \
+         || missing+="a statement of where local-only is carried " ;;
+  esac
   if [[ -z "${missing}" ]]; then
     pass "${record}: names every scope dimension it keeps equal"
   else

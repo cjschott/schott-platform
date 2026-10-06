@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+# SUPERSEDED AT G11-BC-AO. DO NOT RUN THIS.
+#
+# This artifact froze CINST-000007 with admitted_at thirty seconds after the
+# advertisement observation -- a cadence slot chosen while the whole chain was
+# rehearsed together. An admission is a DECISION by the operator, and thirty
+# seconds after an advertisement is not when anybody decided anything, so the
+# instant was re-derived at G11-BC-AO against the now-live CADV-000008.
+#
+# THE LIVE ARTIFACT FOR THIS RECORD IS
+#   provisioning/fabric/g11-bc-ao-cinst-000007-freeze.txt
+#
+# Its pins below are the OLD ones and are deliberately not updated: a superseded
+# artifact with current numbers would be indistinguishable from a live one.
+#
+# ---------------------------------------------------------------------------
 # The CINST-000007 freeze, exactly as it is to be typed.
 #
 # This file is reference text, not a script to run: the operator pastes it into

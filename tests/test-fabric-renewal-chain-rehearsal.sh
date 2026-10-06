@@ -57,10 +57,32 @@ INPUTS="${ROOT}/provisioning/fabric"
 # route head.
 CHAIN=(
 "register-advertisement|g11-bc-am-cadv-000008-input.json|CADV-000008|advertisement|7|8"
-"admit-instance|g11-bc-am-cinst-000007-input.json|CINST-000007|instance|6|7"
+"admit-instance|g11-bc-ao-cinst-000007-input.json|CINST-000007|instance|6|7"
 "create-route|g11-bc-am-croute-0007-input.json|CROUTE-0007|route|6|7"
 "select|g11-bc-am-csel-000005-input.json|CSEL-000005|selection|4|5"
 )
+
+# HOW FAR THE CHAIN IS PREPARED. The reviewer authorises one record at a time, so
+# the chain is prepared one record at a time, and the steps beyond that point have
+# bodies nobody has re-derived.
+#
+# G11-BC-AO: the admission's `admitted_at` was re-derived -- G11-BC-AM's was a
+# cadence slot thirty seconds after the advertisement observation, and an
+# admission is a decision. That re-derivation makes the route and selection
+# bodies INCONSISTENT with it: their instants sit at 06:26, before the admission
+# at 13:35, and the engine judges eligibility at the instant a request names. A
+# selection evaluated before its candidate was admitted selects nothing, and the
+# released engine says exactly that: `selection-recorded-no-instance`.
+#
+# So the unprepared steps are NOT rehearsed. Rehearsing a body that will be
+# re-derived before it is written proves nothing about what gets written, and a
+# digest harvested from it would be a number to carry forward wrongly.
+PREPARED=(CADV-000008 CINST-000007)
+is_prepared() {
+  local name
+  for name in "${PREPARED[@]}"; do [[ "$1" == "${name}" ]] && return 0; done
+  return 1
+}
 # The reviewed bytes, pinned. A body that changed would change its request digest
 # and its predicted identity, and this suite would be rehearsing something else.
 #
@@ -73,7 +95,7 @@ CHAIN=(
 # stale pins before these were recomputed, which is what the pins are for.
 declare -A REVIEWED=(
 [g11-bc-am-cadv-000008-input.json]=f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61
-[g11-bc-am-cinst-000007-input.json]=cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78
+[g11-bc-ao-cinst-000007-input.json]=e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17
 [g11-bc-am-croute-0007-input.json]=6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25
 [g11-bc-am-csel-000005-input.json]=2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b
 )
@@ -99,6 +121,22 @@ FABRIC_BEFORE="$(aggregate "${PRODUCTION_FABRIC}")"
 RUNTIME_BEFORE="$(aggregate "${PRODUCTION_RUNTIME}")"
 TRUST_BEFORE="$(aggregate "${PRODUCTION_TRUST}")"
 UID_N="$(id -u)"; GID_N="$(id -g)"
+
+# Which chain records production already holds, taken BEFORE anything is
+# rehearsed. The final check compares against this rather than against a list,
+# so an operator's accepted write is never mistaken for an escape.
+WRITTEN_AT_START=""
+for entry in "${CHAIN[@]}"; do
+  IFS='|' read -r _verb _input expect _kind _before _after <<<"${entry}"
+  case "${expect}" in
+    CADV-*)   probe="${PRODUCTION_FABRIC}/capability-advertisements/${expect}.yaml" ;;
+    CINST-*)  probe="${PRODUCTION_FABRIC}/capability-instances/${expect}.yaml" ;;
+    CROUTE-*) probe="${PRODUCTION_FABRIC}/capability-routes/${expect}.yaml" ;;
+    CSEL-*)   probe="${PRODUCTION_FABRIC}/capability-selections/${expect}.yaml" ;;
+  esac
+  [[ -e "${probe}" ]] && WRITTEN_AT_START+="${expect} "
+done
+printf 'note     chain records already in production: %s\n' "${WRITTEN_AT_START:-none}"
 
 SCRATCH="${WORK}/fabric"
 APPROVED="${WORK}/approved"
@@ -172,8 +210,63 @@ else
 fi
 
 printf -- '\n--- 2. the chain, one released write at a time ---\n'
+# WHICH STEPS ARE ALREADY WRITTEN, asked of production rather than listed. The
+# chain is authorised one record at a time, so after each operator write this
+# suite must verify what exists and rehearse only what does not. A suite that
+# rehearsed an already-written step would refuse on `destination_exists` and
+# call the operator's accepted write a failure.
+written_record() {
+  case "$1" in
+    CADV-*)  printf '%s' "${PRODUCTION_FABRIC}/capability-advertisements/$1.yaml" ;;
+    CINST-*) printf '%s' "${PRODUCTION_FABRIC}/capability-instances/$1.yaml" ;;
+    CROUTE-*) printf '%s' "${PRODUCTION_FABRIC}/capability-routes/$1.yaml" ;;
+    CSEL-*)  printf '%s' "${PRODUCTION_FABRIC}/capability-selections/$1.yaml" ;;
+  esac
+}
+
 for entry in "${CHAIN[@]}"; do
   IFS='|' read -r verb input expect kind before after <<<"${entry}"
+
+  # NOT PREPARED YET: say so and move on. Its body will be re-derived against the
+  # store as it actually stands when its own checkpoint comes.
+  if ! is_prepared "${expect}"; then
+    printf '\nstep %-22s NOT PREPARED at this checkpoint\n' "${expect}"
+    pass "${expect}: not rehearsed, because its body is re-derived at its own checkpoint"
+    continue
+  fi
+
+  # ALREADY IN PRODUCTION: verify it, do not rehearse it. The scratch copy
+  # already carries it, so the remaining steps rehearse on top of it exactly as
+  # the operator will meet them.
+  if [[ -e "$(written_record "${expect}")" ]]; then
+    printf '\nstep %-22s ALREADY WRITTEN -- verifying, not rehearsing\n' "${expect}"
+    if [[ "$(sequence "${kind}")" == "${after}" ]]; then
+      pass "${expect}: the ${kind} sequence is ${after}, where its accepted write left it"
+    else
+      fail "${expect}: the ${kind} sequence is $(sequence "${kind}"), expected ${after}"
+    fi
+    # It must be the head of its namespace: a written record that something
+    # supersedes would mean the chain moved past it without this suite knowing.
+    head=""
+    for candidate in "$(dirname "$(written_record "${expect}")")"/*.yaml; do
+      id="$(basename "${candidate}" .yaml)"
+      grep -lq "^supersedes: ${id}\$" "$(dirname "$(written_record "${expect}")")"/*.yaml 2>/dev/null \
+        || head="${id}"
+    done
+    if [[ "${head}" == "${expect}" ]]; then
+      pass "${expect}: it is the ${kind} head in production"
+    else
+      fail "${expect}: the ${kind} head is ${head}, not ${expect}"
+    fi
+    # And the body it was written from must still be the reviewed one.
+    if grep -q "request_digest: sha256:" "$(written_record "${expect}")"; then
+      pass "${expect}: the persisted record carries the request digest it was written from"
+    else
+      fail "${expect}: the persisted record carries no request digest"
+    fi
+    continue
+  fi
+
   pre="$(aggregate "${SCRATCH}")"
   printf '\nstep %-22s PRE_BASELINE=%s\n' "${expect}" "$(production_equivalent "${SCRATCH}")"
   if [[ "$(sequence "${kind}")" == "${before}" ]]; then
@@ -281,6 +374,34 @@ for entry in "${CHAIN[@]}"; do
       fi ;;
   esac
 done
+
+# THE WHOLE-CHAIN PROOFS NEED THE WHOLE CHAIN. Current authority is supported by
+# a SELECTION resolving to an admitted instance, so until the selection is
+# prepared and rehearsed there is nothing to be supported. Saying that is the
+# honest report; running the checks anyway would produce a refusal that looks like
+# a defect and is really an unfinished chain.
+CHAIN_COMPLETE=1
+for entry in "${CHAIN[@]}"; do
+  IFS='|' read -r _v _i expect _k _b _a <<<"${entry}"
+  is_prepared "${expect}" || CHAIN_COMPLETE=0
+done
+
+if (( CHAIN_COMPLETE == 0 )); then
+  printf -- '\n--- the chain is prepared through %s ---\n' "${PREPARED[*]}"
+  pass "prepared so far: ${PREPARED[*]}"
+  printf 'note     the whole-chain authority verdict and the Stage-3 gate matrix need a\n'
+  printf 'note     prepared SELECTION: current authority is a selection resolving to an\n'
+  printf 'note     admitted instance, and there is not one yet. Both return when\n'
+  printf 'note     CROUTE-0007 and CSEL-000005 are prepared at their own checkpoints.\n'
+  printf '\n'
+  if (( FAILURES == 0 )); then
+    printf 'Fabric renewal chain rehearsal passed (prepared steps only).\n'
+  else
+    printf 'Fabric renewal chain rehearsal FAILED: %d\n' "${FAILURES}" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 printf -- '\n--- 4. the renewed chain, judged at the real clock ---\n'
 printf 'FINAL_BASELINE=%s  (what production would measure after all four writes)\n' \
@@ -407,14 +528,23 @@ for pair in "fabric:${PRODUCTION_FABRIC}:${FABRIC_BEFORE}" \
   fi
 done
 # And nothing of the renewal reached production.
-for absent in capability-advertisements/CADV-000008.yaml \
-              capability-instances/CINST-000007.yaml \
-              capability-routes/CROUTE-0007.yaml \
-              capability-selections/CSEL-000005.yaml; do
-  if [[ ! -e "${PRODUCTION_FABRIC}/${absent}" ]]; then
-    pass "production holds no ${absent##*/}: the renewal is prepared, not written"
+# ONLY THE UNAUTHORISED STEPS MUST BE ABSENT. A record the operator has been
+# authorised to write and has written is not an escape; a record THIS SUITE
+# caused to appear would be. The distinction is which ones were already there
+# when the run started, measured before anything was rehearsed.
+for entry in "${CHAIN[@]}"; do
+  IFS='|' read -r verb input expect kind before after <<<"${entry}"
+  record="$(written_record "${expect}")"
+  if [[ -n "${WRITTEN_AT_START}" ]] && [[ " ${WRITTEN_AT_START} " == *" ${expect} "* ]]; then
+    if [[ -e "${record}" ]]; then
+      pass "${expect}: written before this run and still there -- the operator's accepted write"
+    else
+      fail "${expect}: WAS IN PRODUCTION AT THE START AND IS GONE"
+    fi
+  elif [[ ! -e "${record}" ]]; then
+    pass "${expect}: still absent from production -- prepared, not written"
   else
-    fail "A RENEWAL RECORD REACHED PRODUCTION: ${absent}"
+    fail "THIS RUN PUT ${expect} INTO PRODUCTION FABRIC"
   fi
 done
 

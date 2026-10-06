@@ -1,0 +1,375 @@
+#!/usr/bin/env bash
+# The CINST-000007 PRODUCTION FREEZE, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run blind: the operator pastes it
+# into a root-capable shell so every command and every refusal is visible on the
+# console.
+#
+# WHAT THIS DOES. It puts one reviewed body under /etc/kyri/fabric and asks the
+# released engine what it WOULD do with it. It does not write
+# /var/lib/kyri/fabric, and it proves that afterwards.
+#
+# STEP 2 OF 4. CADV-000008 is written and accepted; this freezes the admission
+# that binds to it. CROUTE-0007 and CSEL-000005 are NOT frozen here -- each is a
+# separate reviewer authorisation.
+#
+# =====================================================================
+# THE ADMISSION INSTANT, AND WHY IT IS NOT THE ONE G11-BC-AN PREPARED
+# =====================================================================
+#
+# G11-BC-AN's body carried admitted_at 2026-10-06T06:25:30-05:00 -- thirty seconds
+# after the advertisement observation, chosen for cadence while that chain was
+# being rehearsed as a whole. An admission is a DECISION by the operator, not an
+# observation of the host, and thirty seconds after an advertisement is not when
+# anybody decided anything. So it was re-derived at G11-BC-AO, and with it the
+# body, its digest and its request digest. None of the AN numbers is carried
+# forward.
+#
+# THE OPERATOR ASSERTS IT. This block refuses without it:
+#
+#     ADMITTED_AT=2026-10-06T13:35:00-05:00 bash <this block>
+#
+# and refuses if what you supply is not the instant the reviewed bytes carry. The
+# instant is inside the reviewed body -- every dependent digest derives from it --
+# but it must be asserted by the person making the admission decision rather than
+# assumed by the artifact. A mismatch means the body is re-prepared, not edited.
+#
+# NOTHING HERE READS A CLOCK TO FILL IN A VALUE. `date`, `now()` and their
+# equivalents appear only in gates that REFUSE, and in the eligibility call, which
+# must judge at the current instant to mean anything.
+#
+# THE TWO WINDOWS THIS SITS INSIDE
+#
+#     CADV-000008   2026-10-06T06:25:00-05:00 -> 2026-10-13T06:25:00-05:00
+#     CINST-000007  2026-10-06T13:35:00-05:00 -> 2026-10-13T06:25:00-05:00
+#
+# The admission ends at the same instant as the advertisement that governs it, so
+# it cannot outlive it. Both are checked below, read out of the records.
+#
+# IF EITHER WINDOW HAS CLOSED, this block refuses and the chain is RE-PREPARED
+# from a fresh observation. Do not edit a window.
+#
+# NO AUTHORITY IS BROADENED. capability CAPDEF-0001, package CPKG-0001, host
+# CHOST-0001, contract CCON-0001, version 1.0.0, architecture x86-64, and the
+# admission scope -- operation `execute`, classification `internal`, target
+# HOST-0001 -- are all equal to CINST-000006, field by field, with both trust
+# records unchanged. Only the window and the governing advertisement move.
+#
+# LOCALITY IS NOT AN INSTANCE FIELD. `local-only` is carried by the route and the
+# selection, not by an admission, so this record neither widens nor narrows it --
+# CROUTE-0006 and CSEL-000004 still hold it, and their successors are not frozen
+# here. Saying so is the point: an admission artifact that claimed to pin
+# locality would be claiming authority over a record it does not touch.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/cinst-000007.json
+SOURCE=provisioning/fabric/g11-bc-ao-cinst-000007-input.json
+REVIEWED=e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17
+REVIEWED_BYTES=1270
+REQUEST_DIGEST=sha256:7eb452fd0113314fe07bc335da34da2b4c6ca937bd550d74f0a5fcae95fbf2b6
+
+REVIEWED_ADMITTED_AT=2026-10-06T13:35:00-05:00
+REVIEWED_ADMITTED_UNTIL=2026-10-13T06:25:00-05:00
+
+# The POST-CADV baselines. a87c2010 is the pre-CADV store and must never gate a
+# CINST step: the advertisement write moved it.
+FABRIC_BEFORE=d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c
+RUNTIME_BEFORE=7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+TRUST_BEFORE=53605e4e738d941ad5f1d2d2d08fe5cb776e484f6fee07f1123859d07828b63f
+
+# The governing advertisement, as production persisted it.
+CADV8_RECORD=8b478c3e8d3ed6c86a63d4dde1901cedfd56d9736b28017cfd384fa78443654c
+# And the predecessor this supersedes, which is NOT rewritten.
+CINST6_RECORD=5a320fa0cb9f678d3f78a11416beec17945b06add25446fbae7e0e1bf5575b9b
+
+# Bodies that are NOT this one, refused BY NAME. Each is an accepted input still
+# sitting in /etc/kyri/fabric, so each is a plausible mis-paste, and the Fabric
+# engine would have nothing to say about the mistake.
+ACCEPTED_CINST5=850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da
+ACCEPTED_CINST6=6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162
+
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+
+# ---- GATE 0: THE OPERATOR SUPPLIES THE ADMISSION INSTANT ------------------
+printf -- '\n--- the admission instant, supplied by the operator ---\n'
+if [[ -z "${ADMITTED_AT:-}" ]]; then
+  echo "REFUSE: no ADMITTED_AT was supplied."
+  echo "        Re-run as:  ADMITTED_AT=${REVIEWED_ADMITTED_AT} bash <this block>"
+  echo "        An admission is your decision, and the instant is yours to assert."
+  exit 1
+fi
+test "${ADMITTED_AT}" = "${REVIEWED_ADMITTED_AT}" || {
+  echo "REFUSE: you supplied ${ADMITTED_AT}; the reviewed bytes carry ${REVIEWED_ADMITTED_AT}."
+  echo "        If your admission decision is a different instant, the body must be"
+  echo "        RE-PREPARED -- the instant is inside it and its digest derives from"
+  echo "        it. Do not edit the body here."
+  exit 1; }
+printf 'ok  operator-supplied admission %s, equal to the reviewed instant\n' "${ADMITTED_AT}"
+
+# ---- GATE 1: THE POST-CADV PRODUCTION BASELINES --------------------------
+printf -- '\n--- production baselines, after the CADV-000008 write ---\n'
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store is ${got}, expected ${want}"; exit 1; }
+  printf 'ok  %-8s %s\n' "${label}" "${got}"
+done
+
+# ---- GATE 2: THE GOVERNING ADVERTISEMENT, AS WRITTEN ---------------------
+printf -- '\n--- the governing advertisement ---\n'
+test "$(sha256sum /var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml | cut -d' ' -f1)" \
+     = "${CADV8_RECORD}" \
+  || { echo "REFUSE: CADV-000008 is not the record the operator wrote"; exit 1; }
+test "$(cat /var/lib/kyri/fabric/sequences/capability-advertisement.seq)" = "8" \
+  || { echo "REFUSE: the advertisement sequence is not 8"; exit 1; }
+# A head is a record nothing supersedes. Asked of the store, not assumed.
+test -z "$(grep -l '^supersedes: CADV-000008$' \
+             /var/lib/kyri/fabric/capability-advertisements/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: CADV-000008 has already been superseded"; exit 1; }
+printf 'ok  CADV-000008 is the advertisement head, at %s\n' "${CADV8_RECORD}"
+
+# ---- GATE 3: THE INSTANCE NAMESPACE -------------------------------------
+printf -- '\n--- the instance namespace ---\n'
+test "$(cat /var/lib/kyri/fabric/sequences/capability-instance.seq)" = "6" \
+  || { echo "REFUSE: the instance sequence is not 6"; exit 1; }
+test ! -e /var/lib/kyri/fabric/capability-instances/CINST-000007.yaml \
+  || { echo "REFUSE: CINST-000007 already exists in production"; exit 1; }
+test "$(sha256sum /var/lib/kyri/fabric/capability-instances/CINST-000006.yaml | cut -d' ' -f1)" \
+     = "${CINST6_RECORD}" \
+  || { echo "REFUSE: CINST-000006 is not the accepted record; it must be immutable"; exit 1; }
+test -z "$(grep -l '^supersedes: CINST-000006$' \
+             /var/lib/kyri/fabric/capability-instances/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: CINST-000006 has already been superseded"; exit 1; }
+printf 'ok  instance sequence 6, CINST-000006 the head at %s, CINST-000007 absent\n' \
+  "${CINST6_RECORD}"
+
+# ---- GATE 4: THE REVIEWED BODY ------------------------------------------
+printf -- '\n--- the reviewed body ---\n'
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+sudo test -f /etc/kyri/fabric/cadv-000008.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cadv-000008.json is absent; CINST-000007 binds CADV-000008 and is frozen against it"; exit 1; }
+sudo test -f /etc/kyri/fabric/cinst-000006.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cinst-000006.json is absent; CINST-000007 supersedes CINST-000006"; exit 1; }
+test -f "${SOURCE}" || { echo "REFUSE: ${SOURCE} is absent"; exit 1; }
+
+# FROM THE REPOSITORY, NOT RETYPED HERE. A body retyped into a ceremony is a body
+# nobody reviewed.
+TMP="$(mktemp)"
+cp "${SOURCE}" "${TMP}"
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+for pair in "the CINST-000005 input:${ACCEPTED_CINST5}" \
+            "the CINST-000006 input, whose admission EXPIRED 2026-09-23T06:00:00-05:00:${ACCEPTED_CINST6}"; do
+  name="${pair%:*}"; sha="${pair##*:}"
+  if [[ "${ACTUAL}" == "${sha}" ]]; then
+    echo "REFUSE: this is ${name}, not the CINST-000007 input"
+    rm -f "${TMP}"; exit 1
+  fi
+done
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+printf 'ok  reviewed body %s, %s bytes\n' "${ACTUAL}" "${REVIEWED_BYTES}"
+
+# ---- GATE 5: BOTH WINDOWS, AND THE CURRENT CLOCK ------------------------
+#
+# Read out of the rendered body and out of the persisted advertisement, so
+# neither gate can drift from the records it guards. The clock is read HERE, to
+# refuse -- never to supply a value.
+printf -- '\n--- current-time freshness gate: both windows ---\n'
+GATE="$(python3 - "${TMP}" \
+        /var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml <<'GATE_PY'
+import json
+import re
+import sys
+from datetime import datetime
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+advertisement = open(sys.argv[2], encoding="utf-8").read()
+now = datetime.now().astimezone()
+
+admitted = body.get("admitted_at")
+until = body.get("admitted_until")
+recorded = body.get("recorded_at")
+evaluated = body.get("evaluated_at")
+adv_observed = re.search(r"^observed_at: '(.+)'$", advertisement, re.M).group(1)
+adv_until = re.search(r"^valid_until: '(.+)'$", advertisement, re.M).group(1)
+
+print(f"now                      {now.isoformat()}")
+print(f"CADV-000008 observed_at  {adv_observed}")
+print(f"CADV-000008 valid_until  {adv_until}")
+print(f"CINST-000007 admitted_at {admitted}")
+print(f"CINST-000007 until       {until}")
+
+# The admission must not outlive the authority that governs it, and must not
+# begin before it.
+if datetime.fromisoformat(until) > datetime.fromisoformat(adv_until):
+    print(f"REFUSE: the admission ends {until}, outliving the advertisement's {adv_until}")
+    sys.exit(1)
+if datetime.fromisoformat(admitted) < datetime.fromisoformat(adv_observed):
+    print(f"REFUSE: the admission begins {admitted}, before the advertisement's {adv_observed}")
+    sys.exit(1)
+print("ok  the admission window is contained by the advertisement's")
+
+# The engine's own half-open interval, applied to the body's own instants.
+for name, instant in (("recorded_at", recorded), ("evaluated_at", evaluated)):
+    if not (datetime.fromisoformat(admitted) <= datetime.fromisoformat(instant)
+            < datetime.fromisoformat(until)):
+        print(f"REFUSE: {name} {instant} is outside the admission window")
+        sys.exit(1)
+print("ok  recorded_at and evaluated_at sit inside the admission window")
+
+# THE OPERATOR CLOCK, against BOTH windows.
+for label, opens, closes in (("the advertisement", adv_observed, adv_until),
+                             ("the admission", admitted, until)):
+    if now < datetime.fromisoformat(opens):
+        print(f"REFUSE: {label} window has not opened; the body would claim a "
+              f"decision nobody has made")
+        sys.exit(1)
+    if now >= datetime.fromisoformat(closes):
+        print(f"REFUSE: {label} window has CLOSED at the current clock")
+        print("REFUSE: do not extend it -- RE-PREPARE the chain from a fresh observation")
+        sys.exit(1)
+print("ok  the current clock is inside BOTH governing windows")
+GATE_PY
+)" || { printf '%s\n' "${GATE}"; echo "REFUSE: the window gate failed"; rm -f "${TMP}"; exit 1; }
+printf '%s\n' "${GATE}"
+
+# ---- GATE 6: CURRENT ELIGIBILITY, AGAINST A COPY WITH THE CANDIDATE -----
+#
+# Eligibility cannot be asked about a record that does not exist, and this block
+# writes nothing to production. So the candidate is applied to a COPY and the
+# released engine is asked there, at the real clock. The copy is thrown away.
+printf -- '\n--- current eligibility, on a copy carrying the candidate ---\n'
+SCRATCH="$(mktemp -d -p /data/kyri g11bcao-eligibility.XXXXXX)"
+cp -a /var/lib/kyri/fabric "${SCRATCH}/fabric"
+chmod -R u+w "${SCRATCH}/fabric"
+mkdir -p "${SCRATCH}/approved"
+cp "${TMP}" "${SCRATCH}/approved/cinst-000007.json"
+chmod 0400 "${SCRATCH}/approved/cinst-000007.json"
+python3 -m tools.fabric.cli admit-instance \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --input-file cinst-000007.json --approved-directory "${SCRATCH}/approved" \
+  --trust-store-root /var/lib/kyri/trust > /dev/null \
+  || { echo "REFUSE: the released write refused on a copy of production"; \
+       chmod -R u+w "${SCRATCH}"; rm -rf "${SCRATCH}" "${TMP}"; exit 1; }
+ELIGIBILITY="$(python3 -m tools.fabric.cli compute-eligibility \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --trust-store-root /var/lib/kyri/trust --instance-id CINST-000007 \
+  --capability-id CAPDEF-0001 --contract-id CCON-0001 --accepted-version 1.0.0 \
+  --data-classification internal --evaluated-at "$(date -Is)")"
+printf '%s\n' "${ELIGIBILITY}"
+read -r ELIGIBLE REASONS <<<"$(printf '%s' "${ELIGIBILITY}" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("eligible"), len(d.get("reasons") or []))')"
+SCRATCH_HEAD=""
+for f in "${SCRATCH}/fabric"/capability-instances/*.yaml; do
+  id="$(basename "${f}" .yaml)"
+  grep -lq "^supersedes: ${id}\$" "${SCRATCH}/fabric"/capability-instances/*.yaml 2>/dev/null \
+    || SCRATCH_HEAD="${id}"
+done
+SCRATCH_SEQ="$(cat "${SCRATCH}/fabric/sequences/capability-instance.seq")"
+chmod -R u+w "${SCRATCH}"; rm -rf "${SCRATCH}"
+test "${ELIGIBLE}" = "True" \
+  || { echo "REFUSE: the candidate is not currently eligible"; rm -f "${TMP}"; exit 1; }
+test "${REASONS}" = "0" \
+  || { echo "REFUSE: eligibility carries ${REASONS} reason(s)"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_HEAD}" = "CINST-000007" \
+  || { echo "REFUSE: on the copy the instance head is ${SCRATCH_HEAD}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_SEQ}" = "7" \
+  || { echo "REFUSE: on the copy the instance sequence is ${SCRATCH_SEQ}, not 7"; rm -f "${TMP}"; exit 1; }
+printf 'ok  eligible with no reasons; on the copy it becomes the head and the sequence is 7\n'
+
+# ---- THE PREFLIGHT, BEFORE ANYTHING IS INSTALLED -----------------------
+printf -- '\n--- read-only preflight against production (NO Fabric write) ---\n'
+STAGE="$(mktemp -d)"
+cp "${TMP}" "${STAGE}/cinst-000007.json"
+chmod 0400 "${STAGE}/cinst-000007.json"
+PREFLIGHT="$(python3 -m tools.fabric.cli admit-instance \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --input-file cinst-000007.json --approved-directory "${STAGE}" \
+  --trust-store-root /var/lib/kyri/trust --preflight)"
+rm -rf "${STAGE}"
+printf '%s\n' "${PREFLIGHT}"
+
+read -r ACCEPT MUTATED EXISTS PREDICTED DIGEST <<<"$(printf '%s' "${PREFLIGHT}" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["would_accept"], d["mutated"], d["destination_exists"], d["predicted_record_id"], d["request_digest"])')"
+test "${ACCEPT}" = "True"   || { echo "REFUSE: would_accept is ${ACCEPT}"; exit 1; }
+test "${MUTATED}" = "False" || { echo "REFUSE: the preflight reports mutated=${MUTATED}"; exit 1; }
+test "${EXISTS}" = "False"  || { echo "REFUSE: the destination already exists"; exit 1; }
+test "${PREDICTED}" = "CINST-000007" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CINST-000007"; exit 1; }
+test "${DIGEST}" = "${REQUEST_DIGEST}" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed ${REQUEST_DIGEST}"; exit 1; }
+printf 'ok  would_accept %s, mutated %s, destination_exists %s\n' "${ACCEPT}" "${MUTATED}" "${EXISTS}"
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+
+printf -- '\n--- production Fabric must be byte-identical after the preflight ---\n'
+test "$(aggregate /var/lib/kyri/fabric)" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the preflight"; exit 1; }
+test "$(cat /var/lib/kyri/fabric/sequences/capability-instance.seq)" = "6" \
+  || { echo "REFUSE: the instance sequence moved during the preflight"; exit 1; }
+printf 'ok  fabric unchanged at %s, instance sequence still 6\n' "${FABRIC_BEFORE}"
+
+# ---- THE FREEZE: ONE FILE, INTO /etc, AND NOTHING ELSE -----------------
+printf -- '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf -- '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf -- '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+printf -- '\n--- nothing governed moved ---\n'
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store moved during the freeze: ${got}"; exit 1; }
+  printf 'ok  %-8s %s  unchanged\n' "${label}" "${got}"
+done
+test ! -e /var/lib/kyri/fabric/capability-instances/CINST-000007.yaml \
+  || { echo "REFUSE: CINST-000007 REACHED PRODUCTION FABRIC"; exit 1; }
+printf 'ok  CINST-000007 is frozen as an INPUT and is not a production record\n'
+FREEZE
+
+# EXPECTED:
+#   gate 0         operator-supplied admission 2026-10-06T13:35:00-05:00
+#   gate 1         fabric d11c939a…, runtime 7dfb34e6…, trust 53605e4e…
+#   gate 2         CADV-000008 head at 8b478c3e…, advertisement sequence 8
+#   gate 3         instance sequence 6, CINST-000006 head, CINST-000007 absent
+#   gate 4         reviewed body e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17, 1270 bytes
+#   gate 5         the admission window contained by the advertisement's, and the
+#                  clock inside both
+#   gate 6         eligible true, no reasons; on a copy it becomes the head at
+#                  sequence 7
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CINST-000007,
+#                  request_digest sha256:7eb452fd0113314fe07bc335da34da2b4c6ca937bd550d74f0a5fcae95fbf2b6
+#   frozen input   /etc/kyri/fabric/cinst-000007.json  root:cschott  640  1270 bytes
+#   fabric         d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c  (unchanged)
+#
+# CHAIN POSITION, from the G11-BC-AO scratch rehearsal:
+#   PRE_BASELINE              d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c
+#   EXPECTED_RECORD           CINST-000007
+#   EXPECTED_SEQUENCE_BEFORE  instance 6
+#   EXPECTED_SEQUENCE_AFTER   instance 7
+#   POST_BASELINE             ca6ca22307ece7b49fbfa2cdc91a6534a90553a1481d297ee8079ce34cbfbafb
+#                             (rehearsed; UNKNOWN for production until the write)
+#
+# Return this output. The admit-instance WRITE is a separate authorisation and
+# is not in this block. Do not freeze CROUTE-0007 or CSEL-000005 from here.

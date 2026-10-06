@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# STALE AFTER G11-BC-AO. DO NOT RUN THIS.
+#
+# Every pin below derives from the CINST-000007 body as G11-BC-AM rendered it,
+# and that body was re-derived at G11-BC-AO: its admitted_at was a cadence slot
+# rather than a decision, and the governing advertisement is now the live
+# CADV-000008. So this artifact's Fabric baseline, request digest and
+# post-baseline all describe a chain that was never written.
+#
+# CROUTE-0007 IS NOT PREPARED. It will be re-prepared at its own checkpoint, from
+# its own rehearsal against the store as it actually stands then. The numbers
+# here are deliberately left as they were: a stale artifact carrying current
+# pins would be indistinguishable from a live one.
+#
+# ---------------------------------------------------------------------------
 # The CROUTE-0007 freeze, exactly as it is to be typed.
 #
 # This file is reference text, not a script to run: the operator pastes it into
