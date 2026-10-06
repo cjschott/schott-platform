@@ -57,7 +57,22 @@ REVIEWED_RAW=d01faccc67b83c60051348422861c121211a4079f7748572bad0a4882575a569
 REVIEWED_RAW_BYTES=300
 REVIEWED_CANONICAL=591d4b0d9c81fd5cbb56f7a08a8e9b14ef116c8625b16b19311f75d27d3c59b3
 REVIEWED_CANONICAL_BYTES=271
-FABRIC_BASELINE=a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+# WHY THIS IS NOT ONE PINNED NUMBER (G11-BC-AO).
+#
+# The comment further down already names the hazard: "a whole-store aggregate in
+# spent-mode evidence is the defect that broke the CINST-000006 spent mode when
+# CROUTE-0006 landed." This suite then gated on exactly that -- the Fabric
+# aggregate as it stood when the ceremony was reviewed -- and the CADV-000008
+# renewal moved it, so a spent-mode rehearsal about the CAPABILITY RUNTIME failed
+# on a Fabric head it does not depend on.
+#
+# ACCEPTED VALUES, NAMED. Not "whatever is there": each entry is a Fabric state
+# the repository can account for, and anything else still fails. A renewal that
+# lands later adds a reviewed line here, which is a reviewable edit.
+ACCEPTED_FABRIC_BASELINES=(
+"a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|the post-CSEL-000004 store this ceremony was reviewed against"
+"d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|after the accepted CADV-000008 renewal write, G11-BC-AO"
+)
 CINV_SEQ_BEFORE=2
 CRES_SEQ_BEFORE=1
 
@@ -95,11 +110,17 @@ aggregate() {
 PRODUCTION_FABRIC_BEFORE="$(aggregate "${PRODUCTION_FABRIC}")"
 PRODUCTION_RUNTIME_BEFORE="$(aggregate "${PRODUCTION_RUNTIME}")"
 
-if [[ "${PRODUCTION_FABRIC_BEFORE}" == "${FABRIC_BASELINE}" ]]; then
-  pass "production Fabric is at the pinned post-CSEL baseline before the rehearsal"
+fabric_state=""
+for entry in "${ACCEPTED_FABRIC_BASELINES[@]}"; do
+  [[ "${PRODUCTION_FABRIC_BEFORE}" == "${entry%%|*}" ]] && fabric_state="${entry#*|}"
+done
+if [[ -n "${fabric_state}" ]]; then
+  pass "production Fabric is an accepted baseline: ${fabric_state}"
 else
-  fail "production Fabric is ${PRODUCTION_FABRIC_BEFORE}, not the pinned ${FABRIC_BASELINE}"
+  fail "production Fabric is ${PRODUCTION_FABRIC_BEFORE}, which is no baseline this repository accounts for"
 fi
+# AND THE ASSERTION THAT ALWAYS HELD: whatever it was, this run must not move it.
+# That is checked at the end of the suite, against the value measured here.
 # ---- has the ceremony been performed? -------------------------------------
 
 if [[ -e "${PRODUCTION_WORK}" ]]; then
