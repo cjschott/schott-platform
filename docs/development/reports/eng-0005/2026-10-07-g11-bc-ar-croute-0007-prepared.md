@@ -260,7 +260,29 @@ authorisation away: `CSEL-000005`.
 
 ---
 
-## K. Questions for the reviewer
+## K. Validation
+
+| run | result |
+|---|---|
+| `tools/dev/run-validation.sh` (full) | **165/165**, 0 FAIL, 0 FAILED, **0 host-only skips** |
+| clean clone of `514b7bf` | **165/165**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `514b7bf` | **6/6 green** — Static validation, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy |
+
+| suite | before | after |
+|---|---|---|
+| `test-fabric-renewal-chain-rehearsal.sh` | 12 PASS / 0 FAIL | **23 PASS / 0 FAIL** |
+| `test-fabric-renewal-freeze-artifacts.sh` | 84 PASS / 0 FAIL | **87 PASS / 0 FAIL** |
+
+The chain rehearsal gained the route step back (it is prepared again, so it is
+rehearsed rather than skipped) plus the three request-digest coverage
+assertions. The freeze suite gained the route's own gates; three of its checks
+became kind-aware rather than template-shaped, as §H describes.
+
+`TOTAL_STEPS` needed no change: no suite was added.
+
+---
+
+## L. Questions for the reviewer
 
 1. **`create-route` accepting an out-of-order or expired `recorded_at` is still
    unfixed in the engine.** I have now proved it refuses nothing across six
