@@ -219,7 +219,38 @@ resolving to an admitted instance, which is now two authorisations away:
 
 ---
 
-## G. Questions for the reviewer
+## G. Validation
+
+| run | result |
+|---|---|
+| `tools/dev/run-validation.sh` (full) | **165/165**, 0 FAIL, 0 FAILED, **0 host-only skips** |
+| clean clone of `5599d8b` | **165/165**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `5599d8b` | **6/6 green** — Static validation, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy |
+
+Suite-level, after the write moved production:
+
+| suite | before | after |
+|---|---|---|
+| `test-capability-cinv-000003-stage-0-rehearsal.sh` | 14 PASS / **1 FAIL** | **15 PASS / 0 FAIL** |
+| `test-capability-cinv-000003-stage-1-rehearsal.sh` | 25 PASS / **1 FAIL** | **26 PASS / 0 FAIL** |
+| `test-fabric-renewal-chain-rehearsal.sh` | 19 PASS / 0 FAIL | **12 PASS / 0 FAIL** |
+| `test-fabric-renewal-freeze-artifacts.sh` | 84 PASS / 0 FAIL | **84 PASS / 0 FAIL** |
+| `test-capability-cinv-000003-stage-3-gate-matrix.sh` | 74 PASS / 0 FAIL | **74 PASS / 0 FAIL** |
+
+The two stage rehearsals failed *correctly* before the edit: each pins a named
+set of accepted Fabric baselines rather than "whatever is there", so a renewal
+that lands later is a reviewable one-line addition and an unaccounted store is a
+refusal. Each now names `1dc83d01…d8cb`.
+
+The chain rehearsal fell from 19 to 12 assertions with no edit at all: the
+`CINST-000007` step crossed from *rehearsing* to *verifying*, because the
+written-step branch built at G11-BC-AO detects the record in production and
+checks the write instead of replaying it. Three verification assertions replace
+eight rehearsal ones.
+
+---
+
+## H. Questions for the reviewer
 
 1. **The route decision instant is required before any bytes exist.** I stopped
    rather than render, per the brief. Confirm the sequence: operator supplies
