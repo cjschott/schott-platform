@@ -58,7 +58,7 @@ INPUTS="${ROOT}/provisioning/fabric"
 CHAIN=(
 "register-advertisement|g11-bc-am-cadv-000008-input.json|CADV-000008|advertisement|7|8"
 "admit-instance|g11-bc-ap-cinst-000007-input.json|CINST-000007|instance|6|7"
-"create-route|g11-bc-am-croute-0007-input.json|CROUTE-0007|route|6|7"
+"create-route|g11-bc-ar-croute-0007-input.json|CROUTE-0007|route|6|7"
 "select|g11-bc-am-csel-000005-input.json|CSEL-000005|selection|4|5"
 )
 
@@ -66,21 +66,22 @@ CHAIN=(
 # the chain is prepared one record at a time, and the steps beyond that point have
 # bodies nobody has re-derived.
 #
-# G11-BC-AP: the admission's `admitted_at` was re-derived a second time. An
-# admission is a DECISION, so it is neither G11-BC-AM's cadence slot thirty
-# seconds after the advertisement observation nor G11-BC-AO's own preparation
-# instant. It is the instant the operator decided and measured,
-# 2026-10-07T10:08:58-05:00. That re-derivation leaves the route and selection
-# bodies INCONSISTENT with it: their instants sit at 2026-10-06T06:26, a day
-# before the admission, and the engine judges eligibility at the instant a
-# request names. A selection evaluated before its candidate was admitted selects
-# nothing, and the released engine says exactly that:
+# G11-BC-AR: the ROUTE was re-derived from the operator's own route decision,
+# 2026-10-07T17:36:09-05:00, measured after the admission it points at. The stale
+# G11-BC-AM route body sat at 2026-10-06T06:26 -- a day BEFORE that admission --
+# and the released `create-route` would have accepted it anyway, so the ordering
+# is enforced by the ceremony and by this suite, not by the engine.
+#
+# THE SELECTION IS STILL NOT PREPARED. Its instant must be a real operator
+# selection decision made after CROUTE-0007 is written, and the stale AM
+# selection body sits a day early too. A selection evaluated before its candidate
+# was admitted selects nothing, and the released engine says exactly that:
 # `selection-recorded-no-instance`.
 #
 # So the unprepared steps are NOT rehearsed. Rehearsing a body that will be
 # re-derived before it is written proves nothing about what gets written, and a
 # digest harvested from it would be a number to carry forward wrongly.
-PREPARED=(CADV-000008 CINST-000007)
+PREPARED=(CADV-000008 CINST-000007 CROUTE-0007)
 is_prepared() {
   local name
   for name in "${PREPARED[@]}"; do [[ "$1" == "${name}" ]] && return 0; done
@@ -99,7 +100,7 @@ is_prepared() {
 declare -A REVIEWED=(
 [g11-bc-am-cadv-000008-input.json]=f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61
 [g11-bc-ap-cinst-000007-input.json]=92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890
-[g11-bc-am-croute-0007-input.json]=6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25
+[g11-bc-ar-croute-0007-input.json]=beb687c26677cad701519b635b7b1ee82bb8721f4da10d0f7d1a9c29b5ca2989
 [g11-bc-am-csel-000005-input.json]=2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b
 )
 
@@ -172,6 +173,71 @@ if (( drift == 0 )); then
 else
   fail "the reviewed inputs do not match; nothing below would prove the right chain"
   exit 1
+fi
+
+# WHAT THE REQUEST DIGEST DOES NOT COVER (G11-BC-AQ).
+#
+# The digest the engine derives from a request EXCLUDES `request_id`. So a suite
+# or a ceremony that identifies reviewed bytes by their request digest alone has
+# not pinned which request produced the record. This suite pins body SHA-256
+# above, and the freeze artifacts pin both; this section is the standing proof of
+# why both are needed, asked of the released engine rather than asserted.
+printf -- '\n--- the request digest does not cover request_id; the body SHA does ---\n'
+digest_of() {  # $1 = body path -> the engine's request digest for it
+  local kind="$2" probe
+  probe="$(mktemp -d -p /data/kyri g11bcar-digest.XXXXXX)"
+  cp -a "${PRODUCTION_FABRIC}" "${probe}/fabric"
+  chmod -R u+w "${probe}/fabric"
+  mkdir -p "${probe}/approved"
+  cp "$1" "${probe}/approved/${kind}.json"
+  chmod 0600 "${probe}/approved/${kind}.json"
+  ( cd "${ROOT}" && python3 -m tools.fabric.cli create-route \
+      --store-root "${probe}/fabric" --expected-uid 1000 --expected-gid 1000 \
+      --input-file "${kind}.json" --approved-directory "${probe}/approved" --preflight \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])' )
+  chmod -R u+w "${probe}"; rm -rf "${probe}"
+}
+REVIEWED_ROUTE="${INPUTS}/g11-bc-ar-croute-0007-input.json"
+ALT_ID="$(mktemp)"; ALT_ACTOR="$(mktemp)"
+python3 - "${REVIEWED_ROUTE}" "${ALT_ID}" "${ALT_ACTOR}" <<'DIGEST_PY'
+import json
+import sys
+
+source, alt_id, alt_actor = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(source, encoding="utf-8") as handle:
+    body = json.load(handle)
+
+changed = dict(body)
+changed["request_id"] = "a-completely-different-request-id-same-decision"
+with open(alt_id, "w", encoding="utf-8") as handle:
+    json.dump(changed, handle, indent=2)
+
+changed = dict(body)
+changed["actor"] = "some-other-actor"
+with open(alt_actor, "w", encoding="utf-8") as handle:
+    json.dump(changed, handle, indent=2)
+DIGEST_PY
+BASE_SHA="$(sha256sum "${REVIEWED_ROUTE}" | cut -d' ' -f1)"
+ALT_ID_SHA="$(sha256sum "${ALT_ID}" | cut -d' ' -f1)"
+BASE_DIGEST="$(digest_of "${REVIEWED_ROUTE}" croute-0007)"
+ALT_ID_DIGEST="$(digest_of "${ALT_ID}" croute-0007)"
+ALT_ACTOR_DIGEST="$(digest_of "${ALT_ACTOR}" croute-0007)"
+rm -f "${ALT_ID}" "${ALT_ACTOR}"
+
+if [[ "${ALT_ID_SHA}" != "${BASE_SHA}" ]]; then
+  pass "changing request_id CHANGES the body SHA, so the body SHA pins the request id"
+else
+  fail "changing request_id left the body SHA at ${BASE_SHA}, which cannot be right"
+fi
+if [[ "${ALT_ID_DIGEST}" == "${BASE_DIGEST}" ]]; then
+  pass "changing request_id leaves the request digest at ${BASE_DIGEST:0:23}…, so a digest alone does NOT pin it"
+else
+  fail "the request digest now covers request_id (${BASE_DIGEST} -> ${ALT_ID_DIGEST}); the artifacts' reasoning for pinning both needs revisiting, which is a reviewable change, not a silent one"
+fi
+if [[ "${ALT_ACTOR_DIGEST}" != "${BASE_DIGEST}" ]]; then
+  pass "changing actor DOES change the request digest, so the digest is not simply inert"
+else
+  fail "changing actor left the request digest unchanged; it covers less than assumed"
 fi
 
 # The released verifier, asked about whichever selection and instance it is
@@ -395,7 +461,7 @@ if (( CHAIN_COMPLETE == 0 )); then
   printf 'note     the whole-chain authority verdict and the Stage-3 gate matrix need a\n'
   printf 'note     prepared SELECTION: current authority is a selection resolving to an\n'
   printf 'note     admitted instance, and there is not one yet. Both return when\n'
-  printf 'note     CROUTE-0007 and CSEL-000005 are prepared at their own checkpoints.\n'
+  printf 'note     CSEL-000005 is prepared at its own checkpoint -- the route is done.\n'
   printf '\n'
   if (( FAILURES == 0 )); then
     printf 'Fabric renewal chain rehearsal passed (prepared steps only).\n'

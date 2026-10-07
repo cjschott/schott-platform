@@ -34,7 +34,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 ARTIFACTS=(
 "g11-bc-an-cadv-000008-freeze.txt|g11-bc-am-cadv-000008-input.json|f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61|674|CADV-000008|register-advertisement|a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|sha256:3a35799239002a7ee9ee09b6002fd804bdc436030d7a3cb66d17d089f7be9a28"
 "g11-bc-ap-cinst-000007-freeze.txt|g11-bc-ap-cinst-000007-input.json|92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890|1270|CINST-000007|admit-instance|d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|sha256:06e4cf9676352ebbb950e01702d225cce441b0661e6abc93bdb080953adbd9db"
-"g11-bc-am-croute-0007-freeze.txt|g11-bc-am-croute-0007-input.json|6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25|679|CROUTE-0007|create-route|39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf|sha256:093bb3834553cac3dd7cd0d6d1de566f8753e124fa8a9b5cdc2f664fa6056279"
+"g11-bc-ar-croute-0007-freeze.txt|g11-bc-ar-croute-0007-input.json|beb687c26677cad701519b635b7b1ee82bb8721f4da10d0f7d1a9c29b5ca2989|679|CROUTE-0007|create-route|1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb|sha256:db8962e39dcb6efb2b1a91c12ca7b97f8d2ae446e8225f226b4228144cba2e9e"
 "g11-bc-am-csel-000005-freeze.txt|g11-bc-am-csel-000005-input.json|2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b|606|CSEL-000005|select|4a0f15aa1d60278cacc3da7684e83a3242601296a0a65e73b3401d231caf8487|sha256:a5b5700c6cb3e11a3bfd5ef8b396bdae0a24632cc3d06448c6ac1e22bbfd2371"
 )
 
@@ -66,12 +66,13 @@ printf -- '\n--- the superseded artifacts are marked, not live ---\n'
 for superseded_pair in \
   "g11-bc-am-cadv-000008-freeze.txt:g11-bc-an-cadv-000008-freeze.txt:f0e97487b5d45e7f56db220d632811ffd29370c607d517b24f4412340afbdef1" \
   "g11-bc-am-cinst-000007-freeze.txt:g11-bc-ao-cinst-000007-freeze.txt:cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78" \
-  "g11-bc-ao-cinst-000007-freeze.txt:g11-bc-ap-cinst-000007-freeze.txt:e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17"
+  "g11-bc-ao-cinst-000007-freeze.txt:g11-bc-ap-cinst-000007-freeze.txt:e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17" \
+  "g11-bc-am-croute-0007-freeze.txt:g11-bc-ar-croute-0007-freeze.txt:6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25"
 do
   IFS=: read -r was now old_pin <<<"${superseded_pair}"
   path="${FABRIC_DIR}/${was}"
   [[ -f "${path}" ]] || { pass "${was} no longer exists"; continue; }
-  if grep -qE 'SUPERSEDED AT G11-BC-A[NOP]\. DO NOT RUN THIS\.' "${path}" \
+  if grep -qE 'SUPERSEDED AT G11-BC-A[NOPR]\. DO NOT RUN THIS\.' "${path}" \
      && grep -qF "${now}" "${path}"; then
     pass "${was} is marked superseded and names ${now}"
   else
@@ -90,7 +91,7 @@ do
   # it forward stops somewhere that is also marked DO NOT RUN.
   hop="${now}"
   for _ in 1 2 3 4; do
-    grep -qE 'SUPERSEDED AT G11-BC-A[NOP]\. DO NOT RUN THIS\.' "${FABRIC_DIR}/${hop}" 2>/dev/null \
+    grep -qE 'SUPERSEDED AT G11-BC-A[NOPR]\. DO NOT RUN THIS\.' "${FABRIC_DIR}/${hop}" 2>/dev/null \
       || break
     hop="$(grep -oE 'g11-bc-a[a-z]-c[a-z]+-[0-9]+-freeze\.txt' "${FABRIC_DIR}/${hop}" | head -1)"
   done
@@ -110,16 +111,18 @@ done
 # instants are the same width and so are the two request ids. The live artifact
 # must therefore refuse the superseded body by DIGEST.
 printf -- '\n--- a superseded body of equal length is refused by digest ---\n'
-superseded_input=g11-bc-ao-cinst-000007-input.json
-stale="${FABRIC_DIR}/${superseded_input}"
-if [[ ! -f "${stale}" ]]; then
-  pass "${superseded_input} no longer exists"
-else
+for stale_pair in \
+  "CINST-000007:g11-bc-ao-cinst-000007-input.json" \
+  "CROUTE-0007:g11-bc-am-croute-0007-input.json"
+do
+  IFS=: read -r stale_record superseded_input <<<"${stale_pair}"
+  stale="${FABRIC_DIR}/${superseded_input}"
+  [[ -f "${stale}" ]] || { pass "${superseded_input} no longer exists"; continue; }
   stale_sha="$(sha256sum "${stale}" | cut -d' ' -f1)"
   stale_bytes="$(wc -c < "${stale}")"
   for entry in "${ARTIFACTS[@]}"; do
     IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
-    [[ "${record}" == CINST-000007 ]] || continue
+    [[ "${record}" == "${stale_record}" ]] || continue
     if [[ "${stale_bytes}" != "${size}" ]]; then
       pass "${superseded_input} is ${stale_bytes} bytes against the live ${size}, so a length tells them apart"
     elif grep -qF "${stale_sha}" "${FABRIC_DIR}/${artifact}"; then
@@ -128,7 +131,7 @@ else
       fail "${superseded_input} is the same ${size} bytes as the live body and ${artifact} does not refuse it by digest"
     fi
   done
-fi
+done
 
 printf -- '\n--- (the advertisement artifact, in detail) ---\n'
 SUPERSEDED="${FABRIC_DIR}/g11-bc-am-cadv-000008-freeze.txt"
@@ -189,29 +192,56 @@ for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
   ok=1
-  grep -q 'current-time freshness gate' <<<"${body}" || { ok=0; }
   grep -q 'datetime.now().astimezone()' <<<"${body}" || { ok=0; }
   # A closed window must be NAMED as closed at the current clock, in whatever
   # words -- an advertisement expires, an admission closes, and binding to one
   # phrasing would make this a spelling test.
   grep -qiE '(EXPIRED|CLOSED) at the current clock' <<<"${body}" || { ok=0; }
-  # And the gate must read the window OUT OF THE BODY. Which field carries it
-  # depends on the record kind.
-  grep -qE 'body\.get\("(valid_until|admitted_until)"\)' <<<"${body}" || { ok=0; }
+  # AND THE GATE MUST READ ITS BOUNDS OUT OF THE RECORDS, NOT RESTATE THEM. Which
+  # record carries the bound depends on the kind, and conflating the two is how
+  # this check came to demand a window of a record that has none (G11-BC-AR).
+  #
+  #   an advertisement and an admission CARRY a window, in their own body;
+  #   a route and a selection carry a DECISION INSTANT and borrow their window
+  #   from the records they depend on.
+  #
+  # So a route artifact that read `admitted_until` out of its own body would be
+  # reading a field that does not exist there.
+  case "${record}" in
+    CADV-*|CINST-*)
+      grep -qE 'body\.get\("(valid_until|admitted_until)"\)' <<<"${body}" || { ok=0; }
+      bound="its own window, out of the rendered body" ;;
+    CROUTE-*|CSEL-*)
+      grep -qE 'body\.get\("recorded_at"\)|body\[.recorded_at.\]' <<<"${body}" || { ok=0; }
+      # and the governing bound must come out of a governing RECORD file
+      grep -qE 'admitted_until|valid_until' <<<"${body}" || { ok=0; }
+      grep -qE 'capability-(instances|advertisements)/C(INST|ADV)-[0-9]+\.yaml' <<<"${body}" || { ok=0; }
+      bound="its decision instant from the body and its window from the governing records" ;;
+  esac
   if (( ok == 1 )); then
-    pass "${record}: gates on the operator clock, reading its window out of the rendered body"
+    pass "${record}: gates on the operator clock, reading ${bound}"
   else
-    fail "${record}: the current-time freshness gate is missing or restates its instants"
+    fail "${record}: the clock gate is missing, or restates bounds instead of reading ${bound}"
   fi
-  # A DEPENDENT window must not outlive the one that governs it. The
-  # advertisement is the governing record, so there is nothing above it.
-  if [[ "${record}" == CADV-* ]]; then
-    pass "${record}: it IS the governing advertisement, so no containment check applies to it"
-  elif grep -qiE 'outliv(es|ing) the (governing )?advertisement' <<<"${body}"; then
-    pass "${record}: and refuses a window that outlives its governing advertisement"
-  else
-    fail "${record}: nothing checks the governing advertisement's window"
-  fi
+  # A DEPENDENT record must be bounded by the authority that governs it. What
+  # "bounded" means differs by kind: a window must not OUTLIVE the advertisement;
+  # a decision instant must not fall AT OR AFTER it expires.
+  case "${record}" in
+    CADV-*)
+      pass "${record}: it IS the governing advertisement, so no containment check applies to it" ;;
+    CINST-*)
+      if grep -qiE 'outliv(es|ing) the (governing )?advertisement' <<<"${body}"; then
+        pass "${record}: and refuses a window that outlives its governing advertisement"
+      else
+        fail "${record}: nothing checks that its window is contained by the advertisement's"
+      fi ;;
+    *)
+      if grep -qiE 'at or after the (governing )?advertisement expires|outliv(es|ing) the (governing )?advertisement' <<<"${body}"; then
+        pass "${record}: and refuses a decision instant at or after the advertisement expires"
+      else
+        fail "${record}: nothing bounds its decision instant by the governing advertisement"
+      fi ;;
+  esac
 done
 
 printf -- '\n--- 5. each gates on the exact Fabric baseline for its step ---\n'
@@ -224,14 +254,14 @@ for entry in "${ARTIFACTS[@]}"; do
     fail "${record}: does not pin ${pre}"
   fi
 done
-# THE CHAIN JOINS ONLY ACROSS PREPARED STEPS. G11-BC-AP prepared the admission
-# and nothing after it, so CROUTE-0007 and CSEL-000005 carry baselines derived
-# from a CINST body that has since been re-derived twice. Their pins are STALE BY
+# THE CHAIN JOINS ONLY ACROSS PREPARED STEPS. G11-BC-AR prepared the route, so
+# only CSEL-000005 is left carrying baselines derived from bodies that have since
+# been re-derived. Their pins are STALE BY
 # CONSTRUCTION and are not asserted here -- they are re-prepared at their own
 # checkpoint, with their own rehearsal. Asserting a joined chain across an
 # unprepared step would be asserting a number nobody has measured.
 printf -- '\n--- the prepared steps chain, and the unprepared ones say they do not ---\n'
-PREPARED=(CADV-000008 CINST-000007)
+PREPARED=(CADV-000008 CINST-000007 CROUTE-0007)
 chain_ok=1
 previous=""
 for entry in "${ARTIFACTS[@]}"; do
@@ -386,15 +416,34 @@ for entry in "${ARTIFACTS[@]}"; do
   IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
   body="$(cat "${FABRIC_DIR}/${artifact}")"
   missing=""
-  for term in CAPDEF-0001 CPKG-0001 CHOST-0001 CCON-0001 1.0.0 x86-64 execute internal HOST-0001; do
+  # EVERY KIND NAMES WHAT IT CARRIES; NO KIND IS ASKED TO PIN WHAT IT DOES NOT.
+  #
+  # An admission carries the package, the host, the verified architecture and the
+  # permitted operation. A ROUTE carries none of those -- it carries a
+  # capability, a contract, accepted versions, a classification, a locality and
+  # its candidates. Demanding a route artifact pin CPKG-0001 or x86-64 was
+  # demanding prose about authority it does not hold (G11-BC-AR), which is the
+  # same mistake as demanding an admission pin locality.
+  #
+  # So each kind names its own dimensions, and SAYS where the others live. Saying
+  # so is the point: an artifact that claimed authority over a field it does not
+  # touch would be claiming more than it has.
+  for term in CAPDEF-0001 CCON-0001 1.0.0 internal; do
     grep -qF "${term}" <<<"${body}" || missing+="${term} "
   done
-  # Locality is carried by the route and the selection, never by an advertisement
-  # or an admission. Those artifacts must SAY where it lives rather than pin it.
   case "${record}" in
-    CROUTE-*|CSEL-*) grep -qF local-only <<<"${body}" || missing+="local-only " ;;
-    *) grep -qF local-only <<<"${body}" \
-         || missing+="a statement of where local-only is carried " ;;
+    CROUTE-*|CSEL-*)
+      grep -qF local-only <<<"${body}" || missing+="local-only "
+      for term in CPKG-0001 CHOST-0001 x86-64 execute; do
+        grep -qF "${term}" <<<"${body}" \
+          || missing+="a statement of where ${term} is carried " ;
+      done ;;
+    *)
+      for term in CPKG-0001 CHOST-0001 x86-64 execute HOST-0001; do
+        grep -qF "${term}" <<<"${body}" || missing+="${term} "
+      done
+      grep -qF local-only <<<"${body}" \
+        || missing+="a statement of where local-only is carried " ;;
   esac
   if [[ -z "${missing}" ]]; then
     pass "${record}: names every scope dimension it keeps equal"
@@ -431,7 +480,7 @@ def load(name):
 
 adv = load("g11-bc-am-cadv-000008-input.json")
 inst = load("g11-bc-ap-cinst-000007-input.json")
-route = load("g11-bc-am-croute-0007-input.json")
+route = load("g11-bc-ar-croute-0007-input.json")
 sel = load("g11-bc-am-csel-000005-input.json")
 
 expected = {

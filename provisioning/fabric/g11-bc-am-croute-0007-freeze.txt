@@ -1,5 +1,26 @@
 #!/usr/bin/env bash
-# STALE AFTER G11-BC-AO. DO NOT RUN THIS.
+# SUPERSEDED AT G11-BC-AR. DO NOT RUN THIS.
+#
+# This artifact was marked STALE at G11-BC-AO, when the admission it routes to
+# was re-derived and left this body's instant behind. There is now a LIVE
+# replacement, so it is superseded rather than merely stale:
+#
+#   provisioning/fabric/g11-bc-ar-croute-0007-freeze.txt
+#
+# Its recorded_at was 2026-10-06T06:26:00-05:00 -- a day BEFORE CINST-000007 was
+# admitted at 2026-10-07T10:08:58-05:00. G11-BC-AQ proved the released
+# `create-route` would have ACCEPTED that anyway: the engine does not enforce the
+# ordering. So this body is not merely out of date, it is a route decision about
+# an instance that did not yet exist, and nothing in the engine would have
+# stopped it.
+#
+# Its body is also the same 679 bytes as the live one, so the G11-BC-AR block
+# refuses it BY DIGEST rather than relying on a length.
+#
+# Its pins below are the OLD ones and are deliberately not updated: a superseded
+# artifact with current numbers would be indistinguishable from a live one.
+#
+# ---------------------------------------------------------------------------
 #
 # Every pin below derives from the CINST-000007 body as G11-BC-AM rendered it,
 # and that body was re-derived at G11-BC-AO: its admitted_at was a cadence slot
