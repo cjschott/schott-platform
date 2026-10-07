@@ -33,7 +33,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 # artifact | input | reviewed sha | bytes | record | verb | pre-baseline | digest
 ARTIFACTS=(
 "g11-bc-an-cadv-000008-freeze.txt|g11-bc-am-cadv-000008-input.json|f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61|674|CADV-000008|register-advertisement|a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|sha256:3a35799239002a7ee9ee09b6002fd804bdc436030d7a3cb66d17d089f7be9a28"
-"g11-bc-ao-cinst-000007-freeze.txt|g11-bc-ao-cinst-000007-input.json|e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17|1270|CINST-000007|admit-instance|d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|sha256:7eb452fd0113314fe07bc335da34da2b4c6ca937bd550d74f0a5fcae95fbf2b6"
+"g11-bc-ap-cinst-000007-freeze.txt|g11-bc-ap-cinst-000007-input.json|92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890|1270|CINST-000007|admit-instance|d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|sha256:06e4cf9676352ebbb950e01702d225cce441b0661e6abc93bdb080953adbd9db"
 "g11-bc-am-croute-0007-freeze.txt|g11-bc-am-croute-0007-input.json|6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25|679|CROUTE-0007|create-route|39dc7ebb4e81e25247646f005cd5e3583c9845928337a825bd527067cd7748cf|sha256:093bb3834553cac3dd7cd0d6d1de566f8753e124fa8a9b5cdc2f664fa6056279"
 "g11-bc-am-csel-000005-freeze.txt|g11-bc-am-csel-000005-input.json|2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b|606|CSEL-000005|select|4a0f15aa1d60278cacc3da7684e83a3242601296a0a65e73b3401d231caf8487|sha256:a5b5700c6cb3e11a3bfd5ef8b396bdae0a24632cc3d06448c6ac1e22bbfd2371"
 )
@@ -57,19 +57,21 @@ for entry in "${ARTIFACTS[@]}"; do
   fi
 done
 
-printf -- '\n--- the superseded G11-BC-AM artifacts are marked, not live ---\n'
-# G11-BC-AO: the instance artifact joined the advertisement one. Its admitted_at
-# was thirty seconds after the advertisement observation, chosen for cadence while
-# the chain was rehearsed whole -- and an admission is a decision, not a cadence
-# slot. Re-derived at G11-BC-AO, so the AM artifact is superseded.
+printf -- '\n--- the superseded artifacts are marked, not live ---\n'
+# THE ADMISSION HAS BEEN RE-DERIVED TWICE, so its supersession chain is two hops
+# long: G11-BC-AM chose a cadence slot thirty seconds after the advertisement
+# observation, G11-BC-AO used its own preparation instant, and G11-BC-AP uses the
+# instant the operator decided and measured. An admission is a DECISION, and
+# neither of the first two was one.
 for superseded_pair in \
   "g11-bc-am-cadv-000008-freeze.txt:g11-bc-an-cadv-000008-freeze.txt:f0e97487b5d45e7f56db220d632811ffd29370c607d517b24f4412340afbdef1" \
-  "g11-bc-am-cinst-000007-freeze.txt:g11-bc-ao-cinst-000007-freeze.txt:cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78"
+  "g11-bc-am-cinst-000007-freeze.txt:g11-bc-ao-cinst-000007-freeze.txt:cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78" \
+  "g11-bc-ao-cinst-000007-freeze.txt:g11-bc-ap-cinst-000007-freeze.txt:e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17"
 do
   IFS=: read -r was now old_pin <<<"${superseded_pair}"
   path="${FABRIC_DIR}/${was}"
   [[ -f "${path}" ]] || { pass "${was} no longer exists"; continue; }
-  if grep -qE 'SUPERSEDED AT G11-BC-A[NO]\. DO NOT RUN THIS\.' "${path}" \
+  if grep -qE 'SUPERSEDED AT G11-BC-A[NOP]\. DO NOT RUN THIS\.' "${path}" \
      && grep -qF "${now}" "${path}"; then
     pass "${was} is marked superseded and names ${now}"
   else
@@ -82,7 +84,51 @@ do
   else
     fail "${was} had its pins updated, which makes it look live"
   fi
+  # A SUPERSEDED ARTIFACT MAY NAME ANOTHER SUPERSEDED ONE -- the admission's chain
+  # is two hops -- but following the pointers must END at the artifact this suite
+  # calls live. Otherwise a reader who starts at the oldest artifact and follows
+  # it forward stops somewhere that is also marked DO NOT RUN.
+  hop="${now}"
+  for _ in 1 2 3 4; do
+    grep -qE 'SUPERSEDED AT G11-BC-A[NOP]\. DO NOT RUN THIS\.' "${FABRIC_DIR}/${hop}" 2>/dev/null \
+      || break
+    hop="$(grep -oE 'g11-bc-a[a-z]-c[a-z]+-[0-9]+-freeze\.txt' "${FABRIC_DIR}/${hop}" | head -1)"
+  done
+  live=0
+  for entry in "${ARTIFACTS[@]}"; do
+    [[ "${entry%%|*}" == "${hop}" ]] && live=1
+  done
+  if (( live == 1 )); then
+    pass "and following ${was} forward reaches the live ${hop}"
+  else
+    fail "following ${was} forward reaches ${hop:-nothing}, which this suite does not call live"
+  fi
 done
+
+# A SUPERSEDED BODY OF THE SAME LENGTH IS A MIS-PASTE A BYTE COUNT CANNOT CATCH.
+# The AO and AP admission bodies both render to 1270 bytes, because the two
+# instants are the same width and so are the two request ids. The live artifact
+# must therefore refuse the superseded body by DIGEST.
+printf -- '\n--- a superseded body of equal length is refused by digest ---\n'
+superseded_input=g11-bc-ao-cinst-000007-input.json
+stale="${FABRIC_DIR}/${superseded_input}"
+if [[ ! -f "${stale}" ]]; then
+  pass "${superseded_input} no longer exists"
+else
+  stale_sha="$(sha256sum "${stale}" | cut -d' ' -f1)"
+  stale_bytes="$(wc -c < "${stale}")"
+  for entry in "${ARTIFACTS[@]}"; do
+    IFS='|' read -r artifact input sha size record verb pre digest <<<"${entry}"
+    [[ "${record}" == CINST-000007 ]] || continue
+    if [[ "${stale_bytes}" != "${size}" ]]; then
+      pass "${superseded_input} is ${stale_bytes} bytes against the live ${size}, so a length tells them apart"
+    elif grep -qF "${stale_sha}" "${FABRIC_DIR}/${artifact}"; then
+      pass "${superseded_input} is the same ${size} bytes as the live body and ${artifact} refuses it by digest"
+    else
+      fail "${superseded_input} is the same ${size} bytes as the live body and ${artifact} does not refuse it by digest"
+    fi
+  done
+fi
 
 printf -- '\n--- (the advertisement artifact, in detail) ---\n'
 SUPERSEDED="${FABRIC_DIR}/g11-bc-am-cadv-000008-freeze.txt"
@@ -178,9 +224,9 @@ for entry in "${ARTIFACTS[@]}"; do
     fail "${record}: does not pin ${pre}"
   fi
 done
-# THE CHAIN JOINS ONLY ACROSS PREPARED STEPS. G11-BC-AO prepared the admission
+# THE CHAIN JOINS ONLY ACROSS PREPARED STEPS. G11-BC-AP prepared the admission
 # and nothing after it, so CROUTE-0007 and CSEL-000005 carry baselines derived
-# from a CINST body that has since been re-derived. Their pins are STALE BY
+# from a CINST body that has since been re-derived twice. Their pins are STALE BY
 # CONSTRUCTION and are not asserted here -- they are re-prepared at their own
 # checkpoint, with their own rehearsal. Asserting a joined chain across an
 # unprepared step would be asserting a number nobody has measured.
@@ -384,7 +430,7 @@ def load(name):
 
 
 adv = load("g11-bc-am-cadv-000008-input.json")
-inst = load("g11-bc-am-cinst-000007-input.json")
+inst = load("g11-bc-ap-cinst-000007-input.json")
 route = load("g11-bc-am-croute-0007-input.json")
 sel = load("g11-bc-am-csel-000005-input.json")
 

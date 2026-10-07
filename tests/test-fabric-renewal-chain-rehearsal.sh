@@ -57,7 +57,7 @@ INPUTS="${ROOT}/provisioning/fabric"
 # route head.
 CHAIN=(
 "register-advertisement|g11-bc-am-cadv-000008-input.json|CADV-000008|advertisement|7|8"
-"admit-instance|g11-bc-ao-cinst-000007-input.json|CINST-000007|instance|6|7"
+"admit-instance|g11-bc-ap-cinst-000007-input.json|CINST-000007|instance|6|7"
 "create-route|g11-bc-am-croute-0007-input.json|CROUTE-0007|route|6|7"
 "select|g11-bc-am-csel-000005-input.json|CSEL-000005|selection|4|5"
 )
@@ -66,13 +66,16 @@ CHAIN=(
 # the chain is prepared one record at a time, and the steps beyond that point have
 # bodies nobody has re-derived.
 #
-# G11-BC-AO: the admission's `admitted_at` was re-derived -- G11-BC-AM's was a
-# cadence slot thirty seconds after the advertisement observation, and an
-# admission is a decision. That re-derivation makes the route and selection
-# bodies INCONSISTENT with it: their instants sit at 06:26, before the admission
-# at 13:35, and the engine judges eligibility at the instant a request names. A
-# selection evaluated before its candidate was admitted selects nothing, and the
-# released engine says exactly that: `selection-recorded-no-instance`.
+# G11-BC-AP: the admission's `admitted_at` was re-derived a second time. An
+# admission is a DECISION, so it is neither G11-BC-AM's cadence slot thirty
+# seconds after the advertisement observation nor G11-BC-AO's own preparation
+# instant. It is the instant the operator decided and measured,
+# 2026-10-07T10:08:58-05:00. That re-derivation leaves the route and selection
+# bodies INCONSISTENT with it: their instants sit at 2026-10-06T06:26, a day
+# before the admission, and the engine judges eligibility at the instant a
+# request names. A selection evaluated before its candidate was admitted selects
+# nothing, and the released engine says exactly that:
+# `selection-recorded-no-instance`.
 #
 # So the unprepared steps are NOT rehearsed. Rehearsing a body that will be
 # re-derived before it is written proves nothing about what gets written, and a
@@ -95,7 +98,7 @@ is_prepared() {
 # stale pins before these were recomputed, which is what the pins are for.
 declare -A REVIEWED=(
 [g11-bc-am-cadv-000008-input.json]=f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61
-[g11-bc-ao-cinst-000007-input.json]=e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17
+[g11-bc-ap-cinst-000007-input.json]=92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890
 [g11-bc-am-croute-0007-input.json]=6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25
 [g11-bc-am-csel-000005-input.json]=2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b
 )

@@ -1,29 +1,4 @@
 #!/usr/bin/env bash
-# SUPERSEDED AT G11-BC-AP. DO NOT RUN THIS.
-#
-# This artifact froze CINST-000007 with admitted_at 2026-10-06T13:35:00-05:00 --
-# the instant G11-BC-AO was PREPARED. Preparing a body is not deciding to admit
-# it. The operator has since made the admission decision and measured it at
-# 2026-10-07T10:08:58-05:00, so the body was re-prepared at G11-BC-AP, and with
-# it the request id, the body digest, the request digest, the persisted record
-# digest and the rehearsed post-write aggregate.
-#
-# THE LIVE ARTIFACT FOR THIS RECORD IS
-#   provisioning/fabric/g11-bc-ap-cinst-000007-freeze.txt
-#
-# Its pins below are the OLD ones and are deliberately not updated: a superseded
-# artifact with current numbers would be indistinguishable from a live one, and
-# it would also misrepresent what G11-BC-AO actually reviewed. The one value
-# that survives into G11-BC-AP is not a pin from here at all -- it is the
-# production measurement d11c939a..., the post-CADV Fabric baseline, which is a
-# fact about the store rather than a preparation.
-#
-# THE SUPERSEDED BODY IS STILL IN THE REPOSITORY as
-# provisioning/fabric/g11-bc-ao-cinst-000007-input.json, kept as evidence of what
-# was reviewed here, and it renders to the same 1270 bytes as the live body. The
-# G11-BC-AP block therefore refuses it BY NAME rather than relying on a length.
-#
-# ---------------------------------------------------------------------------
 # The CINST-000007 PRODUCTION FREEZE, exactly as it is to be typed.
 #
 # This file is reference text, not a script to run blind: the operator pastes it
@@ -36,23 +11,38 @@
 #
 # STEP 2 OF 4. CADV-000008 is written and accepted; this freezes the admission
 # that binds to it. CROUTE-0007 and CSEL-000005 are NOT frozen here -- each is a
-# separate reviewer authorisation.
+# separate reviewer authorisation, and both of their prepared bodies are STALE.
 #
 # =====================================================================
-# THE ADMISSION INSTANT, AND WHY IT IS NOT THE ONE G11-BC-AN PREPARED
+# THE ADMISSION INSTANT, AND THE TWO EARLIER ONES IT REPLACES
 # =====================================================================
 #
-# G11-BC-AN's body carried admitted_at 2026-10-06T06:25:30-05:00 -- thirty seconds
-# after the advertisement observation, chosen for cadence while that chain was
-# being rehearsed as a whole. An admission is a DECISION by the operator, not an
-# observation of the host, and thirty seconds after an advertisement is not when
-# anybody decided anything. So it was re-derived at G11-BC-AO, and with it the
-# body, its digest and its request digest. None of the AN numbers is carried
-# forward.
+# An admission is a DECISION. It is not an observation of the host and it is not
+# the moment a checkpoint happened to be written. Two earlier instants were
+# prepared for this record and neither was the operator's decision:
+#
+#   2026-10-06T06:25:30-05:00   G11-BC-AM: thirty seconds after the advertisement
+#                               observation, chosen for cadence while the chain
+#                               was rehearsed as a whole. Nobody decided anything
+#                               thirty seconds after an advertisement.
+#   2026-10-06T13:35:00-05:00   G11-BC-AO: the instant that checkpoint was
+#                               prepared. Preparing a body is not deciding to
+#                               admit it.
+#
+# The operator has now made the admission decision and measured it:
+#
+#       2026-10-07T10:08:58-05:00
+#
+# so the body was re-prepared at G11-BC-AP from that instant, and with it the
+# request id, the body digest, the request digest, the persisted record digest and
+# the rehearsed post-write aggregate. NOT ONE G11-BC-AO NUMBER IS CARRIED
+# FORWARD. The single value retained from G11-BC-AO is its production
+# measurement: the post-CADV Fabric baseline d11c939a..., which is a fact about
+# the store rather than a preparation.
 #
 # THE OPERATOR ASSERTS IT. This block refuses without it:
 #
-#     ADMITTED_AT=2026-10-06T13:35:00-05:00 bash <this block>
+#     ADMITTED_AT=2026-10-07T10:08:58-05:00 bash <this block>
 #
 # and refuses if what you supply is not the instant the reviewed bytes carry. The
 # instant is inside the reviewed body -- every dependent digest derives from it --
@@ -63,13 +53,23 @@
 # equivalents appear only in gates that REFUSE, and in the eligibility call, which
 # must judge at the current instant to mean anything.
 #
+# THE SUPERSEDED G11-BC-AO BODY IS THE SAME LENGTH AS THIS ONE. Both render to
+# 1270 bytes, because the two instants are the same width and `g11bcao` and
+# `g11bcap` are the same width. A byte-count gate therefore cannot tell them
+# apart, and this block does not rely on one: the body is identified by SHA-256,
+# and the superseded body is refused BY NAME below. The byte count is checked as
+# well, but it proves nothing on its own and is not treated as though it did.
+#
 # THE TWO WINDOWS THIS SITS INSIDE
 #
 #     CADV-000008   2026-10-06T06:25:00-05:00 -> 2026-10-13T06:25:00-05:00
-#     CINST-000007  2026-10-06T13:35:00-05:00 -> 2026-10-13T06:25:00-05:00
+#     CINST-000007  2026-10-07T10:08:58-05:00 -> 2026-10-13T06:25:00-05:00
 #
 # The admission ends at the same instant as the advertisement that governs it, so
-# it cannot outlive it. Both are checked below, read out of the records.
+# it cannot outlive it. The admitted_until was deliberately NOT moved when the
+# instant was re-derived: the admission's expiry is bounded by CADV-000008, not by
+# how late the decision was made. Both windows are checked below, read out of the
+# records.
 #
 # IF EITHER WINDOW HAS CLOSED, this block refuses and the chain is RE-PREPARED
 # from a fresh observation. Do not edit a window.
@@ -91,12 +91,12 @@ cd /opt/schott-platform
 bash <<'FREEZE'
 set -Eeuo pipefail
 DEST=/etc/kyri/fabric/cinst-000007.json
-SOURCE=provisioning/fabric/g11-bc-ao-cinst-000007-input.json
-REVIEWED=e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17
+SOURCE=provisioning/fabric/g11-bc-ap-cinst-000007-input.json
+REVIEWED=92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890
 REVIEWED_BYTES=1270
-REQUEST_DIGEST=sha256:7eb452fd0113314fe07bc335da34da2b4c6ca937bd550d74f0a5fcae95fbf2b6
+REQUEST_DIGEST=sha256:06e4cf9676352ebbb950e01702d225cce441b0661e6abc93bdb080953adbd9db
 
-REVIEWED_ADMITTED_AT=2026-10-06T13:35:00-05:00
+REVIEWED_ADMITTED_AT=2026-10-07T10:08:58-05:00
 REVIEWED_ADMITTED_UNTIL=2026-10-13T06:25:00-05:00
 
 # The POST-CADV baselines. a87c2010 is the pre-CADV store and must never gate a
@@ -110,9 +110,14 @@ CADV8_RECORD=8b478c3e8d3ed6c86a63d4dde1901cedfd56d9736b28017cfd384fa78443654c
 # And the predecessor this supersedes, which is NOT rewritten.
 CINST6_RECORD=5a320fa0cb9f678d3f78a11416beec17945b06add25446fbae7e0e1bf5575b9b
 
-# Bodies that are NOT this one, refused BY NAME. Each is an accepted input still
-# sitting in /etc/kyri/fabric, so each is a plausible mis-paste, and the Fabric
-# engine would have nothing to say about the mistake.
+# Bodies that are NOT this one, refused BY NAME. Each is a plausible mis-paste
+# that the Fabric engine would have nothing to say about: the first is this
+# record's own superseded preparation, still in the repository as evidence; the
+# rest are accepted inputs sitting in /etc/kyri/fabric. Every one of these
+# digests was measured from its own file at G11-BC-AP, not copied from an
+# earlier artifact.
+SUPERSEDED_AO_BODY=e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17
+ACCEPTED_CADV8=f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61
 ACCEPTED_CINST5=850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da
 ACCEPTED_CINST6=6746234a2b1293052c223ff4a3e253286129ddf58b9d8397d1ecf4d04175e162
 
@@ -188,11 +193,13 @@ test -f "${SOURCE}" || { echo "REFUSE: ${SOURCE} is absent"; exit 1; }
 TMP="$(mktemp)"
 cp "${SOURCE}" "${TMP}"
 ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
-for pair in "the CINST-000005 input:${ACCEPTED_CINST5}" \
+for pair in "the SUPERSEDED G11-BC-AO body, which carries the checkpoint-preparation instant 2026-10-06T13:35:00-05:00 and is the same 1270 bytes as this one:${SUPERSEDED_AO_BODY}" \
+            "the G11-BC-AN CADV-000008 input, which is an advertisement and not an admission:${ACCEPTED_CADV8}" \
+            "the CINST-000005 input:${ACCEPTED_CINST5}" \
             "the CINST-000006 input, whose admission EXPIRED 2026-09-23T06:00:00-05:00:${ACCEPTED_CINST6}"; do
   name="${pair%:*}"; sha="${pair##*:}"
   if [[ "${ACTUAL}" == "${sha}" ]]; then
-    echo "REFUSE: this is ${name}, not the CINST-000007 input"
+    echo "REFUSE: this is ${name}, not the G11-BC-AP CINST-000007 input"
     rm -f "${TMP}"; exit 1
   fi
 done
@@ -273,7 +280,7 @@ printf '%s\n' "${GATE}"
 # writes nothing to production. So the candidate is applied to a COPY and the
 # released engine is asked there, at the real clock. The copy is thrown away.
 printf -- '\n--- current eligibility, on a copy carrying the candidate ---\n'
-SCRATCH="$(mktemp -d -p /data/kyri g11bcao-eligibility.XXXXXX)"
+SCRATCH="$(mktemp -d -p /data/kyri g11bcap-eligibility.XXXXXX)"
 cp -a /var/lib/kyri/fabric "${SCRATCH}/fabric"
 chmod -R u+w "${SCRATCH}/fabric"
 mkdir -p "${SCRATCH}/approved"
@@ -293,6 +300,10 @@ ELIGIBILITY="$(python3 -m tools.fabric.cli compute-eligibility \
 printf '%s\n' "${ELIGIBILITY}"
 read -r ELIGIBLE REASONS <<<"$(printf '%s' "${ELIGIBILITY}" \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("eligible"), len(d.get("reasons") or []))')"
+# The store the engine itself reports on, after the candidate lands.
+FINDINGS="$(python3 -m tools.fabric.cli validate \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("findings") or []))')"
 SCRATCH_HEAD=""
 for f in "${SCRATCH}/fabric"/capability-instances/*.yaml; do
   id="$(basename "${f}" .yaml)"
@@ -300,16 +311,22 @@ for f in "${SCRATCH}/fabric"/capability-instances/*.yaml; do
     || SCRATCH_HEAD="${id}"
 done
 SCRATCH_SEQ="$(cat "${SCRATCH}/fabric/sequences/capability-instance.seq")"
+SCRATCH_LIFECYCLE="$(sed -n 's/^lifecycle_state: //p' \
+  "${SCRATCH}/fabric/capability-instances/CINST-000007.yaml")"
 chmod -R u+w "${SCRATCH}"; rm -rf "${SCRATCH}"
 test "${ELIGIBLE}" = "True" \
   || { echo "REFUSE: the candidate is not currently eligible"; rm -f "${TMP}"; exit 1; }
 test "${REASONS}" = "0" \
   || { echo "REFUSE: eligibility carries ${REASONS} reason(s)"; rm -f "${TMP}"; exit 1; }
+test "${FINDINGS}" = "0" \
+  || { echo "REFUSE: the engine reports ${FINDINGS} finding(s) on the copy"; rm -f "${TMP}"; exit 1; }
 test "${SCRATCH_HEAD}" = "CINST-000007" \
   || { echo "REFUSE: on the copy the instance head is ${SCRATCH_HEAD}"; rm -f "${TMP}"; exit 1; }
 test "${SCRATCH_SEQ}" = "7" \
   || { echo "REFUSE: on the copy the instance sequence is ${SCRATCH_SEQ}, not 7"; rm -f "${TMP}"; exit 1; }
-printf 'ok  eligible with no reasons; on the copy it becomes the head and the sequence is 7\n'
+test "${SCRATCH_LIFECYCLE}" = "admitted" \
+  || { echo "REFUSE: on the copy the lifecycle state is ${SCRATCH_LIFECYCLE}, not admitted"; rm -f "${TMP}"; exit 1; }
+printf 'ok  eligible with no reasons, no findings; on the copy it becomes the admitted head at sequence 7\n'
 
 # ---- THE PREFLIGHT, BEFORE ANYTHING IS INSTALLED -----------------------
 printf -- '\n--- read-only preflight against production (NO Fabric write) ---\n'
@@ -373,27 +390,28 @@ printf 'ok  CINST-000007 is frozen as an INPUT and is not a production record\n'
 FREEZE
 
 # EXPECTED:
-#   gate 0         operator-supplied admission 2026-10-06T13:35:00-05:00
+#   gate 0         operator-supplied admission 2026-10-07T10:08:58-05:00
 #   gate 1         fabric d11c939a…, runtime 7dfb34e6…, trust 53605e4e…
 #   gate 2         CADV-000008 head at 8b478c3e…, advertisement sequence 8
 #   gate 3         instance sequence 6, CINST-000006 head, CINST-000007 absent
-#   gate 4         reviewed body e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17, 1270 bytes
+#   gate 4         reviewed body 92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890, 1270 bytes
 #   gate 5         the admission window contained by the advertisement's, and the
 #                  clock inside both
-#   gate 6         eligible true, no reasons; on a copy it becomes the head at
-#                  sequence 7
+#   gate 6         eligible true, no reasons, no findings; on a copy it becomes
+#                  the admitted head at sequence 7
 #   preflight      would_accept true, mutated false, destination_exists false,
 #                  predicted_record_id CINST-000007,
-#                  request_digest sha256:7eb452fd0113314fe07bc335da34da2b4c6ca937bd550d74f0a5fcae95fbf2b6
+#                  request_digest sha256:06e4cf9676352ebbb950e01702d225cce441b0661e6abc93bdb080953adbd9db
 #   frozen input   /etc/kyri/fabric/cinst-000007.json  root:cschott  640  1270 bytes
 #   fabric         d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c  (unchanged)
 #
-# CHAIN POSITION, from the G11-BC-AO scratch rehearsal:
+# CHAIN POSITION, from the G11-BC-AP scratch rehearsal:
 #   PRE_BASELINE              d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c
 #   EXPECTED_RECORD           CINST-000007
+#   EXPECTED_RECORD_DIGEST    8e577b7df196c80dc380a4e3f62ee98cb60f408b00ec132af50e9da611ce85ad
 #   EXPECTED_SEQUENCE_BEFORE  instance 6
 #   EXPECTED_SEQUENCE_AFTER   instance 7
-#   POST_BASELINE             ca6ca22307ece7b49fbfa2cdc91a6534a90553a1481d297ee8079ce34cbfbafb
+#   POST_BASELINE             1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb
 #                             (rehearsed; UNKNOWN for production until the write)
 #
 # Return this output. The admit-instance WRITE is a separate authorisation and
