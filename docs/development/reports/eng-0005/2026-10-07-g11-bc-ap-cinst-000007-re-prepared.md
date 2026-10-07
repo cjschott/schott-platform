@@ -268,9 +268,14 @@ Three checks were added to the freeze suite, and one repaired:
 | run | result |
 |---|---|
 | `tools/dev/run-validation.sh` (full) | **165/165**, 0 FAIL, 0 FAILED, **0 host-only skips** |
-| `tools/dev/run-validation.sh --quick` | *see below* |
-| clean clone | *see below* |
-| GitHub CI | *see below* |
+| `tools/dev/run-validation.sh --quick` | **140/140**, 0 FAIL, 0 FAILED, 0 skips |
+| clean clone of `8502079` at `/data/kyri` | **165/165**, 0 FAIL, **18 host-only skips** |
+| GitHub CI on `8502079` | **6/6 green** — Static validation, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy |
+
+All 18 clean-clone skips are the same reason — `checkout … is not the pinned
+/opt/schott-platform` — for the ceremony and generation-installer suites that
+drive the real checkout. Same count as G11-BC-AO. The two Fabric suites ran in
+the clone, at steps 103 and 104.
 
 `TOTAL_STEPS` needed no change: no suite was added, only re-pinned.
 
