@@ -350,7 +350,24 @@ not begun.
 
 ---
 
-## M. Questions for the reviewer
+## M. Validation
+
+| run | result |
+|---|---|
+| `tools/dev/run-validation.sh` (full) | **165/165**, 0 FAIL, 0 FAILED, **0 host-only skips** |
+| clean clone of `c089a84` | **165/165**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `c089a84` | **6/6 green** — Static validation, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy |
+
+The first full run failed at step 94 on the unaccounted post-route baseline, as
+§J records; it passed after the two reviewed lines were added. The clean clone
+ran the chain rehearsal's completion path too, reporting `22 reached their own
+refusal, 0 masked` against the renewed chain.
+
+`TOTAL_STEPS` needed no change: no suite was added.
+
+---
+
+## N. Questions for the reviewer
 
 1. **`selected_at` could not be supplied as the brief specified.** It is derived,
    and a body carrying it makes the engine refuse outright. I rendered the body
