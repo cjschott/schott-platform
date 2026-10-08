@@ -1,0 +1,594 @@
+#!/usr/bin/env bash
+# The CSEL-000005 PRODUCTION FREEZE, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run blind: the operator pastes it
+# into a root-capable shell so every command and every refusal is visible on the
+# console.
+#
+# WHAT THIS DOES. It puts one reviewed body under /etc/kyri/fabric and asks the
+# released engine what it WOULD do with it. It does not write
+# /var/lib/kyri/fabric, and it proves that afterwards.
+#
+# STEP 4 OF 4, THE LAST ONE. CADV-000008, CINST-000007 and CROUTE-0007 are
+# written and accepted. This freezes the selection that binds the renewed route
+# to the renewed admission, which is what `verify_selected_evidence` asks for and
+# what the Stage-3 gate matrix needs to stop masking.
+#
+# =====================================================================
+# WHAT THE ENGINE ENFORCES, AND WHAT IT DOES NOT -- MEASURED
+# =====================================================================
+#
+# G11-BC-AS probed the released `select` against a copy of production with eight
+# instant pairs. The result, precisely:
+#
+#   WHAT THE ENGINE DOES. `evaluated_at` is the instant eligibility is judged at.
+#   An `evaluated_at` outside the admission window makes the selection resolve to
+#   `selected_instance_id: null`.
+#
+#   WHAT THE ENGINE DOES NOT DO. It never REFUSES for any of it. In all eight
+#   probes -- including a selection dated a day before the route it resolves
+#   through, one dated after both windows closed, and one dated in December --
+#   the engine returned `would_accept: true`. A null resolution is reported, not
+#   rejected: the engine will persist an accepted selection that selects nothing.
+#
+#   AND `recorded_at` HAS NO EFFECT ON RESOLUTION AT ALL. A selection recorded
+#   one second before, or seven hours before, the route it resolves through still
+#   resolved to CINST-000007. Only `evaluated_at` moves the answer.
+#
+# THEREFORE TWO GATES BELOW ARE CEREMONY AUTHORITY AND MUST NOT BE REMOVED:
+#
+#   GATE 5  the ordering -- `recorded_at` at or after CROUTE-0007's own
+#           `recorded_at`, before both expiries, and not in the future. The
+#           engine checks none of this.
+#
+#   GATE 6  `selected_instance_id == CINST-000007`. NOT `would_accept`. This is
+#           the single most important line in this file: `would_accept: true`
+#           with a null selection is precisely the quiet failure the whole
+#           renewal chain exists to repair, and it is what production would have
+#           recorded if the route had been left alone.
+#
+# THE OPERATOR ASSERTS THE DECISION INSTANT. This block refuses without it:
+#
+#     SELECTION_DECISION_AT=2026-10-08T03:32:26-05:00 bash <this block>
+#
+# A selection is a DECISION; the instant is inside the reviewed body and every
+# dependent digest derives from it. A mismatch means the body is RE-PREPARED, not
+# edited.
+#
+# NOTHING HERE READS A CLOCK TO FILL IN A VALUE. `date` appears only in gates
+# that REFUSE and in the eligibility and resolution probes, which must judge at
+# the current instant to mean anything.
+#
+# =====================================================================
+# `selected_at` IS DERIVED, NOT SUPPLIED
+# =====================================================================
+#
+# The reviewed body carries `recorded_at` and `evaluated_at`. It does NOT carry
+# `selected_at`: the released engine sets `selected_at = recorded_at` when it
+# writes the record (`tools/fabric/selection.py`), and the CLI splats the body as
+# keyword arguments, so a body carrying `selected_at` makes the engine refuse
+# outright with "the decision body does not match this operation" -- which
+# G11-BC-AS confirmed by trying it.
+#
+# So the operator's single decision instant lands in all three places by
+# construction: `recorded_at`, `evaluated_at`, and the derived `selected_at`.
+# Gate 4 checks the two it supplies; gate 7 checks the derived one on the copy.
+#
+# SELECTIONS DO NOT SUPERSEDE. Unlike advertisements, admissions and routes, no
+# selection record carries a `supersedes` field -- all four accepted selections
+# are "heads" if you scan for one. So there is no supersession head to check
+# here, and this block does not pretend otherwise: it gates on the SEQUENCE being
+# 4, on CSEL-000005 being absent, and on CSEL-000004 being byte-identical.
+# Inventing a head check for a record kind that has no supersession would be
+# asserting something the store cannot answer.
+#
+# THE STALE G11-BC-AM SELECTION BODY IS 606 BYTES, THE SAME AS THIS ONE -- the
+# third same-length collision in this chain. A byte count cannot tell them apart,
+# so it is refused BY DIGEST below.
+#
+# NO AUTHORITY IS BROADENED. capability CAPDEF-0001, contract CCON-0001, version
+# 1.0.0, classification `internal`, locality `local-only` and node HOST-0001 are
+# all equal to CSEL-000004, field by field. The package CPKG-0001, the host
+# CHOST-0001, the architecture x86-64 and the operation `execute` are ADMISSION
+# fields, carried by CINST-000007 -- which gate 2 pins by digest -- and a
+# selection neither widens nor narrows them.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/csel-000005.json
+SOURCE=provisioning/fabric/g11-bc-as-csel-000005-input.json
+REVIEWED=4a98b76bf1131788cf19b2728ee5e854f99cc2e3eaabe0580b9799de83838231
+REVIEWED_BYTES=606
+REQUEST_DIGEST=sha256:dd232d5275cd5a69959772179668f9964f8a455bc748199442e7b2570817d721
+REVIEWED_REQUEST_ID=g11bcas-select-capdef-0001-ccon-0001-internal-local-only-host-0001-croute-0007
+
+REVIEWED_RECORDED_AT=2026-10-08T03:32:26-05:00
+REQUIRED_SELECTED_INSTANCE=CINST-000007
+
+# The POST-CROUTE baselines. 1dc83d01 is the pre-route store and must never gate
+# a CSEL step: the route write moved it.
+FABRIC_BEFORE=758c6c6578abdfccc7d29d2f1b7e9d56cbf4d933636853c884fb599ef70862ba
+RUNTIME_BEFORE=7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+TRUST_BEFORE=53605e4e738d941ad5f1d2d2d08fe5cb776e484f6fee07f1123859d07828b63f
+
+# The governing chain, as production persisted it.
+CADV8_RECORD=8b478c3e8d3ed6c86a63d4dde1901cedfd56d9736b28017cfd384fa78443654c
+CINST7_RECORD=8e577b7df196c80dc380a4e3f62ee98cb60f408b00ec132af50e9da611ce85ad
+CROUTE7_RECORD=3ab79b33558f411d76d62d1dd48dbc2c89a51420ea73caa4032698a970bb7c24
+# The accepted predecessor, which is NOT rewritten.
+CSEL4_RECORD=5e58396f3e6937701f07c8b7f2aabbfdb7483213f801358e5ea369eb223aaf24
+
+# Bodies that are NOT this one, refused BY NAME. Each digest was measured from
+# its own file at G11-BC-AS, not copied from an earlier artifact.
+STALE_AM_SELECTION_BODY=2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b
+ACCEPTED_CSEL3=700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e
+ACCEPTED_CSEL4=d04171c50397be2d41f8d066b526f237d982ac1df113840eb81afa6ec44c2f29
+
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+
+# ---- GATE 0: THE OPERATOR SUPPLIES THE SELECTION DECISION INSTANT --------
+printf -- '\n--- the selection decision instant, supplied by the operator ---\n'
+if [[ -z "${SELECTION_DECISION_AT:-}" ]]; then
+  echo "REFUSE: no SELECTION_DECISION_AT was supplied."
+  echo "        Re-run as:  SELECTION_DECISION_AT=${REVIEWED_RECORDED_AT} bash <this block>"
+  echo "        A selection is your decision, and the instant is yours to assert."
+  exit 1
+fi
+test "${SELECTION_DECISION_AT}" = "${REVIEWED_RECORDED_AT}" || {
+  echo "REFUSE: you supplied ${SELECTION_DECISION_AT}; the reviewed bytes carry ${REVIEWED_RECORDED_AT}."
+  echo "        If your selection decision is a different instant, the body must be"
+  echo "        RE-PREPARED -- the instant is inside it and its digest derives from"
+  echo "        it. Do not edit the body here."
+  exit 1; }
+printf 'ok  operator-supplied selection decision %s, equal to the reviewed instant\n' \
+  "${SELECTION_DECISION_AT}"
+
+# ---- GATE 1: THE POST-CROUTE PRODUCTION BASELINES ------------------------
+printf -- '\n--- production baselines, after the CROUTE-0007 write ---\n'
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store is ${got}, expected ${want}"; exit 1; }
+  printf 'ok  %-8s %s\n' "${label}" "${got}"
+done
+
+# ---- GATE 2: THE WHOLE GOVERNING CHAIN, AS WRITTEN ----------------------
+printf -- '\n--- the governing chain: advertisement, admission, route ---\n'
+for triple in \
+  "CADV-000008:/var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml:${CADV8_RECORD}" \
+  "CINST-000007:/var/lib/kyri/fabric/capability-instances/CINST-000007.yaml:${CINST7_RECORD}" \
+  "CROUTE-0007:/var/lib/kyri/fabric/capability-routes/CROUTE-0007.yaml:${CROUTE7_RECORD}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(sha256sum "${path}" | cut -d' ' -f1)"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: ${label} is ${got}, not the record the operator wrote (${want})"; exit 1; }
+  printf 'ok  %-13s %s\n' "${label}" "${got}"
+done
+# Each of the three must still be the head of its own kind, by scan.
+for pair in "capability-advertisements:CADV-000008" \
+            "capability-instances:CINST-000007" \
+            "capability-routes:CROUTE-0007"; do
+  IFS=: read -r dir id <<<"${pair}"
+  test -z "$(grep -l "^supersedes: ${id}\$" \
+               "/var/lib/kyri/fabric/${dir}"/*.yaml 2>/dev/null)" \
+    || { echo "REFUSE: ${id} has already been superseded"; exit 1; }
+done
+test "$(sed -n 's/^lifecycle_state: //p' \
+          /var/lib/kyri/fabric/capability-instances/CINST-000007.yaml)" = "admitted" \
+  || { echo "REFUSE: CINST-000007 is not in the admitted lifecycle state"; exit 1; }
+for pair in "capability-advertisement:8" "capability-instance:7" "capability-route:7"; do
+  IFS=: read -r seq want <<<"${pair}"
+  test "$(cat "/var/lib/kyri/fabric/sequences/${seq}.seq")" = "${want}" \
+    || { echo "REFUSE: the ${seq} sequence is not ${want}"; exit 1; }
+done
+# And the route must actually offer the instance this selection must resolve to.
+ROUTE_CANDIDATES="$(sed -n '/^candidate_instances:/,/^capability_id:/p' \
+  /var/lib/kyri/fabric/capability-routes/CROUTE-0007.yaml | sed -n 's/^- //p' | paste -sd, -)"
+test "${ROUTE_CANDIDATES}" = "${REQUIRED_SELECTED_INSTANCE}" \
+  || { echo "REFUSE: CROUTE-0007 offers ${ROUTE_CANDIDATES}, not ${REQUIRED_SELECTED_INSTANCE}"; exit 1; }
+printf 'ok  all three are heads, the admission is admitted, and the route offers %s\n' \
+  "${ROUTE_CANDIDATES}"
+
+# ---- GATE 3: THE SELECTION NAMESPACE -----------------------------------
+#
+# NO SUPERSESSION HEAD CHECK HERE, deliberately: no selection record carries a
+# `supersedes` field, so there is no head to derive. The sequence and the
+# predecessor's bytes are what the store can actually answer.
+printf -- '\n--- the selection namespace ---\n'
+test "$(cat /var/lib/kyri/fabric/sequences/capability-selection.seq)" = "4" \
+  || { echo "REFUSE: the selection sequence is not 4"; exit 1; }
+test ! -e /var/lib/kyri/fabric/capability-selections/CSEL-000005.yaml \
+  || { echo "REFUSE: CSEL-000005 already exists in production"; exit 1; }
+test "$(sha256sum /var/lib/kyri/fabric/capability-selections/CSEL-000004.yaml | cut -d' ' -f1)" \
+     = "${CSEL4_RECORD}" \
+  || { echo "REFUSE: CSEL-000004 is not the accepted record; it must be immutable"; exit 1; }
+test -z "$(grep -l '^supersedes:' \
+             /var/lib/kyri/fabric/capability-selections/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: a selection record now carries a supersedes field; this block's reasoning about selection heads no longer holds and must be re-reviewed"; exit 1; }
+printf 'ok  selection sequence 4, CSEL-000004 immutable at %s, CSEL-000005 absent\n' \
+  "${CSEL4_RECORD}"
+
+# ---- GATE 4: THE REVIEWED BODY, BY SHA, BYTES AND REQUEST ID -----------
+printf -- '\n--- the reviewed body ---\n'
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+sudo test -f /etc/kyri/fabric/croute-0007.json \
+  || { echo "REFUSE: /etc/kyri/fabric/croute-0007.json is absent; CSEL-000005 resolves through CROUTE-0007 and is frozen against it"; exit 1; }
+sudo test -f /etc/kyri/fabric/cinst-000007.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cinst-000007.json is absent; CSEL-000005 selects CINST-000007"; exit 1; }
+test -f "${SOURCE}" || { echo "REFUSE: ${SOURCE} is absent"; exit 1; }
+
+TMP="$(mktemp)"
+cp "${SOURCE}" "${TMP}"
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+for pair in "the STALE G11-BC-AM selection body, recorded 2026-10-06T06:26:30-05:00 -- before CINST-000007 was admitted AND before CROUTE-0007 was decided -- and the same 606 bytes as this one:${STALE_AM_SELECTION_BODY}" \
+            "the CSEL-000003 input:${ACCEPTED_CSEL3}" \
+            "the CSEL-000004 input, which selects through the SUPERSEDED CROUTE-0006:${ACCEPTED_CSEL4}"; do
+  name="${pair%:*}"; sha="${pair##*:}"
+  if [[ "${ACTUAL}" == "${sha}" ]]; then
+    echo "REFUSE: this is ${name}, not the G11-BC-AS CSEL-000005 input"
+    rm -f "${TMP}"; exit 1
+  fi
+done
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+# THE REQUEST ID, OUT OF THE BODY. G11-BC-AQ proved the request digest does not
+# cover it, and G11-BC-AS confirmed the same for a selection: changing only
+# request_id leaves the digest identical.
+BODY_FIELDS="$(python3 -c '
+import json
+import sys
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+print(body["request_id"])
+print(body["recorded_at"])
+print(body["evaluated_at"])
+print("selected_at" in body)
+' "${TMP}")"
+{ read -r BODY_REQUEST_ID; read -r BODY_RECORDED; read -r BODY_EVALUATED; read -r BODY_HAS_SELECTED_AT; } \
+  <<<"${BODY_FIELDS}"
+test "${BODY_REQUEST_ID}" = "${REVIEWED_REQUEST_ID}" || {
+  echo "REFUSE: the body carries request_id ${BODY_REQUEST_ID}, reviewed ${REVIEWED_REQUEST_ID}"
+  rm -f "${TMP}"; exit 1; }
+test "${BODY_RECORDED}" = "${REVIEWED_RECORDED_AT}" || {
+  echo "REFUSE: the body carries recorded_at ${BODY_RECORDED}, reviewed ${REVIEWED_RECORDED_AT}"
+  rm -f "${TMP}"; exit 1; }
+test "${BODY_EVALUATED}" = "${REVIEWED_RECORDED_AT}" || {
+  echo "REFUSE: the body carries evaluated_at ${BODY_EVALUATED}, reviewed ${REVIEWED_RECORDED_AT}"
+  rm -f "${TMP}"; exit 1; }
+# `selected_at` is DERIVED. A body carrying it makes the engine refuse outright,
+# which is a confusing way to find out.
+test "${BODY_HAS_SELECTED_AT}" = "False" || {
+  echo "REFUSE: the body carries selected_at, which is not an input member -- the"
+  echo "        engine derives it from recorded_at and would refuse this body with"
+  echo "        'the decision body does not match this operation'"
+  rm -f "${TMP}"; exit 1; }
+printf 'ok  reviewed body %s, %s bytes\n' "${ACTUAL}" "${REVIEWED_BYTES}"
+printf 'ok  request_id %s\n' "${BODY_REQUEST_ID}"
+printf 'ok  recorded_at and evaluated_at both %s, and selected_at is left to the engine\n' \
+  "${BODY_RECORDED}"
+
+# ---- GATE 5: THE TEMPORAL GATE -- CEREMONY AUTHORITY -------------------
+#
+# THE ENGINE ENFORCES NONE OF THIS (G11-BC-AS: eight probes, `would_accept: true`
+# in every one, including a selection dated a day before its route and one dated
+# in December). Every bound is read out of the record it guards.
+printf -- '\n--- the temporal gate: ordering the engine will not enforce ---\n'
+GATE="$(python3 - "${TMP}" \
+        /var/lib/kyri/fabric/capability-routes/CROUTE-0007.yaml \
+        /var/lib/kyri/fabric/capability-instances/CINST-000007.yaml \
+        /var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml <<'GATE_PY'
+import json
+import re
+import sys
+from datetime import datetime
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+route = open(sys.argv[2], encoding="utf-8").read()
+instance = open(sys.argv[3], encoding="utf-8").read()
+advertisement = open(sys.argv[4], encoding="utf-8").read()
+now = datetime.now().astimezone()
+
+# The route's own decision instant lives under `evidence:`, indented, and the
+# record also carries a date-only provenance.recorded_at. Anchor on the indent so
+# the two cannot be confused.
+route_recorded = re.search(r"^  recorded_at: '(\d{4}-\d\d-\d\dT[^']+)'$",
+                           route, re.M).group(1)
+
+
+def field(text, name):
+    return re.search(rf"^{name}: '(.+)'$", text, re.M).group(1)
+
+
+admitted = field(instance, "admitted_at")
+admitted_until = field(instance, "admitted_until")
+adv_observed = field(advertisement, "observed_at")
+adv_until = field(advertisement, "valid_until")
+recorded = body["recorded_at"]
+evaluated = body["evaluated_at"]
+
+print(f"now                        {now.isoformat()}")
+print(f"CADV-000008 valid_until    {adv_until}")
+print(f"CINST-000007 admitted_at   {admitted}")
+print(f"CINST-000007 until         {admitted_until}")
+print(f"CROUTE-0007 recorded_at    {route_recorded}")
+print(f"CSEL-000005 recorded_at    {recorded}")
+print(f"CSEL-000005 evaluated_at   {evaluated}")
+
+r = datetime.fromisoformat(recorded)
+e = datetime.fromisoformat(evaluated)
+
+# 1. A selection cannot be decided before the route it resolves through.
+if r < datetime.fromisoformat(route_recorded):
+    print(f"REFUSE: the selection is recorded {recorded}, BEFORE the route it "
+          f"resolves through was decided at {route_recorded}. The engine accepts "
+          f"this and still resolves an instance; it is a decision made through a "
+          f"route that did not yet exist.")
+    sys.exit(1)
+# 2. Nor before the admission it selects.
+if e < datetime.fromisoformat(admitted) or r < datetime.fromisoformat(admitted):
+    print(f"REFUSE: the selection instants ({recorded} / {evaluated}) fall before "
+          f"the admission at {admitted}")
+    sys.exit(1)
+# 3. Nor at or after the admission expires.
+if (r >= datetime.fromisoformat(admitted_until)
+        or e >= datetime.fromisoformat(admitted_until)):
+    print(f"REFUSE: the selection instants ({recorded} / {evaluated}) fall at or "
+          f"after the admission expires {admitted_until}")
+    sys.exit(1)
+# 4. Nor at or after the governing advertisement expires. Stated separately from
+#    the admission rather than looped, so the bound this gate enforces is
+#    readable in this file and not assembled at runtime.
+if (r >= datetime.fromisoformat(adv_until)
+        or e >= datetime.fromisoformat(adv_until)):
+    print(f"REFUSE: the selection instants ({recorded} / {evaluated}) fall at or "
+          f"after the governing advertisement expires {adv_until}")
+    sys.exit(1)
+print("ok  route recorded_at <= selection instants < both expiries")
+
+# 5. A decision cannot be in the future.
+for name, instant in (("recorded_at", r), ("evaluated_at", e)):
+    if instant > now:
+        print(f"REFUSE: {name} {instant.isoformat()} is in the FUTURE. The body "
+              f"would claim a decision nobody has made.")
+        sys.exit(1)
+print("ok  both selection instants are in the past and already reached")
+
+# 6. And the ceremony itself must run inside both governing windows.
+for label, opens, closes in (("the advertisement", adv_observed, adv_until),
+                             ("the admission", admitted, admitted_until)):
+    if now < datetime.fromisoformat(opens):
+        print(f"REFUSE: {label} window has not opened")
+        sys.exit(1)
+    if now >= datetime.fromisoformat(closes):
+        print(f"REFUSE: {label} window has CLOSED at the current clock")
+        print("REFUSE: do not extend it -- RE-PREPARE the chain from a fresh observation")
+        sys.exit(1)
+print("ok  the current clock is inside BOTH governing windows")
+GATE_PY
+)" || { printf '%s\n' "${GATE}"; echo "REFUSE: the temporal gate failed"; rm -f "${TMP}"; exit 1; }
+printf '%s\n' "${GATE}"
+
+# ---- GATE 6: THE RESOLUTION, WHICH IS THE WHOLE POINT ------------------
+#
+# THE MOST IMPORTANT GATE IN THIS FILE. `would_accept` is NOT the test: the
+# engine returns true while resolving to null, and an accepted selection that
+# selects nothing is exactly what this chain was renewed to stop producing.
+printf -- '\n--- the resolution: it must be CINST-000007, not merely acceptable ---\n'
+STAGE="$(mktemp -d)"
+cp "${TMP}" "${STAGE}/csel-000005.json"
+chmod 0400 "${STAGE}/csel-000005.json"
+PREFLIGHT="$(python3 -m tools.fabric.cli select \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --input-file csel-000005.json --approved-directory "${STAGE}" \
+  --trust-store-root /var/lib/kyri/trust --preflight)"
+rm -rf "${STAGE}"
+printf '%s\n' "${PREFLIGHT}"
+
+read -r ACCEPT MUTATED EXISTS PREDICTED SELECTED DIGEST PID <<<"$(printf '%s' "${PREFLIGHT}" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["would_accept"], d["mutated"], d["destination_exists"], d["predicted_record_id"], d["selected_instance_id"], d["request_digest"], d["request_id"])')"
+
+# The resolution first, because it is the one that matters.
+test "${SELECTED}" != "None" || {
+  echo "REFUSE: the selection resolves to NULL. The engine would still accept it."
+  echo "        An accepted selection that selects nothing is the quiet failure"
+  echo "        this renewal chain exists to repair. Do not write it."
+  rm -f "${TMP}"; exit 1; }
+test "${SELECTED}" = "${REQUIRED_SELECTED_INSTANCE}" || {
+  echo "REFUSE: the selection resolves to ${SELECTED}, not ${REQUIRED_SELECTED_INSTANCE}"
+  rm -f "${TMP}"; exit 1; }
+test "${ACCEPT}" = "True"   || { echo "REFUSE: would_accept is ${ACCEPT}"; exit 1; }
+test "${MUTATED}" = "False" || { echo "REFUSE: the preflight reports mutated=${MUTATED}"; exit 1; }
+test "${EXISTS}" = "False"  || { echo "REFUSE: the destination already exists"; exit 1; }
+test "${PREDICTED}" = "CSEL-000005" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CSEL-000005"; exit 1; }
+test "${DIGEST}" = "${REQUEST_DIGEST}" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed ${REQUEST_DIGEST}"; exit 1; }
+test "${PID}" = "${REVIEWED_REQUEST_ID}" \
+  || { echo "REFUSE: the preflight reports request_id ${PID}, not the reviewed ${REVIEWED_REQUEST_ID}"; exit 1; }
+printf 'ok  selected_instance_id %s  <-- the gate that matters\n' "${SELECTED}"
+printf 'ok  would_accept %s, mutated %s, destination_exists %s, predicted %s\n' \
+  "${ACCEPT}" "${MUTATED}" "${EXISTS}" "${PREDICTED}"
+printf 'ok  request_digest %s\n' "${DIGEST}"
+printf 'ok  request_id     %s\n' "${PID}"
+
+printf -- '\n--- production Fabric must be byte-identical after the preflight ---\n'
+test "$(aggregate /var/lib/kyri/fabric)" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the preflight"; exit 1; }
+test "$(cat /var/lib/kyri/fabric/sequences/capability-selection.seq)" = "4" \
+  || { echo "REFUSE: the selection sequence moved during the preflight"; exit 1; }
+printf 'ok  fabric unchanged at %s, selection sequence still 4\n' "${FABRIC_BEFORE}"
+
+# ---- GATE 7: CURRENT AUTHORITY, ON A COPY CARRYING THE SELECTION -------
+#
+# What the renewal is FOR. The released verifier is asked the question the
+# capability runtime asks before it executes anything, at the real clock, against
+# a copy that carries the candidate. Against production as it stands today the
+# same verifier answers `admission-window-not-open`.
+printf -- '\n--- current execution authority, on a copy carrying the candidate ---\n'
+SCRATCH="$(mktemp -d -p /data/kyri g11bcas-authority.XXXXXX)"
+cp -a /var/lib/kyri/fabric "${SCRATCH}/fabric"
+chmod -R u+w "${SCRATCH}/fabric"
+mkdir -p "${SCRATCH}/approved"
+cp "${TMP}" "${SCRATCH}/approved/csel-000005.json"
+chmod 0400 "${SCRATCH}/approved/csel-000005.json"
+python3 -m tools.fabric.cli select \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --input-file csel-000005.json --approved-directory "${SCRATCH}/approved" \
+  --trust-store-root /var/lib/kyri/trust > /dev/null \
+  || { echo "REFUSE: the released write refused on a copy of production"
+       chmod -R u+w "${SCRATCH}"; rm -rf "${SCRATCH}" "${TMP}"; exit 1; }
+
+WRITTEN="${SCRATCH}/fabric/capability-selections/CSEL-000005.yaml"
+SCRATCH_ROUTE="$(sed -n 's/^route_id: //p' "${WRITTEN}")"
+SCRATCH_VERSION="$(sed -n 's/^route_version: //p' "${WRITTEN}")"
+SCRATCH_SELECTED="$(sed -n 's/^selected_instance_id: //p' "${WRITTEN}")"
+SCRATCH_SELECTED_AT="$(sed -n "s/^selected_at: '\\(.*\\)'$/\\1/p" "${WRITTEN}")"
+SCRATCH_CONSIDERED="$(sed -n '/^considered_candidates:/,/^evidence:/p' "${WRITTEN}" \
+  | sed -n 's/^- //p' | paste -sd, -)"
+SCRATCH_EXCLUDED="$(sed -n 's/^excluded_candidates: //p' "${WRITTEN}")"
+SCRATCH_SEQ="$(cat "${SCRATCH}/fabric/sequences/capability-selection.seq")"
+SCRATCH_FINDINGS="$(python3 -m tools.fabric.cli validate \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("findings") or []))')"
+AUTHORITY="$(cd /usr/lib/kyri/python && python3 - "${SCRATCH}/fabric" \
+             CSEL-000005 CINST-000007 /var/lib/kyri/trust <<'AUTH_PY'
+import sys
+from datetime import datetime
+
+sys.path.insert(0, ".")
+from tools.capability.fabric_evidence import verify_selected_evidence
+
+root, selection, instance, trust = sys.argv[1:5]
+try:
+    verdict = verify_selected_evidence(
+        root, expected_uid=1000, expected_gid=1000, selection_id=selection,
+        instance_id=instance, capability_package_id="CPKG-0001",
+        operation="execute", trust_root=trust,
+        evaluated_at=datetime.now().astimezone())
+except Exception as error:  # noqa: BLE001
+    print(f"RAISED {type(error).__name__}: {error}")
+else:
+    print(f"{verdict.supported} {verdict.reason} "
+          f"{len(tuple(verdict.eligibility_reasons))}")
+AUTH_PY
+)"
+chmod -R u+w "${SCRATCH}"; rm -rf "${SCRATCH}"
+
+test "${SCRATCH_SELECTED}" = "${REQUIRED_SELECTED_INSTANCE}" \
+  || { echo "REFUSE: on the copy the written selection chose ${SCRATCH_SELECTED}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_ROUTE}" = "CROUTE-0007" \
+  || { echo "REFUSE: on the copy the selection resolved through ${SCRATCH_ROUTE}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_VERSION}" = "7" \
+  || { echo "REFUSE: on the copy route_version is ${SCRATCH_VERSION}, not 7"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_CONSIDERED}" = "${REQUIRED_SELECTED_INSTANCE}" \
+  || { echo "REFUSE: on the copy considered_candidates is ${SCRATCH_CONSIDERED}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_EXCLUDED}" = "[]" \
+  || { echo "REFUSE: on the copy excluded_candidates is ${SCRATCH_EXCLUDED}, not []"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_SELECTED_AT}" = "${REVIEWED_RECORDED_AT}" \
+  || { echo "REFUSE: the derived selected_at is ${SCRATCH_SELECTED_AT}, not the operator's ${REVIEWED_RECORDED_AT}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_SEQ}" = "5" \
+  || { echo "REFUSE: on the copy the selection sequence is ${SCRATCH_SEQ}, not 5"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_FINDINGS}" = "0" \
+  || { echo "REFUSE: the engine reports ${SCRATCH_FINDINGS} finding(s) on the copy"; rm -f "${TMP}"; exit 1; }
+test "${AUTHORITY}" = "True None 0" \
+  || { echo "REFUSE: the released verifier answers '${AUTHORITY}' on the renewed chain,"
+       echo "        expected 'True None 0'. The chain does not restore authority."
+       rm -f "${TMP}"; exit 1; }
+printf 'ok  written through CROUTE-0007 v7, selected %s, considered [%s], excluded []\n' \
+  "${SCRATCH_SELECTED}" "${SCRATCH_CONSIDERED}"
+printf 'ok  derived selected_at %s, selection sequence 5, no findings\n' "${SCRATCH_SELECTED_AT}"
+printf 'ok  verify_selected_evidence: supported=True reason=None eligibility_reasons=[]\n'
+
+# ---- THE FREEZE: ONE FILE, INTO /etc, AND NOTHING ELSE -----------------
+printf -- '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf -- '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf -- '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+printf -- '\n--- nothing governed moved ---\n'
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store moved during the freeze: ${got}"; exit 1; }
+  printf 'ok  %-8s %s  unchanged\n' "${label}" "${got}"
+done
+test ! -e /var/lib/kyri/fabric/capability-selections/CSEL-000005.yaml \
+  || { echo "REFUSE: CSEL-000005 REACHED PRODUCTION FABRIC"; exit 1; }
+printf 'ok  CSEL-000005 is frozen as an INPUT and is not a production record\n'
+FREEZE
+
+# EXPECTED:
+#   gate 0         operator-supplied selection decision 2026-10-08T03:32:26-05:00
+#   gate 1         fabric 758c6c65…, runtime 7dfb34e6…, trust 53605e4e…
+#   gate 2         CADV-000008 8b478c3e…, CINST-000007 8e577b7d… (admitted),
+#                  CROUTE-0007 3ab79b33… offering CINST-000007; all three heads
+#   gate 3         selection sequence 4, CSEL-000004 immutable at 5e58396f…,
+#                  CSEL-000005 absent
+#   gate 4         reviewed body 4a98b76bf1131788cf19b2728ee5e854f99cc2e3eaabe0580b9799de83838231, 606 bytes
+#                  request_id g11bcas-select-capdef-0001-ccon-0001-internal-local-only-host-0001-croute-0007
+#   gate 5         CROUTE-0007 recorded_at <= both selection instants < both
+#                  expiries, already reached, clock inside both windows
+#   gate 6         selected_instance_id CINST-000007, would_accept true,
+#                  mutated false, destination_exists false, CSEL-000005,
+#                  request_digest sha256:dd232d5275cd5a69959772179668f9964f8a455bc748199442e7b2570817d721
+#   gate 7         through CROUTE-0007 v7, considered [CINST-000007], excluded [],
+#                  derived selected_at 2026-10-08T03:32:26-05:00, sequence 5,
+#                  and verify_selected_evidence supported=True reason=None
+#   frozen input   /etc/kyri/fabric/csel-000005.json  root:cschott  640  606 bytes
+#   fabric         758c6c6578abdfccc7d29d2f1b7e9d56cbf4d933636853c884fb599ef70862ba  (unchanged)
+#
+# CHAIN POSITION, from the G11-BC-AS scratch rehearsal:
+#   PRE_BASELINE              758c6c6578abdfccc7d29d2f1b7e9d56cbf4d933636853c884fb599ef70862ba
+#   EXPECTED_RECORD           CSEL-000005
+#   EXPECTED_RECORD_DIGEST    bc464efcee8c70b0a17678e3011a204f677f2ffb08f5afee16a4e52d8c2510f0
+#   EXPECTED_SEQUENCE_BEFORE  selection 4
+#   EXPECTED_SEQUENCE_AFTER   selection 5
+#   POST_BASELINE             7e2a4ed0e9c11cf1f3790360542232649946a9bf31400e9dd442d8c2ad2f376b
+#                             (rehearsed; UNKNOWN for production until the write)
+#
+# AND WHAT THE WRITE UNBLOCKS, proved on the scratch chain at G11-BC-AS but NOT
+# yet true of production: the Stage-3 BLOCK B gate matrix goes from 8 reached /
+# 14 masked to 22 reached / 0 masked. That is obligation O3, and it closes only
+# when CSEL-000005 is actually written and the matrix is re-run against live
+# production.
+#
+# AFTER THE WRITE, TWO SUITES WILL NEED ONE REVIEWED LINE EACH. The spent-mode
+# stage rehearsals pin a NAMED set of accepted Fabric baselines, not "whatever is
+# there", so a renewal write legitimately makes them fail until the new state is
+# accounted for:
+#
+#   tests/test-capability-cinv-000003-stage-0-rehearsal.sh
+#   tests/test-capability-cinv-000003-stage-1-rehearsal.sh
+#
+# The line to add, once the write has actually happened and the aggregate has been
+# measured rather than assumed:
+#
+#   "<measured post-CSEL aggregate>|after the accepted CSEL-000005 selection write, <checkpoint>"
+#
+# The G11-BC-AS rehearsal predicts
+# 7e2a4ed0e9c11cf1f3790360542232649946a9bf31400e9dd442d8c2ad2f376b, and it is NOT
+# pre-added: accepting a store that does not exist yet is the anticipatory form of
+# the same mistake the named set prevents. A red validator on those two suites
+# immediately after the write is expected, and is not a defect.
+#
+# Return this output. The select WRITE is a separate authorisation and is not in
+# this block.

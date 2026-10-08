@@ -59,29 +59,32 @@ CHAIN=(
 "register-advertisement|g11-bc-am-cadv-000008-input.json|CADV-000008|advertisement|7|8"
 "admit-instance|g11-bc-ap-cinst-000007-input.json|CINST-000007|instance|6|7"
 "create-route|g11-bc-ar-croute-0007-input.json|CROUTE-0007|route|6|7"
-"select|g11-bc-am-csel-000005-input.json|CSEL-000005|selection|4|5"
+"select|g11-bc-as-csel-000005-input.json|CSEL-000005|selection|4|5"
 )
 
 # HOW FAR THE CHAIN IS PREPARED. The reviewer authorises one record at a time, so
 # the chain is prepared one record at a time, and the steps beyond that point have
 # bodies nobody has re-derived.
 #
-# G11-BC-AR: the ROUTE was re-derived from the operator's own route decision,
-# 2026-10-07T17:36:09-05:00, measured after the admission it points at. The stale
-# G11-BC-AM route body sat at 2026-10-06T06:26 -- a day BEFORE that admission --
-# and the released `create-route` would have accepted it anyway, so the ordering
-# is enforced by the ceremony and by this suite, not by the engine.
+# G11-BC-AS: THE CHAIN IS COMPLETE. The selection was re-derived from the
+# operator's own selection decision, 2026-10-08T03:32:26-05:00, measured after
+# the route it resolves through. Every one of the four bodies now carries an
+# instant the operator actually decided, and not one of the G11-BC-AM/AN cadence
+# values survives.
 #
-# THE SELECTION IS STILL NOT PREPARED. Its instant must be a real operator
-# selection decision made after CROUTE-0007 is written, and the stale AM
-# selection body sits a day early too. A selection evaluated before its candidate
-# was admitted selects nothing, and the released engine says exactly that:
-# `selection-recorded-no-instance`.
+# WHY EACH WAS RE-DERIVED RATHER THAN REUSED. The stale AM selection sat at
+# 2026-10-06T06:26:30 -- before the admission it selects AND before the route it
+# resolves through. The released engine would have accepted it: `select` returns
+# `would_accept: true` for a selection dated before its own route, and even for
+# one dated after both windows close. What it does instead of refusing is resolve
+# to `selected_instance_id: null`, which is an accepted record that selects
+# nothing. The ordering is ceremony authority, enforced here and in the freeze
+# artifacts, never by the engine.
 #
 # So the unprepared steps are NOT rehearsed. Rehearsing a body that will be
 # re-derived before it is written proves nothing about what gets written, and a
 # digest harvested from it would be a number to carry forward wrongly.
-PREPARED=(CADV-000008 CINST-000007 CROUTE-0007)
+PREPARED=(CADV-000008 CINST-000007 CROUTE-0007 CSEL-000005)
 is_prepared() {
   local name
   for name in "${PREPARED[@]}"; do [[ "$1" == "${name}" ]] && return 0; done
@@ -101,7 +104,7 @@ declare -A REVIEWED=(
 [g11-bc-am-cadv-000008-input.json]=f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61
 [g11-bc-ap-cinst-000007-input.json]=92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890
 [g11-bc-ar-croute-0007-input.json]=beb687c26677cad701519b635b7b1ee82bb8721f4da10d0f7d1a9c29b5ca2989
-[g11-bc-am-csel-000005-input.json]=2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b
+[g11-bc-as-csel-000005-input.json]=4a98b76bf1131788cf19b2728ee5e854f99cc2e3eaabe0580b9799de83838231
 )
 
 FAILURES=0

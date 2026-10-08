@@ -87,6 +87,7 @@ ACCEPTED_FABRIC_BASELINES=(
 "a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|the store this ceremony was reviewed against"
 "d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|after the accepted CADV-000008 renewal write, G11-BC-AO"
 "1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb|after the accepted CINST-000007 admission write, G11-BC-AQ"
+"758c6c6578abdfccc7d29d2f1b7e9d56cbf4d933636853c884fb599ef70862ba|after the accepted CROUTE-0007 route write, G11-BC-AS"
 )
 RUNTIME_BASELINE=159651ee6c98113f182b80cecdff5a83f5782df8ff8e16c6cf30ac91f0ea92fc
 CINV_SEQ_BEFORE=2

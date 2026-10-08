@@ -1,5 +1,25 @@
 #!/usr/bin/env bash
-# STALE AFTER G11-BC-AO. DO NOT RUN THIS.
+# SUPERSEDED AT G11-BC-AS. DO NOT RUN THIS.
+#
+# Marked STALE at G11-BC-AO, when the admission was re-derived. There is now a
+# LIVE replacement, so it is superseded rather than merely stale:
+#
+#   provisioning/fabric/g11-bc-as-csel-000005-freeze.txt
+#
+# Its instants were 2026-10-06T06:26:30-05:00 -- before the admission it selects
+# (2026-10-07T10:08:58) AND before the route it resolves through
+# (2026-10-07T17:36:09). G11-BC-AS measured what the released engine does with
+# that: it does NOT refuse. `select` returns `would_accept: true` and resolves to
+# `selected_instance_id: null` -- an accepted selection that selects nothing,
+# which is the quiet failure the whole renewal chain exists to repair.
+#
+# Its body is also the same 606 bytes as the live one, so the G11-BC-AS block
+# refuses it BY DIGEST rather than relying on a length.
+#
+# Its pins below are the OLD ones and are deliberately not updated: a superseded
+# artifact with current numbers would be indistinguishable from a live one.
+#
+# ---------------------------------------------------------------------------
 #
 # Every pin below derives from the CINST-000007 body as G11-BC-AM rendered it,
 # and that body was re-derived at G11-BC-AO: its admitted_at was a cadence slot

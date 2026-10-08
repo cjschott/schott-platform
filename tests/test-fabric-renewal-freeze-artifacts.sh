@@ -35,7 +35,7 @@ ARTIFACTS=(
 "g11-bc-an-cadv-000008-freeze.txt|g11-bc-am-cadv-000008-input.json|f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61|674|CADV-000008|register-advertisement|a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5|sha256:3a35799239002a7ee9ee09b6002fd804bdc436030d7a3cb66d17d089f7be9a28"
 "g11-bc-ap-cinst-000007-freeze.txt|g11-bc-ap-cinst-000007-input.json|92c71fb26184cc98a55949805cada709b78bd859b0d2b9765f0e85b8b7b09890|1270|CINST-000007|admit-instance|d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|sha256:06e4cf9676352ebbb950e01702d225cce441b0661e6abc93bdb080953adbd9db"
 "g11-bc-ar-croute-0007-freeze.txt|g11-bc-ar-croute-0007-input.json|beb687c26677cad701519b635b7b1ee82bb8721f4da10d0f7d1a9c29b5ca2989|679|CROUTE-0007|create-route|1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb|sha256:db8962e39dcb6efb2b1a91c12ca7b97f8d2ae446e8225f226b4228144cba2e9e"
-"g11-bc-am-csel-000005-freeze.txt|g11-bc-am-csel-000005-input.json|2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b|606|CSEL-000005|select|4a0f15aa1d60278cacc3da7684e83a3242601296a0a65e73b3401d231caf8487|sha256:a5b5700c6cb3e11a3bfd5ef8b396bdae0a24632cc3d06448c6ac1e22bbfd2371"
+"g11-bc-as-csel-000005-freeze.txt|g11-bc-as-csel-000005-input.json|4a98b76bf1131788cf19b2728ee5e854f99cc2e3eaabe0580b9799de83838231|606|CSEL-000005|select|758c6c6578abdfccc7d29d2f1b7e9d56cbf4d933636853c884fb599ef70862ba|sha256:dd232d5275cd5a69959772179668f9964f8a455bc748199442e7b2570817d721"
 )
 
 printf -- '--- all four artifacts and their inputs exist and parse ---\n'
@@ -58,6 +58,12 @@ for entry in "${ARTIFACTS[@]}"; do
 done
 
 printf -- '\n--- the superseded artifacts are marked, not live ---\n'
+# THE MARKER IS MATCHED BY SHAPE, NOT BY A LIST OF CHECKPOINT LETTERS. An
+# enumeration like G11-BC-A[NOP] has to be edited every time a record is
+# re-derived, and the edit is easy to forget -- which is exactly how a live
+# artifact and a superseded one become indistinguishable. What matters is that
+# the banner names SOME checkpoint and says DO NOT RUN THIS.
+#
 # THE ADMISSION HAS BEEN RE-DERIVED TWICE, so its supersession chain is two hops
 # long: G11-BC-AM chose a cadence slot thirty seconds after the advertisement
 # observation, G11-BC-AO used its own preparation instant, and G11-BC-AP uses the
@@ -67,12 +73,13 @@ for superseded_pair in \
   "g11-bc-am-cadv-000008-freeze.txt:g11-bc-an-cadv-000008-freeze.txt:f0e97487b5d45e7f56db220d632811ffd29370c607d517b24f4412340afbdef1" \
   "g11-bc-am-cinst-000007-freeze.txt:g11-bc-ao-cinst-000007-freeze.txt:cc4e8fe6c435ebf6edbcdf9d7d771e754859a61f85968182fea6f8bd2af9ab78" \
   "g11-bc-ao-cinst-000007-freeze.txt:g11-bc-ap-cinst-000007-freeze.txt:e1bdd53e6e402c8d3f44b158cfc8601e217f701f9c33d08d1fdc622e95b4dd17" \
-  "g11-bc-am-croute-0007-freeze.txt:g11-bc-ar-croute-0007-freeze.txt:6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25"
+  "g11-bc-am-croute-0007-freeze.txt:g11-bc-ar-croute-0007-freeze.txt:6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25" \
+  "g11-bc-am-csel-000005-freeze.txt:g11-bc-as-csel-000005-freeze.txt:2480aac0ccac4e626fbbe592de81d09170d56aaeb11da42f57668c61c61e785b"
 do
   IFS=: read -r was now old_pin <<<"${superseded_pair}"
   path="${FABRIC_DIR}/${was}"
   [[ -f "${path}" ]] || { pass "${was} no longer exists"; continue; }
-  if grep -qE 'SUPERSEDED AT G11-BC-A[NOPR]\. DO NOT RUN THIS\.' "${path}" \
+  if grep -qE 'SUPERSEDED AT G11-BC-[A-Z]{1,2}\. DO NOT RUN THIS\.' "${path}" \
      && grep -qF "${now}" "${path}"; then
     pass "${was} is marked superseded and names ${now}"
   else
@@ -91,7 +98,7 @@ do
   # it forward stops somewhere that is also marked DO NOT RUN.
   hop="${now}"
   for _ in 1 2 3 4; do
-    grep -qE 'SUPERSEDED AT G11-BC-A[NOPR]\. DO NOT RUN THIS\.' "${FABRIC_DIR}/${hop}" 2>/dev/null \
+    grep -qE 'SUPERSEDED AT G11-BC-[A-Z]{1,2}\. DO NOT RUN THIS\.' "${FABRIC_DIR}/${hop}" 2>/dev/null \
       || break
     hop="$(grep -oE 'g11-bc-a[a-z]-c[a-z]+-[0-9]+-freeze\.txt' "${FABRIC_DIR}/${hop}" | head -1)"
   done
@@ -113,7 +120,8 @@ done
 printf -- '\n--- a superseded body of equal length is refused by digest ---\n'
 for stale_pair in \
   "CINST-000007:g11-bc-ao-cinst-000007-input.json" \
-  "CROUTE-0007:g11-bc-am-croute-0007-input.json"
+  "CROUTE-0007:g11-bc-am-croute-0007-input.json" \
+  "CSEL-000005:g11-bc-am-csel-000005-input.json"
 do
   IFS=: read -r stale_record superseded_input <<<"${stale_pair}"
   stale="${FABRIC_DIR}/${superseded_input}"
@@ -254,14 +262,14 @@ for entry in "${ARTIFACTS[@]}"; do
     fail "${record}: does not pin ${pre}"
   fi
 done
-# THE CHAIN JOINS ONLY ACROSS PREPARED STEPS. G11-BC-AR prepared the route, so
-# only CSEL-000005 is left carrying baselines derived from bodies that have since
-# been re-derived. Their pins are STALE BY
+# THE CHAIN NOW JOINS END TO END. G11-BC-AS prepared the selection, so all four
+# steps carry pins derived from bodies the operator actually decided, and each
+# step's pre-baseline is the previous step's rehearsed post-baseline. Their pins are STALE BY
 # CONSTRUCTION and are not asserted here -- they are re-prepared at their own
 # checkpoint, with their own rehearsal. Asserting a joined chain across an
 # unprepared step would be asserting a number nobody has measured.
 printf -- '\n--- the prepared steps chain, and the unprepared ones say they do not ---\n'
-PREPARED=(CADV-000008 CINST-000007 CROUTE-0007)
+PREPARED=(CADV-000008 CINST-000007 CROUTE-0007 CSEL-000005)
 chain_ok=1
 previous=""
 for entry in "${ARTIFACTS[@]}"; do
@@ -481,7 +489,7 @@ def load(name):
 adv = load("g11-bc-am-cadv-000008-input.json")
 inst = load("g11-bc-ap-cinst-000007-input.json")
 route = load("g11-bc-ar-croute-0007-input.json")
-sel = load("g11-bc-am-csel-000005-input.json")
+sel = load("g11-bc-as-csel-000005-input.json")
 
 expected = {
     "capability": "CAPDEF-0001", "package": "CPKG-0001",
