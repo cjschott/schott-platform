@@ -188,7 +188,20 @@ PASS: BLOCK B passes against an unmodified fixture
 Previously BLOCK B refused the clean fixture on `admission-window-not-open`,
 which masked 14 of the 22 sabotages because the expired authority refused ahead
 of their own gates. **`admission-window-not-open` now appears zero times in the
-run.** Each of the 14 reaches the gate it was written for.
+matrix run.** Each of the 14 reaches the gate it was written for.
+
+That claim is scoped to this suite, deliberately. The phrase still appears **8
+times across the 165-step full validator**, and every occurrence is attributed:
+
+| step | why |
+|---|---|
+| 103 Fabric renewal chain rehearsal (×2) | the deliberate probe of the pre-renewal pair `CSEL-000004 → CINST-000006`, which **must** still refuse — that is the append-only proof |
+| 32 Capability runtime (×4) | unit fixtures that construct an expired, an unreadable and a not-yet-open window and assert the refusal reason |
+| 36 Invocation operation authority | a closed admission window must still refuse |
+| 37 Invoke current eligibility | the bridge must refuse a closed window |
+
+None is from the Stage-3 matrix — isolating that step inside the full run gives
+zero. A reader comparing the two counts should not read a contradiction.
 
 `O3_STATUS = CLOSED`.
 
@@ -337,7 +350,36 @@ merged, tagged or released; no evidence cleaned; ENG-0006 not begun.
 
 ---
 
-## I. Questions for the reviewer
+## I. Validators and CI
+
+| run | result |
+|---|---|
+| `tools/dev/run-validation.sh --quick` | **140/140**, 0 FAIL, 0 skips |
+| `tools/dev/run-validation.sh` (full) | **165/165**, 0 FAIL, **0 host-only skips** |
+| clean clone of `316e6af` | **165/165**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `316e6af` | **6/6 green** — Static validation, ShellCheck, CodeQL, Semgrep, Gitleaks, Trivy |
+
+The clean clone reproduces O3's closure from a fresh checkout: both the
+standalone matrix step and the chain rehearsal's invocation of it report `22
+reached their own refusal, 0 masked`, with `BLOCK B passes against an unmodified
+fixture` in each.
+
+Fabric after every run: `7e2a4ed0e9c11cf1f3790360542232649946a9bf31400e9dd442d8c2ad2f376b`
+— unchanged. Sequences 8/7/7/5. No `CRES-000003`.
+
+**One process note, since it affected the evidence.** My first full run was killed
+at step 66 (`Terminated`) because I had launched it from inside a `Monitor`
+command, so it shared the monitor's lifetime and died at the 30-minute expiry.
+Re-run detached with `setsid`, which is the result above. Separately, two
+`pgrep`/`pkill` invocations matched their own command lines — once reporting two
+validators when one was running plus its `shellcheck` child whose argument list
+contains `run-validation.sh` as a filename. Neither mistake touched production or
+changed a result, but the first cost a wasted 30-minute run and the second nearly
+led me to report a conflict that did not exist.
+
+---
+
+## J. Questions for the reviewer
 
 1. **O3's closure is a wall-clock-bounded fact.** The matrix passes 22/0 today
    because authority is live for another 96 hours. After `2026-10-13T06:25:00`
