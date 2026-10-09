@@ -137,3 +137,33 @@ Fabric-engine increment with F2 ranked first. Full reasoning in the audit §4.
 Re-measured after every executable group. No Fabric record written, no capability
 executed, no lifecycle or evidence mutation, nothing renewed, G7 not entered,
 nothing merged or tagged, ENG-0006 not begun.
+
+---
+
+## H. Validation
+
+| run | result |
+|---|---|
+| `tools/dev/run-validation.sh` (full) | **165/165**, 0 FAIL, 0 FAILED, **0 host-only skips** |
+| clean clone of `61a8f1d` | **165/165**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `61a8f1d` | **5/6 — Semgrep could not start** |
+
+**CI is not green, and I am not reporting it as green.** Semgrep failed twice —
+the original run and a re-run I triggered — with the same annotation both times:
+
+```
+failure: Docker pull failed with exit code 1
+warning: Docker pull failed with exit code 1, back off 5.231 seconds before retry
+warning: Docker pull failed with exit code 1, back off 4.105 seconds before retry
+```
+
+The action could not pull its own container image, so **the scan never ran and
+produced no findings**. Static validation, ShellCheck, CodeQL, Gitleaks and Trivy
+all passed. Semgrep was `success` on each of the three preceding commits
+(`afced9d`, `316e6af`, `c089a84`), and this commit adds two Markdown files and
+nothing else, so the failure is registry infrastructure rather than anything about
+this change.
+
+That is a conclusion about the *cause*, not a substitute for the verdict: Semgrep
+has no verdict on this commit. If the reviewer wants one before G7, the job needs
+re-running when the registry is reachable.
