@@ -74,6 +74,7 @@ ACCEPTED_FABRIC_BASELINES=(
 "d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c|after the accepted CADV-000008 renewal write, G11-BC-AO"
 "1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb|after the accepted CINST-000007 admission write, G11-BC-AQ"
 "758c6c6578abdfccc7d29d2f1b7e9d56cbf4d933636853c884fb599ef70862ba|after the accepted CROUTE-0007 route write, G11-BC-AS"
+"7e2a4ed0e9c11cf1f3790360542232649946a9bf31400e9dd442d8c2ad2f376b|after the accepted CSEL-000005 selection write, which completes the renewal, G11-BC-AT"
 )
 CINV_SEQ_BEFORE=2
 CRES_SEQ_BEFORE=1

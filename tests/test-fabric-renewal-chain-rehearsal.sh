@@ -476,7 +476,10 @@ if (( CHAIN_COMPLETE == 0 )); then
 fi
 
 printf -- '\n--- 4. the renewed chain, judged at the real clock ---\n'
-printf 'FINAL_BASELINE=%s  (what production would measure after all four writes)\n' \
+# Once every step is written this IS production's aggregate, because the copy is
+# then a byte copy of it; while steps remain unwritten it is what production would
+# measure after them. Stated without claiming which, since the suite knows.
+printf 'FINAL_BASELINE=%s  (the completed chain, measured from the copy)\n' \
   "$(production_equivalent "${SCRATCH}")"
 FINAL="$(verdict "${SCRATCH}" CSEL-000005 CINST-000007)"
 printf 'verdict: %s\n' "${FINAL}"

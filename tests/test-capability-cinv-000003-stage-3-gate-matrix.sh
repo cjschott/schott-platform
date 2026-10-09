@@ -78,14 +78,14 @@ PRODUCTION_FABRIC=/var/lib/kyri/fabric            # prod-path-reference
 # generic nonzero-exit assertion. The chain an override points at is a real chain
 # the released write verbs produced.
 FABRIC_SOURCE="${KYRI_STAGE3_FABRIC_SOURCE:-${PRODUCTION_FABRIC}}"
-AUTHORITY_SELECTION="${KYRI_STAGE3_SELECTION:-CSEL-000004}"
-AUTHORITY_INSTANCE="${KYRI_STAGE3_INSTANCE:-CINST-000006}"
+AUTHORITY_SELECTION="${KYRI_STAGE3_SELECTION:-CSEL-000005}"
+AUTHORITY_INSTANCE="${KYRI_STAGE3_INSTANCE:-CINST-000007}"
 # BLOCK B pins the route head and the advertisement separately from the
 # selection, and it is right to: a chain whose selection still resolves can
 # still have been superseded underneath, which is exactly what it refuses. All
 # four move together or none of them do.
-AUTHORITY_ROUTE="${KYRI_STAGE3_ROUTE:-CROUTE-0006}"
-AUTHORITY_ADVERTISEMENT="${KYRI_STAGE3_ADVERTISEMENT:-CADV-000007}"
+AUTHORITY_ROUTE="${KYRI_STAGE3_ROUTE:-CROUTE-0007}"
+AUTHORITY_ADVERTISEMENT="${KYRI_STAGE3_ADVERTISEMENT:-CADV-000008}"
 if [[ "${FABRIC_SOURCE}" != "${PRODUCTION_FABRIC}" ]]; then
   printf 'note     Fabric authority under test: %s (selection %s, instance %s)\n' \
     "${FABRIC_SOURCE}" "${AUTHORITY_SELECTION}" "${AUTHORITY_INSTANCE}"
@@ -333,7 +333,7 @@ fixture_fabric="$( cd "${FIX}/fabric" && find . -type f -print0 | sort -z \
                    | xargs -0 sha256sum | sed "s|  \./|  ${FABRIC_SOURCE}/|" \
                    | sha256sum | cut -d' ' -f1 )"
 if [[ "${fixture_fabric}" == "${FABRIC_BEFORE}" ]]; then
-  pass "the reviewed Fabric chain is present, byte-identical -- expired, and NOT renewed to make a gate pass"
+  pass "the reviewed Fabric chain is present, byte-identical to the source -- carried as it stands, with no window edited to make a gate pass"
 else
   fail "the fixture's Fabric is ${fixture_fabric}, not the source's ${FABRIC_BEFORE}"
 fi
@@ -388,8 +388,11 @@ out="${WORK}/gates.out"; status=0
 #
 # That is the gate working. It is NOT weakened here, the ceremony's gate order is
 # not edited, and the fixture does NOT carry a synthesised validity window -- it
-# carries the reviewed chain, expired, because that is what the reviewed chain is.
-# Whether the authority is live is MEASURED from this run, never declared.
+# carries the reviewed chain exactly as the source holds it, whether that chain is
+# expired or live. It was expired for as long as CADV-000007/CINST-000006 were the
+# heads; it is live now that the G11-BC-AM..AS renewal has been written. Either
+# way the suite never declares which: whether the authority is live is MEASURED
+# from this run, from what BLOCK B actually said.
 FABRIC_EXPIRED=0
 if grep -q 'admission-window-not-open' "${out}"; then
   FABRIC_EXPIRED=1
