@@ -306,6 +306,40 @@ omitted — exactly the drift that check exists to refuse.
 
 ---
 
+## I-BIS. Validation
+
+| run | result |
+|---|---|
+| `run-validation.sh --quick` | **142/142**, 0 FAIL, 0 skips |
+| `run-validation.sh` (full) | **167/167**, 0 FAIL, **0 host-only skips** |
+| clean clone of `3813241` | **167/167**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `3813241` | **6/6 green** |
+
+Both new suites run in the clean clone, at steps 100 and 101.
+
+Suite-level, all 0 FAIL: result authority **14**, Generation-24 installer **51**,
+`test-capability-runtime` **1089**, lifecycle 45, capacity 31, conclusion 33,
+abandonment 26, provenance-correction 22, legacy-compatibility 13,
+recovery-discovery 19, supervision 32, mutation 38, Generation-23 installer 56,
+g5-preflight 36, developer-experience 141, static 869, no-production-escape 4,
+and both real-container E2E suites.
+
+**Fabric, runtime and Trust byte-identical throughout**, measured around every
+executable group.
+
+### The installed runtime is deliberately untouched
+
+```
+installed inspection.py  adb0e46b…      (the PRE-fix bytes)
+installed validator says  2 findings     (F7, still present)
+```
+
+Generation 24 is declared and NOT installed, so the finding is still live on the
+host. That is the expected state of this checkpoint, and it is why G7 cannot be
+re-entered yet.
+
+---
+
 ## J. Production state
 
 | store | aggregate | moved? |
