@@ -479,6 +479,18 @@ jobs:
       - name: Capability execution generation-23 installer tests
         run: bash tests/test-capability-execution-generation23-installer.sh
 
+      # F7: a terminal result is authorised by the lifecycle journal, not by a
+      # field the released writer never fills in. A fabricated result with no
+      # journalled launch still fails closed. Portable.
+      - name: Capability execution result authority tests
+        run: bash tests/test-capability-execution-result-authority.sh
+
+      # The Generation-24 installer proves that invariant, with 11 sabotages --
+      # each a plausible wrong fix that would make production validate clean.
+      # Static: nothing runs --install.
+      - name: Capability execution generation-24 installer tests
+        run: bash tests/test-capability-execution-generation24-installer.sh
+
       # BLOCK B of the Stage-3 ceremony and its 22-case matrix. Host-only: the
       # fixture is assembled from the reviewed objects the host holds, so on a
       # runner it reports HOST_ONLY_SKIP and the local validator is authority.
