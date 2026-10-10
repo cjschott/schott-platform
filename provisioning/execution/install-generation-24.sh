@@ -245,6 +245,7 @@ group_name() {
     P) printf 'post-execution lifecycle conclusion' ;;
     C) printf 'multi-field provenance correction' ;;
     L) printf 'ADR-0016 correction shape compatibility' ;;
+    E) printf 'execution-authority evidence' ;;
     *) printf 'unknown group %s' "$1" ;;
   esac
 }
@@ -255,7 +256,7 @@ group_name() {
 # in that group would have reported "unknown group A" -- the exact failure its
 # own comment said the names exist to prevent. A diagnostic defect only, and it
 # is in an accepted installer so it is reported rather than edited here; neither
-# Generation 21 nor this one repeats it, and L has a case.
+# Generation 21 nor this one repeats it, and both L and E have a case.
 require_group_names_known() {
   local group unnamed=0
   for group in $(matrix_groups); do
@@ -1251,17 +1252,19 @@ require_fail_closed_first() {
     actual="$(field "${MATRIX[${index}]}" 0)"
     [[ "${actual}" == "${declared}" ]] \
       || halt "matrix row ${index} is ${actual}, and the dependency-safe order puts ${declared} there: an object published before something it imports is an ImportError on every command"
-    [[ "$(field "${MATRIX[${index}]}" 6)" == "L" ]] \
-      || halt "${actual} is not in coherence group L: this generation publishes one architecture and one group"
+    [[ "$(field "${MATRIX[${index}]}" 6)" == "E" ]] \
+      || halt "${actual} is not in coherence group E: this generation publishes one architecture and one group"
     index=$((index + 1))
   done
 
   [[ "$(field "${MATRIX[0]}" 0)" == "${FAIL_CLOSED_FIRST}" ]] \
-    || halt "the first published object is not ${FAIL_CLOSED_FIRST}: the module that decides the comparison rule is the only object this generation moves"
+    || halt "the first published object is not ${FAIL_CLOSED_FIRST}: the module that PROVIDES the journal accessor must land before anything that calls it"
 
-  # NO OPERATOR SURFACE MOVES, and that is asserted rather than assumed. A row
-  # naming `cli.py` would mean the surface had changed after all, and the header's
-  # claim that a legacy resume needs no surface change would be false.
+  # THE OPERATOR SURFACE DOES MOVE, and it must be last. `cli.py` gains the
+  # journal read and passes it to the validator, so publishing it before
+  # `state.py` would make `capability validate` call an accessor that does not
+  # exist yet. The else-branch below is kept for a later generation that moves no
+  # surface: an empty declaration is a claim, and it is checked either way.
   if [[ -n "${OPERATOR_SURFACE_LAST}" ]]; then
     [[ "$(field "${MATRIX[$(( ${#MATRIX[@]} - 1 ))]}" 0)" == "${OPERATOR_SURFACE_LAST}" ]] \
       || halt "the last published object is not ${OPERATOR_SURFACE_LAST}: the operator surface must not be reachable before the operation it calls exists"
@@ -1273,7 +1276,7 @@ require_fail_closed_first() {
     done
   fi
 
-  ok "the single object publishes in group L, ${FAIL_CLOSED_FIRST##*/}, and no operator surface moves"
+  ok "${#MATRIX[@]} objects publish in group E, ${FAIL_CLOSED_FIRST##*/} first and ${OPERATOR_SURFACE_LAST##*/} last"
 }
 
 # The coherence-group member this generation does NOT move, checked on both
