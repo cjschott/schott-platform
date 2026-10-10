@@ -138,19 +138,21 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # what a run printed, not what an increment implied.
 #
 # G11-BC-AV added two: the result-authority suite and the Generation-24 installer
-# suite, both portable and unconditional. The totals below are what a measured
-# run printed afterwards, not 140+2 and 165+2 -- the arithmetic above is exactly
-# why that distinction is kept.
+# suite, both portable and unconditional. 142 and 167 are what a measured run
+# PRINTED -- the validator refused its own stale 140 and 165 with "step count
+# mismatch", which is the check that exists because an incremented total was
+# wrong by one at G11-BC-AI. The increment would have agreed this time; it was
+# still measured, because a number that happens to be right is not evidence.
 #
 # G11-BC-AL added three: the legacy-compatibility suite and the Generation-23
 # installer suite are portable and unconditional, and the Stage-3 gate matrix is
 # host-only but still a STEP -- it skips inside itself rather than being skipped
 # here. Both totals are re-measured by a run below rather than incremented.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=140
+  TOTAL_STEPS=142
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=165
+  TOTAL_STEPS=167
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 

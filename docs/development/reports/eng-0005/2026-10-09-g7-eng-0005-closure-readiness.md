@@ -348,6 +348,26 @@ My own scratchpad (206 MB) is outside the repository and the governed stores.
 
 ---
 
+## G-BIS. Reviewer disposition, recorded 2026-10-10 — THIS GATE DID NOT PASS
+
+**F7 reviewer ruling: BLOCKING. G7 operator closure: NOT AUTHORISED.**
+
+The reviewer ruled that ENG-0005 may not close while the released runtime
+validator rejects the production state the released execution path produced, and
+`capability validate` returns `EXIT_DENIED` on any finding. §C below offered my
+assessment that F7 was non-blocking and named this as the reviewer's call; the
+call went the other way.
+
+**Nothing in this report has been rewritten.** The decision in §G stands as what
+I concluded on 2026-10-09, with the information and the judgement I had. It is
+historical evidence of the finding and of the recommendation that was not
+accepted, which is more useful than a document edited to look right afterwards.
+
+The remediation is [G11-BC-AV](2026-10-10-g11-bc-av-f7-remediation.md), which
+leaves this gate re-enterable once Generation 24 is installed.
+
+---
+
 ## G. Decision
 
 **`READY_FOR_OPERATOR_CLOSURE`.**
