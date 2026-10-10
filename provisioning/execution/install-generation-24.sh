@@ -65,7 +65,7 @@ set -Eeuo pipefail
 # aggregate is identical before and after, because nothing in the governed
 # stores is written at all -- only the installed library moves.
 #
-COMMIT="eeffa9d08cb3ba65b08c0b1d1b03198dbb38d33f"
+COMMIT="2bda293bffdd33e8e8b56a672b83579e9cb5c78d"
 
 # The accepted Generation-24 source authority, and the baseline this transaction
 # requires the host to be at.
