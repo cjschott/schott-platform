@@ -1997,7 +1997,7 @@ case "${MODE}" in
   # and, more importantly, what they still REFUSE -- so each is read from the
   # parsed source where it is decided.
   AUTHORITY_STAGING="$(mktemp -d)" || halt "cannot stage the reviewed Generation-24 source"
-  for relative in "${CORRECTION_SOURCES[@]}"; do
+  for relative in "${AUTHORITY_SOURCES[@]}"; do
     mkdir -p "${AUTHORITY_STAGING}/$(dirname "${relative}")"
     git_as_owner show "${COMMIT}:${relative}" > "${AUTHORITY_STAGING}/${relative}" \
       || halt "the reviewed commit carries no ${relative}"
