@@ -207,9 +207,9 @@ my assessment; I am naming the judgement rather than assuming it.
 
 | run | result |
 |---|---|
-| `run-validation.sh --quick` | *see below* |
-| `run-validation.sh` (full) | *see below* |
-| clean clone | *see below* |
+| `run-validation.sh --quick` | **140/140**, 0 FAIL, 0 skips |
+| `run-validation.sh` (full) | **165/165**, 0 FAIL, 0 FAILED, **0 host-only skips** |
+| clean clone of `4b088ce` | **165/165**, 0 FAIL, **18 pinned-checkout skips** |
 | GitHub CI on `8853d51` | **6/6 green** |
 | `fabric validate` (production) | `findings: []` |
 | `capability validate` (production runtime) | **2 findings — F7** |
