@@ -164,40 +164,38 @@ PREPARING=0
 #
 # source | target | mode | operation | gen23-sha256 | gen24-sha256 | group
 #
-# The target already exists at Generation 22, so the single row is a REPLACE.
+# All three targets already exist at Generation 23, so every row is a REPLACE.
 # There is no CREATE, no directory to make, and nothing for rollback to delete: a
-# rollback restores one file to bytes this installer pinned before it moved it.
+# rollback restores three files to bytes this installer pinned before it moved
+# them.
 #
-# ONE ROW, AND THAT IS DERIVED RATHER THAN CONVENIENT. Exactly one installed
-# object differs from the reviewed tree. `cli.py` reads
-# `Correction.actual_occurrence_at` and serialises it, so widening that field to
-# `str | None` makes a legacy resume emit `null` with no change to the surface,
-# and nothing else in the installed tree imports `LATER_SCHEMA_MEMBERS`,
-# `MEMBER_ACTUAL_OCCURRENCE_AT` or `_compare_for_resume`. The import closure
-# check below is what proves it; this comment only says where to look.
+# THREE ROWS, AND THAT IS DERIVED RATHER THAN CONVENIENT. Exactly three installed
+# objects differ from the reviewed tree, and each is there because something
+# imports what the one before it provides:
 #
-# A SINGLE ROW ALSO MEANS THERE IS NO INTERMEDIATE PUBLICATION STATE. Every
-# earlier generation had to argue about which half-published combination an
-# interrupted operator would meet. This one cannot be half-published: the
-# transaction holds either the new bytes or the old ones, and `rollback` restores
-# the one file it moved.
+#   state.py       adds `launch_authorised`; nothing else in the installed tree
+#                  provides it, and nothing imported it before;
+#   inspection.py  changes `validate_store`'s signature and the authority
+#                  predicate it calls;
+#   cli.py         is the only released caller that reads the journal and the
+#                  only one that passes the new argument.
 #
-# THE GROUP, AND WHY IT IS A NEW LETTER.
+# The import-closure check below is what proves the set is closed; this comment
+# only says where to look.
 #
-#   L  ADR-0016 correction shape compatibility.
-#      `provenance.py` owns the closed set of detail members that later ADRs
-#      introduced, the resume comparison that skips the ones a prior record does
-#      not carry, and the return that reports what the record HOLDS.
+# THREE ROWS MEANS INTERMEDIATE PUBLICATION STATES EXIST, and unlike Generation
+# 23 they have to be reasoned about. The publication order makes every one of
+# them a working library:
 #
-#      C is multi-field provenance correction and still means that; P is
-#      post-execution lifecycle conclusion and still means that. Reusing either
-#      would make a coherence report name the wrong architecture, and reusing C
-#      would make `cli.py` -- a C member this generation does not move -- an
-#      undeclared member left behind. So L is added to the names below, for the
-#      same reason C was added at G11-BC-AI.
+#   state.py only              the old behaviour, plus an accessor nobody calls;
+#   state.py + inspection.py   the old behaviour, plus an argument nobody passes;
+#   all three                  the corrected behaviour.
 #
-#      There is no CARRYOVER: L has exactly one member, and it is the row here.
-
+# The reverse is what would break: `cli.py` published before `state.py` would
+# call an attribute that does not exist. That is why FAIL_CLOSED_FIRST is the
+# provider and OPERATOR_SURFACE_LAST is the surface, and why the order is
+# declared and length-checked against the matrix rather than left implicit.
+#
 MATRIX=(
 # --- E: execution-authority evidence (F7, ruled closure-blocking at G7).
 #
@@ -1446,15 +1444,15 @@ require_operation_shape() {
       *) bad "matrix row $(field "${row}" 0) declares the unknown operation ${operation}" ;;
     esac
   done
-  (( replaces == 1 )) \
-    || bad "the matrix holds ${replaces} REPLACE rows, expected 1"
+  (( replaces == 3 )) \
+    || bad "the matrix holds ${replaces} REPLACE rows, expected 3"
   (( creates == 0 )) \
     || bad "the matrix holds ${creates} CREATE rows, expected 0: this generation creates nothing, and ${created_target:-a row} says otherwise"
   local expected_move=$(( EXPECTED_LIBRARY_FILES_TARGET - EXPECTED_LIBRARY_FILES_BASELINE ))
   (( expected_move == creates )) \
     || bad "the declared library count moves by ${expected_move} but the matrix holds ${creates} CREATE row(s)"
   (( FAILURES == 0 )) \
-    && ok "the matrix is 1 REPLACE and 0 CREATE, and the declared count stays at ${EXPECTED_LIBRARY_FILES_BASELINE} because nothing is created"
+    && ok "the matrix is 3 REPLACE and 0 CREATE, and the declared count stays at ${EXPECTED_LIBRARY_FILES_BASELINE} because nothing is created"
 }
 
 # Installable is not execution-ready, and an operator sizing up this
@@ -1689,11 +1687,10 @@ rollback() {
   journal_write ROLLING_BACK
   local row target operation wanted observed removed=0 index
 
-  # Reverse of the publication order, which for one row is the same order. Kept
-  # as a loop rather than collapsed to a single restore: the unwind has to stay
-  # correct for the generation after this one, and a rollback written for exactly
-  # one object is a rollback that silently does half the work the day a second
-  # row appears.
+  # Reverse of the publication order, and with three rows that genuinely
+  # matters: the unwind restores the operator surface first and the provider
+  # last, so no intermediate rollback state has `cli.py` calling an accessor
+  # that is already gone.
   for (( index = ${#MATRIX[@]} - 1; index >= 0; index-- )); do
     row="${MATRIX[index]}"
     target="$(field "${row}" 1)"; operation="$(field "${row}" 3)"
