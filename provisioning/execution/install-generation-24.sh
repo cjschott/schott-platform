@@ -1094,6 +1094,29 @@ def function(tree, name):
     return None
 
 
+def executable_source(tree_src, node):
+    """The function source with its docstring removed.
+
+    WHY THIS EXISTS. An earlier draft of this proof grepped whole function
+    bodies for `ABANDONED`, `CONCLUDED` and `launch-authorisation` -- and
+    failed, because the implementation's own docstrings NAME all three while
+    explaining why none of them is the authority. A proof that reads prose
+    instead of structure is the defect class G7 recorded as F4, and that
+    draft was mine. The docstring comes out before the properties below."""
+    segment = ast.get_source_segment(tree_src, node) or ""
+    body = list(node.body)
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        for quote in ('"""', "'''"):
+            start = segment.find(quote)
+            if start != -1:
+                end = segment.find(quote, start + 3)
+                if end != -1:
+                    return segment[:start] + segment[end + 3:]
+    return segment
+
+
 def names_called(node):
     called = set()
     for item in ast.walk(node):
@@ -1131,12 +1154,13 @@ if accessor is not None:
     check(not (called & forbidden),
           "and writes nothing, repairs nothing and reads no clock")
     # It must compare against LAUNCH_AUTHORIZED specifically.
-    body = ast.get_source_segment(source("tools/capability/execution/state.py"),
-                                  accessor) or ""
-    check("LAUNCH_AUTHORIZED" in body,
+    code = executable_source(source("tools/capability/execution/state.py"),
+                             accessor)
+    check("LAUNCH_AUTHORIZED" in code,
           "and the state it looks for is LAUNCH_AUTHORIZED")
-    check("ABANDONED" not in body and "CONCLUDED" not in body,
-          "and it does not treat a terminal closure as proof of authority")
+    check("ABANDONED" not in code and "CONCLUDED" not in code,
+          "and no terminal closure appears in its executable code, so it "
+          "cannot treat one as proof of authority")
 
 # --- inspection.py: the predicate, and that it still fails closed ----------
 inspection_relative = "tools/capability/inspection.py"
@@ -1173,7 +1197,7 @@ check(emitted,
       "and validate_store still reaches it, so this is not a suppression")
 
 if predicate is not None:
-    predicate_src = ast.get_source_segment(inspection_src, predicate) or ""
+    predicate_src = executable_source(inspection_src, predicate)
     # Exactly three accept paths, and no fourth.
     check("adapter_identity is not None" in predicate_src,
           "the predicate accepts adapter-bound authority")
@@ -1184,16 +1208,18 @@ if predicate is not None:
     returns = [node for node in ast.walk(predicate)
                if isinstance(node, ast.Return)]
     check(len(returns) == 3,
-          f"and it has exactly three returns, not {len(returns)}")
+          f"and it has exactly three accept paths ({len(returns)} returns), "
+          "one per accepted authority shape")
     # It must not accept on the projection, nor on a lifecycle state.
     check("launch-authorisation" not in predicate_src
           and "launch_authorisation" not in predicate_src,
-          "and it does not accept the launch-authorisation PROJECTION, which "
-          "launch.py says is not the authority")
+          "and its executable code never reads the launch-authorisation "
+          "PROJECTION, which launch.py says is not the authority")
     check("CONCLUDED" not in predicate_src and "ABANDONED" not in predicate_src
           and "concluded" not in predicate_src
           and "abandoned" not in predicate_src,
-          "and it does not accept a terminal lifecycle state as proof")
+          "and its executable code names no lifecycle state at all, so it "
+          "cannot accept a terminal one as proof")
 
 # --- cli.py: the operator surface, and that it fails closed ---------------
 cli_relative = "tools/capability/cli.py"
