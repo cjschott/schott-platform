@@ -1201,8 +1201,21 @@ if predicate is not None:
     # Exactly three accept paths, and no fourth.
     check("adapter_identity is not None" in predicate_src,
           "the predicate accepts adapter-bound authority")
-    check("authorised" in predicate_src,
-          "the predicate accepts journalled supervised authority")
+    # USED, NOT MERELY NAMED. The parameter appears in the signature whatever
+    # the body does, so a textual check passed a sabotage that replaced the
+    # membership test with `if False:` and removed the supervised accept path
+    # altogether. The property is that the identity is tested FOR MEMBERSHIP in
+    # the journalled set, so it is read off the comparison.
+    membership = any(
+        isinstance(node, ast.Compare)
+        and any(isinstance(op, ast.In) for op in node.ops)
+        and isinstance(node.left, ast.Name)
+        and any(isinstance(c, ast.Name) and c.id == "authorised"
+                for c in node.comparators)
+        for node in ast.walk(predicate))
+    check(membership,
+          "the predicate accepts journalled supervised authority, by testing "
+          "membership of the journalled set rather than merely naming it")
     check("legacy" in predicate_src,
           "the predicate keeps the legacy treatment exactly as accepted")
     returns = [node for node in ast.walk(predicate)

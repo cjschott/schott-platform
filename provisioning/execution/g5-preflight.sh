@@ -109,7 +109,7 @@ TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d
 GENERATION_DELTA=(
 "tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
 "tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
-"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c,9459b09f2d0545c3a490f21e5223c2cfe95f2f4431132e275b6eae0b4502927f"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c,9459b09f2d0545c3a490f21e5223c2cfe95f2f4431132e275b6eae0b4502927f|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c,9459b09f2d0545c3a490f21e5223c2cfe95f2f4431132e275b6eae0b4502927f,211cf173e780d7031ec78180c9890b046ae0ec70fdcddd9e479eaa3e6fad3095"
 # Generation 10. The package pipeline becomes tree-native: generation 9 staged
 # the package as a regular file while the launch bridge opened the staged path
 # with O_DIRECTORY, so the two ends of that contract could not meet. Note that
@@ -186,7 +186,7 @@ GENERATION_DELTA=(
 # ordinary successful shape.
 #
 # Declared here as pending. NOT INSTALLED.
-"tools/capability/inspection.py|REPLACE|9ddf6cbba02063bc9f0a204d4565f4a11cea0afccd29dcfc8bbe9f4b9bf6a202|adb0e46b03c649895564aabccf95cbd7b2bdd6d4a71bbc94773630691bef1297"
+"tools/capability/inspection.py|REPLACE|9ddf6cbba02063bc9f0a204d4565f4a11cea0afccd29dcfc8bbe9f4b9bf6a202,adb0e46b03c649895564aabccf95cbd7b2bdd6d4a71bbc94773630691bef1297|adb0e46b03c649895564aabccf95cbd7b2bdd6d4a71bbc94773630691bef1297,1c2d27d7f003e70ee4fcc4ede004530b0587dfcd65f7180a59caaa03b2d3b99b"
 #
 # G11-AS. The deployment execution identity authority.
 #
@@ -390,7 +390,7 @@ GENERATION_DELTA=(
 # CINV-000002 reclamation ceremony runs the coordinator CLI out of this
 # checkout, which is why it is executable before that publication.
 "tools/capability/execution/types.py|REPLACE|7dc35046fafdb4e7218739cdbc86deff18ed804b2a37d66a173df58016258b5c,da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae|da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae,6f0c8fa63333cb2880ba195c25fac35f15ad81a9fe82811e112d89f706520f44"
-"tools/capability/execution/state.py|REPLACE|f0b00112db5090f1885149e4eaee0df79ef03fa3c72a5b618d51cf9263486241,88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b|88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b,9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980"
+"tools/capability/execution/state.py|REPLACE|f0b00112db5090f1885149e4eaee0df79ef03fa3c72a5b618d51cf9263486241,88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b,9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980|88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b,9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980,87abff5bdde4ad295f605df2f39bac3a2e028f833dc53e6f2725cd2d457bba53"
 "tools/capability/execution/capacity.py|REPLACE|25bab08cd2f517e28d5a9add58a4d0fff6d6d720cd20df241d4a4003eaa27afb,f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e|f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e,650c05dd3c5ebe3496c468181c7c8770954f79fe73675eec6efa210b01472eb3"
 "tools/capability/execution/admin.py|REPLACE|be899d7a193f6aa5c80d3887109fa07212d757f94503ba994bac104f217633d5,2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606|2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606,b4ea351b3e34e5d4674c72fce14465761eff1eb8444edb7019fcd7d1c0dc7be9"
 "tools/capability/execution/abandonment.py|CREATE|ABSENT|4fb431ca5f74e45aba8cb4ed7f80699e9a16b4743b5c554e992747926f9b1903,7d2f1857f16c54dda9f39658857a0d03b94198af75a04d21cef942bf2a224f24"
@@ -515,6 +515,41 @@ GENERATION_DELTA=(
 # its Generation-23 digest as a successor, exactly as at G11-BC-E and G11-BC-K.
 #
 # Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-23.sh`
+# is the ceremony that publishes it, and it has not been run.
+#
+# --- Generation 24, G11-BC-AV: execution-authority evidence ------------------
+#
+# THREE OBJECTS, DERIVED RATHER THAN ASSUMED, and unlike Generation 23 the
+# operator surface is one of them:
+#
+#   state.py       gains `launch_authorised`, a read-only accessor answering from
+#                  the append-only journal which `CINV` identities ever committed
+#                  LAUNCH_AUTHORIZED. The only new symbol in the generation.
+#   inspection.py  `validate_store` takes that set keyword-only, and the
+#                  authority predicate becomes the three accepted shapes.
+#   cli.py         reads the journal for the validator and still exits
+#                  EXIT_DENIED on any finding.
+#
+# WHAT IT FIXES. The released validator rejected the whole of production --
+# `CINV-000002` and `CINV-000003` both reported
+# `result-without-execution-authority`, with EXIT_DENIED -- because it tested
+# `adapter_identity`, which `coordinator.py` says is always null on the released
+# path, and never read the journal `launch.py` names as the authority.
+#
+# HISTORY, NOT CURRENT STATE. `CONCLUDED` would prove authority; `ABANDONED`
+# would not, because only `reserved` and `launch_authorized` are abandonable.
+# Production's two flagged invocations differ exactly there, which is why the
+# accessor reads the journal's history rather than `all_states`.
+#
+# Each of the three rows moves its installed digest into the baseline list and
+# gains its Generation-24 digest as a successor, exactly as Generation 23 did for
+# `provenance.py`.
+#
+# NO ADR. ADR-0015, ADR-0017 and the first-adapter design §6, §13 and §16 already
+# define supervised launch authority. This is a validator implementation defect
+# measured against that architecture, and no record is migrated or rewritten.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-24.sh`
 # is the ceremony that publishes it, and it has not been run.
 )
 

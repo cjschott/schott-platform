@@ -137,6 +137,11 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # G11-BC-AG and so never reached its own closing count. These two numbers are
 # what a run printed, not what an increment implied.
 #
+# G11-BC-AV added two: the result-authority suite and the Generation-24 installer
+# suite, both portable and unconditional. The totals below are what a measured
+# run printed afterwards, not 140+2 and 165+2 -- the arithmetic above is exactly
+# why that distinction is kept.
+#
 # G11-BC-AL added three: the legacy-compatibility suite and the Generation-23
 # installer suite are portable and unconditional, and the Stage-3 gate matrix is
 # host-only but still a STEP -- it skips inside itself rather than being skipped
@@ -736,6 +741,20 @@ run "Capability provenance multi-field correction" \
 # Portable: fixtures only.
 run "Capability provenance legacy compatibility" \
   bash tests/test-capability-provenance-legacy-compatibility.sh
+
+# G11-BC-AV. The result-authority invariant: a terminal result is sound only
+# when execution authority is PROVABLE, and a fabricated one still fails closed.
+# Portable -- it builds real stores in a temporary directory and takes production's
+# record shapes as templates when they are readable.
+run "Capability execution result authority" \
+  bash tests/test-capability-execution-result-authority.sh
+
+# G11-BC-AV. The Generation-24 installer proves the authority invariant rather
+# than its predecessor's purpose, and 11 sabotages -- each a plausible WRONG fix
+# that would make production validate clean -- are caught by a named property.
+# Static by construction: nothing runs --install. Portable.
+run "Capability execution generation-24 installer" \
+  bash tests/test-capability-execution-generation24-installer.sh
 
 # G11-BC-AL. The Generation-23 installer proves the compatibility rule, and 17
 # sabotages of the reviewed source are each caught by a named property. Static by

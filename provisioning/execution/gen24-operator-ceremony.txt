@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# The Generation-24 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# THIS IS ONE STAGE, AND IT MOVES THREE FILES. No helper object, no readiness
+# authority, no sudoers grant: helper compatibility stays `compatible`, blocking
+# stays 0, supervision_ready stays true, and there is no second ceremony to
+# follow.
+#
+# WHAT IT DEPLOYS. Three objects in one coherence group, E:
+#
+#   tools/capability/execution/state.py     the journal accessor
+#   tools/capability/inspection.py          the authority predicate
+#   tools/capability/cli.py                 the operator surface
+#
+# No CREATE. All three targets already exist at Generation 23.
+#
+# WHAT IT FIXES. F7, which reviewer ruling made closure-blocking at G7. The
+# released validator REJECTED the whole of production:
+#
+#   $ python3 -m tools.capability.cli validate \
+#       --store-root /data/kyri/capability-runtime --expected-uid 1000 --expected-gid 1000
+#   {"findings": ["CINV-000002: result-without-execution-authority",
+#                 "CINV-000003: result-without-execution-authority"],
+#    "status": "reported"}
+#   EXIT=1
+#
+# `capability validate` returns EXIT_DENIED on any finding, so the released
+# validator said the released execution path had produced an unauthorised state.
+#
+# Both invocations have complete authority evidence on disk: a
+# launch-authorisation record, a `launch_authorized` transition in the journal,
+# and a terminal `CRES`. Nothing was ever mis-recorded. The validator's QUESTION
+# was wrong: it tested `adapter_identity is not None`, and `coordinator.py` says
+# at the point of cause why that is always null -- "command_invoke supplies
+# neither an adapter nor a binding". It asked for the one signal the released
+# writer does not produce and ignored the one it does.
+#
+# WHERE THE AUTHORITY LIVES. `launch.py` is normative: "The lifecycle transition
+# is the authority. RESERVED -> LAUNCH_AUTHORIZED is committed first and is the
+# only thing that decides whether a launch was approved. The launch-authorisation
+# record is a *projection* of that decision." So this generation reads the
+# journal, not the projection.
+#
+# THE RULE. A terminal result is sound only when execution authority is PROVABLE
+# from durable evidence, in exactly one of three shapes:
+#
+#   SUPERVISED  the append-only journal contains a committed LAUNCH_AUTHORIZED
+#               transition for that CINV -- the released model;
+#   ADAPTER     the invocation record names the governed execution mechanism --
+#               architecturally permitted, currently latent;
+#   LEGACY      a different schema version, treated exactly as accepted.
+#
+# Anything else is unproven, and unproven still fails closed.
+#
+# HISTORY, NOT CURRENT STATE, and this is the part worth reading twice.
+# `CONCLUDED` would prove authority -- ADR-0017 makes `launch_authorized` the
+# only state that reaches it. `ABANDONED` would NOT: abandonment.py says "only
+# reserved and launch_authorized are abandonable", so an invocation abandoned
+# straight from `reserved` never had a launch authorised. Production's two
+# flagged invocations differ exactly there -- CINV-000003 concluded,
+# CINV-000002 abandoned -- so reading the current state would have authorised a
+# result nobody authorised. Both terminal states are also off the linear order,
+# so no positional read of the enum can decide it either.
+#
+# NO ARCHITECTURE CHANGE. No ADR is added or amended. ADR-0015, ADR-0017 and the
+# first-adapter design §6, §13 and §16 already define supervised launch
+# authority, and `launch.py` already declares which artefact is the authority.
+# This is a validator implementation defect measured against that architecture.
+#
+# WHAT IT DOES NOT DO. No `MAXIMUM_SLOTS` change, no abandonment semantics, no
+# conclusion semantics, no result semantics, no helper object, no entrypoint, no
+# worker, no readiness authority, no container-runtime binding, no sudoers grant,
+# no execution image, no deployment identity, no privileged transition path, and
+# not one byte of Fabric, Trust or invocation history.
+#
+# IT VALIDATES NOTHING AND REPAIRS NOTHING. No CADM is read or written, no
+# invocation changes state, no slot changes hands, no CMUT is spent, and the
+# runtime store is byte-identical across this publication.
+
+# An unexpected transaction is the one condition that must stop everything before
+# any installer runs. It would mean a previous ceremony did not finish, and the
+# correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen24-transaction/journal \
+  || { printf 'STOP: a Generation-24 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen24-transaction \
+  || { printf 'STOP: Generation-24 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 23 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 23 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen23-library-digests.txt
+sudo test -f /root/kyri-gen23-helper-digests.txt
+
+# The governed runtime store, before. This generation must not touch one byte of
+# it, and the same command after must print the same digest. Record both.
+find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+# EXPECTED: 7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-24.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-24.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-24.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-24.sh --verify-installed
+
+find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum
+# EXPECTED: 7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+#           -- the same digest, unchanged.
+
+# THE OBSERVABLE DIFFERENCE, and the one command that decides whether this
+# generation did its job. Before: two findings and EXIT 1. After:
+python3 -m tools.capability.cli validate \
+  --store-root /data/kyri/capability-runtime --expected-uid 1000 --expected-gid 1000
+echo "exit=$?"
+# EXPECTED: {"findings": [], "status": "reported"}  and  exit=0
+
+# EXPECTED AFTER THIS CEREMONY:
+#   capability validate   findings [] exit 0   (WAS: 2 findings, exit 1)
+#   fabric validate       findings []          (UNCHANGED)
+#   helper compatibility  compatible           (UNCHANGED)
+#   helpers blocking      0                    (UNCHANGED)
+#   supervision_ready     true                 (UNCHANGED)
+#   library objects       83 + 1 helper        (UNCHANGED -- there is no CREATE)
+#   CINV sequence         3    CRES sequence 2 (UNCHANGED)
+#   CINV-000001           abandoned            CINV-000002  abandoned (UNCHANGED)
+#   CINV-000003           concluded            (UNCHANGED)
+#   administrative records 7                   (CADM-000001..000007, UNTOUCHED)
+#   cadm-counter          000007               (UNCHANGED -- no CADM is written)
+#   cmut-counter          000000000012         (UNCHANGED -- no mutation spent)
+#   transition records    9                    (UNCHANGED -- read, never written)
+#   occupancy             0 of 2               (UNCHANGED)
+#
+# AN INTERRUPTION CAN LEAVE A HALF-PUBLISHED MATRIX, unlike Generation 23. Three
+# rows means intermediate states exist, and the publication order is what makes
+# each of them a working library: `state.py` first adds an accessor nobody calls
+# yet, `inspection.py` next adds an argument nobody passes yet, and `cli.py` last
+# is what starts using both. If the run is interrupted, do NOT rerun --install.
+# Run:
+#   sudo bash /opt/schott-platform/provisioning/execution/install-generation-24.sh --recover
+# and return its output. Do not delete the transaction directory.
+#
+# AFTER THIS INSTALLATION, F7 is remediated and reviewer gate G7 can be re-entered
+# for the ENG-0005 closure decision. The closure ceremony itself
+# (provisioning/closure/eng-0005-g7-closure-ceremony.txt) is unchanged and still
+# held at its operator boundary.
