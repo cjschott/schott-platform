@@ -358,6 +358,46 @@ def all_states(root: RootDescriptor) -> dict[str, LifecycleState]:
             for cinv, records in _scan(root).items()}
 
 
+def launch_authorised(root: RootDescriptor) -> frozenset[str]:
+    """Every `CINV` whose committed history contains `LAUNCH_AUTHORIZED`.
+
+    **The transition is the authority.** `launch.py` states it: "RESERVED ->
+    LAUNCH_AUTHORIZED is committed first and is the only thing that decides
+    whether a launch was approved. The launch-authorisation record is a
+    *projection* of that decision". So this reads the journal, not the
+    projection, and answers the only question an authority check should ask.
+
+    **HISTORY, NOT CURRENT STATE, and that distinction is the whole point.**
+    Neither terminal state can answer this on its own:
+
+    - `CONCLUDED` does prove it -- ADR-0017 makes `launch_authorized` the only
+      state that reaches concluded;
+    - `ABANDONED` does NOT -- "only reserved and launch_authorized are
+      abandonable", so an invocation abandoned straight from `reserved` never
+      had a launch authorised, and reading its current state as proof would
+      authorise a result nobody authorised.
+
+    Both are also off the linear order by construction, so no positional read of
+    the enum can decide this either.
+
+    The chain is validated exactly as `current_state` validates it -- same
+    `_resolve`, so a gap, a broken `previous` link, a non-canonical record or one
+    declaring a different identity refuses the whole read rather than yielding a
+    partial answer. Read-only: no write, no repair, no clock.
+    """
+    _require_root(root)
+    authorised: set[str] = set()
+    for cinv, records in _scan(root).items():
+        # Validate the chain before believing any member of it.
+        _resolve(records, cinv)
+        for sequence in sorted(records):
+            if (_decode(records[sequence], cinv, sequence)["state"]
+                    == LifecycleState.LAUNCH_AUTHORIZED.value):
+                authorised.add(cinv)
+                break
+    return frozenset(authorised)
+
+
 def _commit(root: RootDescriptor, cinv: str, previous: LifecycleState | None,
             state: LifecycleState, sequence: int) -> None:
     if sequence > _MAXIMUM_SEQUENCE:

@@ -1027,10 +1027,41 @@ def command_inspect(args) -> int:
     return EXIT_SUCCESS if report.status == STATUS_REPORTED else EXIT_DENIED
 
 
+def _supervised_launch_authority(store_root: str) -> frozenset[str] | None:
+    """Every `CINV` the committed journal shows was launch-authorised.
+
+    **Read-only, and fails closed.** The journal lives in the execution
+    namespace, reached through a verified root descriptor; the validator is
+    given the record store. So this opens that namespace the way every other
+    released reader does -- `_anchored`, which opens `O_RDONLY|O_NOFOLLOW` and
+    hands the root to the governed verifier -- and closes it again.
+
+    `None` on any failure, which the validator treats as *nothing is proven*
+    rather than *nothing is wrong*. A store with no execution namespace, an
+    unreadable one, or a journal whose chain does not validate therefore gets
+    exactly the behaviour this verb had before the authority check could read
+    the journal at all: unproven, and reported.
+    """
+    from .execution import state as state_module
+
+    try:
+        execution_root = _anchored(os.path.join(store_root, "execution"))
+    except Exception:  # noqa: BLE001 -- any failure means "not proven"
+        return None
+    try:
+        return state_module.launch_authorised(execution_root)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        execution_root.close()
+
+
 def command_validate(args) -> int:
     """Findings, and nothing repaired."""
     store = _runtime_store(args)
-    report = validate_store(store)
+    report = validate_store(
+        store,
+        launch_authorised=_supervised_launch_authority(args.store_root))
     _emit({"status": report.status, "findings": list(report.findings)})
     sound = report.status == STATUS_REPORTED and not report.findings
     return EXIT_SUCCESS if sound else EXIT_DENIED

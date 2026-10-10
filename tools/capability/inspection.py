@@ -110,14 +110,62 @@ def inspect_records(store, *, kind: Any = None, identifier: Any = None) -> Repor
     return Report(STATUS_REPORTED, (), tuple(found))
 
 
-def validate_store(store) -> Report:
+
+def _execution_authorised(identity: str, adapter_identity: Any, legacy: bool,
+                          authorised: frozenset[str]) -> bool:
+    """Can execution authority for `identity` be PROVEN from durable evidence?
+
+    Exactly three shapes count, and nothing else does:
+
+    1. **SUPERVISED** -- the committed lifecycle journal contains a
+       `LAUNCH_AUTHORIZED` transition for this `CINV`. This is the released
+       model and the authority `launch.py` names: the transition decides, the
+       launch-authorisation record is only a projection of it, and the handoff
+       only a materialisation. It is what every production execution has.
+
+    2. **ADAPTER-BOUND** -- the invocation record names the governed execution
+       mechanism. Architecturally permitted and checked by `_shape` against
+       `ADAPTER_IDENTITY`; currently latent, because no released caller supplies
+       an adapter, which is exactly why asking only this question rejected the
+       whole of production.
+
+    3. **LEGACY** -- retained exactly as accepted. Note that it is unreachable:
+       `_shape` reports any invocation at a different schema version as
+       malformed before this is consulted, so no legacy record arrives here. It
+       is kept rather than removed because removing it is a separate decision
+       from fixing the authority check.
+
+    Everything else is unproven, and unproven fails closed. A fabricated
+    terminal result on an invocation that never left `reserved` has none of the
+    three and is still reported -- which is the property this function exists to
+    keep, not the one it exists to relax.
+    """
+    if adapter_identity is not None:
+        return True
+    if identity in authorised:
+        return True
+    return bool(legacy)
+
+
+def validate_store(store, *,
+                   launch_authorised: Collection[str] | None = None) -> Report:
     """Structural and relational problems, in deterministic order.
 
     Reports; repairs nothing, removes nothing, and rewrites nothing.
+
+    `launch_authorised` is the set of `CINV` identities whose committed
+    lifecycle journal contains a `LAUNCH_AUTHORIZED` transition -- the
+    supervised execution authority, read by the caller from the journal because
+    that namespace is reached through a verified root descriptor and this
+    function is given the record store. `None` means *no journal was readable*,
+    which is treated as *nothing is proven* rather than as *everything is
+    fine*: the check below then behaves exactly as it did before this argument
+    existed, and fails closed.
     """
     findings: list[str] = []
     invocations: dict[str, Mapping[str, Any]] = {}
     by_opaque: dict[str, list[str]] = {}
+    authorised = frozenset(launch_authorised or ())
 
     for record in store.list_records(INVOCATION_KIND):
         problem = _shape(INVOCATION_KIND, record)
@@ -182,7 +230,8 @@ def validate_store(store) -> Report:
             elif any(entry.get("outcome_class") == OUTCOME_CLASS_REFUSED
                      for entry in linked):
                 findings.append(f"{identity}: {FINDING_OUTCOME_MISMATCH}")
-            elif linked and adapter_identity is None and not legacy:
+            elif linked and not _execution_authorised(
+                    identity, adapter_identity, legacy, authorised):
                 # A terminal result for an execution nobody authorised.
                 findings.append(
                     f"{identity}: {FINDING_RESULT_WITHOUT_AUTHORITY}")
