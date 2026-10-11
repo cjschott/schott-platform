@@ -204,7 +204,17 @@ transaction root.
 | static | 870 PASS / 0 FAIL |
 | no-production-escape | 4 PASS / 0 FAIL |
 
-**Fabric, runtime and Trust byte-identical throughout.**
+| `run-validation.sh --quick` | **142/142**, 0 FAIL, 0 skips |
+| `run-validation.sh` (full) | **167/167**, 0 FAIL, **0 host-only skips** |
+| clean clone of `120fe75` | **167/167**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `120fe75` | **6/6 green** |
+
+**Fabric, runtime and Trust byte-identical throughout.** The identity gate runs
+inside the clean clone too, at step 101.
+
+**Generation 24 is confirmed NOT installed**: the installed `inspection.py` is
+not the Generation-24 digest, so the F7 finding is still live on the host. That
+is the expected state of this checkpoint.
 
 ---
 
