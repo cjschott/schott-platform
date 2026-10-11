@@ -609,7 +609,7 @@ require_group_coherence() {
       esac
     done
     if (( at_baseline > 0 && at_target > 0 )); then
-      bad "group ${group} ($(group_name "${group}")) is split: ${at_baseline} object(s) at Generation 23 and ${at_target} at Generation 24"
+      bad "group ${group} ($(group_name "${group}")) is split: ${at_baseline} object(s) at Generation ${PREDECESSOR_GENERATION} and ${at_target} at Generation ${GENERATION}"
       split=$((split + 1))
     fi
   done
@@ -625,11 +625,11 @@ require_repository() {
   head_now="$(git_as_owner rev-parse HEAD)" \
     || halt "the repository at ${REPOSITORY} is not readable as ${REPO_OWNER}"
   git_as_owner cat-file -e "${COMMIT}^{commit}" 2>/dev/null \
-    || halt "the reviewed Generation-24 commit ${COMMIT} is not in this repository"
+    || halt "the reviewed Generation ${GENERATION} commit ${COMMIT} is not in this repository"
   git_as_owner merge-base --is-ancestor "${COMMIT}" HEAD 2>/dev/null \
-    || halt "the reviewed Generation-24 commit ${COMMIT} is not an ancestor of HEAD (${head_now})"
+    || halt "the reviewed Generation ${GENERATION} commit ${COMMIT} is not an ancestor of HEAD (${head_now})"
   git_as_owner merge-base --is-ancestor "${PREDECESSOR_COMMIT}" "${COMMIT}" 2>/dev/null \
-    || halt "the Generation-23 authority is not an ancestor of the Generation-24 authority"
+    || halt "the Generation ${PREDECESSOR_GENERATION} authority is not an ancestor of the Generation ${GENERATION} authority"
   [[ "$(git_as_owner rev-parse --abbrev-ref HEAD)" == "${BRANCH}" ]] \
     || halt "this is not the ${BRANCH} branch"
   residue="$(git_as_owner status --porcelain --untracked-files=all)"
@@ -658,10 +658,10 @@ require_source_digests() {
     [[ "${worktree}" == "${wanted}" ]] \
       || note "${source} in the working tree is ${worktree:-absent}; the ceremony installs the commit object, not this"
   done
-  (( drift == 0 )) || halt "the reviewed commit does not carry the pinned Generation-24 surface"
+  (( drift == 0 )) || halt "the reviewed commit does not carry the pinned Generation ${GENERATION} surface"
   local checked_n
   checked_n="$(matrix_count)"
-  ok "${checked_n} Generation-24 source $(plural "${checked_n}" object objects) match the reviewed commit ${COMMIT}"
+  ok "${checked_n} Generation ${GENERATION} source $(plural "${checked_n}" object objects) match the reviewed commit ${COMMIT}"
 }
 
 # --- the closed closure ----------------------------------------------------
@@ -1009,7 +1009,7 @@ require_target_state() {
   if (( UNKNOWN_COUNT > 0 )); then
     local target
     for target in "${UNKNOWN_TARGETS[@]}"; do
-      bad "UNKNOWN object at ${target}: neither the Generation-23 baseline nor the Generation-24 target"
+      bad "UNKNOWN object at ${target}: neither the Generation ${PREDECESSOR_GENERATION} baseline nor the Generation ${GENERATION} target"
     done
     halt "a target is in an unruled state and requires operator disposition"
   fi
@@ -1693,7 +1693,7 @@ prepare() {
     [[ "$(stat -c '%a' "${prepared}")" == "${mode#0}" ]] \
       || halt "the prepared object for ${target} has the wrong mode"
     sync_path "${prepared}"
-    injected_at staged && halt "injected failure after staging a Generation-24 object"
+    injected_at staged && halt "injected failure after staging a Generation ${GENERATION} object"
   done
   injected_at prepared && halt "injected failure before the PREPARED journal write"
   journal_write PREPARED
@@ -1884,7 +1884,7 @@ recover() {
   if (( UNKNOWN_COUNT > 0 )); then
     local target
     for target in "${UNKNOWN_TARGETS[@]}"; do
-      bad "UNKNOWN bytes at ${target} (neither the Generation-23 baseline nor the Generation-24 target, and not absent)"
+      bad "UNKNOWN bytes at ${target} (neither the Generation ${PREDECESSOR_GENERATION} baseline nor the Generation ${GENERATION} target, and not absent)"
     done
     halt "recovery refuses to guess: unknown bytes require operator disposition"
   fi
@@ -1898,7 +1898,7 @@ recover() {
   if (( BASELINE_COUNT == ${#MATRIX[@]} )); then
     journal_write ROLLED_BACK
     OUTCOME="ROLLED_BACK"
-    ok "recovery: no Generation-24 object was published; the host is at Generation 23"
+    ok "recovery: no Generation ${GENERATION} object was published; the host is at Generation ${PREDECESSOR_GENERATION}"
     return 0
   fi
 
@@ -1927,7 +1927,7 @@ write_evidence() {
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" && -f "${BASELINE_HELPER_EVIDENCE}" ]] \
     || halt "Generation-${PREDECESSOR_GENERATION} evidence vanished during installation"
   if injected_at evidence; then
-    bad "injected failure while writing Generation-24 evidence; Generation 23 stands"
+    bad "injected failure while writing Generation ${GENERATION} evidence; Generation ${PREDECESSOR_GENERATION} stands"
     return 0
   fi
   find "${LIBRARY_ROOT}" -type f -name '*.py' -print0 \
@@ -1937,7 +1937,7 @@ write_evidence() {
     target="$(field "${row}" 1)"
     grep -q "${target}\$" "${TARGET_LIBRARY_EVIDENCE}.writing" \
       || { rm -f "${TARGET_LIBRARY_EVIDENCE}.writing"
-           halt "the Generation-24 evidence does not record ${target}"; }
+           halt "the Generation ${GENERATION} evidence does not record ${target}"; }
   done
   {
     printf 'commit %s\n' "${COMMIT}"
@@ -1976,7 +1976,7 @@ write_evidence() {
   mv -f "${TARGET_HELPER_EVIDENCE}.writing" "${TARGET_HELPER_EVIDENCE}"
   sync_path "${TARGET_LIBRARY_EVIDENCE}"
   sync_path "${TARGET_HELPER_EVIDENCE}"
-  ok "Generation-24 evidence written; Generation-23 evidence preserved"
+  ok "Generation ${GENERATION} evidence written; Generation ${PREDECESSOR_GENERATION} evidence preserved"
 }
 
 # The privileged bytes the installed runtime was built against, read out of
@@ -2067,7 +2067,7 @@ verify_unchanged_surface() {
     is_target "${file}" && continue
     relative="${file#"${LIBRARY_ROOT}"/}"
     if ! accepted="$(accepted_library_digest "${relative}")"; then
-      bad "installed object ${relative} is not accounted for by the Generation-23 evidence or any accepted ceremony, and is not a declared Generation-24 target"
+      bad "installed object ${relative} is not accounted for by the Generation ${PREDECESSOR_GENERATION} evidence or any accepted ceremony, and is not a declared Generation ${GENERATION} target"
       drift=$((drift + 1)); continue
     fi
     read -r authority recorded <<<"${accepted}"
@@ -2120,7 +2120,7 @@ case "${MODE}" in
   # lost the boundary. The properties that matter are what the closed sets HOLD
   # and, more importantly, what they still REFUSE -- so each is read from the
   # parsed source where it is decided.
-  AUTHORITY_STAGING="$(mktemp -d)" || halt "cannot stage the reviewed Generation-24 source"
+  AUTHORITY_STAGING="$(mktemp -d)" || halt "cannot stage the reviewed Generation ${GENERATION} source"
   for relative in "${AUTHORITY_SOURCES[@]}"; do
     mkdir -p "${AUTHORITY_STAGING}/$(dirname "${relative}")"
     git_as_owner show "${COMMIT}:${relative}" > "${AUTHORITY_STAGING}/${relative}" \
@@ -2218,7 +2218,8 @@ case "${MODE}" in
 
   note "no installed path was read for state and none was written"
   printf '\n'
-  printf 'Generation 24 source verification: all checks passed. %s object(s) would change (%s REPLACE, %s CREATE).\n' \
+  printf 'Generation %s source verification: all checks passed. %s object(s) would change (%s REPLACE, %s CREATE).\n' \
+    "${GENERATION}" \
     "$(matrix_count)" "$(matrix_count_of REPLACE)" "$(matrix_count_of CREATE)"
   exit 0
   ;;
@@ -2235,7 +2236,7 @@ case "${MODE}" in
 
   classify_all
   if (( TARGET_COUNT == ${#MATRIX[@]} )); then
-    note "all $(matrix_count) targets are already at Generation 23; use --verify-installed to audit the installed generation"
+    note "all $(matrix_count) targets are already at Generation ${PREDECESSOR_GENERATION}; use --verify-installed to audit the installed generation"
     require_gates_closed
     verify_excluded_absent
     require_group_coherence
