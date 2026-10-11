@@ -67,9 +67,27 @@ set -Eeuo pipefail
 #
 COMMIT="2bda293bffdd33e8e8b56a672b83579e9cb5c78d"
 
+# THE TWO GENERATION ROLES, DECLARED ONCE.
+#
+# Every diagnostic, path and identifier below is derived from these rather than
+# written out, because G11-BC-AW found the alternative: this installer was
+# committed creating `gen23-` transaction IDs and announcing "Generation 23 is
+# already installed", and it carried its predecessor's commit under a
+# `GEN22_COMMIT` name whose message had been reworded to claim it checked
+# Generation 23. Prose and values drifted apart because each was maintained by
+# hand. Two constants cannot.
+GENERATION=24
+PREDECESSOR_GENERATION=23
+# This file, for the identity checks that read their own source.
+SELF="${BASH_SOURCE[0]}"
+
 # The accepted Generation-24 source authority, and the baseline this transaction
 # requires the host to be at.
-GEN22_COMMIT="646b12799a0b5438d1d346f56a9a9a9f9e65299a"
+# The PREDECESSOR's reviewed authority -- Generation 23's commit, not
+# Generation 22's. It was committed here as Generation 22's while the check that
+# reads it had been reworded to say "the Generation-23 authority", so the message
+# and the value disagreed. Named for its role now, so it cannot.
+PREDECESSOR_COMMIT="736c3716c037fabd9fca7c6b8eb97dc39de55c95"
 
 BRANCH="arch/eng-0005-execution-transition"
 REPOSITORY="/opt/schott-platform"
@@ -85,11 +103,11 @@ LIBEXEC_ROOT="/usr/libexec"
 # installer from its predecessor and leaving the predecessor's path in place is
 # what made the first real Generation-14 attempt halt against a COMMITTED
 # journal belonging to a transaction that had already finished.
-TRANSACTION_ROOT="/root/kyri-gen24-transaction"
-BASELINE_LIBRARY_EVIDENCE="/root/kyri-gen23-library-digests.txt"
-BASELINE_HELPER_EVIDENCE="/root/kyri-gen23-helper-digests.txt"
-GEN24_LIBRARY_EVIDENCE="/root/kyri-gen24-library-digests.txt"
-GEN24_HELPER_EVIDENCE="/root/kyri-gen24-helper-digests.txt"
+TRANSACTION_ROOT="/root/kyri-gen${GENERATION}-transaction"
+BASELINE_LIBRARY_EVIDENCE="/root/kyri-gen${PREDECESSOR_GENERATION}-library-digests.txt"
+BASELINE_HELPER_EVIDENCE="/root/kyri-gen${PREDECESSOR_GENERATION}-helper-digests.txt"
+TARGET_LIBRARY_EVIDENCE="/root/kyri-gen${GENERATION}-library-digests.txt"
+TARGET_HELPER_EVIDENCE="/root/kyri-gen${GENERATION}-helper-digests.txt"
 
 # Both grants. Neither may exist while this runs, and neither is written by it.
 SUDOERS_DIR="/etc/sudoers.d"
@@ -135,8 +153,8 @@ if [[ -n "${FIXTURE}" ]]; then
   TRANSACTION_ROOT="${FIXTURE}${TRANSACTION_ROOT}"
   BASELINE_LIBRARY_EVIDENCE="${FIXTURE}${BASELINE_LIBRARY_EVIDENCE}"
   BASELINE_HELPER_EVIDENCE="${FIXTURE}${BASELINE_HELPER_EVIDENCE}"
-  GEN24_LIBRARY_EVIDENCE="${FIXTURE}${GEN24_LIBRARY_EVIDENCE}"
-  GEN24_HELPER_EVIDENCE="${FIXTURE}${GEN24_HELPER_EVIDENCE}"
+  TARGET_LIBRARY_EVIDENCE="${FIXTURE}${TARGET_LIBRARY_EVIDENCE}"
+  TARGET_HELPER_EVIDENCE="${FIXTURE}${TARGET_HELPER_EVIDENCE}"
   SUDOERS_DIR="${FIXTURE}${SUDOERS_DIR}"
   SUDOERS="${FIXTURE}${SUDOERS}"
   VERIFY_SUDOERS="${FIXTURE}${VERIFY_SUDOERS}"
@@ -148,8 +166,8 @@ if [[ -n "${FIXTURE}" ]]; then
 fi
 
 JOURNAL="${TRANSACTION_ROOT}/journal"
-PREPARED_SUFFIX=".kyri-gen24.new"
-BACKUP_SUFFIX=".kyri-gen24.gen23"
+PREPARED_SUFFIX=".kyri-gen${GENERATION}.new"
+BACKUP_SUFFIX=".kyri-gen${GENERATION}.gen${PREDECESSOR_GENERATION}"
 
 FAILURES=0
 OUTCOME=""
@@ -234,6 +252,72 @@ declared_outside_closure() {
 # this generation only moves L. The names outlive the generation that
 # introduced them, and a coherence failure naming "unknown group V" would be a
 # worse report than one naming what V is.
+# WHY THIS EXISTS (G11-BC-AW). This installer was committed creating `gen23-`
+# transaction IDs, announcing "Generation 23 is already installed", and carrying
+# its predecessor's commit under a `GEN22_COMMIT` name whose message had been
+# reworded to claim it checked Generation 23. `--verify-source` passed and a
+# 51-assertion suite passed, because every one of those is a STRING and nothing
+# tied the strings to the generation being installed.
+#
+# These four roles are now checked against the two declared constants, in every
+# mode, before anything else runs. A generation whose identity disagrees with
+# itself refuses rather than installs.
+require_generation_identity() {
+  local expected_transaction="gen${GENERATION}-"
+
+  # 1. THE TRANSACTION PREFIX IS THE GENERATION BEING INSTALLED.
+  [[ "${GENERATION}" =~ ^[0-9]+$ ]] \
+    || halt "GENERATION is '${GENERATION}', which is not a generation number"
+  [[ "${PREDECESSOR_GENERATION}" =~ ^[0-9]+$ ]] \
+    || halt "PREDECESSOR_GENERATION is '${PREDECESSOR_GENERATION}', which is not a generation number"
+  (( GENERATION == PREDECESSOR_GENERATION + 1 )) \
+    || halt "this installer claims to publish Generation ${GENERATION} on top of Generation ${PREDECESSOR_GENERATION}: a generation installs on its immediate predecessor"
+
+  # The identifier is only assigned inside --install, so the property is checked
+  # against the DERIVATION as well as the value: a literal prefix in the
+  # assignment is exactly what went wrong, so a literal prefix is refused.
+  # Assembled from parts: a single-quoted pattern containing ${...} is exactly
+  # the shape the repository's ShellCheck refuses, and a check that searches for
+  # a variable expression should not read as one.
+  local derived_pattern assignment
+  derived_pattern='TRANSACTION_ID="gen'"\${"'GENERATION}-'
+  assignment="$(grep -cF "${derived_pattern}" "${SELF}")"
+  (( assignment >= 1 )) \
+    || halt "the transaction identifier is not derived from GENERATION"
+  (( $(grep -cE 'TRANSACTION_ID="gen[0-9]' "${SELF}") == 0 )) \
+    || halt "the transaction identifier carries a literal generation prefix"
+  if [[ -n "${TRANSACTION_ID}" ]]; then
+    [[ "${TRANSACTION_ID}" == "${expected_transaction}"* ]] \
+      || halt "the transaction identifier ${TRANSACTION_ID} is not this generation's (${expected_transaction}...)"
+  fi
+
+  # 2. THE PREDECESSOR GENERATION IS THE EVIDENCE BASELINE.
+  [[ "${BASELINE_LIBRARY_EVIDENCE}" == *"gen${PREDECESSOR_GENERATION}-"* ]] \
+    || halt "the baseline library evidence ${BASELINE_LIBRARY_EVIDENCE} is not Generation ${PREDECESSOR_GENERATION}'s"
+  [[ "${BASELINE_HELPER_EVIDENCE}" == *"gen${PREDECESSOR_GENERATION}-"* ]] \
+    || halt "the baseline helper evidence ${BASELINE_HELPER_EVIDENCE} is not Generation ${PREDECESSOR_GENERATION}'s"
+
+  # 3. THE TARGET GENERATION IS THIS INSTALLER'S OWN.
+  [[ "${TARGET_LIBRARY_EVIDENCE}" == *"gen${GENERATION}-"* ]] \
+    || halt "the target library evidence ${TARGET_LIBRARY_EVIDENCE} is not Generation ${GENERATION}'s"
+  [[ "${TARGET_HELPER_EVIDENCE}" == *"gen${GENERATION}-"* ]] \
+    || halt "the target helper evidence ${TARGET_HELPER_EVIDENCE} is not Generation ${GENERATION}'s"
+  [[ "${TRANSACTION_ROOT}" == *"gen${GENERATION}-"* ]] \
+    || halt "the transaction root ${TRANSACTION_ROOT} is not Generation ${GENERATION}'s"
+  [[ "${SELF}" == *"install-generation-${GENERATION}.sh" ]] \
+    || halt "this file is ${SELF##*/} but declares GENERATION=${GENERATION}"
+
+  # 4. THE DIAGNOSTICS AGREE WITH THOSE ROLES. The strings are what drifted, so
+  #    they are read back out of this file: no executable diagnostic may name a
+  #    generation literally where it means one of the two roles. Comments are
+  #    exempt, because the history genuinely names Generation 22 and 15.
+  local stale
+  stale="$(grep -nE "^[^#]*(printf|halt |bad |ok |note ).*Generation[ -]2[0-9]" "${SELF}" || true)"
+  [[ -z "${stale}" ]] \
+    || halt "an executable diagnostic names a generation literally instead of deriving it: ${stale}"
+  ok "generation identity: publishing ${GENERATION} over ${PREDECESSOR_GENERATION}, transaction ${expected_transaction}..., and no executable diagnostic names a generation literally"
+}
+
 group_name() {
   case "$1" in
     V) printf 'the runtime-side verification surface' ;;
@@ -353,7 +437,7 @@ is_target() {
 # Test-only failure injection, in this generation's own namespace. Impossible
 # without --fixture, so a production run cannot reach any of it.
 injected_at() {
-  [[ -n "${FIXTURE}" && "${KYRI_GEN24_FAIL_AT:-}" == "$1" ]]
+  [[ -n "${FIXTURE}" && "${KYRI_GEN${GENERATION}_FAIL_AT:-}" == "$1" ]]
 }
 digest_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
@@ -416,8 +500,8 @@ unwind_preparation() {
     rmdir "${TRANSACTION_ROOT}" 2>/dev/null || true
   fi
 
-  printf 'unwound  preparation: %d staged object(s) removed; the host is at Generation 22\n' \
-    "${removed}" >&2
+  printf 'unwound  preparation: %d staged object(s) removed; the host is at Generation %s\n' \
+    "${removed}" "${PREDECESSOR_GENERATION}" >&2
 }
 
 cleanup_on_exit() {
@@ -445,7 +529,7 @@ journal_write() {
   {
     printf 'transaction=%s\n' "${TRANSACTION_ID}"
     printf 'commit=%s\n' "${COMMIT}"
-    printf 'baseline_commit=%s\n' "${GEN22_COMMIT}"
+    printf 'baseline_commit=%s\n' "${PREDECESSOR_COMMIT}"
     printf 'state=%s\n' "${state}"
     printf 'library_root=%s\n' "${LIBRARY_ROOT}"
     local row index=0
@@ -544,7 +628,7 @@ require_repository() {
     || halt "the reviewed Generation-24 commit ${COMMIT} is not in this repository"
   git_as_owner merge-base --is-ancestor "${COMMIT}" HEAD 2>/dev/null \
     || halt "the reviewed Generation-24 commit ${COMMIT} is not an ancestor of HEAD (${head_now})"
-  git_as_owner merge-base --is-ancestor "${GEN22_COMMIT}" "${COMMIT}" 2>/dev/null \
+  git_as_owner merge-base --is-ancestor "${PREDECESSOR_COMMIT}" "${COMMIT}" 2>/dev/null \
     || halt "the Generation-23 authority is not an ancestor of the Generation-24 authority"
   [[ "$(git_as_owner rev-parse --abbrev-ref HEAD)" == "${BRANCH}" ]] \
     || halt "this is not the ${BRANCH} branch"
@@ -641,7 +725,7 @@ require_closed_closure() {
     declared+="${target#"${LIBRARY_ROOT}"/}"$'\n'
   done
 
-  # What the predecessor provides, decided from the reviewed Generation-22
+  # What the predecessor provides, decided from the reviewed predecessor
   # AUTHORITY rather than from the host. `--verify-source` answers "is this
   # package sound?" before anything is installed, so a gate that consulted the
   # library root would be answering a different question -- and would report a
@@ -660,7 +744,7 @@ require_closed_closure() {
         ;;
       *) source="${candidate}" ;;
     esac
-    if git_as_owner cat-file -e "${GEN22_COMMIT}:${source}" 2>/dev/null; then
+    if git_as_owner cat-file -e "${PREDECESSOR_COMMIT}:${source}" 2>/dev/null; then
       carried+="${candidate}"$'\n'
     fi
   done < <(printf '%s\n' "${computed}")
@@ -754,9 +838,9 @@ helper_ceremony_library_creates() {
 # THE ACCEPTED SET FOR AN OBJECT IS:
 #
 #   the ONE state it holds before this generation installs
-#     -- the last ceremony accepted BEFORE Generation 22 that governs it,
-#        or Generation-22 evidence when none does
-#   PLUS the target of every ceremony accepted AFTER Generation 22 that governs it
+#     -- the last ceremony accepted BEFORE the predecessor generation that
+#        governs it, or the predecessor's evidence when none does
+#   PLUS the target of every ceremony accepted AFTER it that governs it
 #
 # EVERY HELPER CEREMONY IS "BEFORE", AND THAT IS THE WHOLE DIFFERENCE FROM
 # GENERATION 15'S COPY OF THIS LIST. G11-BB was still pending when Generation 15
@@ -768,7 +852,7 @@ helper_ceremony_library_creates() {
 # with the earlier G11-AX states now superseded and correctly refused.
 #
 # The AFTER list is EMPTY, and that is a claim this ceremony is making: no
-# accepted ceremony is scheduled to run after Generation 22. If one is later
+# accepted ceremony is scheduled to run after the predecessor. If one is later
 # planned it must be added here before this generation installs, or the host
 # will report its objects as drift.
 #
@@ -878,12 +962,12 @@ require_baseline() {
   helpers_present="$(helper_ceremony_library_creates)"
   expected_baseline=$((EXPECTED_LIBRARY_FILES_BASELINE + helpers_present))
   [[ "${count}" -eq "${expected_baseline}" ]] \
-    || halt "the installed library holds ${count} objects, expected the Generation-22 ${EXPECTED_LIBRARY_FILES_BASELINE} plus ${helpers_present} published helper module(s)"
+    || halt "the installed library holds ${count} objects, expected the Generation-${PREDECESSOR_GENERATION} ${EXPECTED_LIBRARY_FILES_BASELINE} plus ${helpers_present} published helper module(s)"
 
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" ]] \
-    || halt "the Generation-22 library evidence at ${BASELINE_LIBRARY_EVIDENCE} is missing"
+    || halt "the Generation-${PREDECESSOR_GENERATION} library evidence at ${BASELINE_LIBRARY_EVIDENCE} is missing"
   [[ -f "${BASELINE_HELPER_EVIDENCE}" ]] \
-    || halt "the Generation-22 helper evidence at ${BASELINE_HELPER_EVIDENCE} is missing"
+    || halt "the Generation-${PREDECESSOR_GENERATION} helper evidence at ${BASELINE_HELPER_EVIDENCE} is missing"
 
   local drift=0 accepted authority recorded observed file relative
   while IFS= read -r file; do
@@ -891,9 +975,9 @@ require_baseline() {
 
     # This is not "ignore helper files". The overlay is read from an accepted
     # ceremony's own matrix, one path at a time; an object no ceremony declares
-    # is still judged against Generation-22 evidence and still refuses.
+    # is still judged against Generation-${PREDECESSOR_GENERATION} evidence and still refuses.
     if ! accepted="$(accepted_library_digest "${relative}")"; then
-      bad "installed object ${relative} is absent from the Generation-22 evidence"
+      bad "installed object ${relative} is absent from the Generation-${PREDECESSOR_GENERATION} evidence"
       drift=$((drift + 1)); continue
     fi
     read -r authority recorded <<<"${accepted}"
@@ -913,11 +997,11 @@ require_baseline() {
   while IFS= read -r recorded_relative; do
     [[ -n "${recorded_relative}" ]] || continue
     [[ -f "${LIBRARY_ROOT}/${recorded_relative}" ]] \
-      || { bad "the Generation-22 evidence records ${recorded_relative}, which is not installed"; drift=$((drift + 1)); }
+      || { bad "the Generation-${PREDECESSOR_GENERATION} evidence records ${recorded_relative}, which is not installed"; drift=$((drift + 1)); }
   done < <(sed -n 's#^[0-9a-f]\{64\}  /usr/lib/kyri/python/##p' "${BASELINE_LIBRARY_EVIDENCE}")
 
-  (( drift == 0 )) || halt "the installed runtime is not the accepted Generation-22 baseline"
-  ok "the installed runtime is exactly the accepted Generation-22 baseline (${count} objects)"
+  (( drift == 0 )) || halt "the installed runtime is not the accepted Generation-${PREDECESSOR_GENERATION} baseline"
+  ok "the installed runtime is exactly the accepted Generation-${PREDECESSOR_GENERATION} baseline (${count} objects)"
 }
 
 require_target_state() {
@@ -956,7 +1040,7 @@ report_transaction_residue() {
   if (( extra == 0 )); then
     ok "no transaction artefacts remain"
   else
-    note "${extra} transaction artefact(s) remain from a cleanup that did not finish; Generation 22 is installed and unaffected. Remove them with --recover or by hand."
+    note "${extra} transaction artefact(s) remain from a cleanup that did not finish; Generation ${PREDECESSOR_GENERATION} is installed and unaffected. Remove them with --recover or by hand."
   fi
 }
 
@@ -1506,17 +1590,17 @@ require_operation_shape() {
 report_execution_readiness() {
   local ready=1
   if [[ ! -f "${COORDINATOR_IDENTITY}" ]]; then
-    note "the coordinator identity authority is not installed; Generation 22 installs without it"
+    note "the coordinator identity authority is not installed; Generation ${PREDECESSOR_GENERATION} installs without it"
     ready=0
   fi
   if [[ ! -f "${EXECUTION_IDENTITY}" ]]; then
-    note "the execution identity authority is not installed; Generation 22 installs without it"
+    note "the execution identity authority is not installed; Generation ${PREDECESSOR_GENERATION} installs without it"
     ready=0
   fi
   if (( ready == 1 )); then
     note "both deployment identity authorities are installed"
   else
-    note "this host will be at Generation 22 and NOT execution-ready: the deployment identity ceremony is a separate one, and the runtime refuses execution until it has run"
+    note "this host will be at Generation ${PREDECESSOR_GENERATION} and NOT execution-ready: the deployment identity ceremony is a separate one, and the runtime refuses execution until it has run"
   fi
 
   # This transaction does NOT change execution readiness, and saying so is the
@@ -1645,7 +1729,7 @@ commit_targets() {
     baseline="$(field "${row}" 4)"; wanted="$(field "${row}" 5)"
     prepared="${target}${PREPARED_SUFFIX}"
 
-    if [[ -n "${FIXTURE}" && "${KYRI_GEN24_FAIL_AT:-}" == "${index}" ]]; then
+    if [[ -n "${FIXTURE}" && "${KYRI_GEN${GENERATION}_FAIL_AT:-}" == "${index}" ]]; then
       PROGRESS["${index}"]="INJECTED_FAILURE"
       journal_write COMMITTING
       rollback "injected failure at commit position ${index}"
@@ -1713,7 +1797,7 @@ commit_targets() {
   # the journal's own say-so.
   journal_write COMMITTED
   injected_at postcommit \
-    && bad "injected failure immediately after COMMITTED; Generation 22 stands"
+    && bad "injected failure immediately after COMMITTED; Generation ${PREDECESSOR_GENERATION} stands"
   OUTCOME="COMMITTED"
   local published_n replaced_n created_n
   published_n="$(matrix_count)"
@@ -1782,7 +1866,7 @@ rollback() {
     OUTCOME="ROLLED_BACK"
     local rolled_n
     rolled_n="$(matrix_count)"
-    ok "ROLLBACK complete: ${rolled_n} $(plural "${rolled_n}" target targets) back at Generation 22 (${removed} restored or removed)"
+    ok "ROLLBACK complete: ${rolled_n} $(plural "${rolled_n}" target targets) back at Generation ${PREDECESSOR_GENERATION} (${removed} restored or removed)"
   else
     journal_write ROLLING_BACK
     bad "ROLLBACK INCOMPLETE: BASELINE=${BASELINE_COUNT} TARGET=${TARGET_COUNT} UNKNOWN=${UNKNOWN_COUNT}"
@@ -1808,7 +1892,7 @@ recover() {
   if (( TARGET_COUNT == ${#MATRIX[@]} )); then
     journal_write COMMITTED
     OUTCOME="COMMITTED"
-    ok "recovery: the complete Generation-22 set is already installed"
+    ok "recovery: the complete Generation-${PREDECESSOR_GENERATION} set is already installed"
     return 0
   fi
   if (( BASELINE_COUNT == ${#MATRIX[@]} )); then
@@ -1841,23 +1925,23 @@ recover() {
 # --- evidence --------------------------------------------------------------
 write_evidence() {
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" && -f "${BASELINE_HELPER_EVIDENCE}" ]] \
-    || halt "Generation-22 evidence vanished during installation"
+    || halt "Generation-${PREDECESSOR_GENERATION} evidence vanished during installation"
   if injected_at evidence; then
     bad "injected failure while writing Generation-24 evidence; Generation 23 stands"
     return 0
   fi
   find "${LIBRARY_ROOT}" -type f -name '*.py' -print0 \
-    | sort -z | xargs -0 sha256sum > "${GEN24_LIBRARY_EVIDENCE}.writing"
+    | sort -z | xargs -0 sha256sum > "${TARGET_LIBRARY_EVIDENCE}.writing"
   local row target
   for row in "${MATRIX[@]}"; do
     target="$(field "${row}" 1)"
-    grep -q "${target}\$" "${GEN24_LIBRARY_EVIDENCE}.writing" \
-      || { rm -f "${GEN24_LIBRARY_EVIDENCE}.writing"
+    grep -q "${target}\$" "${TARGET_LIBRARY_EVIDENCE}.writing" \
+      || { rm -f "${TARGET_LIBRARY_EVIDENCE}.writing"
            halt "the Generation-24 evidence does not record ${target}"; }
   done
   {
     printf 'commit %s\n' "${COMMIT}"
-    printf 'baseline_commit %s\n' "${GEN22_COMMIT}"
+    printf 'baseline_commit %s\n' "${PREDECESSOR_COMMIT}"
     printf 'predecessor generation 19\n'
     printf 'transaction %s\n' "${TRANSACTION_ID}"
     printf 'state COMMITTED\n'
@@ -1884,14 +1968,14 @@ write_evidence() {
     printf 'expects_execution_identity %s\n' "/etc/kyri/execution-identity.json"
     expected_helpers || halt "the installed runtime declares no helper expectation"
     printf 'library_objects %s\n' "$(find "${LIBRARY_ROOT}" -type f -name '*.py' | wc -l)"
-  } > "${GEN24_HELPER_EVIDENCE}.writing"
-  chmod 0400 "${GEN24_LIBRARY_EVIDENCE}.writing" "${GEN24_HELPER_EVIDENCE}.writing"
-  sync_path "${GEN24_LIBRARY_EVIDENCE}.writing"
-  sync_path "${GEN24_HELPER_EVIDENCE}.writing"
-  mv -f "${GEN24_LIBRARY_EVIDENCE}.writing" "${GEN24_LIBRARY_EVIDENCE}"
-  mv -f "${GEN24_HELPER_EVIDENCE}.writing" "${GEN24_HELPER_EVIDENCE}"
-  sync_path "${GEN24_LIBRARY_EVIDENCE}"
-  sync_path "${GEN24_HELPER_EVIDENCE}"
+  } > "${TARGET_HELPER_EVIDENCE}.writing"
+  chmod 0400 "${TARGET_LIBRARY_EVIDENCE}.writing" "${TARGET_HELPER_EVIDENCE}.writing"
+  sync_path "${TARGET_LIBRARY_EVIDENCE}.writing"
+  sync_path "${TARGET_HELPER_EVIDENCE}.writing"
+  mv -f "${TARGET_LIBRARY_EVIDENCE}.writing" "${TARGET_LIBRARY_EVIDENCE}"
+  mv -f "${TARGET_HELPER_EVIDENCE}.writing" "${TARGET_HELPER_EVIDENCE}"
+  sync_path "${TARGET_LIBRARY_EVIDENCE}"
+  sync_path "${TARGET_HELPER_EVIDENCE}"
   ok "Generation-24 evidence written; Generation-23 evidence preserved"
 }
 
@@ -1917,7 +2001,7 @@ EXPECTPY
 cleanup_transaction_artifacts() {
   local row target
   if injected_at cleanup; then
-    bad "injected cleanup failure after COMMITTED; Generation 22 remains installed"
+    bad "injected cleanup failure after COMMITTED; Generation ${PREDECESSOR_GENERATION} remains installed"
     return 0
   fi
   for row in "${MATRIX[@]}"; do
@@ -1949,9 +2033,9 @@ verify_installed_set() {
   helpers_present="$(helper_ceremony_library_creates)"
   expected_target=$((EXPECTED_LIBRARY_FILES_TARGET + helpers_present))
   [[ "${count}" -eq "${expected_target}" ]] \
-    || bad "the installed library holds ${count} objects, expected the Generation-22 ${EXPECTED_LIBRARY_FILES_TARGET} plus ${helpers_present} published helper module(s)"
+    || bad "the installed library holds ${count} objects, expected the Generation-${PREDECESSOR_GENERATION} ${EXPECTED_LIBRARY_FILES_TARGET} plus ${helpers_present} published helper module(s)"
   (( FAILURES == 0 )) \
-    && ok "all $(matrix_count) Generation-22 changed objects correspond to the reviewed commit ${COMMIT}"
+    && ok "all $(matrix_count) Generation-${GENERATION} changed objects correspond to the reviewed commit ${COMMIT}"
 }
 
 verify_excluded_absent() {
@@ -1971,7 +2055,7 @@ verify_excluded_absent() {
 # the created targets are legitimately absent from the predecessor evidence and
 # are the only objects permitted to be.
 #
-# The accepted authority is Generation 22 PLUS what accepted ceremonies
+# The accepted authority is the predecessor generation PLUS what accepted ceremonies
 # published after it -- the same overlay model `require_baseline` uses, through
 # the same reader. Carrying a second, overlay-blind copy of this comparison is
 # what refused a COMMITTED Generation-22 transaction: the four G11-AX
@@ -1992,7 +2076,7 @@ verify_unchanged_surface() {
     if [[ "${authority}" == "ceremony" ]]; then
       bad "${relative} changed: ${observed} but the accepted helper ceremon(ies) record ${recorded}"
     else
-      bad "${relative} changed: ${observed} but Generation-22 evidence records ${recorded}"
+      bad "${relative} changed: ${observed} but Generation-${PREDECESSOR_GENERATION} evidence records ${recorded}"
     fi
     drift=$((drift + 1))
   done < <(find "${LIBRARY_ROOT}" -type f -name '*.py' | sort)
@@ -2003,11 +2087,11 @@ verify_unchanged_surface() {
   while IFS= read -r recorded_relative; do
     [[ -n "${recorded_relative}" ]] || continue
     [[ -f "${LIBRARY_ROOT}/${recorded_relative}" ]] \
-      || { bad "the Generation-22 evidence records ${recorded_relative}, which is no longer installed"; drift=$((drift + 1)); }
+      || { bad "the Generation-${PREDECESSOR_GENERATION} evidence records ${recorded_relative}, which is no longer installed"; drift=$((drift + 1)); }
   done < <(sed -n 's#^[0-9a-f]\{64\}  /usr/lib/kyri/python/##p' "${BASELINE_LIBRARY_EVIDENCE}")
 
   (( drift == 0 )) \
-    && ok "every carried-over runtime object is exactly its accepted predecessor -- Generation 22, plus the $(helper_ceremony_library_rows "${CEREMONIES_BEFORE_THIS_GENERATION[@]}" "${CEREMONIES_AFTER_THIS_GENERATION[@]}" | wc -l) object(s) an accepted ceremony published after it -- and nothing was removed"
+    && ok "every carried-over runtime object is exactly its accepted predecessor -- Generation ${PREDECESSOR_GENERATION}, plus the $(helper_ceremony_library_rows "${CEREMONIES_BEFORE_THIS_GENERATION[@]}" "${CEREMONIES_AFTER_THIS_GENERATION[@]}" | wc -l) object(s) an accepted ceremony published after it -- and nothing was removed"
 }
 
 # ===========================================================================
@@ -2026,6 +2110,7 @@ case "${MODE}" in
   require_fail_closed_first
   require_carryover_unmoved
 
+  require_generation_identity
   require_group_names_known
 
   # THE ARCHITECTURE THIS GENERATION EXISTS TO DEPLOY, PROVED FROM THE REVIEWED
@@ -2156,7 +2241,7 @@ case "${MODE}" in
     require_group_coherence
     note "authority namespace fingerprint: $(authority_fingerprint)"
     printf '\n'
-    printf 'Generation 23 / supervised execution runtime verify: already installed.\n'
+    printf 'Generation %s / supervised execution runtime verify: already installed.\n' "${GENERATION}"
     exit 0
   fi
 
@@ -2179,7 +2264,7 @@ case "${MODE}" in
   report_execution_readiness
 
   if (( BASELINE_COUNT == ${#MATRIX[@]} )); then
-    ok "the host is at Generation 22 and ready for the Generation-23 installation: $(matrix_count_of REPLACE) REPLACE, $(matrix_count_of CREATE) CREATE, $(matrix_count) changed objects across $(matrix_groups | wc -l) coherence groups, object count ${EXPECTED_LIBRARY_FILES_BASELINE} -> ${EXPECTED_LIBRARY_FILES_TARGET}"
+    ok "the host is at Generation ${PREDECESSOR_GENERATION} and ready for the Generation-${GENERATION} installation: $(matrix_count_of REPLACE) REPLACE, $(matrix_count_of CREATE) CREATE, $(matrix_count) changed objects across $(matrix_groups | wc -l) coherence groups, object count ${EXPECTED_LIBRARY_FILES_BASELINE} -> ${EXPECTED_LIBRARY_FILES_TARGET}"
   else
     bad "mixed target state: baseline=${BASELINE_COUNT} target=${TARGET_COUNT} unknown=${UNKNOWN_COUNT}"
   fi
@@ -2203,7 +2288,7 @@ case "${MODE}" in
   # corrected that, and this generation is named too. Transaction evidence that
   # misnames its own generation is evidence an operator has to correct by hand
   # before it can be read.
-  TRANSACTION_ID="gen23-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  TRANSACTION_ID="gen${GENERATION}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir -p "${TRANSACTION_ROOT}"
   chmod 0700 "${TRANSACTION_ROOT}"
   state="$(journal_state)"
@@ -2219,7 +2304,7 @@ case "${MODE}" in
     require_same_filesystem
     classify_all
     if (( TARGET_COUNT == ${#MATRIX[@]} )); then
-      ok "Generation 23 is already installed: nothing to do"
+      ok "Generation ${GENERATION} is already installed: nothing to do"
       exit 0
     fi
     prepare
@@ -2228,7 +2313,7 @@ case "${MODE}" in
   elif [[ "${state}" == "COMMITTED" ]]; then
     classify_all
     if (( TARGET_COUNT == ${#MATRIX[@]} )); then
-      ok "Generation 23 is already installed: nothing to do"
+      ok "Generation ${GENERATION} is already installed: nothing to do"
       exit 0
     fi
     halt "the journal says COMMITTED but the targets do not agree; operator disposition required"
@@ -2247,7 +2332,7 @@ case "${MODE}" in
   elif [[ "${OUTCOME}" == "ROLLED_BACK" ]]; then
     cleanup_transaction_artifacts
     require_group_coherence
-    bad "the transaction rolled back: the host is at Generation 22 and nothing was installed"
+    bad "the transaction rolled back: the host remains at Generation ${PREDECESSOR_GENERATION} and nothing was installed"
   else
     halt "the transaction reached no terminal outcome; the journal is at ${JOURNAL}"
   fi
@@ -2291,14 +2376,14 @@ case "${MODE}" in
   # mode runs, against what is actually on the host -- so "installed" means the
   # architecture is there, and not merely that two hashes matched.
   prove_result_authority "${LIBRARY_ROOT}" "the installed library at ${LIBRARY_ROOT}"
-  [[ -f "${GEN24_LIBRARY_EVIDENCE}" ]] \
-    || bad "the Generation-22 library evidence is missing"
-  [[ -f "${GEN24_HELPER_EVIDENCE}" ]] \
-    || bad "the Generation-22 helper evidence is missing"
+  [[ -f "${TARGET_LIBRARY_EVIDENCE}" ]] \
+    || bad "the Generation-${GENERATION} library evidence is missing"
+  [[ -f "${TARGET_HELPER_EVIDENCE}" ]] \
+    || bad "the Generation-${GENERATION} helper evidence is missing"
   [[ -f "${BASELINE_LIBRARY_EVIDENCE}" ]] \
-    || bad "the Generation-22 evidence was not preserved"
+    || bad "the Generation-${PREDECESSOR_GENERATION} evidence was not preserved"
   [[ -f "${BASELINE_HELPER_EVIDENCE}" ]] \
-    || bad "the Generation-22 helper evidence was not preserved"
+    || bad "the Generation-${PREDECESSOR_GENERATION} helper evidence was not preserved"
   report_transaction_residue
   note "authority namespace fingerprint: $(authority_fingerprint)"
   ;;
@@ -2317,7 +2402,7 @@ case "${MODE}" in
   elif [[ "${OUTCOME}" == "ROLLED_BACK" ]]; then
     cleanup_transaction_artifacts
     require_group_coherence
-    bad "recovery rolled the transaction back: the host is at Generation 22 and Generation 23 is not installed"
+    bad "recovery rolled the transaction back: the host remains at Generation ${PREDECESSOR_GENERATION} and Generation ${GENERATION} is not installed"
   else
     halt "recovery reached no terminal outcome; the journal is at ${JOURNAL}"
   fi
@@ -2326,8 +2411,10 @@ esac
 
 printf '\n'
 if (( FAILURES == 0 )); then
-  printf 'Generation 23 / supervised execution runtime %s: all checks passed.\n' "${MODE#--}"
+  printf 'Generation %s / supervised execution runtime %s: all checks passed.\n' \
+    "${GENERATION}" "${MODE#--}"
 else
-  printf 'Generation 23 / supervised execution runtime %s FAILED: %d\n' "${MODE#--}" "${FAILURES}" >&2
+  printf 'Generation %s / supervised execution runtime %s FAILED: %d\n' \
+    "${GENERATION}" "${MODE#--}" "${FAILURES}" >&2
   exit 1
 fi
