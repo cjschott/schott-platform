@@ -279,12 +279,17 @@ require_generation_identity() {
   # Assembled from parts: a single-quoted pattern containing ${...} is exactly
   # the shape the repository's ShellCheck refuses, and a check that searches for
   # a variable expression should not read as one.
-  local derived_pattern assignment
+  # `grep -c` exits 1 when the count is zero, and under `set -e` that aborts the
+  # assignment with no message -- which is exactly how the two transaction cases
+  # first refused "without naming a reason". Guarded, so the halt below is what
+  # reports the problem.
+  local derived_pattern derived_n literal_n
   derived_pattern='TRANSACTION_ID="gen'"\${"'GENERATION}-'
-  assignment="$(grep -cF "${derived_pattern}" "${SELF}")"
-  (( assignment >= 1 )) \
+  derived_n="$(grep -cF "${derived_pattern}" "${SELF}" || true)"
+  literal_n="$(grep -cE 'TRANSACTION_ID="gen[0-9]' "${SELF}" || true)"
+  (( derived_n >= 1 )) \
     || halt "the transaction identifier is not derived from GENERATION"
-  (( $(grep -cE 'TRANSACTION_ID="gen[0-9]' "${SELF}") == 0 )) \
+  (( literal_n == 0 )) \
     || halt "the transaction identifier carries a literal generation prefix"
   if [[ -n "${TRANSACTION_ID}" ]]; then
     [[ "${TRANSACTION_ID}" == "${expected_transaction}"* ]] \

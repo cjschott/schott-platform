@@ -168,11 +168,11 @@ while IFS='|' read -r source baseline wanted; do
     digest_drift=$((digest_drift + 1))
   fi
   # The baseline must be a real predecessor, not a guess: it is what the
-  # Generation-22 authority carries.
-  gen22="$(sed -n 's/^GEN22_COMMIT="\([0-9a-f]\{40\}\)"$/\1/p' "${INSTALLER}" | head -1)"
+  # predecessor authority carries.
+  gen22="$(sed -n 's/^PREDECESSOR_COMMIT="\([0-9a-f]\{40\}\)"$/\1/p' "${INSTALLER}" | head -1)"
   previous="$(cd "${ROOT}" && git show "${gen22}:${source}" 2>/dev/null | sha256sum | cut -d' ' -f1)"
   if [[ "${previous}" != "${baseline}" ]]; then
-    fail "${source} is ${previous} at the Generation-22 authority, and the matrix baseline says ${baseline}"
+    fail "${source} is ${previous} at the predecessor authority, and the matrix baseline says ${baseline}"
     digest_drift=$((digest_drift + 1))
   fi
   if [[ "${wanted}" == "${baseline}" ]]; then
@@ -185,23 +185,49 @@ done < <(printf '%s\n' "${rows}" | awk -F'|' '{print $1"|"$5"|"$6}')
 
 # --- the installer names its own generation --------------------------------
 printf -- '\n--- the installer is named for the generation it publishes ---\n'
-if grep -q 'TRANSACTION_ID="gen23-' "${INSTALLER}"; then
-  pass "the transaction journal identifies itself as Generation 23's"
+# THIS BLOCK IS WHY G11-BC-AW HAPPENED. It read, verbatim:
+#
+#   if grep -q 'TRANSACTION_ID="gen23-' "${INSTALLER}"; then
+#     pass "the transaction journal identifies itself as Generation 23's"
+#
+# It ASSERTED THE DEFECT. Inherited from Generation 23's suite, where `gen23-`
+# was the correct answer, and never inverted -- so the installer created
+# Generation-23 transaction IDs and this suite reported that as a pass. Fifty-one
+# assertions agreed with it.
+#
+# The lesson is not "check for gen24- instead". A literal expectation is what
+# rots. These checks now read the installer's DECLARED constants and require
+# every identifier to be derived from them, so there is no literal to inherit.
+declared_generation="$(sed -n 's/^GENERATION=\([0-9]\+\)$/\1/p' "${INSTALLER}" | head -1)"
+declared_predecessor="$(sed -n 's/^PREDECESSOR_GENERATION=\([0-9]\+\)$/\1/p' "${INSTALLER}" | head -1)"
+if [[ "${declared_generation}" == "24" && "${declared_predecessor}" == "23" ]]; then
+  pass "the installer declares its roles: publishing ${declared_generation} over ${declared_predecessor}"
 else
-  fail "the transaction prefix is not gen24-: evidence that misnames its own generation has to be corrected by hand"
+  fail "the installer declares generation '${declared_generation}' over '${declared_predecessor}'"
 fi
-if grep -q 'TRANSACTION_ROOT="/root/kyri-gen24-transaction"' "${INSTALLER}"; then
-  pass "the transaction namespace is this generation's own"
+# Derived, not literal. A literal prefix anywhere in the assignment is the
+# committed defect, so a literal prefix is what this refuses.
+if grep -qE 'TRANSACTION_ID="gen[0-9]' "${INSTALLER}"; then
+  fail "the transaction identifier carries a LITERAL generation prefix: the G11-BC-AW defect"
 else
-  fail "the transaction namespace is not /root/kyri-gen24-transaction"
+  pass "the transaction identifier carries no literal generation prefix"
 fi
-if grep -q 'BASELINE_LIBRARY_EVIDENCE="/root/kyri-gen23-library-digests.txt"' "${INSTALLER}" \
-   && grep -q 'GEN24_LIBRARY_EVIDENCE="/root/kyri-gen24-library-digests.txt"' "${INSTALLER}"; then
-  pass "the predecessor evidence is read as Generation 23's, and this generation writes its own"
+for derived in TRANSACTION_ROOT TARGET_LIBRARY_EVIDENCE TARGET_HELPER_EVIDENCE \
+               BASELINE_LIBRARY_EVIDENCE BASELINE_HELPER_EVIDENCE \
+               PREPARED_SUFFIX BACKUP_SUFFIX; do
+  if grep -qE "^${derived}=\"[^\"]*gen[0-9]" "${INSTALLER}"; then
+    fail "${derived} hard-codes a generation number instead of deriving it"
+  else
+    pass "${derived} derives its generation from the declared constants"
+  fi
+done
+# AND THE INSTALLER GATES ALL OF IT ITSELF, in every mode.
+if grep -q 'require_generation_identity' "${INSTALLER}"; then
+  pass "the installer gates its own generation identity"
 else
-  fail "the evidence paths do not separate Generation 23's from Generation 24's"
+  fail "the installer does not gate its own generation identity"
 fi
-if grep -q "KYRI_GEN23_FAIL_AT" "${INSTALLER}"; then
+if grep -qE "KYRI_GEN[0-9]+_FAIL_AT" "${INSTALLER}"; then
   fail "the fault-injection variable still carries a predecessor's name"
 else
   pass "the fault-injection variable is named for this generation"
@@ -527,6 +553,175 @@ else
 fi
 
 # --- the ceremony tells the operator the truth -----------------------------
+# --- GENERATION IDENTITY. Each role sabotaged independently. ---------------
+#
+# WHY THIS SECTION EXISTS. G11-BC-AW found this installer committed creating
+# `gen23-` transaction IDs, announcing "Generation 23 is already installed", and
+# carrying its predecessor's commit under a `GEN22_COMMIT` name whose message
+# claimed it checked Generation 23. `--verify-source` passed. The 51 assertions
+# above passed. Every one of those defects is a STRING, and nothing tied the
+# strings to the generation being installed.
+#
+# So the installer now derives all four roles from two constants and gates them,
+# and this section sabotages each role on a COPY and requires the gate to refuse.
+# The copy keeps the real filename inside a temporary directory, because the gate
+# checks the filename against the declared generation -- a copy named anything
+# else would be "caught" for the wrong reason, and every sabotage below would
+# pass while proving nothing.
+printf -- '\n--- generation identity: every role refuses independently ---\n'
+
+# HOW THIS IS EXERCISED, and why not through `--verify-source`.
+#
+# The first version of this section ran the sabotaged installer with
+# `--verify-source` and required a refusal. Every sabotage was "caught" -- by
+# `STOP: the working tree is not clean`, which fires long before the identity
+# gate and fires whenever this suite runs with uncommitted changes. Nine
+# sabotages passed while proving nothing, which is the same vacuous-pass shape as
+# the gen23- check above. The output said so plainly, in nine identical lines.
+#
+# So the gate is extracted and run in isolation: its own source, its own stubs,
+# a sabotaged copy as its SELF. Tree-independent, and the refusal that comes back
+# is the gate's own.
+extract_identity_gate() {
+  local from="$1" into="$2"
+  # The stubs come from a quoted heredoc, not printf: escaping them through
+  # printf produced a malformed `halt` whose refusals carried no message, and
+  # every case then reported "refused without naming a reason".
+  cat > "${into}" <<'STUBS'
+set -Eeuo pipefail
+halt() { printf 'STOP: %s\n' "$1" >&2; exit 1; }
+ok() { printf 'ok %s\n' "$1"; }
+TRANSACTION_ID=""
+STUBS
+  {
+    # The declarations the gate reads, taken from the copy under test.
+    sed -n -E '/^(GENERATION|PREDECESSOR_GENERATION)=[0-9]+$/p' "${from}"
+    sed -n -E '/^(TRANSACTION_ROOT|BASELINE_LIBRARY_EVIDENCE|BASELINE_HELPER_EVIDENCE|TARGET_LIBRARY_EVIDENCE|TARGET_HELPER_EVIDENCE)=/p' "${from}"
+    # SELF is supplied by the caller, so the gate reads the copy under test.
+    printf 'SELF="%s"\n' "${from}"
+    # The gate itself.
+    awk '/^require_generation_identity\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "${from}"
+    printf 'require_generation_identity\n'
+  } >> "${into}"
+}
+
+# The extraction must actually contain the gate, or every case below measures an
+# empty script.
+probe="${WORK}/identity-probe.sh"
+extract_identity_gate "${INSTALLER}" "${probe}"
+if grep -q 'require_generation_identity() {' "${probe}" \
+   && grep -qE '^GENERATION=[0-9]+$' "${probe}" \
+   && grep -qE '^PREDECESSOR_GENERATION=[0-9]+$' "${probe}"; then
+  pass "the generation-identity gate and its declarations extract cleanly"
+else
+  fail "the identity gate did not extract; the cases below would measure nothing"
+fi
+
+# And the UNSABOTAGED gate must pass, or a refusal proves nothing.
+if (cd "${ROOT}" && bash "${probe}" > "${WORK}/identity-clean.txt" 2>&1); then
+  pass "the unsabotaged identity gate passes: $(sed -n 's/^ok //p' "${WORK}/identity-clean.txt" | cut -c1-58)"
+else
+  fail "the unsabotaged identity gate refuses: $(sed -n 's/^STOP: //p' "${WORK}/identity-clean.txt" | head -1)"
+fi
+
+identity_sabotage() {
+  local title="$1" old="$2" new="$3"
+  local dir="${WORK}/identity-case" copy script out
+  rm -rf "${dir}"; mkdir -p "${dir}"
+  # THE COPY KEEPS THE REAL FILENAME. The gate checks the filename against the
+  # declared generation, so a copy named anything else would refuse for that
+  # reason and every case would be "caught" without testing its own property.
+  copy="${dir}/install-generation-24.sh"
+  cp "${INSTALLER}" "${copy}"
+  if ! grep -qF -- "${old}" "${copy}"; then
+    fail "BROKEN SABOTAGE (${title}): the anchor is not in the installer"
+    return
+  fi
+  python3 - "${copy}" "${old}" "${new}" <<'IDPATCH'
+import sys
+
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text.replace(old, new, 1))
+IDPATCH
+  if ! bash -n "${copy}" 2>/dev/null; then
+    fail "BROKEN SABOTAGE (${title}): the sabotaged installer no longer parses"
+    return
+  fi
+  script="${dir}/probe.sh"
+  extract_identity_gate "${copy}" "${script}"
+  out="${dir}/out.txt"
+  if (cd "${ROOT}" && bash "${script}" > "${out}" 2>&1); then
+    fail "NOT CAUGHT: ${title}"
+    return
+  fi
+  if grep -q '^STOP: ' "${out}"; then
+    pass "caught: ${title} -- $(sed -n 's/^STOP: //p' "${out}" | head -1 | cut -c1-62)"
+  else
+    fail "BROKEN SABOTAGE (${title}): the gate refused without naming a reason"
+  fi
+}
+
+# ROLE 1 -- THE TRANSACTION PREFIX. The committed defect, exactly.
+# The opening brace, assembled once. A single-quoted anchor containing ${...} is
+# the shape this repository's ShellCheck refuses, and an anchor that quotes an
+# expression should not read as one.
+B="$(printf '\x24\x7b')"
+GEN="gen${B}GENERATION}"
+PRED="gen${B}PREDECESSOR_GENERATION}"
+
+identity_sabotage "the transaction prefix reverts to the predecessor's" \
+  "TRANSACTION_ID=\"${GEN}-" \
+  "TRANSACTION_ID=\"gen23-"
+identity_sabotage "the transaction prefix is hard-coded to this generation" \
+  "TRANSACTION_ID=\"${GEN}-" \
+  "TRANSACTION_ID=\"gen24-"
+
+# ROLE 2 -- THE PREDECESSOR IS THE EVIDENCE BASELINE.
+identity_sabotage "the baseline evidence names the wrong generation" \
+  "BASELINE_LIBRARY_EVIDENCE=\"/root/kyri-${PRED}-library-digests.txt\"" \
+  'BASELINE_LIBRARY_EVIDENCE="/root/kyri-gen22-library-digests.txt"'
+
+# ROLE 3 -- THE TARGET IS THIS INSTALLER'S OWN GENERATION.
+identity_sabotage "the target evidence names the predecessor" \
+  "TARGET_LIBRARY_EVIDENCE=\"/root/kyri-${GEN}-library-digests.txt\"" \
+  'TARGET_LIBRARY_EVIDENCE="/root/kyri-gen23-library-digests.txt"'
+identity_sabotage "the transaction root names the predecessor" \
+  "TRANSACTION_ROOT=\"/root/kyri-${GEN}-transaction\"" \
+  'TRANSACTION_ROOT="/root/kyri-gen23-transaction"'
+identity_sabotage "the declared generation does not match the filename" \
+  'GENERATION=24' \
+  'GENERATION=25'
+identity_sabotage "the generation does not sit on its immediate predecessor" \
+  'PREDECESSOR_GENERATION=23' \
+  'PREDECESSOR_GENERATION=22'
+
+# ROLE 4 -- THE DIAGNOSTICS AGREE WITH THOSE ROLES.
+identity_sabotage "a success diagnostic names a generation literally" \
+  "ok \"Generation ${B}GENERATION} is already installed: nothing to do\"" \
+  'ok "Generation 23 is already installed: nothing to do"'
+identity_sabotage "a rollback diagnostic names a generation literally" \
+  "bad \"the transaction rolled back: the host remains at Generation ${B}PREDECESSOR_GENERATION} and nothing was installed\"" \
+  'bad "the transaction rolled back: the host is at Generation 22 and nothing was installed"'
+
+# AND THE PREDECESSOR COMMIT IS THE PREDECESSOR'S, which is the defect the
+# reworded message hid: the value and the claim have to be the same generation.
+if grep -q 'PREDECESSOR_COMMIT="736c3716c037fabd9fca7c6b8eb97dc39de55c95"' "${INSTALLER}"; then
+  pass "the predecessor commit is Generation 23's own reviewed authority"
+else
+  fail "the predecessor commit is not Generation 23's; a reworded message would hide it"
+fi
+# AN ASSIGNMENT, not any mention: the installer's own comments explain the
+# GEN22_COMMIT defect by name, and a check that matched prose would refuse the
+# explanation along with the defect.
+if grep -qE '^GEN[0-9]+_COMMIT=' "${INSTALLER}"; then
+  fail "the predecessor commit is still assigned under a generation-numbered name"
+else
+  pass "no assignment names a generation the installer does not install on"
+fi
+
 printf -- '\n--- the operator ceremony matches the installer ---\n'
 if grep -q '7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99' "${CEREMONY}"; then
   pass "the ceremony pins the runtime aggregate and asks for it twice"
