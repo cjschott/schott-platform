@@ -141,10 +141,12 @@ substituted window, no synthetic authority, no reordered gates.
 
 **Wall-clock bound, stated plainly.** This evidence depends on live admission
 authority. `CADV-000008.valid_until` and `CINST-000007.admitted_until` are both
-`2026-10-13T06:25:00-05:00`; at `2026-10-12T09:45` that is **~20.7 hours**. O3 is
-closed *now*. If operator closure happens after that instant, the matrix needs
-re-running against renewed authority — not because anything regressed, but
-because the thing it proves expires.
+**`2026-10-13T06:25:00-05:00`**, and that deadline is the durable fact here — the
+margin is not. The matrix ran at `09:39` with 20.8 hours left; by the time
+validation finished and this report was completed, `18:43`, the margin was
+**11.7 hours**. O3 is closed *now*. If operator closure happens after that
+instant, the matrix needs re-running against renewed authority — not because
+anything regressed, but because the thing it proves expires.
 
 ---
 
@@ -191,8 +193,42 @@ does not silently absorb them.
 
 ## F. Validation
 
-Recorded in the commit for this report. The suites exercised at this checkpoint
-are read-only against production; nothing here mutates a store.
+| run | result |
+|---|---|
+| `run-validation.sh --quick` | **142/142 steps**, 8364 assertions, **0 FAIL**, 0 host-only skips |
+| `run-validation.sh` (full) | **167/167 steps**, 21350 assertions, **0 FAIL**, 0 host-only skips |
+| clean clone of `a5117b5` | **167/167 steps**, 20263 assertions, **0 FAIL** |
+| CI on `a5117b5` | **6/6 green** — CI, ShellCheck, CodeQL, Semgrep, Trivy, Gitleaks |
+
+**Two things worth reading precisely rather than at a glance.**
+
+The one `FAIL`-prefixed line in each run is `FAILURE_INVOKE_E2E=PASS` — a variable
+name, not a failure. A naive `grep '^FAIL'` reports 1 and is wrong. *(The inverse
+of this mistake was made earlier in this arc, when a grep for `no traceback`
+assertions was reported as 22 tracebacks.)*
+
+Both runs carry exactly one skip, `note: skipped (Stage 3 is spent)` — the
+coordinator half, the refusal matrix and BLOCK B against a fixture. That is spent
+mode, **not** a host-only skip, and the live Stage-3 matrix in §D is the evidence
+that covers it.
+
+**The clone's 1087 fewer assertions are accounted for, not waved past.** The step
+lists are byte-identical, all 167 pass in both, and the difference is confined to
+**18** installer and ceremony steps — generation-6, -7, -9 through -14, the helper
+ceremony, G5 authority, governed artifact authority, Fabric evidence authority and
+the rest. Those suites assert less inside a clone because the installers they
+exercise hard-code `REPOSITORY="/opt/schott-platform"`, so their host-dependent
+assertions do not run. Eighteen is the same count the previous two checkpoints
+recorded.
+
+Step 66, the Generation-20 installer step that aborted in two earlier checkpoints
+— once for a working tree made dirty by an uncommitted report, once for being
+launched inside a monitor whose lifetime it shared — passed in both full runs.
+
+**Production after all three runs**, re-measured at `2026-10-12T18:27:56-05:00`:
+Fabric `7e2a4ed0…f376b`, runtime `7dfb34e6…2e99`, Trust `53605e4e…b63f` — all
+byte-identical to §C. Everything exercised at this checkpoint is read-only
+against production; nothing here mutates a store.
 
 ---
 
@@ -205,7 +241,9 @@ production is unchanged across the generation; O1–O3 and O6 are closed; O4 is
 reconciled in this commit. Two qualifications, both stated above rather than
 buried: `--verify-installed` rests on the operator's acceptance plus my digest
 comparison, because it needs privilege I do not have; and O3's evidence expires
-`2026-10-13T06:25:00-05:00`.
+`2026-10-13T06:25:00-05:00`, which was 11.7 hours after this report was finished.
+If the operator crosses the boundary after that instant, re-run the live Stage-3
+matrix against renewed authority first.
 
 **Remaining steps are the operator's**, in the order precedent sets
 ([§E of the historical report](2026-10-09-g7-eng-0005-closure-readiness.md#e-closure-sequence-grounded-in-precedent)):
