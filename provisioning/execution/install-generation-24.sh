@@ -249,7 +249,7 @@ declared_outside_closure() {
 }
 
 # Every group any previous generation named is still spelled here, even though
-# this generation only moves L. The names outlive the generation that
+# this generation only moves E. The names outlive the generation that
 # introduced them, and a coherence failure naming "unknown group V" would be a
 # worse report than one naming what V is.
 # WHY THIS EXISTS (G11-BC-AW). This installer was committed creating `gen23-`

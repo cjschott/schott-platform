@@ -754,6 +754,122 @@ else
   fail "the ceremony does not require Generation 23's evidence"
 fi
 
+# --- THE CEREMONY'S F7 VERDICT MUST RUN THE INSTALLED LIBRARY -------------
+#
+# WHY (G11-BC-AX). The ceremony starts `cd /opt/schott-platform`, so a bare
+# `python3 -m tools.capability.cli` resolves the REPOSITORY copy -- which
+# already carries the Generation-24 fix. Measured before installation, the two
+# copies disagree completely:
+#
+#   /opt/schott-platform/tools/capability/cli.py   findings []  exit 0
+#   /usr/lib/kyri/python/tools/capability/cli.py   2 findings   exit 1
+#
+# So the first version of that block would have printed `findings: []` and
+# `exit=0` before anything was installed. The closure-blocking finding lives in
+# the INSTALLED runtime, and only the installed runtime can retire it.
+#
+# The property is checked STRUCTURALLY, on the invocation itself: the validator
+# call must be preceded, inside the same subshell, by an explicit change into
+# the installed library -- or carry an explicit installed PYTHONPATH. Grepping
+# the file for the string "/usr/lib/kyri/python" would pass on a ceremony that
+# merely mentioned it in a comment.
+printf -- '\n--- the ceremony proves F7 against the INSTALLED library ---\n'
+
+ceremony_resolves_installed() {
+  local file="$1"
+  python3 - "$file" <<'RESOLVEPY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+lines = text.splitlines()
+
+# Every validator invocation in the ceremony, by line index.
+calls = [i for i, line in enumerate(lines)
+         if "tools.capability.cli validate" in line and not line.lstrip().startswith("#")]
+if not calls:
+    sys.exit("no validator invocation in the ceremony")
+
+for index in calls:
+    # Walk back over the enclosing block to the subshell that opens it, and
+    # require an explicit installed resolution between the two.
+    resolved = False
+    for j in range(index - 1, max(index - 25, -1), -1):
+        bare = lines[j].strip()
+        if bare.startswith("#"):
+            continue
+        if re.match(r"^cd /usr/lib/kyri/python\s*$", bare):
+            resolved = True
+            break
+        if "PYTHONPATH=" in bare and "/usr/lib/kyri/python" in bare:
+            resolved = True
+            break
+        # An opening subshell with nothing installed-resolving inside it means
+        # this invocation resolves from wherever the ceremony last was.
+        if bare.endswith('="$(') or bare == "(" or bare.startswith("installed_validate_out="):
+            break
+        if re.match(r"^cd /opt/schott-platform\s*$", bare):
+            break
+    if not resolved:
+        sys.exit(f"the validator invocation at line {index + 1} does not "
+                 "explicitly resolve the installed library")
+print(f"ok  all {len(calls)} validator invocation(s) resolve the installed library")
+RESOLVEPY
+}
+
+if ceremony_resolves_installed "${CEREMONY}" > "${WORK}/resolve.txt" 2>&1; then
+  pass "$(sed -n 's/^ok  //p' "${WORK}/resolve.txt")"
+else
+  fail "the ceremony's F7 verdict can resolve tools.capability from the repository: $(cat "${WORK}/resolve.txt")"
+fi
+
+# AND THE VERDICT IS ASSERTED, not printed. All three conditions, and a
+# non-zero exit must stop the ceremony rather than scroll past.
+ceremony_body="$(cat "${CEREMONY}")"
+for required in 'cd /usr/lib/kyri/python' 'installed_validate_rc'                 'F7 is not retired' 'not reported'; do
+  if grep -qF -- "${required}" <<<"${ceremony_body}"; then
+    pass "the ceremony carries: ${required}"
+  else
+    fail "the ceremony does not carry: ${required}"
+  fi
+done
+if grep -vE '^\s*#' <<<"${ceremony_body}" | grep -qF 'echo "exit=$?"'; then
+  fail "the ceremony still reads the exit code after a command set -e would have aborted on"
+else
+  pass "no executable line reads an exit code set -e would never let it reach"
+fi
+
+# SABOTAGE: put the verdict back to repository resolution.
+#
+# GUARDED, because the first version of this was not. Its heredoc lost a newline
+# escape, the Python died with a SyntaxError, and the function returned WITHOUT
+# calling pass or fail -- so the sabotage contributed no verdict at all and the
+# suite reported 77 PASS / 0 FAIL with this case silently absent. Every failure
+# path below now reports.
+sabotage_ceremony_resolution() {
+  local copy="${WORK}/ceremony-sabotage.txt"
+  cp "${CEREMONY}" "${copy}"
+  # Removing the installed-resolution line is the whole sabotage: the validator
+  # call then runs wherever the ceremony last was, which is the repository.
+  if ! grep -qx '  cd /usr/lib/kyri/python' "${copy}"; then
+    fail "BROKEN SABOTAGE (repository resolution): the installed-resolution line is not in the ceremony"
+    return
+  fi
+  grep -vx '  cd /usr/lib/kyri/python' "${copy}" > "${copy}.new" \
+    || { fail "BROKEN SABOTAGE (repository resolution): could not produce the sabotaged copy"; return; }
+  mv "${copy}.new" "${copy}"
+  if grep -qx '  cd /usr/lib/kyri/python' "${copy}"; then
+    fail "BROKEN SABOTAGE (repository resolution): the line survived removal"
+    return
+  fi
+  if ceremony_resolves_installed "${copy}" > "${WORK}/resolve-sab.txt" 2>&1; then
+    fail "NOT CAUGHT: the ceremony resolving the validator from the repository"
+  else
+    pass "caught: repository resolution -- $(head -1 "${WORK}/resolve-sab.txt" | cut -c1-62)"
+  fi
+}
+sabotage_ceremony_resolution
+
 printf -- '\n'
 if (( FAILURES == 0 )); then
   printf 'Generation-23 installer validation passed.\n'

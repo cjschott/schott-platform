@@ -112,11 +112,59 @@ find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256su
 #           -- the same digest, unchanged.
 
 # THE OBSERVABLE DIFFERENCE, and the one command that decides whether this
-# generation did its job. Before: two findings and EXIT 1. After:
-python3 -m tools.capability.cli validate \
-  --store-root /data/kyri/capability-runtime --expected-uid 1000 --expected-gid 1000
-echo "exit=$?"
-# EXPECTED: {"findings": [], "status": "reported"}  and  exit=0
+# generation did its job.
+#
+# IT MUST RUN THE INSTALLED LIBRARY, and the first version of this block did
+# not. This ceremony starts with `cd /opt/schott-platform`, so a bare
+# `python3 -m tools.capability.cli` resolved
+# /opt/schott-platform/tools/capability/cli.py -- the REPOSITORY copy, which
+# already carries the Generation-24 fix. Measured before installation:
+#
+#   repository copy   findings []                      exit 0
+#   installed copy    CINV-000002, CINV-000003 flagged exit 1
+#
+# So the old block would have printed `findings: []` and `exit=0` before
+# anything was installed, and an operator would reasonably have read that as
+# proof the fix had landed. The closure-blocking finding is in the INSTALLED
+# runtime; only the installed runtime can retire it.
+#
+# The subshell is what makes the resolution unambiguous. The `|| rc=$?` is what
+# keeps `set -e` from killing the ceremony before the assertions run -- the old
+# `echo "exit=$?"` could never have printed a failure, because a non-zero exit
+# would have aborted the script one line earlier.
+installed_validate_rc=0
+installed_validate_out="$(
+  cd /usr/lib/kyri/python
+  python3 -m tools.capability.cli validate \
+    --store-root /data/kyri/capability-runtime \
+    --expected-uid 1000 \
+    --expected-gid 1000
+)" || installed_validate_rc=$?
+
+printf '%s\n' "${installed_validate_out}"
+printf 'installed validate exit=%s\n' "${installed_validate_rc}"
+
+# ASSERTED, not printed. All three, or the ceremony stops.
+[ "${installed_validate_rc}" -eq 0 ] || {
+  printf 'STOP: the INSTALLED validator exited %s; F7 is not retired.\n' \
+    "${installed_validate_rc}" >&2
+  exit 1
+}
+printf '%s' "${installed_validate_out}" \
+  | python3 -c 'import json, sys
+report = json.load(sys.stdin)
+findings = report.get("findings")
+status = report.get("status")
+if findings != []:
+    sys.exit(f"STOP: the INSTALLED validator reports {findings}; F7 is not retired.")
+if status != "reported":
+    sys.exit(f"STOP: the INSTALLED validator status is {status!r}, not reported.")
+print("ok  installed validate: findings [], status reported, exit 0")'
+
+# EXPECTED: {"findings": [], "status": "reported"} from
+#           /usr/lib/kyri/python/tools/capability/cli.py, exit 0, and the `ok`
+#           line above. `--verify-installed` remains the independent
+#           structural and digest proof; this is the behavioural one.
 
 # EXPECTED AFTER THIS CEREMONY:
 #   capability validate   findings [] exit 0   (WAS: 2 findings, exit 1)
