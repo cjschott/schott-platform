@@ -138,6 +138,23 @@ rewrite was opened, and the edit moves no digest.
 
 ---
 
+## D-BIS. Validation
+
+| run | result |
+|---|---|
+| Generation-24 installer suite | **78 PASS / 0 FAIL** |
+| F7 result-authority suite | 14 PASS / 0 FAIL |
+| Generation-24 `--verify-source` | PASS — 3 REPLACE, 0 CREATE |
+| `run-validation.sh --quick` | **142/142**, 0 FAIL, 0 skips |
+| `run-validation.sh` (full) | **167/167**, 0 FAIL, **0 host-only skips** |
+| clean clone of `4c91e04` | **167/167**, 0 FAIL, **18 pinned-checkout skips** |
+| GitHub CI on `4c91e04` | **6/6 green** |
+
+Both resolution checks run inside the clean clone, including the sabotage.
+Fabric, runtime and Trust byte-identical throughout.
+
+---
+
 ## E. Production state
 
 | store | aggregate |
