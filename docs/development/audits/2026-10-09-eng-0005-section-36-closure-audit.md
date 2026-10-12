@@ -648,6 +648,46 @@ finding most likely to hide the next one.
 
 ---
 
+## 7-BIS. Addendum, 2026-10-12: F7, raised after this audit and now CLOSED
+
+**This audit did not find F7, and should have.** Not one of the fifteen criteria
+in §2 cites `capability validate` against the production runtime store, and §6
+and §7 reached their conclusions without it. Had it been run, this audit would
+have reported:
+
+```
+CINV-000002: result-without-execution-authority
+CINV-000003: result-without-execution-authority    exit 1
+```
+
+It was found at G7 instead, one gate later. The original classifications above are
+left exactly as they were written on 2026-10-09; this section records what
+happened afterwards.
+
+| | |
+|---|---|
+| raised | G11-BC-AT → surfaced at **G7**, 2026-10-09 |
+| my assessment at G7 | PASS_WITH_ACCEPTED_FINDING, non-blocking, with the reviewer's call named |
+| **reviewer ruling** | **BLOCKING** — ENG-0005 may not close while the released runtime validator rejects the state the released execution path produced |
+| root cause | the validator tested authority with `adapter_identity`, which `coordinator.py` says is always null on the released path, and never read the lifecycle journal `launch.py` names as the authority |
+| remediation | **Generation 24** (G11-BC-AV), with its identity corrected at G11-BC-AW and its ceremony's verification path at G11-BC-AX |
+| **status** | **CLOSED by Generation 24**, installed and accepted; the installed validator returns `findings: []`, `status: reported`, exit **0** |
+| verified | G11-BC-AY, from `/usr/lib/kyri/python` against live production |
+
+**Criterion 12 is unaffected.** It was satisfied by the production records
+themselves — all 12 `CMUT` entries carrying both an intent and an outcome — and
+that evidence did not depend on the validator's authority predicate.
+
+**What this says about the audit method.** The method was to ask each criterion
+for its own best available evidence — which is why four of the fifteen
+(criteria 1, 5, 11, 13) carry an accepted finding naming exactly where that
+evidence fell short. What the method never did was ask the released tooling, as a
+set, whether it accepted the production state. That is a different question from
+any of the fifteen, no criterion owns it, and it is the one that would have
+surfaced F7. A future closure audit should ask it first.
+
+---
+
 ## 8. Related records
 
 - [§36 criteria](../../superpowers/specs/2026-08-11-first-adapter-design.md)
