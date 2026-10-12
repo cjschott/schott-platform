@@ -12,6 +12,9 @@ half-written lineage advance to reconcile afterwards.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -59,6 +62,122 @@ def _record_for_decision(store, decision_id: str) -> dict[str, Any] | None:
         if record.get("decision_id") == decision_id:
             return record
     return None
+
+
+# Rehearsal. Set for the duration of one call and consulted at exactly the two
+# points where a decision stops being reversible: identity allocation, and the
+# write. Everything before those runs identically, so a rehearsal cannot answer
+# a different question from the decision it rehearses.
+_REHEARSING = contextvars.ContextVar("trust_rehearsing", default=False)
+
+
+@contextlib.contextmanager
+def rehearsing():
+    """Run a decision as a rehearsal: validate fully, allocate and write nothing."""
+    token = _REHEARSING.set(True)
+    try:
+        yield
+    finally:
+        _REHEARSING.reset(token)
+
+
+class _Identities:
+    """Identity allocation, or prediction where nothing may be spent.
+
+    Under rehearsal the store's own `peek_next_id` answers, offset by how many
+    of that kind this decision has already taken -- a decision citing two
+    pieces of evidence would otherwise predict one identity twice. Outside a
+    rehearsal this is the allocator and nothing else.
+    """
+
+    def __init__(self, store) -> None:
+        self._store = store
+        self._taken: dict[str, int] = {}
+
+    def predict(self, kind: str) -> str:
+        """What `take` would return, without consuming anything.
+
+        Read-only in both modes, so a caller may compare an identity against
+        what it is about to be given before anything is spent on refusing.
+        """
+        identifier = self._store.peek_next_id(kind)
+        for _ in range(self._taken.get(kind, 0)):
+            prefix, _, number = identifier.rpartition("-")
+            identifier = f"{prefix}-{int(number) + 1:0{len(number)}d}"
+        return identifier
+
+    def take(self, kind: str) -> str:
+        identifier = (self.predict(kind) if _REHEARSING.get()
+                      else self._store.allocate_id(kind))
+        self._taken[kind] = self._taken.get(kind, 0) + 1
+        return identifier
+
+
+def _cited_evidence(store, references, identities):
+    """The evidence a decision cites, resolved rather than re-labelled.
+
+    **A supplied identity is authoritative.** This path used to discard it and
+    allocate a fresh one, so a decision citing `TEVID-000001` produced a durable
+    record citing something else entirely -- the approved body and the record
+    silently disagreed about which evidence was examined, and neither was wrong
+    on its face.
+
+    So a cited identity that already exists must **agree exactly** with the
+    stored record, compared on the canonical representation the store writes
+    rather than on raw bytes. Agreement means the citation stands and nothing is
+    written; disagreement is refused. The stored record is never overwritten,
+    superseded, repaired, or reinterpreted: one Trust Evidence identity has one
+    canonical meaning, and a second meaning is a refusal rather than a version.
+
+    A cited identity that does not exist is new evidence, and the store still
+    owns identity -- but the allocation must be the identity that was cited.
+    An operator who predicted an identity and got a different one silently
+    recorded evidence nobody reviewed, which is the same defect wearing the
+    other face.
+    """
+    resolved: list[TrustEvidenceReference] = []
+    recorded: list[TrustEvidenceReference] = []
+    for reference in references:
+        cited = reference.evidence_id
+        try:
+            stored = store.read("evidence", cited)
+        except Exception:  # noqa: BLE001
+            stored = None
+        if stored is not None:
+            if dict(stored) != dict(reference.to_dict()):
+                raise TrustError(
+                    f"evidence '{cited}' already exists and does not match the "
+                    "citation; one evidence identity has one meaning, and it is "
+                    "not superseded, repaired, or reinterpreted here"
+                )
+            # Cited, not re-recorded. The identity already means this, and
+            # writing it again would be an immutable store overwriting itself.
+            resolved.append(reference)
+            continue
+        # Compared before anything is spent, so a citation naming an identity
+        # the store is not about to hand out costs no sequence position.
+        predicted = identities.predict("evidence")
+        if predicted != cited:
+            raise TrustError(
+                f"evidence '{cited}' does not exist and the next evidence identity "
+                f"is '{predicted}'; the citation is recorded as supplied or not at "
+                "all, never silently under another identity"
+            )
+        allocated = identities.take("evidence")
+        if allocated != cited:
+            # Only reachable if another writer took the identity between the
+            # prediction and the allocation. Fail closed: an identifier is spent
+            # and nothing is written, which is a gap rather than a wrong record.
+            raise TrustError(
+                f"evidence identity '{cited}' was taken while this decision was "
+                "being prepared; nothing was written"
+            )
+        fresh = TrustEvidenceReference(
+            evidence_id=allocated, kind=reference.kind,
+            reference=reference.reference, recorded_at=reference.recorded_at)
+        resolved.append(fresh)
+        recorded.append(fresh)
+    return resolved, recorded
 
 
 def _active_root(store) -> dict[str, Any]:
@@ -179,23 +298,20 @@ def create_decision(
             "revocation, and the two are permanently distinct in the history"
         )
 
-    decision_id = store.allocate_id("decision")
+    identities = _Identities(store)
+    # Citations are resolved before any identity is spent, so a decision refused
+    # for naming evidence it cannot name leaves no gap in a sequence behind it.
+    stored_evidence, new_evidence = _cited_evidence(
+        store, evidence_references, identities)
+
+    decision_id = identities.take("decision")
     validate_supersession(store, decision_id, supersedes)
 
-    stored_evidence: list[TrustEvidenceReference] = []
-    for reference in evidence_references:
-        stored_evidence.append(TrustEvidenceReference(
-            evidence_id=store.allocate_id("evidence"),
-            kind=reference.kind,
-            reference=reference.reference,
-            recorded_at=reference.recorded_at,
-        ))
-
     resolved_lineage_id = (head.get("lineage_id") if head
-                           else store.allocate_id("lineage"))
+                           else identities.take("lineage"))
     # Allocated before the decision so the decision can cite the record it
     # produces: a decision that cannot be placed in its chain is not reviewable.
-    record_id = store.allocate_id("record")
+    record_id = identities.take("record")
 
     decision = TrustDecision(
         decision_id=decision_id,
@@ -266,7 +382,7 @@ def create_decision(
 
     event_kind = STATE_EVENT.get(requested_state, AuditEventKind.TRUST_DECISION_CREATED)
     audit_event = TrustAuditEvent(
-        audit_id=store.allocate_id("audit"),
+        audit_id=identities.take("audit"),
         event_kind=AuditEventKind.TRUST_DECISION_CREATED.value,
         subject_id=subject_id,
         lineage_id=resolved_lineage_id,
@@ -278,7 +394,16 @@ def create_decision(
         provenance=dict(provenance or {}),
     )
 
-    for reference in stored_evidence:
+    if _REHEARSING.get():
+        # Every rule above has run against the real store and every object has
+        # been constructed, which is the whole answer a rehearsal can honestly
+        # give. The write is the first act that cannot be taken back, so this
+        # is where it stops -- and the outcome it returns carries the same
+        # objects the decision would have written.
+        return DecisionOutcome(decision=decision, record=record, lineage=lineage,
+                               audit_event=audit_event)
+
+    for reference in new_evidence:
         store.write("evidence", reference)
     store.write("decision", decision)
     store.write("record", record)

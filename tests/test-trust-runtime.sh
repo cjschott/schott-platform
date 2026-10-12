@@ -239,9 +239,13 @@ def make_store(tmp):
     return TrustStore(Path(tmp) / "trust")
 
 
-def evidence():
+def evidence(store):
+    # The next free identity, which is what an operator cites now that a
+    # supplied evidence identity is carried rather than re-labelled by the
+    # store. A fixed id would be a citation of evidence that already means
+    # something else the moment a second decision is made.
     return (TrustEvidenceReference(
-        evidence_id="TEVID-000001",
+        evidence_id=store.peek_next_id("evidence"),
         kind="fingerprint",
         reference="/approved/evidence/fingerprint.txt",
         recorded_at=STAMP,
@@ -712,7 +716,7 @@ def orphan_authority(store):
         external_identity_reference="secret-source://approved/operator-root",
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(),
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         created_at=STAMP,
         provenance={"class": "declared", "source": "operator-out-of-band"},
         state=TrustState.TRUSTED.value,
@@ -1058,7 +1062,7 @@ with tempfile.TemporaryDirectory() as tmp:
         store, subject_id="HOST-EXP", subject_type="host", requested_state=TR,
         actor_authority_id=authority.authority_id, decided_at=STAMP,
         reason="granted with a short expiration for the renewal regression",
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(), scope=scope, expiration=SHORT)
 
@@ -1071,7 +1075,7 @@ with tempfile.TemporaryDirectory() as tmp:
         store, subject_id="HOST-EXP", subject_type="host", requested_state=TR,
         actor_authority_id=authority.authority_id, decided_at=AFTER,
         reason="renewed by explicit decision after the grant elapsed",
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(), scope=scope,
         expiration=AFTER + timedelta(days=365),
@@ -1103,7 +1107,7 @@ with tempfile.TemporaryDirectory() as tmp:
         store, subject_id="HOST-LAPSE", subject_type="host", requested_state=TR,
         actor_authority_id=authority.authority_id, decided_at=STAMP,
         reason="granted with a short expiration for the revocation regression",
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(), scope=scope, expiration=SHORT)
 
@@ -1111,7 +1115,7 @@ with tempfile.TemporaryDirectory() as tmp:
         store, subject_id="HOST-LAPSE", subject_type="host", requested_state=RV,
         actor_authority_id=authority.authority_id, decided_at=LATE,
         reason="the lapsed grant was found compromised and is withdrawn",
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(), scope=None, expiration=None,
         revokes_record_id=lapsed_grant.record.record_id,
@@ -1128,7 +1132,7 @@ with tempfile.TemporaryDirectory() as tmp:
             store, subject_id="HOST-LAPSE", subject_type="host", requested_state=TR,
             actor_authority_id=authority.authority_id, decided_at=LATE + timedelta(days=10),
             reason="attempting to revive a long-revoked lapsed lineage",
-            evidence_references=evidence(),
+            evidence_references=evidence(store),
             verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
             verification_details=details(), scope=scope, expiration=LATE + timedelta(days=800),
             lineage_id=lapsed_grant.lineage.lineage_id)
@@ -1156,7 +1160,7 @@ with tempfile.TemporaryDirectory() as tmp:
         actor_authority_id=authority.authority_id,
         decided_at=STAMP,
         reason="verified out of band by the operator during commissioning",
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(),
         scope=scope,
@@ -1173,7 +1177,7 @@ with tempfile.TemporaryDirectory() as tmp:
         create_decision(store, subject_id=authority.authority_id, subject_type="user",
                         requested_state=TR, actor_authority_id=authority.authority_id,
                         decided_at=STAMP, reason="self approval attempt for testing",
-                        evidence_references=evidence(),
+                        evidence_references=evidence(store),
                         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
                         verification_details=details(), scope=scope, expiration=YEAR)
         bad("a subject cannot approve itself")
@@ -1185,7 +1189,7 @@ with tempfile.TemporaryDirectory() as tmp:
         create_decision(store, subject_id="HOST-0002", subject_type="host",
                         requested_state=RS, actor_authority_id=authority.authority_id,
                         decided_at=STAMP, reason="restricted with no scope for testing",
-                        evidence_references=evidence(),
+                        evidence_references=evidence(store),
                         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
                         verification_details=details(), scope=None, expiration=YEAR)
         bad("a restricted decision with no scope is refused")
@@ -1197,7 +1201,7 @@ with tempfile.TemporaryDirectory() as tmp:
         create_decision(store, subject_id="HOST-0003", subject_type="host",
                         requested_state=TR, actor_authority_id=authority.authority_id,
                         decided_at=STAMP, reason="expiration already elapsed for testing",
-                        evidence_references=evidence(),
+                        evidence_references=evidence(store),
                         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
                         verification_details=details(), scope=scope,
                         expiration=STAMP - timedelta(days=1))
@@ -1210,7 +1214,7 @@ with tempfile.TemporaryDirectory() as tmp:
         store, subject_id="HOST-0001", subject_type="host", requested_state=RV,
         actor_authority_id=authority.authority_id, decided_at=LATER,
         reason="host was found compromised during a scheduled review",
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(), scope=None, expiration=None,
         revokes_record_id=first.record.record_id, lineage_id=first.lineage.lineage_id)
@@ -1222,7 +1226,7 @@ with tempfile.TemporaryDirectory() as tmp:
                         requested_state=TR, actor_authority_id=authority.authority_id,
                         decided_at=LATER + timedelta(days=1),
                         reason="attempting to reactivate a revoked lineage",
-                        evidence_references=evidence(),
+                        evidence_references=evidence(store),
                         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
                         verification_details=details(), scope=scope, expiration=YEAR,
                         lineage_id=first.lineage.lineage_id)
@@ -1239,7 +1243,7 @@ with tempfile.TemporaryDirectory() as tmp:
         store, subject_id="HOST-0001", subject_type="host", requested_state=TR,
         actor_authority_id=authority.authority_id, decided_at=LATER + timedelta(days=2),
         reason="host rebuilt and re-verified out of band after revocation",
-        evidence_references=evidence(),
+        evidence_references=evidence(store),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=details(), scope=scope, expiration=YEAR,
         supersedes_lineage_id=first.lineage.lineage_id)

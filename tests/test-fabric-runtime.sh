@@ -205,6 +205,21 @@ EXPECTED_PREFIXES = {
 check(PREFIXES == EXPECTED_PREFIXES, "identifier prefixes match the accepted schemas")
 
 
+# A shape names the authority that enforces it. The fixtures name the real
+# ones, so a shape that stopped being a reference to enforcing code would be
+# visible here rather than merely valid.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
+
 def definition(**overrides):
     fields = dict(
         capability_id="CAPDEF-0001",
@@ -225,9 +240,12 @@ def contract(**overrides):
         contract_version="1.0.0",
         effect_class="content-generating",
         determinism_class="nondeterministic",
-        request_shape={"prompt": "string"},
-        response_shape={"text": "string"},
-        failure_modes=("refused", "unavailable"),
+        request_shape=REQUEST_SHAPE,
+        response_shape=RESPONSE_SHAPE,
+        # A generation interface can decline a call outright, and the adapter
+        # in front of it can fail to serve one. Two governed modes, kept
+        # distinct because they mean different things to a caller.
+        failure_modes=("refused", "adapter-error"),
         resource_requirements={"host_memory_mb": 2048},
         compatible_with=(),
         provenance={"class": "declared", "source": "operator"},
@@ -258,6 +276,10 @@ def host(**overrides):
         node_identity_reference="secret-source://approved/node-identity",
         fabric_node_trust_record_id="TREC-000001",
         verified_resource_profile={"host_memory_mb": 65536, "accelerator_class": "discrete-gpu"},
+        # Required since the optionality between schema, model and admission
+        # was reconciled: a host claiming a verified profile must name what
+        # verified it.
+        verification_reference="/approved/evidence/host-observed.txt",
         location_class="on-premises",
         data_classification="internal",
         availability_intent="in-service",
@@ -300,6 +322,10 @@ def instance(**overrides):
         admitted_until=LATER,
         provenance={"class": "declared", "source": "operator"},
         lifecycle_state="admitted",
+        # An instance is permanently bound to the advertisement it was admitted
+        # against. Admission always required one; the model now says so too, so
+        # a fixture that omitted it was describing a record nobody could admit.
+        advertisement_id="CADV-000001",
     )
     fields.update(overrides)
     return CapabilityInstance(**fields)
@@ -1341,6 +1367,18 @@ WHEN = datetime(2026, 8, 5, 9, 0, 0, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 8, 6, 9, 0, 0, tzinfo=timezone.utc)
 ORIGIN = {"class": "declared", "source": "operator"}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 
 def fixture_evidence(kind):
     """The evidence every persisted record must carry, written literally.
@@ -1394,9 +1432,9 @@ def accepted_records():
          "contract_id", CapabilityContract(
              contract_id="CCON-0001", capability_id="CAPDEF-0001",
              contract_version="1.0.0", effect_class="read-only",
-             determinism_class="deterministic", request_shape={"text": "string"},
-             response_shape={"summary": "string"}, failure_modes=("unavailable",),
-             resource_requirements={"memory_mb": 512}, compatible_with=(),
+             determinism_class="deterministic", request_shape=REQUEST_SHAPE,
+             response_shape=RESPONSE_SHAPE, failure_modes=("adapter-error",),
+             resource_requirements={"host_memory_mb": 512}, compatible_with=(),
              provenance=ORIGIN,
              evidence=fixture_evidence("capability-contract"))),
         ("capability-package", "capability-packages", "CPKG-0001",
@@ -1405,14 +1443,18 @@ def accepted_records():
              contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
              package_version="1.0.0",
              artifact_reference="oci://registry.invalid/summarise",
-             resource_requirements={"memory_mb": 512},
+             resource_requirements={"host_memory_mb": 512},
              trust_domain="schott-platform", provenance=ORIGIN,
              evidence=fixture_evidence("capability-package"))),
         ("capability-host", "capability-hosts", "CHOST-0001",
          "capability_host_id", CapabilityHost(
              capability_host_id="CHOST-0001", node_identity_reference="node/schai",
              fabric_node_trust_record_id="TAUTH-000001",
-             verified_resource_profile={"memory_mb": 8192},
+             verified_resource_profile={"host_memory_mb": 8192},
+             # Required since the optionality between schema, model and
+             # admission was reconciled: a host claiming a verified profile
+             # must name what verified it.
+             verification_reference="EVID-000001",
              location_class="on-premises", data_classification="internal",
              availability_intent="available", provenance=ORIGIN,
              evidence=fixture_evidence("capability-host"))),
@@ -1421,7 +1463,7 @@ def accepted_records():
              advertisement_id="CADV-000001", capability_host_id="CHOST-0001",
              capability_package_id="CPKG-0001", contract_id="CCON-0001",
              satisfied_contract_versions=("1.0.0",),
-             advertised_resource_profile={"memory_mb": 512},
+             advertised_resource_profile={"host_memory_mb": 512},
              observed_at=WHEN, valid_until=UNTIL, provenance=ORIGIN,
              evidence=fixture_evidence("capability-advertisement"))),
         ("capability-instance", "capability-instances", "CINST-000001",
@@ -1429,7 +1471,7 @@ def accepted_records():
              instance_id="CINST-000001", capability_id="CAPDEF-0001",
              capability_package_id="CPKG-0001", capability_host_id="CHOST-0001",
              contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
-             verified_resource_profile={"memory_mb": 512},
+             verified_resource_profile={"host_memory_mb": 512},
              admission_decision_id="TDEC-000001",
              package_trust_record_id="TAUTH-000002",
              host_trust_record_id="TAUTH-000001",
@@ -1728,6 +1770,18 @@ STAMP = "2026-08-04T12:00:00+00:00"
 LATER = "2026-08-05T12:00:00+00:00"
 PROV = {"declared_by": "operator", "declared_at": STAMP}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 DIRS = {
     "capability-definition": "capability-definitions",
     "capability-contract": "capability-contracts",
@@ -1756,10 +1810,10 @@ CONTRACT = {
     "contract_version": "1.0.0",
     "effect_class": "read-only",
     "determinism_class": "deterministic",
-    "request_shape": {"text": "string"},
-    "response_shape": {"summary": "string"},
-    "failure_modes": ["unavailable"],
-    "resource_requirements": {"memory_mb": 512},
+    "request_shape": REQUEST_SHAPE,
+    "response_shape": RESPONSE_SHAPE,
+    "failure_modes": ["adapter-error"],
+    "resource_requirements": {"host_memory_mb": 512},
     "compatible_with": [],
     "provenance": PROV,
 }
@@ -1770,7 +1824,7 @@ PACKAGE = {
     "satisfied_contract_versions": ["1.0.0"],
     "package_version": "1.0.0",
     "artifact_reference": "oci://registry.invalid/summarise",
-    "resource_requirements": {"memory_mb": 512},
+    "resource_requirements": {"host_memory_mb": 512},
     "trust_domain": "schott-platform",
     "provenance": PROV,
 }
@@ -1778,7 +1832,10 @@ HOST = {
     "capability_host_id": "CHOST-0001",
     "node_identity_reference": "node/schai",
     "fabric_node_trust_record_id": "TAUTH-000001",
-    "verified_resource_profile": {"memory_mb": 8192},
+    "verified_resource_profile": {"host_memory_mb": 8192},
+    # Required since the optionality between schema, model and admission was
+    # reconciled: a host claiming a verified profile must name what verified it.
+    "verification_reference": "/approved/evidence/host-observed.txt",
     "location_class": "on-premises",
     "data_classification": "internal",
     "availability_intent": "available",
@@ -1790,7 +1847,7 @@ ADVERTISEMENT = {
     "capability_package_id": "CPKG-0001",
     "contract_id": "CCON-0001",
     "satisfied_contract_versions": ["1.0.0"],
-    "advertised_resource_profile": {"memory_mb": 512},
+    "advertised_resource_profile": {"host_memory_mb": 512},
     "observed_at": STAMP,
     "valid_until": LATER,
     "provenance": PROV,
@@ -1802,7 +1859,7 @@ INSTANCE = {
     "capability_host_id": "CHOST-0001",
     "contract_id": "CCON-0001",
     "satisfied_contract_versions": ["1.0.0"],
-    "verified_resource_profile": {"memory_mb": 512},
+    "verified_resource_profile": {"host_memory_mb": 512},
     "admission_decision_id": "TDEC-000001",
     "package_trust_record_id": "TAUTH-000002",
     "host_trust_record_id": "TAUTH-000001",
@@ -2724,6 +2781,18 @@ STAMP = "2026-08-04T12:00:00+00:00"
 LATER = "2026-08-05T12:00:00+00:00"
 PROV = {"class": "declared", "source": "operator"}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 
 def accepted(kind, evidence):
     """One valid record of a kind, carrying assembled evidence."""
@@ -2735,32 +2804,36 @@ def accepted(kind, evidence):
         "capability-contract": dict(
             contract_id="CCON-0001", capability_id="CAPDEF-0001",
             contract_version="1.0.0", effect_class="read-only",
-            determinism_class="deterministic", request_shape={"text": "string"},
-            response_shape={"summary": "string"}, failure_modes=("unavailable",),
-            resource_requirements={"memory_mb": 512}, compatible_with=(), provenance=PROV),
+            determinism_class="deterministic", request_shape=REQUEST_SHAPE,
+            response_shape=RESPONSE_SHAPE, failure_modes=("adapter-error",),
+            resource_requirements={"host_memory_mb": 512}, compatible_with=(), provenance=PROV),
         "capability-package": dict(
             capability_package_id="CPKG-0001", capability_id="CAPDEF-0001",
             contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
             package_version="1.0.0", artifact_reference="oci://registry.invalid/summarise",
-            resource_requirements={"memory_mb": 512}, trust_domain="schott-platform",
+            resource_requirements={"host_memory_mb": 512}, trust_domain="schott-platform",
             provenance=PROV),
         "capability-host": dict(
             capability_host_id="CHOST-0001", node_identity_reference="node/schai",
             fabric_node_trust_record_id="TAUTH-000001",
-            verified_resource_profile={"memory_mb": 8192}, location_class="on-premises",
+            verified_resource_profile={"host_memory_mb": 8192},
+            # Required since the optionality between schema, model and
+            # admission was reconciled.
+            verification_reference="/approved/evidence/host-observed.txt",
+            location_class="on-premises",
             data_classification="internal", availability_intent="available",
             provenance=PROV),
         "capability-advertisement": dict(
             advertisement_id="CADV-000001", capability_host_id="CHOST-0001",
             capability_package_id="CPKG-0001", contract_id="CCON-0001",
             satisfied_contract_versions=("1.0.0",),
-            advertised_resource_profile={"memory_mb": 512},
+            advertised_resource_profile={"host_memory_mb": 512},
             observed_at=WHEN, valid_until=UNTIL, provenance=PROV),
         "capability-instance": dict(
             instance_id="CINST-000001", capability_id="CAPDEF-0001",
             capability_package_id="CPKG-0001", capability_host_id="CHOST-0001",
             contract_id="CCON-0001", satisfied_contract_versions=("1.0.0",),
-            verified_resource_profile={"memory_mb": 512},
+            verified_resource_profile={"host_memory_mb": 512},
             admission_decision_id="TDEC-000001", package_trust_record_id="TAUTH-000002",
             host_trust_record_id="TAUTH-000001",
             effective_scope={"data_classification": "internal"},
@@ -3543,7 +3616,7 @@ ADVERTISEMENT_BODY = dict(
     advertisement_id="CADV-000009", capability_host_id="CHOST-0001",
     capability_package_id="CPKG-0001", contract_id="CCON-0001",
     satisfied_contract_versions=("1.0.0",),
-    advertised_resource_profile={"memory_mb": 512},
+    advertised_resource_profile={"host_memory_mb": 512},
     observed_at=WHEN, valid_until=UNTIL, provenance=PROV)
 
 
@@ -3799,9 +3872,9 @@ def forensic(base):
     return entries
 
 
-def evidence():
+def evidence(store):
     return (TrustEvidenceReference(
-        evidence_id="TEVID-000001", kind="fingerprint",
+        evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
         reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),)
 
 
@@ -3819,7 +3892,7 @@ def scope():
         permitted_capabilities=("coding-workload",),
         permitted_operations=("linux.hostname",),
         permitted_data_classifications=("internal",),
-        permitted_targets=("schmgmt.home.arpa",),
+        permitted_targets=("node/schai",),
         validity_start=STAMP, validity_end=YEAR)
 
 
@@ -3860,7 +3933,7 @@ def seeded(tmp):
         return create_decision(
             store, subject_id=subject, subject_type="host", requested_state=state,
             actor_authority_id=authority.authority_id, decided_at=decided_at,
-            reason=reason, evidence_references=evidence(),
+            reason=reason, evidence_references=evidence(store),
             verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
             verification_details=details(), scope=scope(), expiration=expiration,
             lineage_id=lineage_id, revokes_record_id=revokes_record_id)
@@ -5080,6 +5153,18 @@ YEAR = STAMP + timedelta(days=365)
 OPERATOR = "operator:cschott"
 PROV = {"class": "declared", "source": "operator"}
 
+# A shape references the authority that enforces it; it never restates one.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
 
 def forensic(base):
     entries = {}
@@ -5156,7 +5241,7 @@ def seeded_trust(tmp, subject="node/schai", state=TrustState.TRUSTED.value,
         requested_state=state, actor_authority_id=authority.authority_id,
         decided_at=STAMP, reason="granted for the fabric admission regression",
         evidence_references=(TrustEvidenceReference(
-            evidence_id="TEVID-000001", kind="fingerprint",
+            evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
             reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
         verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
         verification_details=TrustVerificationDetails(
@@ -5169,13 +5254,13 @@ def seeded_trust(tmp, subject="node/schai", state=TrustState.TRUSTED.value,
             permitted_capabilities=("coding-workload",),
             permitted_operations=("linux.hostname",),
             permitted_data_classifications=("internal",),
-            permitted_targets=("schmgmt.home.arpa",),
+            permitted_targets=("node/schai",),
             validity_start=STAMP, validity_end=YEAR),
         expiration=expiration)
     return store, granted
 
 
-PROFILE = {"host_memory_mb": 8192, "host_cpu_cores": 8, "architecture": "x86_64"}
+PROFILE = {"host_memory_mb": 8192, "host_cpu_cores": 8, "architecture": "x86-64"}
 
 
 def capability(store, request_id="req-cap-1", **overrides):
@@ -5193,9 +5278,9 @@ def contract(store, capability_id, request_id="req-con-1", **overrides):
                   approving_authority=OPERATOR, recorded_at=STAMP,
                   capability_id=capability_id, contract_version="1.0.0",
                   effect_class="read-only", determinism_class="deterministic",
-                  request_shape={"text": "string"},
-                  response_shape={"summary": "string"},
-                  failure_modes=("unavailable",),
+                  request_shape=REQUEST_SHAPE,
+                  response_shape=RESPONSE_SHAPE,
+                  failure_modes=("adapter-error",),
                   resource_requirements={"host_memory_mb": 512},
                   compatible_with=(), provenance=PROV)
     fields.update(overrides)
@@ -5606,12 +5691,26 @@ with TemporaryDirectory() as tmp:
         ({"valid_until": STAMP - timedelta(hours=1)}, "a reversed validity window"),
         ({"observed_at": STAMP.replace(tzinfo=None)}, "a naive observation instant"),
         ({"valid_until": LATER.replace(tzinfo=None)}, "a naive validity boundary"),
+        # The window must cover the moment the claim is being registered.
+        # `recorded_at` is the governed request's own instant, so the verdict
+        # is a property of the request rather than of when it was replayed.
+        ({"observed_at": STAMP - timedelta(hours=2),
+          "valid_until": STAMP - timedelta(hours=1)},
+         "a window that closed before the request was recorded"),
+        ({"observed_at": STAMP - timedelta(hours=1), "valid_until": STAMP},
+         "a window that ends exactly when the request is recorded"),
+        ({"observed_at": STAMP + timedelta(hours=1),
+          "valid_until": STAMP + timedelta(hours=2)},
+         "an observation instant after the request was recorded"),
     )
-    for overrides, description in ADVERTISEMENT_REFUSALS:
+    # One request identity per case. Sharing a single one is safe only while
+    # every case refuses: the moment one is accepted, the rest collide with it
+    # and report a request-identity conflict instead of the defect under test.
+    for index, (overrides, description) in enumerate(ADVERTISEMENT_REFUSALS):
         before = forensic(fabric_root)
         result = advertisement(store, host.record_id, pkg.record_id,
                                overrides.pop("contract_id", con.record_id),
-                               request_id="req-adv-bad", **overrides)
+                               request_id=f"req-adv-bad-{index}", **overrides)
         check(result.record_id is None,
               f"an advertisement carrying {description} is refused")
         check(forensic(fabric_root) == before,
@@ -5624,6 +5723,36 @@ with TemporaryDirectory() as tmp:
                                  other_con.record_id, request_id="req-inc")
     check(inconsistent.record_id is None,
           "an advertisement whose contract is not the package's contract is refused")
+
+    # A window that covers the recording instant is accepted, at both the
+    # inclusive start and a strictly-interior position.
+    ADVERTISEMENT_FRESH = (
+        ("start", {"observed_at": STAMP, "valid_until": LATER},
+         "an observation instant equal to the recording instant"),
+        ("inside", {"observed_at": STAMP - timedelta(hours=1),
+                    "valid_until": LATER},
+         "a window recorded strictly inside it"),
+    )
+    for slug, overrides, description in ADVERTISEMENT_FRESH:
+        fresh = advertisement(store, host.record_id, pkg.record_id,
+                              con.record_id, request_id=f"req-adv-fresh-{slug}",
+                              **overrides)
+        check(fresh.outcome == ACCEPTED,
+              f"an advertisement with {description} is accepted")
+
+    # The verdict comes from the three governed instants and nothing else, so
+    # the same request replayed under a different request identity — and at a
+    # different wall-clock moment — decides the same way. A check reading the
+    # system clock could not promise this.
+    stale_body = {"observed_at": STAMP - timedelta(hours=2),
+                  "valid_until": STAMP - timedelta(hours=1)}
+    first = advertisement(store, host.record_id, pkg.record_id, con.record_id,
+                          request_id="req-adv-det-1", **stale_body)
+    second = advertisement(store, host.record_id, pkg.record_id, con.record_id,
+                           request_id="req-adv-det-2", **stale_body)
+    check(first.record_id is None and second.record_id is None
+          and first.reason == second.reason,
+          "the freshness verdict depends only on the governed instants")
 
     accepted_adv = advertisement(store, host.record_id, pkg.record_id,
                                  con.record_id, request_id="req-adv-ok")
@@ -5772,8 +5901,8 @@ BASE_CAPABILITY = dict(
 BASE_CONTRACT = dict(
     actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
     contract_version="1.0.0", effect_class="read-only",
-    determinism_class="deterministic", request_shape={"text": "string"},
-    response_shape={"summary": "string"}, failure_modes=("unavailable",),
+    determinism_class="deterministic", request_shape=REQUEST_SHAPE,
+    response_shape=RESPONSE_SHAPE, failure_modes=("adapter-error",),
     resource_requirements={"host_memory_mb": 512}, compatible_with=(),
     provenance=dict(PROV), description=None)
 
@@ -5915,9 +6044,14 @@ try:
              ("contract_version", "2.0.0"),
              ("effect_class", "computational"),
              ("determinism_class", "nondeterministic"),
-             ("request_shape", {"text": "string", "locale": "string"}),
-             ("response_shape", {"summary": "string", "confidence": "string"}),
-             ("failure_modes", ("unavailable", "timed-out")),
+             # A different version of the same authority is a different
+             # interface, and a governed one, so the conflict is about the
+             # change rather than about the value being unadmittable.
+             ("request_shape", dict(REQUEST_SHAPE, schema_version=2)),
+             ("response_shape", dict(
+                 RESPONSE_SHAPE,
+                 content=dict(RESPONSE_SHAPE["content"], schema_version=2))),
+             ("failure_modes", ("adapter-error", "timeout")),
              ("resource_requirements", {"host_memory_mb": 1024}),
              ("compatible_with", ("0.9.0",)),
              ("provenance", dict(OTHER_PROV)),
@@ -5967,7 +6101,7 @@ try:
              ("fabric_node_trust_record_id", "TREC-999999"),
              ("verified_resource_profile", {"host_memory_mb": 4096,
                                             "host_cpu_cores": 8,
-                                            "architecture": "x86_64"}),
+                                            "architecture": "x86-64"}),
              ("verification_reference", "/approved/evidence/host-reobserved.txt"),
              ("location_class", "third-party-hosted"),
              ("data_classification", "confidential"),
@@ -5998,7 +6132,10 @@ try:
                  capability_host_id=adm.record_id,
                  capability_package_id=pkg.record_id, contract_id=con.record_id),
             (("actor", "CHOST-9999"),
-             ("recorded_at", LATER),
+             # Inside the base window on purpose: a `recorded_at` at or past
+             # `valid_until` is refused on structure before the request is
+             # identified, which would prove a refusal rather than a conflict.
+             ("recorded_at", STAMP + timedelta(hours=1)),
              ("capability_host_id", "CHOST-9999"),
              ("capability_package_id", "CPKG-9999"),
              ("contract_id", "CCON-9999"),
@@ -6546,7 +6683,10 @@ try:
                   capability_host_id=adm.record_id,
                   capability_package_id=pkg.record_id, contract_id=con.record_id),
              (("actor", "CHOST-9999"),
-              ("recorded_at", LATER),
+              # Still inside the base window: a structurally valid change has
+              # to remain structurally valid, and `recorded_at` at or past
+              # `valid_until` is refused rather than identified.
+              ("recorded_at", STAMP + timedelta(hours=1)),
               ("observed_at", STAMP - timedelta(hours=1)),
               ("valid_until", LATER + timedelta(hours=1)))),
         )
@@ -6599,7 +6739,16 @@ RELEASED_MODULES = {"__init__.py", "admission.py", "errors.py", "evidence.py",
                     "store.py", "trust_adapter.py", "validator.py",
                     # One module per increment: C5's, C6's, C8's, then the
                     # interface the twelve operations are reached through.
-                    "eligibility.py", "selection.py", "inspection.py", "cli.py"}
+                    "eligibility.py", "selection.py", "inspection.py", "cli.py",
+                    # The one resource-semantics primitive both admission and
+                    # eligibility consume, so the two planes cannot drift.
+                    "resources.py",
+                    # The read-only reader for the deployment Evidence
+                    # authority. It lives here because Fabric admission is its
+                    # only consumer and this package is repository-side: placing
+                    # it in the Capability runtime to reuse code would move
+                    # plane ownership and make it an installed object.
+                    "evidence_authority.py"}
 check({path.name for path in (root / "tools" / "fabric").glob("*.py")}
       == RELEASED_MODULES,
       "the fabric package holds the released modules and C5, and nothing else")
@@ -6676,7 +6825,8 @@ class DomainTrust:
 # Exact containment, never interpretation: the package may require only
 # dimensions the operator verified, at the values the operator verified.
 INSTANCE_PACKAGE = dict(BASE_PACKAGE,
-                        resource_requirements={"architecture": "x86_64"})
+                        resource_requirements={"host_memory_mb": 512,
+                                               "architecture": "x86-64"})
 # The operator's own bound, in the released Trust scope vocabulary. Every
 # dimension is named: every released dimension must survive composition
 # non-empty, and one the composition leaves empty bounds nothing.
@@ -6687,12 +6837,12 @@ INSTANCE_PACKAGE = dict(BASE_PACKAGE,
 SCOPE = {"permitted_capabilities": ["CAPDEF-0001"],
          "permitted_operations": ["linux.hostname"],
          "permitted_data_classifications": ["internal"],
-         "permitted_targets": ["schmgmt.home.arpa"]}
+         "permitted_targets": ["node/schai"]}
 # What the intersection of both grants and that bound comes to.
 EFFECTIVE = {"permitted_capabilities": ("CAPDEF-0001",),
              "permitted_operations": ("linux.hostname",),
              "permitted_data_classifications": ("internal",),
-             "permitted_targets": ("schmgmt.home.arpa",)}
+             "permitted_targets": ("node/schai",)}
 BASE_INSTANCE = dict(
     actor=OPERATOR, approving_authority=OPERATOR, recorded_at=STAMP,
     evaluated_at=LATER, satisfied_contract_versions=("1.0.0",),
@@ -6761,7 +6911,7 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
             requested_state=state, actor_authority_id=authority.authority_id,
             decided_at=STAMP, reason="granted for the fabric admission regression",
             evidence_references=(TrustEvidenceReference(
-                evidence_id="TEVID-000001", kind="fingerprint",
+                evidence_id=store.peek_next_id("evidence"), kind="fingerprint",
                 reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
             verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
             verification_details=TrustVerificationDetails(
@@ -6774,7 +6924,11 @@ def seeded_fabric_trust(tmp, node="node/schai", artifact="CPKG-0001",
                 permitted_capabilities=tuple(capabilities),
                 permitted_operations=("linux.hostname",),
                 permitted_data_classifications=("internal",),
-                permitted_targets=("schmgmt.home.arpa",),
+                # Every machine this world admits, because a grant that named
+                # only one of them would authorise work on one and refuse it
+                # on the other -- which is the target rule doing its job, not
+                # the selection behaviour these matrices are about.
+                permitted_targets=(node,) + tuple(nodes),
                 validity_start=STAMP, validity_end=YEAR),
             expiration=expiration)
 
@@ -6977,7 +7131,7 @@ try:
             ("capability_host_id", "CHOST-9999"),
             ("contract_id", "CCON-9999"),
             ("satisfied_contract_versions", ("1.0.0", "2.0.0")),
-            ("verified_resource_profile", {"architecture": "x86_64"}),
+            ("verified_resource_profile", {"architecture": "x86-64"}),
             ("admission_decision_id", "TDEC-000002"),
             ("package_trust_record_id", "TREC-999999"),
             ("host_trust_record_id", "TREC-999998"),
@@ -7044,12 +7198,16 @@ try:
         alt_pkg = declare_package(store, **dict(
             INSTANCE_PACKAGE, request_id="i7-pkg-alt", capability_id=cap.record_id,
             contract_id=con.record_id, package_version="2.0.0"))
-        # A package the verified host cannot satisfy. 512 is numerically below
-        # the host's 8192, and that is not containment, which is the point.
+        # A package the verified host genuinely cannot satisfy: it asks for more
+        # memory than the machine was verified to have. This fixture used to ask
+        # for LESS (512 against 8192) and was refused only because comparison
+        # was exact equality -- which is the defect capacity semantics fixes, so
+        # the case has to be restated to still mean what its name says.
         heavy_pkg = declare_package(store, **dict(
             INSTANCE_PACKAGE, request_id="i7-pkg-heavy", capability_id=cap.record_id,
             contract_id=con.record_id, package_version="3.0.0",
-            resource_requirements={"host_memory_mb": 512}))
+            resource_requirements={"host_memory_mb": 65536,
+                                   "architecture": "x86-64"}))
         second_host = admit_subject(store, trust_store, **dict(
             BASE_SUBJECT, request_id="i7-host2",
             fabric_node_trust_record_id=host_trust.record.record_id))
@@ -7073,15 +7231,21 @@ try:
             capability_host_id=second_host.record_id,
             capability_package_id=pkg.record_id, contract_id=con.record_id,
             observed_at=STAMP, valid_until=YEAR))
+        # Both windows are registered from inside themselves -- a claim made
+        # while it was live -- and only go stale, or become not-yet-valid,
+        # relative to the instant the admission is evaluated at. Registration
+        # refuses a window that never covered its own request, so a claim that
+        # was dead on arrival cannot be the fixture for a claim that lapsed.
         stale_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-stale", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-            contract_id=con.record_id, observed_at=STAMP - timedelta(days=3),
+            contract_id=con.record_id, recorded_at=STAMP - timedelta(days=3),
+            observed_at=STAMP - timedelta(days=3),
             valid_until=STAMP - timedelta(days=2)))
         future_adv = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-adv-future", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-            contract_id=con.record_id, observed_at=YEAR,
+            contract_id=con.record_id, recorded_at=YEAR, observed_at=YEAR,
             valid_until=YEAR + timedelta(days=1)))
         check(all(result.outcome == ACCEPTED for result in (
                   other_cap, other_con, other_pkg, alt_pkg, heavy_pkg, second_host,
@@ -7431,12 +7595,20 @@ try:
               and replayed.outcome == EXACT_REPLAY
               and replayed.record_id == "CROUTE-0001",
               "a byte-identical route request replays the original route")
+        # Routes diverge from every other kind here, since G11-AC. A new request
+        # identity normally means a new record even for identical content -- and
+        # for a route that would be a second current declaration for one request
+        # class, which is the fork selection refuses to resolve. So the request
+        # identity is no longer what decides: the class already has a route, and
+        # a second one is refused whatever identity asks for it. Superseding the
+        # head is how a class gets a new route, and that is exercised below.
         independent, error = call("create_route", store,
                                   **dict(route_base, request_id="i7-route-2"))
         check(error is None and independent is not None
-              and independent.outcome == ACCEPTED
-              and independent.record_id == "CROUTE-0002",
-              "identical route content under a new request identity is a new route")
+              and independent.outcome == REFUSED
+              and independent.reason == "request-class-already-routed",
+              f"a second current route for one request class is refused "
+              f"({independent and independent.outcome}/{independent and independent.reason})")
 
         ROUTE_REFUSALS = (
             ("an unresolved candidate", NOT_FOUND, "unresolved-reference",
@@ -7523,9 +7695,9 @@ try:
             supersedes="CROUTE-0001"))
         check(error is None and superseded is not None
               and superseded.outcome == ACCEPTED
-              and superseded.record_id == "CROUTE-0003",
+              and superseded.record_id == "CROUTE-0002",
               "a superseding route creates a new route record")
-        new_route = record_of(store, "capability-route", "CROUTE-0003")
+        new_route = record_of(store, "capability-route", "CROUTE-0002")
         check(new_route.get("supersedes") == "CROUTE-0001",
               "the superseding route names the route it supersedes")
         check(new_route.get("route_version") == 2,
@@ -7555,7 +7727,7 @@ try:
             ("a version that does not increase", REFUSED, "invalid-route-version",
              {"supersedes": "CROUTE-0001", "route_version": 1}),
             ("a version that decreases", REFUSED, "invalid-route-version",
-             {"supersedes": "CROUTE-0003", "route_version": 1}),
+             {"supersedes": "CROUTE-0002", "route_version": 1}),
         )
         for index, (description, outcome, reason, overrides) in enumerate(
                 SUPERSESSION_REFUSALS):
@@ -7719,10 +7891,13 @@ try:
         # A host disappearing, returning, and advertising afresh.
         check(forensic(fabric_root) == settled,
               "host disappearance changes no authoritative record")
+        # The host returns and speaks at YEAR, so that is when it records the
+        # claim as well: a return that published a window it could not yet
+        # have observed would be describing a future it has not reached.
         revived = register_advertisement(store, **dict(
             BASE_ADVERT, request_id="i7-revive", actor=adm.record_id,
             capability_host_id=adm.record_id, capability_package_id=pkg.record_id,
-            contract_id=con.record_id, observed_at=YEAR,
+            contract_id=con.record_id, recorded_at=YEAR, observed_at=YEAR,
             valid_until=YEAR + timedelta(days=1)))
         check(revived.outcome == ACCEPTED,
               "a returning host may publish a fresh advertisement")
@@ -7735,10 +7910,14 @@ try:
               "a fresh advertisement writes nothing to the Trust Plane")
 
         # Re-admission is a new decision under a new request identity.
+        # Bounded by the revived claim's own window (G11-AG), so the refusal
+        # this case is about is the one that fires: an admission reaching past
+        # its advertisement would be refused on the dependency bound and never
+        # reach Trust, which would leave a trust regression invisible here.
         readmitted, error = call("admit_instance", store, trust_store, **dict(
             base, request_id="i7-readmit", evaluated_at=YEAR,
             advertisement_id=revived.record_id, admitted_at=YEAR,
-            admitted_until=YEAR + timedelta(days=30)))
+            admitted_until=YEAR + timedelta(days=1)))
         check(error is None and readmitted is not None,
               "a re-admission attempt raises nothing")
         check(readmitted is not None and readmitted.outcome == REFUSED
@@ -8300,7 +8479,7 @@ try:
                                 trust_store.all_records("authority")][0]["authority_id"],
             decided_at=STAMP, reason="renewed for the fabric refresh regression",
             evidence_references=(TrustEvidenceReference(
-                evidence_id="TEVID-000001", kind="fingerprint",
+                evidence_id=trust_store.peek_next_id("evidence"), kind="fingerprint",
                 reference="/approved/evidence/fingerprint.txt", recorded_at=STAMP),),
             verification_method=VerificationMethod.OUT_OF_BAND_PHYSICAL.value,
             verification_details=TrustVerificationDetails(
@@ -8313,7 +8492,7 @@ try:
                 permitted_capabilities=("CAPDEF-0001",),
                 permitted_operations=("linux.hostname",),
                 permitted_data_classifications=("internal",),
-                permitted_targets=("schmgmt.home.arpa",),
+                permitted_targets=("node/schai",),
                 validity_start=STAMP, validity_end=YEAR),
             supersedes=host_trust.decision.decision_id,
             lineage_id=host_trust.lineage.lineage_id)
@@ -8604,8 +8783,11 @@ try:
         check(replayed.outcome == EXACT_REPLAY
               and replayed.record_id == accepted_claim.record_id,
               "a byte-identical claim on the current declaration replays exactly")
+        # A different claim that is still structurally valid: moving the
+        # observation *earlier* keeps it inside the recorded window, so what
+        # this proves is the identity conflict rather than a refusal.
         conflicting = register_advertisement(store, **dict(
-            current, request_id="i7-adv-head", observed_at=STAMP + timedelta(hours=1)))
+            current, request_id="i7-adv-head", observed_at=STAMP - timedelta(hours=1)))
         check(conflicting.outcome == CONFLICT
               and conflicting.reason == CONFLICT_REASON,
               "a changed claim under one request identity conflicts")
@@ -9682,11 +9864,17 @@ with TemporaryDirectory() as tmp:
 # expiry that removes eligibility changes no authoritative record.
 with TemporaryDirectory() as tmp:
     fabric_root = Path(tmp) / "fabric"
+    # The binding is admitted bounded by its claim, because since G11-AG an
+    # admission reaching past its advertisement is refused at the write. The
+    # tail this case needs is then produced as a legacy record through the
+    # variant helper -- a shape a store can still hold, and which historical
+    # CINST-000001 has, but which no governed path will mint again.
     store, trust_store, request, *_, inst = i8_world(
-        tmp, advert={"valid_until": SOON})
+        tmp, advert={"valid_until": SOON}, instance={"admitted_until": SOON})
+    lapsed = variant_instance(store, inst.record_id, "CINST-000002",
+                              admitted_until=STALE_AT + timedelta(days=1))
     before = forensic(fabric_root)
-    verdict, error = verdict_for(store, trust_store, inst.record_id,
-                                 request, STALE_AT)
+    verdict, error = verdict_for(store, trust_store, lapsed, request, STALE_AT)
     check(error is None, f"a lapsed advertisement evaluates cleanly ({error})")
     check(unmet_of(verdict) == ("ELIG-6",),
           "an advertisement outside its validity window fails ELIG-6 alone")
@@ -9835,8 +10023,13 @@ with TemporaryDirectory() as tmp:
 # Every unmet condition is reported, in schema order, so an operator sees the
 # whole picture rather than whichever check happened to run first.
 with TemporaryDirectory() as tmp:
+    # Bounded at the write and lapsed as a legacy record, for the same reason
+    # as the ELIG-6 case above: the matrix needs ELIG-6 unmet while ELIG-7
+    # stays met, and only a historical-shaped record can still be both.
     store, trust_store, request, cap, con, pkg, adm, adv, inst = i8_world(
-        tmp, advert={"valid_until": SOON})
+        tmp, advert={"valid_until": SOON}, instance={"admitted_until": SOON})
+    lapsed = variant_instance(store, inst.record_id, "CINST-000002",
+                              admitted_until=STALE_AT + timedelta(days=1))
     withdrawn = admission_module.withdraw_subject(
         store, request_id="i8-multi-drain", actor=OPERATOR,
         approving_authority=OPERATOR, recorded_at=STAMP,
@@ -9848,9 +10041,9 @@ with TemporaryDirectory() as tmp:
         "capability-package"))
     eligibility_module.verify_trust_record = substitute
     try:
-        verdict, error = verdict_for(store, trust_store, inst.record_id,
+        verdict, error = verdict_for(store, trust_store, lapsed,
                                      request, STALE_AT)
-        again, _ = verdict_for(store, trust_store, inst.record_id,
+        again, _ = verdict_for(store, trust_store, lapsed,
                                request, STALE_AT)
     finally:
         eligibility_module.verify_trust_record = RELEASED_TRUST_VERIFY_8
@@ -10572,6 +10765,11 @@ def c6_world(tmp, *, locality="any-trusted", second_host=False,
             capability_id=cap.record_id, capability_package_id=pkg.record_id,
             capability_host_id=host_id, contract_id=con.record_id,
             advertisement_id=advert.record_id,
+            # This world admits onto two machines, so the operator's bound has
+            # to name both. Bounding it to one would refuse the second binding
+            # on the target rule before any selection question was reached.
+            admission_scope=dict(SCOPE,
+                                 permitted_targets=[LOCAL_NODE, REMOTE_NODE]),
             package_trust_record_id=package_trust.record.record_id,
             host_trust_record_id=NODE_TRUST[
                 LOCAL_NODE if index == 0 else REMOTE_NODE]))
@@ -10613,6 +10811,157 @@ def excluded_of(record):
     """(instance_id, reasons) per excluded candidate, in recorded order."""
     return tuple((entry.get("instance_id"), tuple(entry.get("reasons") or ()))
                  for entry in (record.get("excluded_candidates") or ()))
+
+
+# --- G11-C. The rehearsal boundary ------------------------------------------
+#
+# The same governed selection, run twice over one authority: once as a
+# rehearsal and once for real. What the rehearsal predicts is what the write
+# does, and what the rehearsal touches is nothing.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+
+    before = forensic(fabric_root)
+    sequences_before = sequences_of(fabric_root)
+    with admission_module.rehearsing():
+        rehearsed, error = chosen(store, trust_store, asked,
+                                  request_id="c6-preflight")
+    check(error is None, f"a rehearsed selection raises nothing ({error})")
+    check(rehearsed.outcome == admission_module.PREFLIGHT,
+          "a rehearsed selection reports the preflight outcome")
+    check(rehearsed.record_id is None,
+          "a rehearsed selection names no record")
+    check(rehearsed.selected_instance_id == instances[0],
+          "a rehearsed selection names the candidate declared order chooses")
+    check(forensic(fabric_root) == before,
+          "a rehearsed selection leaves the fabric byte-identical")
+    check(sequences_of(fabric_root) == sequences_before,
+          "a rehearsed selection advances no sequence")
+    check("capability-selection" not in sequences_before
+          or sequences_of(fabric_root) == sequences_before,
+          "a rehearsed selection creates no selection sequence")
+    check(store.counts().get("capability-selection", 0) == 0,
+          "a rehearsed selection writes no selection record")
+
+    # The identity the store would hand out, read without spending it.
+    predicted = store.peek_next_id("capability-selection")
+    check(forensic(fabric_root) == before,
+          "predicting the selection identity mutates nothing")
+
+    # A second rehearsal over an unchanged authority answers identically.
+    with admission_module.rehearsing():
+        again, _ = chosen(store, trust_store, asked, request_id="c6-preflight")
+    check(again.request_digest == rehearsed.request_digest
+          and again.selected_instance_id == rehearsed.selected_instance_id,
+          "a repeated rehearsal over an unchanged authority answers identically")
+    check(forensic(fabric_root) == before,
+          "a repeated rehearsal still mutates nothing")
+
+    # And now the write, under the same request identity and the same body.
+    committed, error = chosen(store, trust_store, asked,
+                              request_id="c6-preflight")
+    check(error is None, f"the committed selection raises nothing ({error})")
+    check(committed.outcome == ACCEPTED, "the committed selection is accepted")
+    check(committed.record_id == predicted,
+          "the committed selection takes the identity the rehearsal predicted")
+    check(committed.selected_instance_id == rehearsed.selected_instance_id,
+          "the committed selection chooses the candidate the rehearsal named")
+    check(committed.request_digest == rehearsed.request_digest,
+          "the rehearsal and the write share one request digest")
+    stored = written(store, committed.record_id)
+    check(stored.get("selected_instance_id") == rehearsed.selected_instance_id,
+          "the durable record names the rehearsed candidate")
+
+    # A rehearsal after the write reports what a second write would decide, and
+    # still writes nothing -- replay is not classified during a rehearsal.
+    after_write = forensic(fabric_root)
+    with admission_module.rehearsing():
+        post, _ = chosen(store, trust_store, asked, request_id="c6-preflight")
+    check(post.outcome == admission_module.PREFLIGHT,
+          "a rehearsal after the write is still a preflight, not a replay")
+    check(forensic(fabric_root) == after_write,
+          "a rehearsal after the write leaves the record byte-identical")
+
+# A rehearsal reports a refusal as a refusal, not as an acceptance.
+with TemporaryDirectory() as tmp:
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    before = forensic(fabric_root)
+    with admission_module.rehearsing():
+        removed, _ = chosen(store, trust_store, asked, request_id="c6-pf-none",
+                            health_removals=(instances[0],))
+    check(removed.outcome == admission_module.PREFLIGHT
+          and removed.selected_instance_id is None,
+          "a rehearsal whose only candidate is removed selects nothing")
+    check(forensic(fabric_root) == before,
+          "a rehearsal that selects nothing still writes nothing")
+
+    with admission_module.rehearsing():
+        unrouted_pf, _ = chosen(store, trust_store,
+                                dict(asked, capability_id="CAPDEF-0009"),
+                                request_id="c6-pf-unrouted")
+    check(unrouted_pf.outcome == admission_module.PREFLIGHT
+          and unrouted_pf.selected_instance_id is None,
+          "a rehearsal with no route resolves to no candidate")
+    check(forensic(fabric_root) == before,
+          "a rehearsal with no route writes nothing")
+
+# The same rehearsal reached the way an operator reaches it, through the
+# released interface. The API cases above prove the semantics; this proves the
+# command surfaces them and mutates nothing on the way.
+with TemporaryDirectory() as tmp:
+    import json as _json
+    import subprocess as _subprocess
+    fabric_root = Path(tmp) / "fabric"
+    store, trust_store, asked, instances, hosts, route = c6_world(tmp)
+    # `c6_world` already established this directory for the trust declaration.
+    approved = Path(tmp) / "approved"
+    approved.mkdir(exist_ok=True)
+    approved.joinpath("select.json").write_text(_json.dumps({
+        "request_id": "c6-cli-preflight", "actor": "core",
+        "recorded_at": STAMP.isoformat(), "evaluated_at": LATER.isoformat(),
+        "capability_id": asked["capability_id"],
+        "contract_id": asked["contract_id"],
+        "accepted_contract_versions": list(asked["accepted_contract_versions"]),
+        "data_classification": asked["data_classification"],
+        "locality": asked["locality"],
+        "local_node_identity": LOCAL_NODE,
+        "provenance": dict(PROV),
+    }), encoding="utf-8")
+
+    before = forensic(fabric_root)
+    completed = _subprocess.run(
+        [sys.executable, "-m", "tools.fabric.cli", "select", "--preflight",
+         "--store-root", str(fabric_root),
+         "--expected-uid", str(UID), "--expected-gid", str(GID),
+         "--input-file", "select.json", "--approved-directory", str(approved),
+         "--trust-store-root", str(Path(tmp) / "trust")],
+        capture_output=True, text=True, cwd=".")
+    check(completed.returncode == 0,
+          f"the select preflight command exits zero ({completed.stderr.strip()[:120]})")
+    check("Traceback" not in completed.stderr,
+          "a governed selection rehearsal raises no traceback")
+    try:
+        payload = _json.loads(completed.stdout)
+    except ValueError:
+        payload = {}
+    check(payload.get("outcome") == "preflight"
+          and payload.get("would_accept") is True
+          and payload.get("mutated") is False,
+          "the command reports a non-mutating preflight")
+    check(payload.get("predicted_record_id") == store.peek_next_id(
+              "capability-selection"),
+          "the command predicts the identity the store would allocate")
+    check(payload.get("selected_instance_id") == instances[0],
+          "the command names the candidate declared order chooses")
+    check(payload.get("destination_exists") is False,
+          "the command reports the destination as absent")
+    check(isinstance(payload.get("request_digest"), str)
+          and payload.get("request_id") == "c6-cli-preflight",
+          "the command reports the governed request identity and digest")
+    check(forensic(fabric_root) == before,
+          "the select preflight command leaves the fabric byte-identical")
 
 
 # --- A. A request class no route governs ------------------------------------
@@ -10998,20 +11347,37 @@ with TemporaryDirectory() as tmp:
 with TemporaryDirectory() as tmp:
     fabric_root = Path(tmp) / "fabric"
     store, trust_store, asked, instances, hosts, route = c6_world(tmp)
-    rival = admission_module.create_route(store, **dict(
+    # Since G11-AC `create_route` refuses to write a second current route for
+    # one request class, so the fork is forged directly into the store instead.
+    # That is the case the traversal documents and this assertion is about: a
+    # damaged, tampered, or legacy store can hold a state the released write
+    # path can no longer produce, and selection must refuse on what it reads
+    # rather than assume validation ran.
+    refused_rival = admission_module.create_route(store, **dict(
         BASE_ROUTE, request_id="c6-route-rival",
         capability_id=asked["capability_id"], contract_id=asked["contract_id"],
         candidate_instances=(instances[0],), locality=asked["locality"],
         accepted_contract_versions=asked["accepted_contract_versions"]))
-    check(rival.outcome == ACCEPTED,
-          f"a second route for the same class is declarable ({rival.reason})")
+    check(refused_rival.outcome == REFUSED
+          and refused_rival.reason == "request-class-already-routed",
+          f"a second current route for one class is refused by the write path "
+          f"({refused_rival.outcome}/{refused_rival.reason})")
+
+    forged = dict(record_of(store, "capability-route", route.record_id))
+    forged["route_id"] = "CROUTE-0002"
+    # Independent head, not a second successor: two records superseding one
+    # predecessor is a forked chain and reads as `route-chain-unreadable`.
+    # Ambiguity is two routes for one class that supersede nothing, which is
+    # the state this block is about.
+    forged["supersedes"] = None
+    store.write_atomic(store.path_for("capability-route", "CROUTE-0002"), forged)
     before = forensic(fabric_root)
     result, error = chosen(store, trust_store, asked, request_id="c6-ambiguous")
     check(error is None, f"two competing routes evaluate cleanly ({error})")
     check(result.outcome == REFUSED,
           "two unsuperseded routes for one request class are refused")
     check(result.reason == REASON_ROUTE_AMBIGUOUS,
-          "the ambiguity is named rather than resolved by picking one")
+          f"the ambiguity is named rather than resolved by picking one ({result.reason})")
     check(result.record_id is None,
           "an ambiguous route universe writes no decision")
     check(forensic(fabric_root) == before,
@@ -11566,8 +11932,8 @@ with TemporaryDirectory() as tmp:
         actor=OPERATOR, approving_authority=OPERATOR, request_id="cli-con",
         capability_id=capability_id, contract_version="1.0.0",
         effect_class="read-only", determinism_class="deterministic",
-        request_shape={"text": "string"}, response_shape={"summary": "string"},
-        failure_modes=["unavailable"], resource_requirements={"host_memory_mb": 512},
+        request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+        failure_modes=["adapter-error"], resource_requirements={"host_memory_mb": 512},
         compatible_with=[], provenance=dict(PROV))))
     check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
           "operation 2 declares a contract through the interface")
@@ -11578,7 +11944,7 @@ with TemporaryDirectory() as tmp:
         capability_id=capability_id, contract_id=contract_id,
         satisfied_contract_versions=["1.0.0"], package_version="1.0.0",
         artifact_reference="oci://registry.invalid/summarise",
-        resource_requirements={"architecture": "x86_64"},
+        resource_requirements={"host_memory_mb": 512, "architecture": "x86-64"},
         trust_domain="capability-package", provenance=dict(PROV))))
     check(code == EXIT_SUCCESS and result.get("outcome") == ACCEPTED,
           "operation 3 declares a package through the interface")
@@ -11767,7 +12133,8 @@ with TemporaryDirectory() as tmp:
                        request_id="cli-missing", recorded_at=STAMP.isoformat(),
                        capability_id="CAPDEF-0009", contract_version="1.0.0",
                        effect_class="read-only", determinism_class="deterministic",
-                       request_shape={}, response_shape={}, failure_modes=[],
+                       request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+                       failure_modes=[],
                        resource_requirements={}, compatible_with=[],
                        provenance=dict(PROV)))])
     body = payload_of(refused[1])
@@ -11917,7 +12284,8 @@ with TemporaryDirectory() as tmp:
                 request_id="cli-fc25", recorded_at=STAMP.isoformat(),
                 capability_id="CAPDEF-0009", contract_version="1.0.0",
                 effect_class="read-only", determinism_class="deterministic",
-                request_shape={}, response_shape={}, failure_modes=[],
+                request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+                failure_modes=[],
                 resource_requirements={}, compatible_with=[], provenance=dict(PROV))
     failed = run(["declare-contract", *store_flags(tmp), "--input-file", "f.json",
                   "--approved-directory", approved(tmp, "f.json", body)])
@@ -12326,6 +12694,521 @@ if [[ -z "${ADMIT_FAILURES}" ]]; then
   fail "fabric governed admission did not report a result"
 else
   FAILURES=$((FAILURES + ADMIT_FAILURES))
+fi
+
+# --- Contract semantics the schema governs and admission must enforce -------
+#
+# Two defects found while deriving the first capability contract. Both let a
+# permanent, immutable CCON record carry a value no authority governs:
+#
+#   * `determinism_class` had a schema enum and an admission `_text` check, so
+#     any non-empty string was written and kept forever;
+#   * nothing compared a contract's `effect_class` with the effect class of the
+#     capability it declares, so two permanent records could disagree about one
+#     capability -- and the runtime reads the contract.
+#
+# Both are refused before allocation, so a refusal spends no identifier.
+SEMANTICS_OUTPUT="$(python3 - <<'SEMPY'
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+sys.path.insert(0, ".")
+
+import yaml
+
+from tools.fabric import admission
+from tools.fabric.errors import FabricError
+from tools.fabric.models import (DETERMINISM_CLASSES, EFFECT_CLASSES,
+                                 FAILURE_MODES, RECORD_MODELS,
+                                 RESPONSE_SHAPE_PARTS, SHAPE_REFERENCE_FIELDS)
+from tools.fabric.store import FabricStore
+
+failures = 0
+
+
+def check(condition, description):
+    global failures
+    if condition:
+        print(f"PASS: {description}")
+    else:
+        failures += 1
+        print(f"FAIL: {description}", file=sys.stderr)
+
+
+STAMP = datetime(2026, 8, 21, 9, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+WHO = "operator:cschott"
+PROV = {"class": "declared", "source": "operator"}
+
+# The real authorities, named as a contract must name them. The request payload
+# is enforced by `payload.py`; a result has two layers and two authorities --
+# `collector.py` decides the envelope is a believable document at all, and
+# `result_content.py` decides what is inside it is a governed result.
+REQUEST_SHAPE = {"authority": "tools/capability/execution/payload.py",
+                 "schema": "kyri-execution-payload", "schema_version": 1}
+RESPONSE_SHAPE = {
+    "envelope": {"authority": "tools/capability/execution/collector.py",
+                 "schema": "kyri-execution-result-envelope",
+                 "schema_version": 1},
+    "content": {"authority": "tools/capability/execution/result_content.py",
+                "schema": "kyri-execution-verification-result",
+                "schema_version": 1},
+}
+
+# --- the vocabularies are the schema's, not this module's -------------------
+schema = yaml.safe_load(
+    Path("platform-model/schemas/capability-contract.schema.yaml").read_text(
+        encoding="utf-8"))
+enums = schema.get("enums") or {}
+check(tuple(enums.get("determinism_class") or ()) == DETERMINISM_CLASSES,
+      "the determinism vocabulary in code is exactly the schema's, in order")
+check(tuple(enums.get("effect_class") or ()) == EFFECT_CLASSES,
+      "the effect-class vocabulary in code is exactly the schema's, in order")
+check(len(set(DETERMINISM_CLASSES)) == 3,
+      "exactly three determinism classes are governed")
+check(tuple(enums.get("failure_mode") or ()) == FAILURE_MODES,
+      "the failure-mode vocabulary in code is exactly the schema's, in order")
+check(len(set(FAILURE_MODES)) == 6, "exactly six failure modes are governed")
+
+# The vocabulary is the observable outcome of a call, not the platform's own
+# reasoning about one. A mode naming a provider, an internal refusal category,
+# or an eligibility judgement would bind a permanent contract to a build.
+check("completed" not in FAILURE_MODES, "success is not a failure mode")
+check("result-missing" in FAILURE_MODES and "serialisation-failure" in FAILURE_MODES,
+      "a missing result and an unrepresentable one stay distinguishable")
+for ungoverned in ("provider-error", "cancelled", "unavailable", "timed-out",
+                   "internal-error"):
+    check(ungoverned not in FAILURE_MODES,
+          f"'{ungoverned}' is not a governed failure mode")
+
+# The shape governance in code is the schema's too, so a contract cannot be
+# admitted against one structure and read back against another.
+check(tuple(schema.get("shape_reference_fields") or ()) == SHAPE_REFERENCE_FIELDS,
+      "the shape-reference fields in code are exactly the schema's, in order")
+check(tuple(schema.get("response_shape_parts") or ()) == RESPONSE_SHAPE_PARTS,
+      "the response-shape parts in code are exactly the schema's, in order")
+check(schema.get("shape_reference_form") == "closed",
+      "the schema declares the reference structure closed")
+check(schema.get("inline_shape_declaration") == "forbidden",
+      "the schema forbids a contract restating a shape it references")
+
+
+def opened(tmp):
+    import os
+    return FabricStore(Path(tmp) / "fabric", expected_uid=os.getuid(),
+                       expected_gid=os.getgid())
+
+
+def seeded(store, effect_class="computational", request_id="sem-cap"):
+    result = admission.declare_capability(
+        store, request_id=request_id, actor=WHO, approving_authority=WHO,
+        recorded_at=STAMP, name="an ability", description="A described ability.",
+        effect_class=effect_class, contract_ids=[], provenance=dict(PROV))
+    assert result.outcome == admission.ACCEPTED, result
+    return result.record_id
+
+
+def body(capability_id, **overrides):
+    fields = dict(
+        request_id="sem-con", actor=WHO, approving_authority=WHO,
+        recorded_at=STAMP, capability_id=capability_id, contract_version="1.0.0",
+        effect_class="computational", determinism_class="deterministic",
+        request_shape=REQUEST_SHAPE, response_shape=RESPONSE_SHAPE,
+        failure_modes=(), resource_requirements={}, compatible_with=(),
+        provenance=dict(PROV))
+    fields.update(overrides)
+    return fields
+
+
+def sequence_of(store, kind):
+    """The kind's sequence value, or None when nothing has been allocated."""
+    path = store.root / "sequences" / f"{kind}.seq"
+    return path.read_text(encoding="utf-8").strip() if path.exists() else None
+
+
+# --- every governed determinism class is accepted, and only those -----------
+for governed in DETERMINISM_CLASSES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        result = admission.declare_contract(
+            store, **body(capability, determinism_class=governed))
+        check(result.outcome == admission.ACCEPTED,
+              f"a contract declaring determinism_class '{governed}' is accepted")
+
+REFUSED_DETERMINISM = (
+    ("definitely-not-governed", "a value outside the vocabulary"),
+    ("DETERMINISTIC", "an uppercase spelling"),
+    (" deterministic ", "a whitespace-padded spelling"),
+    ("deterministic\n", "a trailing newline"),
+    ("", "an empty string"),
+    (None, "no value at all"),
+    (7, "a number"),
+    (True, "a boolean"),
+)
+for value, described in REFUSED_DETERMINISM:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, determinism_class=value))
+        check(result.outcome == admission.REFUSED,
+              f"a determinism_class carrying {described} is refused")
+        check(result.reason == admission.REASON_DETERMINISM_CLASS,
+              f"{described} is named unknown-determinism-class")
+        check(result.record_id is None,
+              f"{described} produces no record identity")
+        check(sequence_of(store, "capability-contract") == before,
+              f"{described} is refused before allocation and burns no identifier")
+        check(not list((store.root / "capability-contracts").glob("*.yaml")),
+              f"{described} writes no contract record")
+
+def reconstructed(**overrides):
+    """One stored contract as the model would rebuild it, with one field bent.
+
+    The route a store damaged out of band would take: admission is not
+    involved, so what the model itself refuses is what this measures.
+    """
+    fields = dict(
+        contract_id="CCON-0001", capability_id="CAPDEF-0001",
+        contract_version="1.0.0", effect_class="computational",
+        determinism_class="deterministic", request_shape=dict(REQUEST_SHAPE),
+        response_shape={part: dict(reference)
+                        for part, reference in RESPONSE_SHAPE.items()},
+        failure_modes=(), resource_requirements={}, compatible_with=(),
+        provenance=dict(PROV))
+    fields.update(overrides)
+    return RECORD_MODELS["capability-contract"](**fields)
+
+
+def refuses_reconstruction(described, **overrides):
+    try:
+        reconstructed(**overrides)
+    except FabricError:
+        check(True, f"the model refuses to reconstruct {described}")
+    else:
+        check(False, f"the model refuses to reconstruct {described}")
+
+
+check(reconstructed().contract_id == "CCON-0001",
+      "a governed contract still reconstructs from the model")
+
+# The model refuses to reconstruct one too, so a store damaged out of band
+# cannot present an ungoverned value as a valid record.
+refuses_reconstruction("an ungoverned determinism_class",
+                       determinism_class="definitely-not-governed")
+refuses_reconstruction("an ungoverned failure mode",
+                       failure_modes=("unavailable",))
+refuses_reconstruction("a governed mode beside an ungoverned one",
+                       failure_modes=("refused", "unavailable"))
+refuses_reconstruction("a request shape that restates a schema",
+                       request_shape={"text": "string"})
+refuses_reconstruction("a request shape carrying a fourth key",
+                       request_shape=dict(REQUEST_SHAPE, extra="ignored"))
+refuses_reconstruction("a response shape missing its content authority",
+                       response_shape={"envelope": dict(
+                           RESPONSE_SHAPE["envelope"])})
+
+# --- the shape a frozen record names cannot be changed afterwards -----------
+#
+# A response shape is a mapping of mappings, so freezing only the outer one
+# would leave the record able to change which authority it names through a
+# reference the caller still holds.
+supplied = {part: dict(reference) for part, reference in RESPONSE_SHAPE.items()}
+record = reconstructed(response_shape=supplied)
+supplied["content"]["authority"] = "tools/capability/execution/payload.py"
+check(record.response_shape["content"]["authority"]
+      == "tools/capability/execution/result_content.py",
+      "a frozen contract does not follow the caller's mapping")
+try:
+    record.response_shape["content"]["authority"] = "elsewhere"
+    check(False, "a frozen contract's response shape is immutable all the way down")
+except TypeError:
+    check(True, "a frozen contract's response shape is immutable all the way down")
+
+# --- failure modes are the schema's closed vocabulary ----------------------
+#
+# `failure_modes` is permanent and immutable. Before this, any non-empty string
+# was written and kept forever, so a contract could promise a failure nobody
+# could interpret and no implementation could be held to.
+for governed in FAILURE_MODES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        result = admission.declare_contract(
+            store, **body(capability, failure_modes=(governed,)))
+        check(result.outcome == admission.ACCEPTED,
+              f"a contract declaring failure mode '{governed}' is accepted")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(
+        store, **body(capability, failure_modes=FAILURE_MODES))
+    check(result.outcome == admission.ACCEPTED,
+          "a contract declaring every governed failure mode is accepted")
+
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(
+        store, **body(capability, failure_modes=()))
+    check(result.outcome == admission.ACCEPTED,
+          "a contract declaring no failure mode at all is accepted")
+
+REFUSED_MODES = (
+    (("unavailable",), "a mode outside the vocabulary"),
+    (("timed-out",), "a plausible spelling of a governed mode"),
+    (("completed",), "an outcome that is not a failure"),
+    (("provider-error",), "a mode naming a provider"),
+    (("REFUSED",), "an uppercase spelling"),
+    ((" refused",), "a whitespace-padded spelling"),
+    (("refused", "unavailable"), "one governed mode beside one ungoverned"),
+    ((7,), "a number"),
+    ((True,), "a boolean"),
+    ((None,), "nothing at all"),
+    ((("refused",),), "a nested sequence"),
+)
+for value, described in REFUSED_MODES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, failure_modes=value))
+        check(result.outcome == admission.REFUSED,
+              f"failure modes carrying {described} are refused")
+        check(result.reason == admission.REASON_FAILURE_MODE,
+              f"{described} is named unknown-failure-mode")
+        check(result.record_id is None,
+              f"{described} produces no record identity")
+        check(sequence_of(store, "capability-contract") == before,
+              f"{described} is refused before allocation and burns no identifier")
+        check(not list((store.root / "capability-contracts").glob("*.yaml")),
+              f"{described} writes no contract record")
+
+# A sequence that is not one is malformed content, exactly as it was before the
+# vocabulary existed. The two mistakes keep their two different answers.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(store, **body(capability, failure_modes=7))
+    check(result.reason == admission.REASON_CONTENT,
+          "failure modes that are not a sequence are still malformed content")
+    result = admission.declare_contract(
+        store, **body(capability, failure_modes="refused"))
+    check(result.reason == admission.REASON_CONTENT,
+          "a bare string of failure modes is malformed content, not a mode")
+
+# --- a shape names its enforcing authority and restates nothing -------------
+#
+# A contract that spelled its fields out would be a second, permanent,
+# unexecuted copy of a schema some module already enforces -- and the day the
+# two disagree, the contract wins by being immutable while the code wins by
+# being what runs.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(store, **body(capability))
+    check(result.outcome == admission.ACCEPTED,
+          "a contract referencing its authorities is accepted")
+
+REFUSED_REQUEST_SHAPES = (
+    ({"text": "string"}, "a restated schema"),
+    ({}, "nothing at all"),
+    (dict(REQUEST_SHAPE, extra="ignored"), "a fourth key"),
+    ({"authority": "tools/capability/execution/payload.py",
+      "schema": "kyri-execution-payload"}, "no schema version"),
+    (dict(REQUEST_SHAPE, schema_version=0), "a version of zero"),
+    (dict(REQUEST_SHAPE, schema_version=-1), "a negative version"),
+    (dict(REQUEST_SHAPE, schema_version="1"), "a version written as text"),
+    (dict(REQUEST_SHAPE, schema_version=True), "a boolean version"),
+    (dict(REQUEST_SHAPE, authority=""), "an empty authority"),
+    (dict(REQUEST_SHAPE, authority="   "), "a whitespace authority"),
+    (dict(REQUEST_SHAPE, authority=7), "an authority that is not text"),
+    (dict(REQUEST_SHAPE, schema=""), "an empty schema name"),
+)
+for value, described in REFUSED_REQUEST_SHAPES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, request_shape=value))
+        check(result.outcome == admission.REFUSED,
+              f"a request shape carrying {described} is refused")
+        check(result.reason == admission.REASON_SHAPE_REFERENCE,
+              f"a request shape carrying {described} is named "
+              "shape-not-an-authority-reference")
+        check(sequence_of(store, "capability-contract") == before,
+              f"a request shape carrying {described} burns no identifier")
+        check(not list((store.root / "capability-contracts").glob("*.yaml")),
+              f"a request shape carrying {described} writes no contract record")
+
+REFUSED_RESPONSE_SHAPES = (
+    ({"summary": "string"}, "a restated schema"),
+    ({}, "nothing at all"),
+    ({"envelope": dict(RESPONSE_SHAPE["envelope"])}, "no content authority"),
+    ({"content": dict(RESPONSE_SHAPE["content"])}, "no envelope authority"),
+    (dict(RESPONSE_SHAPE, extra=dict(REQUEST_SHAPE)), "a third part"),
+    (dict(RESPONSE_SHAPE, content={"summary": "string"}),
+     "a content part that restates a schema"),
+    (dict(RESPONSE_SHAPE,
+          envelope=dict(RESPONSE_SHAPE["envelope"], schema_version=0)),
+     "an envelope version of zero"),
+)
+for value, described in REFUSED_RESPONSE_SHAPES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store)
+        before = sequence_of(store, "capability-contract")
+        result = admission.declare_contract(
+            store, **body(capability, response_shape=value))
+        check(result.outcome == admission.REFUSED,
+              f"a response shape carrying {described} is refused")
+        check(result.reason == admission.REASON_SHAPE_REFERENCE,
+              f"a response shape carrying {described} is named "
+              "shape-not-an-authority-reference")
+        check(sequence_of(store, "capability-contract") == before,
+              f"a response shape carrying {described} burns no identifier")
+
+# A shape that is not a mapping at all is malformed content, unchanged.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    for field in ("request_shape", "response_shape"):
+        result = admission.declare_contract(store, **body(capability, **{field: 7}))
+        check(result.reason == admission.REASON_CONTENT,
+              f"a {field} that is not a mapping is still malformed content")
+
+# The authorities the fixtures name are real, and they say what they enforce.
+# A reference is a review question, but a reference to nothing at all would
+# make the whole structure decorative.
+from tools.capability.execution import collector, payload, result_content  # noqa: E402
+
+check(payload.PAYLOAD_SCHEMA_VERSION == REQUEST_SHAPE["schema_version"],
+      "the payload authority implements the version the request shape names")
+# The envelope authority is referenced, never modified: `collector.py` is
+# installed runtime, and this hardening changes no production byte. What is
+# checked is that it really does enforce an envelope -- the document's name,
+# its bound, and the one function that can produce a trusted result.
+check(all(hasattr(collector, name) for name in
+          ("RESULT_NAME", "RESULT_MAXIMUM_BYTES", "read_result")),
+      "the envelope authority is the module that enforces the result envelope")
+check(result_content.RESULT_CONTENT_SCHEMA == RESPONSE_SHAPE["content"]["schema"]
+      and result_content.RESULT_CONTENT_SCHEMA_VERSION
+      == RESPONSE_SHAPE["content"]["schema_version"],
+      "the content authority implements the schema the response shape names")
+for reference in (REQUEST_SHAPE, RESPONSE_SHAPE["envelope"],
+                  RESPONSE_SHAPE["content"]):
+    check(Path(reference["authority"]).is_file(),
+          f"the authority {reference['authority']} is a module that exists")
+
+# --- a contract may not declare an effect class its capability does not -----
+for shared in EFFECT_CLASSES:
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store, effect_class=shared)
+        result = admission.declare_contract(
+            store, **body(capability, effect_class=shared))
+        check(result.outcome == admission.ACCEPTED,
+              f"a contract agreeing with its capability on '{shared}' is accepted")
+
+for declared in EFFECT_CLASSES:
+    for contradicted in EFFECT_CLASSES:
+        if declared == contradicted:
+            continue
+        with TemporaryDirectory() as tmp:
+            store = opened(tmp)
+            capability = seeded(store, effect_class=declared)
+            before = sequence_of(store, "capability-contract")
+            result = admission.declare_contract(
+                store, **body(capability, effect_class=contradicted))
+            check(result.outcome == admission.REFUSED,
+                  f"a '{contradicted}' contract on a '{declared}' capability is refused")
+            check(result.reason == admission.REASON_EFFECT_CLASS_MISMATCH,
+                  f"'{contradicted}' against '{declared}' is named "
+                  "effect-class-not-of-capability")
+            check(sequence_of(store, "capability-contract") == before,
+                  f"'{contradicted}' against '{declared}' burns no identifier")
+
+# An unknown effect class is still its own refusal: the mismatch check must not
+# swallow the vocabulary check, or a typo would be reported as a disagreement.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    result = admission.declare_contract(
+        store, **body(capability, effect_class="not-a-class"))
+    check(result.reason == admission.REASON_EFFECT_CLASS,
+          "an unknown effect class is refused as unknown, not as a mismatch")
+
+# The capability is read, never written: a refused contract leaves it exactly
+# as it was.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store, effect_class="computational")
+    path = store.path_for("capability-definition", capability)
+    before = path.read_bytes()
+    admission.declare_contract(store, **body(capability, effect_class="read-only"))
+    admission.declare_contract(store, **body(capability,
+                                             determinism_class="not-governed"))
+    check(path.read_bytes() == before,
+          "a refused contract leaves its capability definition byte-identical")
+
+# --- preflight and the real write refuse identically ------------------------
+for described, overrides in (
+        ("an ungoverned determinism_class", {"determinism_class": "not-governed"}),
+        ("a contradicted effect class", {"effect_class": "read-only"}),
+        ("an ungoverned failure mode", {"failure_modes": ("unavailable",)}),
+        ("a restated request shape", {"request_shape": {"text": "string"}}),
+        ("a response shape missing its content authority",
+         {"response_shape": {"envelope": dict(RESPONSE_SHAPE["envelope"])}})):
+    with TemporaryDirectory() as tmp:
+        store = opened(tmp)
+        capability = seeded(store, effect_class="computational")
+        written = admission.declare_contract(store, **body(capability, **overrides))
+        with admission.rehearsing():
+            rehearsed = admission.declare_contract(
+                store, **body(capability, request_id="sem-pre", **overrides))
+        check(rehearsed.outcome == written.outcome
+              and rehearsed.reason == written.reason,
+              f"preflight and the write refuse {described} identically")
+        check(sequence_of(store, "capability-contract") is None,
+              f"neither path allocated an identifier for {described}")
+
+# A rehearsal of a *valid* contract still stops before allocation, and the real
+# write that follows still allocates the first identity.
+with TemporaryDirectory() as tmp:
+    store = opened(tmp)
+    capability = seeded(store)
+    with admission.rehearsing():
+        rehearsed = admission.declare_contract(store, **body(capability))
+    check(rehearsed.outcome == admission.PREFLIGHT,
+          "a valid contract rehearses to preflight after the hardening")
+    check(sequence_of(store, "capability-contract") is None,
+          "the rehearsal allocated nothing")
+    accepted = admission.declare_contract(store, **body(capability))
+    check(accepted.outcome == admission.ACCEPTED
+          and accepted.record_id == "CCON-0001",
+          "the real write still takes the first contract identity")
+    replayed = admission.declare_contract(store, **body(capability))
+    check(replayed.outcome == admission.EXACT_REPLAY
+          and replayed.record_id == "CCON-0001",
+          "exact replay of a contract still returns the original identity")
+    check(sequence_of(store, "capability-contract") == "1",
+          "the replay allocated no second identifier")
+
+print(f"__FAILURES__={failures}")
+SEMPY
+)"
+printf '%s\n' "${SEMANTICS_OUTPUT}" | grep -v '^__FAILURES__=' || true
+SEMANTICS_FAILURES="$(printf '%s\n' "${SEMANTICS_OUTPUT}" | sed -n 's/^__FAILURES__=//p' | tail -1)"
+if [[ -z "${SEMANTICS_FAILURES}" ]]; then
+  fail "fabric contract semantics did not report a result"
+else
+  FAILURES=$((FAILURES + SEMANTICS_FAILURES))
 fi
 
 # --- C4 and C7 reach the filesystem through C1 only -------------------------

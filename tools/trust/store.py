@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..common.immutable_store import ImmutableStore, StoreError
+from ..common.immutable_store import MAX_SEQUENCE, ImmutableStore, StoreError
 from .errors import TrustError, TrustStoreError
 from .identifiers import LINEAGE_ID, LINEAGE_VERSION_ID, PATTERNS, PREFIXES
 from .models import validate_root_lineage_record
@@ -62,6 +62,45 @@ class TrustStore(ImmutableStore):
                     f"identifier '{identifier}' is not a valid lineage identifier")
             return self._directory(kind) / f"{text}.yaml"
         return super().path_for(kind, identifier)
+
+    def peek_next_id(self, kind: str) -> str:
+        """The identifier `allocate_id` would return, without spending it.
+
+        Reads. Never opens the sequence for writing, never creates it, and
+        advances nothing: a prediction that consumed the thing it predicted
+        would be an allocation wearing a different name. An absent sequence
+        reads as zero rather than being created, so asking what comes next
+        never provisions the thing being asked about.
+
+        The candidate rule is the allocator's own -- skip a name something
+        already occupies rather than reuse it -- restated here only so
+        prediction and allocation cannot answer differently.
+
+        It is a prediction, not a reservation. Between peeking and allocating
+        another caller may take the identifier, which is why the write path
+        allocates for itself rather than being handed this value.
+        """
+        if kind not in self.id_prefixes:
+            raise TrustStoreError(f"unknown record kind '{kind}'")
+        prefix = self.id_prefixes[kind]
+        width = self.id_widths.get(kind, 6)
+        maximum = min(10 ** width - 1, MAX_SEQUENCE)
+        try:
+            raw = (self.root / "sequences" / f"{kind}.seq").read_text(
+                encoding="utf-8").strip()
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            raw = ""
+        candidate = int(raw) if raw.isdigit() else 0
+        while True:
+            candidate += 1
+            if candidate > maximum:
+                raise TrustStoreError(
+                    f"{kind} sequence is exhausted; widening the identifier is a "
+                    "deliberate decision, not an automatic rollover")
+            identifier = f"{prefix}-{candidate:0{width}d}"
+            if kind in self.record_dirs and self.path_for(kind, identifier).exists():
+                continue
+            return identifier
 
     def write(self, kind: str, record) -> Path:
         try:

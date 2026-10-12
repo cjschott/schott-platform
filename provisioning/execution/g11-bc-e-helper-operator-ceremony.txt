@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# The G11-BC-E helper operator ceremony, exactly as it is to be typed.
+#
+# THIS IS STAGE TWO OF TWO, AND IT RUNS ONLY AFTER GENERATION 17.
+# The ceremony enforces that itself: `require_runtime_generation` halts unless
+# the Generation-17 readiness rule is the installed one. Running this first
+# would be actively unsafe -- Generation 17 publishes helpers.py before its
+# other objects, so with the action module already corrected that publication
+# would reopen execution while the rest of the runtime was still predecessor.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+sudo test ! -e /root/kyri-g11-bc-e-helper-transaction/journal \
+  || { printf 'STOP: a G11-BC-E helper transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-g11-bc-e-helper-transaction \
+  || { printf 'STOP: G11-BC-E helper transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The verification entrypoint has never been authorised, and this ceremony does
+# not authorise it. A grant present here means something else installed one.
+sudo test ! -e /etc/sudoers.d/kyri-exec-verify \
+  || { printf 'STOP: the verification grant exists. This ceremony does not authorise it. Report to the reviewer.\n' >&2; exit 1; }
+
+# Generation 17 must already be the installed runtime. The ceremony checks this
+# too; asserting it here means the operator sees the reason before any installer
+# runs rather than as a refusal partway through.
+sudo test -f /root/kyri-gen17-library-digests.txt
+
+sudo bash /opt/schott-platform/provisioning/execution/install-g11-bc-e-helpers.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bc-e-helpers.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bc-e-helpers.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bc-e-helpers.sh --verify-installed
+
+# EXPECTED AFTER THIS CEREMONY:
+#   helper compatibility  compatible
+#   helpers blocking      0
+#   supervision_ready     true
+# Stage 3 is STILL NOT AUTHORISED. Return this output for review.

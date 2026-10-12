@@ -1,0 +1,396 @@
+#!/usr/bin/env bash
+# CADM-000001 PROVENANCE CORRECTION, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# =====================================================================
+# DO NOT RUN THIS UNTIL BOTH ARE TRUE
+# =====================================================================
+#   1. Generation 20 is INSTALLED and accepted.
+#   2. The reviewer has accepted ADR-0016 and this ceremony.
+#
+# Gate 0 below refuses if (1) is not true. Nothing can check (2) but you.
+#
+# WHAT THIS DOES, IN ONE SENTENCE
+# ===============================
+# It records that CADM-000001's `actor: primary-platform-operator` is not
+# truthful provenance, while leaving CADM-000001, the lifecycle, the occupancy
+# and every other record exactly as they are.
+#
+# WHAT IT IS NOT
+# ==============
+# It is NOT ratification. It does not say an operator approved the abandonment,
+# it does not name a substitute actor, and it makes no claim that the original
+# action was correct to take. It is NOT a reversal: CINV-000002 stays
+# `abandoned`, the reclaimed slot stays reclaimed, and no transition is written.
+#
+# WHY THE STORE IS IN THIS STATE
+# ==============================
+# On 2026-09-20 at 18:54:33-05:00 a rehearsal harness drove `capability abandon`
+# against production. The harness substituted the runtime path through every
+# shell gate of the ceremony it was rehearsing, and each gate read a fixture and
+# passed -- then the CLI resolved a compiled-in production constant and wrote
+# CADM-000001. The lifecycle effect is materially what ADR-0015 specifies. The
+# attribution is not.
+#
+# The incident report is
+# docs/development/reports/eng-0005/2026-09-20-g11-bc-x-unauthorised-production-abandonment-incident.md
+# at commit e5471e8. Generation 20 removed the implicit target that made it
+# possible.
+#
+# THE TARGET IS NAMED, AND THE WRITER IS ASKED WHERE IT WROTE
+# ===========================================================
+# `--store-root /data/kyri/capability-runtime` is spelled out below, because
+# after Generation 20 there is no default and a call that names nothing refuses.
+# And the emitted `target` is checked against the inode this ceremony measured
+# itself: the reason the incident went unnoticed is that everything checked was
+# a check about TEXT, and the one thing that mattered was which object the
+# writer held.
+#
+# THE OPERATOR'S CONTAINER OBSERVATION IS RECORDED, NOT RELIED ON. Christopher
+# observed the host as kyri-capability after the incident: no kyri-CINV-000002
+# container exists and none is running. A correction touches no container and
+# needs no such gate -- the fact is carried as an evidence reference because it
+# belongs in the record of this episode, not because anything here depends on it.
+
+set -Eeuo pipefail
+
+INSTALLED=/usr/lib/kyri/python
+RUNTIME=/data/kyri/capability-runtime
+
+SUBJECT=CADM-000001
+TARGET_CINV=CINV-000002
+ACTOR=primary-platform-operator
+REQUEST_ID=g11bcy-correct-cadm-000001-attribution
+DISPUTED_FIELD=actor
+DISPUTED_VALUE=primary-platform-operator
+FINDING=attribution-not-authorised
+INITIATOR=unauthorised-rehearsal-harness
+
+INCIDENT_REPORT='docs/development/reports/eng-0005/2026-09-20-g11-bc-x-unauthorised-production-abandonment-incident.md@e5471e85f5fce312256ee377465d2e0220457800'
+OPERATOR_OBSERVATION='operator-observed 2026-09-20: podman ps -a shows no kyri-CINV-000002 container; podman ps shows none running'
+
+# The post-incident state, pinned. Every one of these was measured at G11-BC-Y.
+RUNTIME_BEFORE=9374b56870759ebccbbb74a38ada5905bcd5ce3bd1418428b72e148cdc662d68
+CADM_ABANDONMENT_SHA=d1307f014d8eae2cccf83bfc8c3d673a93a00a86c797e07af44b9053b0dedced
+CADM_INTENT_SHA=a7faa2c165f7c0fd4b3b91204ecd213b4ad4ffdb1029e0c438b3eb25d6e92944
+CADM_OUTCOME_SHA=07bb889d884bc76b0cae423a65f6e2fdff9a6d7d8de4584df029fc6a3bbeeeb3
+SHA_CINV1=1dcef40d0ca289e5c65642cd3f704be864529ffb26b05cfbe1b8cb087d6cfaaa
+SHA_CINV2=923ff0d72e3217cbaa378cf55b69045e3dde914e1afce4becab9a5a7e6d3f4aa
+SHA_CINV3=c0941b7d45dcccac4bb28d00f942ea63aa90cd46ed55767797363f1ed1accaf2
+SHA_CRES1=18ba4c3428f3b87a033abdeb54feb63a4cda6c8c41597e5ab591e7e7a7396f2d
+CINV_SEQ=3
+CRES_SEQ=1
+CADM_COUNTER_BEFORE=000001
+CMUT_COUNTER_BEFORE=000000000007
+TRANSITIONS_BEFORE=5
+EXPECTED_CORRECTION=CADM-000002
+
+GATE_DIR="$(mktemp -d)"
+trap 'rm -rf "${GATE_DIR}"' EXIT
+
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+
+# ---- GATE 0: THE INSTALLED RUNTIME IS WHOLLY GENERATION 20 --------------
+#
+# G11-BC-W's lesson, kept: an operation must run against the runtime that can
+# read what it writes. A Generation-19 runtime has no correct-provenance verb
+# at all, so this would fail loudly rather than quietly -- but "loudly" is not
+# a reason to skip the check.
+printf -- '--- installed generation gate ---\n'
+check_installed() {
+  local relative="$1" wanted="$2" got
+  got="$(sha256sum "${INSTALLED}/${relative}" 2>/dev/null | cut -d' ' -f1)"
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${INSTALLED}/${relative} is ${got:-absent}, not the reviewed Generation-20 ${wanted}"; exit 1; }
+  printf 'ok  %-28s %s\n' "$(basename "${relative}")" "${got}"
+}
+check_installed tools/capability/execution/backing_store.py e82aa24b6fe2ef2336737ca344bb5d6b35af9c95b70f0c2ce78bc8dcb786259f
+check_installed tools/capability/execution/admin.py         f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606
+check_installed tools/capability/execution/abandonment.py   7d2f1857f16c54dda9f39658857a0d03b94198af75a04d21cef942bf2a224f24
+check_installed tools/capability/execution/provenance.py    2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6
+check_installed tools/capability/cli.py                     90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23
+
+# And the installed library is asked what it understands, from ITS OWN
+# directory, so a digest that matched a file Python would not import cannot
+# pass. Nothing here reads or writes a governed store.
+if ! ( cd "${INSTALLED}" && python3 - <<'INSTALLED_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import provenance
+from tools.capability.execution.admin import Verb, _DESTROYS_UNDER
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+if os.path.realpath(cli.__file__) != os.path.realpath("tools/capability/cli.py"):
+    refuse(f"the answering cli is {cli.__file__}, not the installed one")
+if provenance.CORRECTABLE_FIELDS != frozenset({"actor"}):
+    refuse(f"the installed correctable set is {sorted(provenance.CORRECTABLE_FIELDS)}")
+if Verb.CORRECT_PROVENANCE in _DESTROYS_UNDER:
+    refuse("the installed correction verb carries destruction authority")
+verbs = next(a.choices for a in cli.build_parser()._actions
+             if getattr(a, "choices", None))
+if "correct-provenance" not in verbs:
+    refuse("the installed CLI exposes no correct-provenance verb")
+flags = {o for a in verbs["correct-provenance"]._actions for o in a.option_strings}
+if "--store-root" not in flags:
+    refuse("the installed correct-provenance takes no explicit store root")
+abandon_flags = {o for a in verbs["abandon"]._actions for o in a.option_strings}
+if "--store-root" not in abandon_flags:
+    refuse("the installed abandon still has no explicit store root: this host is "
+           "not at Generation 20 and the incident is still possible")
+print("ok  installed: correct-provenance present, actor-only, no destruction authority")
+print("ok  installed: both administrative mutators require an explicit target")
+INSTALLED_PY
+)
+then
+  echo "REFUSE: the installed runtime does not carry the reviewed Generation-20 semantics"
+  exit 1
+fi
+
+# ---- GATE 1: THE RUNTIME HAS NOT MOVED ---------------------------------
+printf '\n--- runtime baseline gate ---\n'
+NOW="$(aggregate "${RUNTIME}")"
+test "${NOW}" = "${RUNTIME_BEFORE}" \
+  || { echo "REFUSE: the capability-runtime store has moved: ${NOW}, expected ${RUNTIME_BEFORE}"; exit 1; }
+printf 'ok  runtime  %s\n' "${NOW}"
+
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "${CINV_SEQ}" \
+  || { echo "REFUSE: capability-invocation.seq is not ${CINV_SEQ}"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "${CRES_SEQ}" \
+  || { echo "REFUSE: capability-result.seq is not ${CRES_SEQ}"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cadm-counter")" = "${CADM_COUNTER_BEFORE}" \
+  || { echo "REFUSE: cadm-counter is not ${CADM_COUNTER_BEFORE}"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cmut-counter")" = "${CMUT_COUNTER_BEFORE}" \
+  || { echo "REFUSE: cmut-counter is not ${CMUT_COUNTER_BEFORE}"; exit 1; }
+printf 'ok  sequences 3/1, cadm-counter %s, cmut-counter %s\n' \
+  "${CADM_COUNTER_BEFORE}" "${CMUT_COUNTER_BEFORE}"
+
+# ---- GATE 2: THE IMMUTABLE RECORDS -------------------------------------
+printf '\n--- immutable records gate ---\n'
+check_sha() {
+  local path="$1" wanted="$2" got
+  got="$(sha256sum "${path}" 2>/dev/null | cut -d' ' -f1)"
+  test -n "${got}" || { echo "REFUSE: ${path} is absent"; exit 1; }
+  test "${got}" = "${wanted}" \
+    || { echo "REFUSE: ${path} is ${got}, expected ${wanted}"; exit 1; }
+  printf 'ok  %-58s %s\n' "$(basename "${path}")" "${got}"
+}
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" "${SHA_CINV1}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" "${SHA_CINV2}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000003.yaml" "${SHA_CINV3}"
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml"     "${SHA_CRES1}"
+
+# ---- GATE 3: THE SUBJECT, EXACTLY AS IT STANDS -------------------------
+printf '\n--- subject gate ---\n'
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment" "${CADM_ABANDONMENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/intent"      "${CADM_INTENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/outcome"     "${CADM_OUTCOME_SHA}"
+
+# The claim being disputed must be the claim that is there.
+grep -q "\"actor\":\"${DISPUTED_VALUE}\"" "${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment" \
+  || { echo "REFUSE: ${SUBJECT} does not record actor ${DISPUTED_VALUE}"; exit 1; }
+grep -q "\"cinv\":\"${TARGET_CINV}\"" "${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment" \
+  || { echo "REFUSE: ${SUBJECT} is not about ${TARGET_CINV}"; exit 1; }
+printf 'ok  %s records actor %s for %s -- the claim this corrects\n' \
+  "${SUBJECT}" "${DISPUTED_VALUE}" "${TARGET_CINV}"
+
+test "$(find "${RUNTIME}/execution/admin-records" -mindepth 1 -maxdepth 1 | wc -l)" = "1" \
+  || { echo "REFUSE: there is more than one administrative record; this ceremony expects exactly ${SUBJECT}"; exit 1; }
+test ! -e "${RUNTIME}/execution/admin-records/${SUBJECT}/provenance-correction" \
+  || { echo "REFUSE: ${SUBJECT} already carries a correction"; exit 1; }
+printf 'ok  exactly one administrative record, and no correction yet\n'
+
+# ---- GATE 4: THE EFFECT THIS CORRECTS IS STANDING ----------------------
+printf '\n--- lifecycle gate ---\n'
+test "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)" = "${TRANSITIONS_BEFORE}" \
+  || { echo "REFUSE: the transition journal does not hold ${TRANSITIONS_BEFORE} records"; exit 1; }
+test ! -e "${RUNTIME}/execution/CINV-000003" \
+  || { echo "REFUSE: CINV-000003 has execution state; Stage 2 was run and this ceremony's baseline is wrong"; exit 1; }
+
+if ! ( cd "${INSTALLED}" && python3 - "${RUNTIME}" <<'LIFECYCLE_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import capacity as cap
+from tools.capability.execution import state as sm
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    states = sm.all_states(root)
+    held = sum(1 for v in states.values() if v in cap.slot_holding_states())
+    expected = {"CINV-000001": "launch_authorized", "CINV-000002": "abandoned"}
+    actual = {k: v.value for k, v in states.items()}
+    if actual != expected:
+        print(f"REFUSE: the lifecycle is {actual}, expected {expected}")
+        sys.exit(1)
+    if held != 1 or cap.MAXIMUM_SLOTS != 2:
+        print(f"REFUSE: occupancy is {held} of {cap.MAXIMUM_SLOTS}, expected 1 of 2")
+        sys.exit(1)
+    print(f"ok  CINV-000001 launch_authorized, CINV-000002 abandoned, {held} of "
+          f"{cap.MAXIMUM_SLOTS} slots held")
+finally:
+    root.close()
+LIFECYCLE_PY
+)
+then
+  echo "REFUSE: the lifecycle this correction describes is not the one in the store"
+  exit 1
+fi
+
+# The object the writer must end up holding, measured HERE so the check below
+# compares two things this ceremony obtained independently.
+EXECUTION_INODE="$(stat -c '%i' "${RUNTIME}/execution")"
+EXECUTION_DEV="$(stat -c '%d' "${RUNTIME}/execution")"
+printf 'ok  production execution root is device %s inode %s\n' "${EXECUTION_DEV}" "${EXECUTION_INODE}"
+
+printf '\n========================================================\n'
+printf 'ALL GATES PASSED. THE NEXT COMMAND IS IRREVERSIBLE.\n'
+printf 'It appends one administrative record disputing %s/actor.\n' "${SUBJECT}"
+printf 'It changes NO lifecycle, NO occupancy, and NO existing record.\n'
+printf '========================================================\n'
+
+# ---- THE ONE CORRECTION -------------------------------------------------
+#
+# Run from ${INSTALLED} so the INSTALLED Generation-20 package is what Python
+# imports, and with the store root SPELLED OUT, because after Generation 20
+# there is no default and a call that names no target refuses.
+printf '\n--- capability correct-provenance (production, installed runtime) ---\n'
+OUT="${GATE_DIR}/correction.json"
+set +e
+( cd "${INSTALLED}" && python3 -m tools.capability.cli correct-provenance \
+    --store-root "${RUNTIME}" \
+    --subject-cadm "${SUBJECT}" \
+    --cinv "${TARGET_CINV}" \
+    --disputed-field "${DISPUTED_FIELD}" \
+    --disputed-value "${DISPUTED_VALUE}" \
+    --finding "${FINDING}" \
+    --actual-initiator "${INITIATOR}" \
+    --actor "${ACTOR}" \
+    --request-id "${REQUEST_ID}" \
+    --recorded-at "$(date -Is)" \
+    --evidence-reference "${INCIDENT_REPORT}" \
+    --evidence-reference "${OPERATOR_OBSERVATION}" ) > "${OUT}"
+RC=$?
+set -e
+cat "${OUT}"
+test "${RC}" = "0" || { echo "STOP: the process exited ${RC}. Nothing further. Report the output."; exit 1; }
+printf 'ok  process rc 0\n'
+
+# ---- THE VERDICT --------------------------------------------------------
+printf '\n--- verdict ---\n'
+verdict() {
+  local key="$1" want="$2" got
+  got="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${OUT}" "${key}")"
+  test "${got}" = "${want}" \
+    || { echo "STOP: ${key} is ${got}, expected ${want}"; exit 1; }
+  printf 'ok  %-18s %s\n' "${key}" "${got}"
+}
+verdict cadm             "${EXPECTED_CORRECTION}"
+verdict subject_cadm     "${SUBJECT}"
+verdict subject_member   abandonment
+verdict subject_digest   "${CADM_ABANDONMENT_SHA}"
+verdict cinv             "${TARGET_CINV}"
+verdict disputed_field   "${DISPUTED_FIELD}"
+verdict disputed_value   "${DISPUTED_VALUE}"
+verdict finding          "${FINDING}"
+verdict actual_initiator "${INITIATOR}"
+verdict effect           retained
+verdict lifecycle_state  abandoned
+verdict resumed          False
+verdict store_root       "${RUNTIME}"
+
+# WHERE IT WROTE, not where it was told to write.
+WROTE_INODE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["target"]["st_ino"])' "${OUT}")"
+WROTE_DEV="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["target"]["st_dev"])' "${OUT}")"
+if [[ "${WROTE_INODE}" != "${EXECUTION_INODE}" || "${WROTE_DEV}" != "${EXECUTION_DEV}" ]]; then
+  echo "STOP: the writer held device ${WROTE_DEV} inode ${WROTE_INODE}, not the production execution root ${EXECUTION_DEV}/${EXECUTION_INODE}"
+  exit 1
+fi
+printf 'ok  the writer held the production execution root, asked of the kernel\n'
+
+# ---- WHAT MUST NOT HAVE CHANGED ----------------------------------------
+printf '\n--- the correction corrected nothing else ---\n'
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/abandonment" "${CADM_ABANDONMENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/intent"      "${CADM_INTENT_SHA}"
+check_sha "${RUNTIME}/execution/admin-records/${SUBJECT}/outcome"     "${CADM_OUTCOME_SHA}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000001.yaml" "${SHA_CINV1}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000002.yaml" "${SHA_CINV2}"
+check_sha "${RUNTIME}/capability-invocations/CINV-000003.yaml" "${SHA_CINV3}"
+check_sha "${RUNTIME}/capability-results/CRES-000001.yaml"     "${SHA_CRES1}"
+
+test "$(find "${RUNTIME}/execution/transitions" -type f | wc -l)" = "${TRANSITIONS_BEFORE}" \
+  || { echo "STOP: A TRANSITION WAS WRITTEN"; exit 1; }
+test "$(cat "${RUNTIME}/execution/cmut-counter")" = "${CMUT_COUNTER_BEFORE}" \
+  || { echo "STOP: THE MUTATION COUNTER MOVED: a correction journals no lifecycle"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-invocation.seq")" = "${CINV_SEQ}" \
+  || { echo "STOP: the invocation sequence moved"; exit 1; }
+test "$(cat "${RUNTIME}/sequences/capability-result.seq")" = "${CRES_SEQ}" \
+  || { echo "STOP: the result sequence moved"; exit 1; }
+test ! -e "${RUNTIME}/capability-results/CRES-000002.yaml" \
+  || { echo "STOP: A SYNTHETIC RESULT WAS WRITTEN"; exit 1; }
+test ! -e "${RUNTIME}/execution/CINV-000003" \
+  || { echo "STOP: CINV-000003 GAINED EXECUTION STATE"; exit 1; }
+printf 'ok  no transition, no CMUT, no CRES, no sequence movement, CINV-000003 untouched\n'
+
+if ! ( cd "${INSTALLED}" && python3 - "${RUNTIME}" <<'AFTER_PY'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from tools.capability import cli
+from tools.capability.execution import capacity as cap
+from tools.capability.execution import state as sm
+
+root = cli._anchored(os.path.join(sys.argv[1], "execution"))
+try:
+    states = {k: v.value for k, v in sm.all_states(root).items()}
+    held = sum(1 for v in sm.all_states(root).values()
+               if v in cap.slot_holding_states())
+    if states != {"CINV-000001": "launch_authorized", "CINV-000002": "abandoned"}:
+        print(f"STOP: the lifecycle changed: {states}")
+        sys.exit(1)
+    if held != 1:
+        print(f"STOP: occupancy changed to {held}")
+        sys.exit(1)
+    print(f"ok  lifecycle unchanged, {held} of {cap.MAXIMUM_SLOTS} slots held")
+finally:
+    root.close()
+AFTER_PY
+)
+then
+  echo "STOP: the lifecycle or the occupancy moved. Report immediately."
+  exit 1
+fi
+
+# The correction is where it should be, and says what it should say.
+printf '\n--- the new record ---\n'
+cat "${RUNTIME}/execution/admin-records/${EXPECTED_CORRECTION}/provenance-correction"
+printf '\n'
+for member in intent outcome provenance-correction; do
+  test -f "${RUNTIME}/execution/admin-records/${EXPECTED_CORRECTION}/${member}" \
+    || { echo "STOP: ${EXPECTED_CORRECTION} has no ${member}"; exit 1; }
+done
+test "$(cat "${RUNTIME}/execution/cadm-counter")" = "000002" \
+  || { echo "STOP: cadm-counter is not 000002"; exit 1; }
+printf 'ok  %s carries intent, outcome and the finding; cadm-counter 000001 -> 000002\n' \
+  "${EXPECTED_CORRECTION}"
+
+printf '\n========================================================\n'
+printf 'THE ATTRIBUTION IS CORRECTED. THE EFFECT STANDS. STOP HERE.\n'
+printf 'Report the new capability-runtime aggregate:\n'
+aggregate "${RUNTIME}"
+printf '\n'
+printf 'DO NOT continue to CINV-000003 Stage 2, and do not reclaim\n'
+printf 'CINV-000001. Both await a separate reviewer decision.\n'
+printf '========================================================\n'

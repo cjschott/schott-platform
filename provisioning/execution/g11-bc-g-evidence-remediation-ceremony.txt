@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# The G11-BC-G evidence remediation, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. The test suite executes the ceremony it drives against fixtures, so
+# the control flow is proven rather than described.
+#
+# EVIDENCE ONLY. This installs nothing, changes no runtime, helper, Fabric,
+# Trust, sudoers, handoff or invocation state, and touches no capability record.
+# It archives one defective file under /root and writes two correctly named and
+# explicitly-marked reconstructions beside it.
+#
+# It does NOT recreate /root/kyri-g11-bb-helper-digests.txt. The original is
+# gone; a reconstruction at that pathname would be indistinguishable from an
+# original to anything that only checks existence. Nothing reads it.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# STEP 1 -- read-only. Returns the defective artifact's digest and everything
+# the remediation would do. Return this output for review BEFORE step 2.
+sudo bash /opt/schott-platform/provisioning/execution/remediate-g11-bc-g-evidence.sh --verify
+
+# STEP 2 -- the remediation. Only after step 1 has been reviewed and accepted.
+# Chained so a --verify refusal stops everything.
+sudo bash /opt/schott-platform/provisioning/execution/remediate-g11-bc-g-evidence.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/remediate-g11-bc-g-evidence.sh --apply
+
+# EXPECTED AFTER STEP 2:
+#   /root/kyri-g11-bb-helper-digests.txt                    ABSENT
+#   /root/kyri-g11-bb-helper-digests.defective-bc-e.txt     the preserved bytes
+#   /root/kyri-g11-bb-helper-digests.reconstructed.txt      0400 root:root
+#   /root/kyri-g11-bc-e-helper-digests.txt                  0400 root:root
+#
+# If the run is interrupted, do NOT rerun --apply. Run --recover and return its
+# output: past the archive step it requires operator disposition by design.
+#
+# Stage 3 remains unauthorised. This ceremony has nothing to do with execution.

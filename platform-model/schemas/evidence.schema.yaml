@@ -24,6 +24,11 @@ provenance:
 id_pattern: '^EVID-[0-9]{6}$'
 
 required_fields:
+  # Required on evidence specifically, because it is the `schema_version` of
+  # the content fingerprint's preimage. A field that binds how a record is
+  # interpreted cannot be optional: a record omitting it would be fingerprinted
+  # over an interpretation nobody declared.
+  - api_version
   - id
   - type
   - target

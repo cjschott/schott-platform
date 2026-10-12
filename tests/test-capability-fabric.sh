@@ -360,6 +360,42 @@ for value in ("none", "integrated-gpu", "discrete-gpu", "dedicated-accelerator",
               "remote-service"):
     check(value in accelerator_classes,
           f"accelerator class vocabulary includes {value}")
+check("accelerator_compute_capability" in profile,
+      "resource profile vocabulary defines accelerator_compute_capability")
+
+# Every dimension declares HOW it is compared. A vocabulary that named its
+# fields but not their comparison is what let a capacity be compared for
+# equality, refusing every machine larger than the one asked for.
+for attribute, expected in (("host_memory_mb", "available-at-least-required"),
+                            ("host_cpu_cores", "available-at-least-required"),
+                            ("accelerator_memory_mb", "available-at-least-required"),
+                            ("architecture", "exact-token-equality"),
+                            ("accelerator_class", "exact-token-equality"),
+                            ("accelerator_compute_capability", "exact-token-equality")):
+    check((profile.get(attribute) or {}).get("comparison") == expected,
+          f"{attribute} declares {expected} comparison")
+for attribute in ("host_memory_mb", "host_cpu_cores", "accelerator_memory_mb"):
+    check((profile.get(attribute) or {}).get("value_domain") == "positive-integer",
+          f"{attribute} declares a positive-integer domain")
+
+# The governed architecture value space is closed and holds the canonical
+# token only. A producer spelling in this list would make one vendor's
+# convention the governed value.
+architectures = (profile.get("architecture") or {}).get("values") or []
+check(architectures == ["x86-64"],
+      f"the governed architecture value space is exactly ['x86-64'] ({architectures})")
+for spelling in ("x86_64", "amd64", "arm64", "aarch64"):
+    check(spelling not in architectures,
+          f"the raw observation {spelling} is not a governed architecture value")
+
+# Both halves of the containment invariant are declared, not merely narrated.
+package_schema = schemas.get("capability-package", {})
+check(package_schema.get("resource_matching")
+      == "satisfaction-against-verified-profile",
+      "the package schema declares typed satisfaction against the verified profile")
+check(package_schema.get("package_requirement_relation")
+      == "contract-requirements-satisfied-by-package",
+      "the package schema declares that a package may not weaken its contract")
 
 location_classes = (host.get("enums") or {}).get("location_class") or []
 for value in ("on-premises", "operator-controlled-remote", "third-party-hosted"):
@@ -376,6 +412,34 @@ effect_classes = (contract.get("enums") or {}).get("effect_class") or []
 for value in ("read-only", "computational", "content-generating", "side-effecting"):
     check(value in effect_classes, f"effect class includes {value}")
 check(len(effect_classes) == 4, "exactly four effect classes are defined")
+
+# A permanent, immutable record may not carry a value no authority governs.
+# `failure_modes` is what a caller is promised about how a call can fail, so a
+# freely spelled mode is a promise nobody can interpret, kept forever.
+failure_modes = (contract.get("enums") or {}).get("failure_mode") or []
+check(failure_modes == ["refused", "adapter-error", "timeout", "interrupted",
+                        "serialisation-failure", "result-missing"],
+      f"the failure-mode vocabulary is closed and exactly as accepted ({failure_modes})")
+check("completed" not in failure_modes, "success is not a failure mode")
+check("result-missing" in failure_modes and "serialisation-failure" in failure_modes,
+      "a missing result and an unrepresentable one are separate outcomes")
+
+# Shapes reference the one authority that enforces them. A contract restating a
+# schema would be a permanent unexecuted copy of one, and the day the two
+# disagree the contract wins by being immutable and the code wins by running.
+check(contract.get("shape_form") == "authority-reference",
+      "a contract shape is a reference to its enforcing authority")
+check(contract.get("inline_shape_declaration") == "forbidden",
+      "a contract may not restate the schema it references")
+check(contract.get("shape_reference_fields")
+      == ["authority", "schema", "schema_version"],
+      "a shape reference names the module, the schema, and the version")
+check(contract.get("shape_reference_form") == "closed",
+      "a shape reference is closed: an extra key is refused, never ignored")
+check(contract.get("request_shape_form") == "single-reference",
+      "one request, one enforcing authority")
+check(contract.get("response_shape_parts") == ["envelope", "content"],
+      "a result names the envelope authority and the content authority apart")
 
 # Compatibility is declared, never inferred. A platform that reads meaning into
 # a version number has guessed, and it will guess wrong during an upgrade.

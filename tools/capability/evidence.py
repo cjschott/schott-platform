@@ -34,13 +34,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 
+from ..common.immutable_store import StoreError
 from .errors import CapabilityError
+from .execution.profile import ADAPTER_IDENTITY
+from .rehearsal import is_rehearsing
 from .invocation_identity import (CONFLICT, CONSUMED, compare_binding,
                                   validate_invocation_id)
 from .records import (INVOCATION_FIELDS, INVOCATION_KIND, RECORD_SCHEMA_VERSION,
+                      RESULT_SCHEMA_VERSION, INVOCATION_SCHEMA_VERSION,
+                      REASON_RESULT_MISSING,
+                      OUTCOME_CLASSES,
                       RESULT_FIELDS, RESULT_KIND)
 
 STATUS_PREPARED = "prepared"
+# What a rehearsal returns. Never written to a record: no record is written.
+STATUS_PREFLIGHT = "preflight"
 STATUS_REFUSED = "refused"
 STATUS_CONSUMED = "consumed"
 STATUS_CONFLICT = "conflict"
@@ -72,6 +80,17 @@ class InvocationDecision:
     payload_digest: str | None = None
     artifact_digest: str | None = None
     staged_path: str | None = None
+    # Whether a governed result was ADMITTED, which is not the same question as
+    # whether the process finished. `outcome_class` answers the second; a
+    # capability that exits zero and writes nothing is `completed` and did not
+    # succeed.
+    #
+    # `None` where no adapter ran: a preparation that never reached execution
+    # did not fail, and `False` would be a claim about a run that never
+    # happened. Only an actual execution outcome sets True or False.
+    succeeded: bool | None = None
+    result_digest: str | None = None
+    result_artifact_reference: str | None = None
 
 
 def _digest_shaped(value: Any) -> bool:
@@ -142,7 +161,7 @@ def _existing(store, invocation_id: str):
 def _invocation_body(identity: str, *, invocation_id: str, request_id: Any,
                      evidence, staged, actor: str, payload_digest: str,
                      binding_digest: str, requested_at: datetime,
-                     outcome: str) -> dict[str, Any]:
+                     outcome: str, adapter_identity: Any = None) -> dict[str, Any]:
     return {
         "invocation_record_id": identity,
         "invocation_id": invocation_id,
@@ -152,39 +171,239 @@ def _invocation_body(identity: str, *, invocation_id: str, request_id: Any,
         "capability_package_id": evidence.capability_package_id,
         "contract_id": evidence.contract_id,
         "capability_id": evidence.capability_id,
+        "operation": evidence.operation,
         "actor": actor,
         "payload_digest": payload_digest,
         "binding_digest": binding_digest,
         "effect_class": evidence.effect_class,
-        "artifact_digest": staged.artifact_sha256 if staged is not None else None,
+        "artifact_digest": staged.package_tree_sha256 if staged is not None else None,
         "staged_path": staged.staged_path if staged is not None else None,
+        "adapter_identity": adapter_identity,
         "requested_at": requested_at,
         "kind": INVOCATION_KIND,
-        "schema_version": RECORD_SCHEMA_VERSION,
+        "schema_version": INVOCATION_SCHEMA_VERSION,
         "evidence": {"actor": actor, "outcome": outcome,
                      "request_id": request_id,
                      "selection_id": evidence.selection_id},
     }
 
 
-def _result_body(identity: str, *, invocation_record_id: str, reason: str,
-                 recorded_at: datetime, actor: str) -> dict[str, Any]:
+def _result_body(identity: str, *, invocation_record_id: str, reason: Any,
+                 recorded_at: datetime, actor: str,
+                 outcome_class: str = OUTCOME_CLASS_REFUSED,
+                 result_digest: Any = None,
+                 result_artifact_reference: Any = None,
+                 started_at: Any = None, ended_at: Any = None,
+                 outcome: str = OUTCOME_REFUSED) -> dict[str, Any]:
+    """One result record, in the section 15 shape.
+
+    A pre-execution refusal has no `started_at`: nothing started. Encoding that
+    as null rather than as the recording instant keeps "when the work ran" and
+    "when we wrote this down" distinct, which is the whole reason both exist.
+    """
     return {
         "capability_result_id": identity,
         "invocation_record_id": invocation_record_id,
         "attempt_number": 1,
-        "outcome_class": OUTCOME_CLASS_REFUSED,
+        "outcome_class": outcome_class,
         "reason": reason,
+        "result_digest": result_digest,
+        "result_artifact_reference": result_artifact_reference,
+        "started_at": started_at,
+        "ended_at": ended_at,
         "recorded_at": recorded_at,
         "kind": RESULT_KIND,
-        "schema_version": RECORD_SCHEMA_VERSION,
-        "evidence": {"actor": actor, "outcome": OUTCOME_REFUSED},
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "evidence": {"actor": actor, "outcome": outcome},
     }
+
+
+def require_adapter_identity(value: Any) -> Any:
+    """The governed execution mechanism bound to an invocation, or refuse.
+
+    Two legal values and no others: the one adapter identity this build
+    governs, or `None` where no execution mechanism was authorised. A caller
+    never supplies this -- it is derived from the source-governed execution
+    binding -- so an unrecognised value is not a caller's mistake to tolerate,
+    it is a record claiming an execution mechanism that does not exist.
+    """
+    if value is None:
+        return None
+    if value != ADAPTER_IDENTITY:
+        raise CapabilityError(
+            f"{value!r} is not the governed adapter identity")
+    return value
+
+
+def require_execution_success(value: Any) -> bool:
+    """The adapter's admission verdict, or refuse.
+
+    Fails closed on anything that is not exactly a boolean. A missing or
+    oddly-typed `succeeded` is not evidence that a result was admitted, and
+    defaulting it either way would answer a question nobody asked -- which is
+    how `completed` came to read as success in the first place.
+    """
+    if value is not True and value is not False:
+        raise CapabilityError(
+            "the adapter outcome does not carry a usable success verdict")
+    return value
+
+
+class TerminalResultExists(CapabilityError):
+    """This invocation already has a governed terminal result."""
+
+
+def existing_terminal_result(store, invocation_record_id: Any):
+    """The terminal result already recorded for this invocation, or ``None``.
+
+    **One reader, two callers, on purpose.** The pre-execution gate in
+    `execute_supervised` and the recording guard below must answer the same
+    question the same way; two spellings of "does a result exist" would
+    eventually disagree, and the disagreement would be a second execution.
+
+    **It fails closed on a damaged result namespace.** `list_records` skips a
+    file that is not a mapping so that listing stays usable, which is right for
+    listing and wrong here: a corrupted `CRES` would simply vanish and this
+    would answer "no result" for an invocation that has one. So the files are
+    counted as well as read, and a shortfall is refused rather than stepped
+    over.
+
+    **A result naming this invocation blocks it whatever its attempt_number.**
+    The recording guard used to require ``attempt_number == 1``, which meant a
+    result carrying an unusable one would not block anything -- fail-open in the
+    one place that must not be. The number is reported, never used to dismiss.
+    """
+    # The record directory itself, through the store's own guarded resolver, so
+    # the count below is taken over exactly the files `list_records` reads.
+    try:
+        directory = store._directory(RESULT_KIND)          # noqa: SLF001
+        on_disk = sorted(directory.glob("*.yaml"))
+    except (CapabilityError, StoreError, OSError) as error:
+        raise CapabilityError(
+            f"the result namespace could not be read: {error}") from None
+    try:
+        stored = store.list_records(RESULT_KIND)
+    except (CapabilityError, StoreError) as error:
+        raise CapabilityError(
+            f"the result namespace could not be read: {error}") from None
+    if len(stored) != len(on_disk):
+        raise CapabilityError(
+            f"{len(on_disk) - len(stored)} result record(s) are unreadable; "
+            f"whether {invocation_record_id} already has a terminal result "
+            f"cannot be established")
+
+    matched = [record for record in stored
+               if record.get("invocation_record_id") == invocation_record_id]
+    if len(matched) > 1:
+        raise CapabilityError(
+            f"{len(matched)} terminal results name {invocation_record_id}; "
+            f"the store is corrupt and this adapter performs one attempt")
+    return matched[0] if matched else None
+
+
+def require_no_terminal_result(store, invocation_record_id: Any) -> None:
+    """Refuse if this invocation is already resolved.
+
+    Raised before anything runs. The message names the result, because an
+    operator seeing this needs to know which record closed the invocation.
+    """
+    existing = existing_terminal_result(store, invocation_record_id)
+    if existing is None:
+        return
+    raise TerminalResultExists(
+        f"a terminal result already exists for {invocation_record_id} "
+        f"({existing.get('capability_result_id')}, "
+        f"outcome {existing.get('outcome_class')}); "
+        f"this adapter performs one attempt")
+
+
+def record_terminal_result(store, *, invocation_record_id: Any, outcome: Any,
+                           result_digest: Any = None,
+                           result_artifact_reference: Any = None,
+                           actor: Any = "unknown",
+                           invocation_id: Any = None,
+                           recorded_at: datetime | None = None) -> InvocationDecision:
+    """Persist the terminal outcome of one execution attempt.
+
+    **It records conclusions and reaches none.** The outcome class was decided
+    by T13, the admission verdict by T14, and the digest by whatever collected
+    the result. Nothing here reruns the adapter, re-reads an exit code,
+    reinterprets output, or revisits eligibility.
+
+    **It never touches the invocation record.** CINV is the immutable
+    pre-execution attempt evidence, written before the adapter precisely so a
+    crash mid-flight is still attributable. Recording completion by editing it
+    would destroy the property that makes it worth having.
+
+    **An undescribable pair is refused rather than written.** A success with no
+    digest, or a failure carrying one, is not an outcome anybody reached, and a
+    record of it would be worse than none.
+    """
+    admitted = require_execution_success(getattr(outcome, "succeeded", None))
+    outcome_class = getattr(outcome, "outcome_class", None)
+    if outcome_class not in OUTCOME_CLASSES:
+        raise CapabilityError(
+            f"the outcome class {outcome_class!r} is not a released one")
+
+    if admitted:
+        if not _digest_shaped(result_digest):
+            raise CapabilityError(
+                "an admitted result must carry a governed result digest")
+        reason = None
+    else:
+        if result_digest is not None or result_artifact_reference is not None:
+            raise CapabilityError(
+                "a result that was not admitted may not carry a digest or a "
+                "reference")
+        # The governed name for what went wrong. `completed` with nothing
+        # admitted is the case that used to read as success, so it gets the
+        # one reason added for it; every other class already names itself.
+        reason = (REASON_RESULT_MISSING if outcome_class == "completed"
+                  else outcome_class)
+
+    # Supplied, never read from a clock here. This module records conclusions
+    # and the instant a record was written is the caller's fact, the same way
+    # `requested_at` already is on the refusal path.
+    if recorded_at is None:
+        raise CapabilityError("a terminal result must be recorded at an instant")
+
+    terminal = getattr(outcome, "terminal", None)
+    started_at = getattr(terminal, "started_at", None)
+    ended_at = getattr(terminal, "finished_at", None)
+
+    # Serialised, and entered only now. The invocation critical section is the
+    # store's own -- not the Fabric's -- and it is deliberately NOT held across
+    # the execution: a capability that runs for its full timeout must not block
+    # every other invocation-identity operation for that long.
+    with store.invocation_critical_section(invocation_id or invocation_record_id):
+        # Still checked here, and still inside the critical section. The
+        # pre-execution gate stops a second run; this stops a second RECORD,
+        # which is a different race -- two callers past the gate concurrently
+        # would both reach this, and only one may write.
+        require_no_terminal_result(store, invocation_record_id)
+        identity = store.allocate_id(RESULT_KIND)
+        store.write_atomic(
+            store.path_for(RESULT_KIND, identity),
+            _result_body(identity, invocation_record_id=invocation_record_id,
+                         reason=reason, recorded_at=recorded_at,
+                         actor=actor, outcome_class=outcome_class,
+                         result_digest=result_digest if admitted else None,
+                         result_artifact_reference=(
+                             result_artifact_reference if admitted else None),
+                         started_at=started_at, ended_at=ended_at,
+                         outcome=outcome_class))
+    return InvocationDecision(
+        STATUS_PREPARED, reason, invocation_record_id=invocation_record_id,
+        result_record_id=identity, succeeded=admitted,
+        result_digest=result_digest if admitted else None,
+        result_artifact_reference=(
+            result_artifact_reference if admitted else None))
 
 
 def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
                       payload_digest: Any, evidence, staged, actor: Any,
-                      request_id: Any, requested_at: datetime) -> InvocationDecision:
+                      request_id: Any, requested_at: datetime,
+                      adapter_identity: Any = None) -> InvocationDecision:
     """Decide this invocation once, and record the decision durably.
 
     A prepared decision means the invocation was verified and recorded. **It is
@@ -203,6 +422,43 @@ def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
         return InvocationDecision(STATUS_REFUSED, REASON_INVOCATION_INPUT)
     if not isinstance(requested_at, datetime) or requested_at.tzinfo is None:
         return InvocationDecision(STATUS_REFUSED, REASON_INVOCATION_INPUT)
+
+    # A rehearsal stops here. Everything above ran -- the identity is validated,
+    # the digests are shaped, the actor and instant are checked -- and the two
+    # conclusions the write would reach are computed below from the same
+    # evidence and the same staging result. What does not happen is the critical
+    # section, the allocation, and the write.
+    #
+    # The prior-record lookup still runs, because "this identity has already
+    # been consumed" is one of the answers a rehearsal owes the operator.
+    if is_rehearsing():
+        prior, problem = _existing(store, identity)
+        if problem is not None:
+            return InvocationDecision(STATUS_PREFLIGHT, problem,
+                                      invocation_id=identity)
+        if prior is not None:
+            verdict = compare_binding(prior["binding_digest"], binding_digest)
+            return InvocationDecision(
+                STATUS_PREFLIGHT,
+                CONSUMED if verdict == CONSUMED else CONFLICT,
+                invocation_record_id=prior["invocation_record_id"],
+                invocation_id=identity,
+                binding_digest=prior["binding_digest"],
+                payload_digest=prior["payload_digest"],
+                artifact_digest=prior.get("artifact_digest"),
+                staged_path=prior.get("staged_path"))
+        refusal = None
+        if not evidence.supported:
+            refusal = evidence.reason
+        elif staged is None or not staged.supported:
+            refusal = staged.reason if staged is not None else REASON_INVOCATION_INPUT
+        return InvocationDecision(
+            STATUS_PREFLIGHT, refusal,
+            invocation_record_id=store.peek_next_id(INVOCATION_KIND),
+            invocation_id=identity, binding_digest=binding_digest,
+            payload_digest=payload_digest,
+            artifact_digest=None if refusal is not None else staged.package_tree_sha256,
+            staged_path=None if refusal is not None else staged.staged_path)
 
     # One section, entered once. Lookup, comparison, allocation, and both
     # writes happen inside it, because a decision published outside the lock
@@ -240,14 +496,16 @@ def record_invocation(store, *, invocation_id: Any, binding_digest: Any,
                              staged=staged if refusal is None else None,
                              actor=actor, payload_digest=payload_digest,
                              binding_digest=binding_digest,
-                             requested_at=requested_at, outcome=outcome))
+                             requested_at=requested_at, outcome=outcome,
+                             adapter_identity=require_adapter_identity(
+                                 adapter_identity)))
 
         if refusal is None:
             return InvocationDecision(
                 STATUS_PREPARED, None, invocation_record_id=record_id,
                 invocation_id=identity, binding_digest=binding_digest,
                 payload_digest=payload_digest,
-                artifact_digest=staged.artifact_sha256,
+                artifact_digest=staged.package_tree_sha256,
                 staged_path=staged.staged_path)
 
         result_id = store.allocate_id(RESULT_KIND)

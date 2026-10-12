@@ -41,6 +41,7 @@ from typing import Any, Mapping
 from ..trust.models import TrustState
 from .identifiers import ID_FIELDS, PATTERNS
 from .models import WORKLOAD_DATA_CLASSIFICATIONS
+from .resources import satisfies
 from .trust_adapter import REASON_NOT_USABLE, REASON_UNREADABLE, verify_trust_record
 
 # The two domains a binding composes. Trusting a package trusts no machine and
@@ -229,21 +230,6 @@ def _members(value: Any) -> tuple[str, ...] | None:
         if type(member) is not str or not member.strip():
             return None
     return tuple(value)
-
-
-def _contained(required: Any, verified: Any) -> bool:
-    """Containment, not interpretation.
-
-    Every required dimension must be one the operator verified, at the value
-    the operator verified. Ordering a memory size here would be the
-    interpretation the accepted vocabulary rules out.
-    """
-    if not isinstance(required, Mapping) or not isinstance(verified, Mapping):
-        return False
-    for name, value in required.items():
-        if name not in verified or verified[name] != value:
-            return False
-    return True
 
 
 def _request(value: Any) -> dict[str, Any] | None:
@@ -541,8 +527,8 @@ def _resources(host, host_defect: str | None, package, package_defect: str | Non
         return ConditionResult("", INDETERMINATE, host_defect)
     if package is None:
         return ConditionResult("", INDETERMINATE, package_defect)
-    if not _contained(package.get("resource_requirements"),
-                      host.get("verified_resource_profile")):
+    if not satisfies(package.get("resource_requirements"),
+                     host.get("verified_resource_profile")):
         return ConditionResult("", UNMET, REASON_RESOURCES)
     return None
 

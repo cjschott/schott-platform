@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "capability_package_id": "CPKG-0001",
+  "contract_id": "CCON-0001",
+  "capability_id": "CAPDEF-0001",
+  "artifact_reference": "tree:kyri-execution-boundary-verification/1.0.0",
+  "package_tree_sha256": "sha256:6f2282c58ad8d5bf5a463ca09b8a2c5c3f3faef31aea95e2b07100720e6c9a8e"
+}

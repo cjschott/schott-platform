@@ -33,6 +33,9 @@ creates no route, computes no eligibility, and chooses nothing.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
@@ -40,10 +43,16 @@ from typing import Any, Mapping
 from ..trust.identifiers import RECORD_ID as TRUST_RECORD_ID
 from .errors import FabricError
 from .evidence import assemble_evidence, validate_record_evidence
+from .evidence_authority import (EVIDENCE_ID, REASON_UNAVAILABLE as
+                                 REASON_EVIDENCE_UNAVAILABLE,
+                                 resolve_evidence, supports_profile)
+from .resources import (REASON_MALFORMED_VALUE, REASON_UNKNOWN_DIMENSION,
+                        satisfies, validate_resource_map)
 from .identifiers import ID_FIELDS as ID_FIELD_FOR, PATTERNS, PREFIXES
 from .models import (
-    EFFECT_CLASSES, INSTANCE_LIFECYCLE_STATES, RECORD_MODELS,
-    WORKLOAD_DATA_CLASSIFICATIONS,
+    DETERMINISM_CLASSES, EFFECT_CLASSES, FAILURE_MODES,
+    INSTANCE_LIFECYCLE_STATES, RECORD_MODELS, RESPONSE_SHAPE_PARTS,
+    SHAPE_REFERENCE_FIELDS, WORKLOAD_DATA_CLASSIFICATIONS,
 )
 from .request_identity import (
     REPLAY_CONFLICT, REPLAY_EXACT, compute_request_digest,
@@ -60,6 +69,8 @@ INVALID = "invalid"
 NOT_FOUND = "not-found"
 CONFLICT = "conflict"
 UNAVAILABLE = "unavailable"
+# A rehearsal. Leaves no record, holds no lock, and takes no identifier.
+PREFLIGHT = "preflight"
 
 # Controlled refusal categories. A caller acts on these; none is derived from
 # an exception, a path, or a rejected value.
@@ -70,17 +81,36 @@ REASON_UNEXPECTED_AUTHORITY = "unexpected-approving-authority"
 REASON_NOT_SUBJECT = "actor-is-not-the-subject"
 REASON_SELF_ADMISSION = "self-admission"
 REASON_EFFECT_CLASS = "unknown-effect-class"
+REASON_DETERMINISM_CLASS = "unknown-determinism-class"
+# A contract may not declare an effect class its capability does not. Named
+# like the other "not-of" relations -- `contract-not-of-capability`,
+# `package-not-of-capability` -- because it is the same kind of fact: two
+# records that must agree about one capability, and do not.
+REASON_EFFECT_CLASS_MISMATCH = "effect-class-not-of-capability"
+REASON_FAILURE_MODE = "unknown-failure-mode"
+# A shape that is a mapping but not a reference to an enforcing authority. Not
+# `malformed-operation-content`: the value is well formed and simply is not the
+# governed thing, which is a different answer to give an operator.
+REASON_SHAPE_REFERENCE = "shape-not-an-authority-reference"
 REASON_TRUST_DOMAIN = "unknown-trust-domain"
 REASON_UNRESOLVED = "unresolved-reference"
 REASON_CONTRACT_OWNER = "contract-not-of-capability"
 REASON_PACKAGE_CONTRACT = "contract-not-of-package"
 REASON_VERSIONS = "versions-not-declared"
 REASON_RESOURCE_CLAIM = "resource-claim-not-verified"
+REASON_UNGOVERNED_DIMENSION = REASON_UNKNOWN_DIMENSION
+REASON_PACKAGE_WEAKER = "package-requirements-weaker-than-contract"
 REASON_WINDOW = "invalid-validity-window"
 REASON_NAIVE_INSTANT = "timestamp-carries-no-offset"
 REASON_SUBJECT_MISMATCH = "trust-subject-mismatch"
 REASON_UNVERIFIED_PROFILE = "resource-profile-not-verified-out-of-band"
 REASON_CONTENT = "malformed-operation-content"
+# The caller's explicit expected next identifier is no longer the next
+# identifier at the protected allocation boundary. It says nothing about a
+# manifest: this module opens no file and parses none, so it could not know
+# what a manifest claims -- and a reason naming one would describe a check
+# nobody here performs.
+REASON_PREDICTED_IDENTITY = "predicted-identity-moved"
 
 # Categories the part-2 operations add. Each names a condition that did not
 # exist before instances and routes did; none replaces or widens one above.
@@ -89,12 +119,57 @@ REASON_ADVERT_SUBJECT = "advertisement-not-of-subject"
 REASON_ADVERT_CONTRACT = "advertisement-not-of-contract"
 REASON_ADVERT_PACKAGE = "advertisement-not-of-package"
 REASON_ADVERT_STALE = "advertisement-not-fresh"
+# Separate from staleness on purpose, and named after the host's counterpart in
+# the same operation rather than after the renewal rule that guards the other
+# end of the chain. Freshness is temporal and supersession is lineage: an
+# advertisement can be well inside its window and still not be what this host
+# currently claims. Reporting the second as the first would send an operator to
+# renew a claim that does not need renewing, when what they must do is consume
+# the head.
+REASON_ADVERT_SUPERSEDED = "advertisement-record-superseded"
+# Renewal. A new advertisement may replace an earlier one, and the earlier one
+# is never touched: supersession is a forward statement by the successor, read
+# backwards. Each way a renewal can fail to be a renewal gets its own name,
+# because "same host, same package, same contract" are three different
+# operator mistakes and a single reason would send all three to the same wrong
+# place. Changing the package or the contract is not a renewal at all -- it is
+# a claim about a different binding, and it needs its own first advertisement.
+# There is deliberately no `renewal-changes-contract`. A renewal must name the
+# same package, a package names exactly one contract, and the equality of the
+# body's contract with the package's is already enforced before any renewal
+# rule runs -- so a contract change is refused as `contract-not-of-package`
+# and a separate reason could never be produced. A token nothing can emit is
+# vocabulary that documents a check the code does not make.
+#
+# There is deliberately no `renewal-supersedes-itself` either. A new record's
+# identity is minted by the store after every check here has passed, so a
+# claim cannot name itself as its predecessor -- there is nothing to name yet.
+# A self-loop can only exist in a store that was damaged into holding one, and
+# that is a cycle, which the chain traversal already refuses as
+# `advertisement-chain-cyclic`.
+REASON_RENEWAL_HOST = "renewal-of-another-host"
+REASON_RENEWAL_PACKAGE = "renewal-changes-package"
+REASON_RENEWAL_NOT_HEAD = "renewal-predecessor-not-current"
+REASON_ADVERT_FORKED = "advertisement-chain-forked"
+REASON_ADVERT_CYCLIC = "advertisement-chain-cyclic"
+REASON_ADVERT_INCOHERENT = "advertisement-chain-incoherent"
 REASON_ADMISSION_EXPIRED = "admission-window-expired"
+# Distinct from an expired admission and from a stale advertisement, because it
+# is a different fact from either: the claim is fresh, the window is open, and
+# the binding still reaches past the thing it depends on.
+REASON_ADMISSION_UNBOUNDED = "admission-window-exceeds-advertisement"
 REASON_EMPTY_SCOPE = "empty-effective-scope"
 # Separate from an empty intersection on purpose: nothing overlapped at all is
 # a different fact from an overlap that does not cover this binding, and an
 # operator reading one as the other looks in the wrong place.
 REASON_CAPABILITY_SCOPE = "capability-not-permitted-by-scope"
+# The same distinction, one dimension over. A composed scope may authorise
+# several machines and still not authorise this one, which is a different fact
+# from authorising none -- and the machine is named by its Platform Model node
+# identity, because that is the identity the trust grant's targets are written
+# in. The fabric host record is a different namespace and is never compared to
+# it.
+REASON_TARGET_SCOPE = "target-not-permitted-by-scope"
 # "Exceeds" would assert a ranking of classifications that no accepted source
 # declares. Membership is the whole of the comparison.
 REASON_CLASSIFICATION = "data-classification-not-permitted-by-host"
@@ -138,6 +213,14 @@ REASON_NO_CANDIDATE = "no-declared-candidate"
 REASON_DUPLICATE_CANDIDATE = "duplicate-candidate"
 REASON_CANDIDATE_OWNER = "candidate-not-of-route"
 REASON_ROUTE_VERSION = "invalid-route-version"
+# Route chains get the same vocabulary every other chain has. `_successors`
+# requires a caller to name both, because a traversal that cannot say what an
+# unreadable chain is called cannot refuse on one.
+REASON_ROUTE_FORKED = "route-chain-forked"
+REASON_ROUTE_INCOHERENT = "route-chain-incoherent"
+# A request class already has a current route. Distinct from superseding a
+# stale predecessor: this is the fork made by naming no predecessor at all.
+REASON_CLASS_ROUTED = "request-class-already-routed"
 REASON_SUPERSEDES_SUBJECT = "supersedes-different-subject"
 
 # The trust domain every capability package is decided in, per the accepted
@@ -190,6 +273,43 @@ TRUST_UNAVAILABLE = "trust-unavailable"
 # allocated. It is never returned, never written, and never persisted.
 PROBE_IDS = {kind: f"{prefix}-{0:0{ID_WIDTHS[kind]}d}"
              for kind, prefix in PREFIXES.items()}
+
+# Rehearsal mode. Set for the duration of one call, consulted at exactly the two
+# points where a governed operation stops being reversible: the critical
+# section, and allocation.
+_REHEARSING = contextvars.ContextVar("fabric_rehearsing", default=False)
+
+
+@contextlib.contextmanager
+def rehearsing():
+    """Run governed operations as a rehearsal: validate fully, mutate nothing.
+
+    Everything a write does up to its first irreversible act still happens --
+    field validation, vocabulary checks, reference resolution against the real
+    store, evidence assembly, and the model's own construction rules applied to
+    the real content through the same probe identity `_commit` already uses.
+
+    What does not happen is the critical section, the allocation, and the
+    write. So a rehearsal reads the store and reports what would occur; it
+    reserves nothing, and another caller may take the identifier it predicted.
+    """
+    token = _REHEARSING.set(True)
+    try:
+        yield
+    finally:
+        _REHEARSING.reset(token)
+
+
+def is_rehearsing() -> bool:
+    """Whether the caller is inside `rehearsing()`.
+
+    Exported so every governed operation reads **one** rehearsal state. C6
+    selection lives in its own module and would otherwise need a context
+    variable of its own -- two states that agree until one is entered without
+    the other, and then a rehearsal that writes. There is one flag, and this is
+    how a module outside `admission` asks about it.
+    """
+    return _REHEARSING.get()
 
 
 @dataclass(frozen=True)
@@ -270,6 +390,66 @@ def _effect_class(value: Any) -> str:
     if value not in EFFECT_CLASSES:
         _refuse(REFUSED, REASON_EFFECT_CLASS)
     return value
+
+
+def _determinism_class(value: Any) -> str:
+    """One released class, judged exactly as an effect class is.
+
+    The vocabulary lives in `models.DETERMINISM_CLASSES` and is read from there
+    rather than restated, so the value admission accepts and the value the model
+    will reconstruct cannot disagree. Not trimmed and not recased, for the same
+    reason: a class that had to be corrected to be recognised was not declared.
+    """
+    if value not in DETERMINISM_CLASSES:
+        _refuse(REFUSED, REASON_DETERMINISM_CLASS)
+    return value
+
+
+def _failure_modes(value: Any) -> tuple:
+    """Only modes the released vocabulary governs, in the order declared.
+
+    A sequence that is not one is malformed content, exactly as it was before
+    the vocabulary existed; a well-formed sequence naming a mode nobody
+    released is a refusal of its own. The two are different answers because
+    they are different mistakes.
+    """
+    modes = _sequence(value)
+    for mode in modes:
+        if mode not in FAILURE_MODES:
+            _refuse(REFUSED, REASON_FAILURE_MODE)
+    return modes
+
+
+def _shape_reference(value: Any) -> Mapping[str, Any]:
+    """The authority that enforces a shape, and nothing that restates it.
+
+    The governed structure lives in `models`, so the reference admission
+    accepts and the reference the model will reconstruct cannot disagree.
+    Whether the named authority is the right one is a review question -- the
+    same question a package's `artifact_reference` poses. That the contract
+    names exactly one, and duplicates no schema, is governed here.
+    """
+    reference = _mapping(value)
+    if set(reference) != set(SHAPE_REFERENCE_FIELDS):
+        _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    for field in ("authority", "schema"):
+        if not isinstance(reference[field], str) or not reference[field].strip():
+            _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    version = reference["schema_version"]
+    # `bool` is an `int` in Python, so `True` would otherwise pass as version 1.
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    return reference
+
+
+def _response_shape(value: Any) -> Mapping[str, Any]:
+    """Both governed parts, each naming the code that actually checks it."""
+    parts = _mapping(value)
+    if set(parts) != set(RESPONSE_SHAPE_PARTS):
+        _refuse(REFUSED, REASON_SHAPE_REFERENCE)
+    for part in RESPONSE_SHAPE_PARTS:
+        _shape_reference(parts[part])
+    return parts
 
 
 def _resolve(store, kind: str, identifier: Any) -> Mapping[str, Any]:
@@ -373,6 +553,43 @@ def _identifier(value: Any, kind: str, reason: str = REASON_CONTENT) -> str:
 def _optional_identifier(value: Any, kind: str) -> str | None:
     """Absent, or a released identifier. Never something in between."""
     return None if value is None else _identifier(value, kind)
+
+
+def _require_supporting_evidence(reference: Any, node_identity_reference: Any,
+                                profile: Any, evidence_root: Any,
+                                trusted_uid: Any) -> None:
+    """Resolve a governed Evidence reference, or refuse. Reads; never writes.
+
+    **Applied where the reference is a governed identity, and only there.**
+    `verification_reference` is free text by schema, because a fabric may admit
+    machines this platform model does not describe. A reference that matches
+    the governed `EVID-NNNNNN` grammar is claiming to be one of ours, and a
+    claim that cannot be checked is worth less than no claim -- so it is
+    resolved. Anything else stays the opaque operator reference it always was.
+    A grammar check that refused everything else would forbid the non-modelled
+    hosts the schema deliberately permits.
+
+    **Before the trust query, deliberately.** Trust standing is unavailable for
+    a subject nobody has decided yet, and reporting that first would mask a
+    broken evidence claim behind a condition the operator is already expecting.
+
+    **The authority root and trusted uid are supplied, never inferred.** A
+    reference that names governed evidence while the authority to resolve it
+    was not supplied is unavailable, not waived: fail closed is the whole point
+    of resolving it at all.
+    """
+    if not isinstance(reference, str) or not EVIDENCE_ID.fullmatch(reference):
+        return
+    resolved = resolve_evidence(evidence_id=reference, evidence_root=evidence_root,
+                                trusted_source_uid=trusted_uid)
+    if not resolved.supported:
+        _refuse(UNAVAILABLE if resolved.reason == REASON_EVIDENCE_UNAVAILABLE
+                else INVALID, resolved.reason)
+    unsupported = supports_profile(
+        resolved, node_identity_reference=node_identity_reference,
+        verified_resource_profile=profile)
+    if unsupported is not None:
+        _refuse(REFUSED, unsupported)
 
 
 def _trust_identifier(value: Any) -> str:
@@ -562,18 +779,20 @@ def _binding_root(records: Mapping[str, Any], identifier: str) -> str:
         walked.append(identifier)
 
 
-def _contained(claim: Mapping[str, Any], verified: Mapping[str, Any]) -> bool:
-    """Containment, not interpretation.
+def _resources(value: Any) -> Mapping[str, Any]:
+    """One governed resource mapping, or a refusal naming what was wrong.
 
-    Every claimed dimension must be one the operator verified, with the value
-    the operator verified. Ordering a memory size here would be the
-    interpretation the accepted vocabulary rules out, and a dimension nobody
-    verified is a claim about something nobody looked at.
+    Every resource mapping this plane records passes through here, so an
+    ungoverned dimension or a malformed capacity is refused where it is
+    declared rather than discovered later by a comparison that could not
+    interpret it.
     """
-    for name, value in claim.items():
-        if name not in verified or verified[name] != value:
-            return False
-    return True
+    problem = validate_resource_map(value)
+    if problem is REASON_UNKNOWN_DIMENSION:
+        _refuse(REFUSED, REASON_UNGOVERNED_DIMENSION)
+    if problem is not None:
+        _refuse(INVALID, REASON_CONTENT)
+    return value
 
 
 def _human_preflight(actor: Any, approving_authority: Any, *instants: Any) -> None:
@@ -647,6 +866,19 @@ def _governed(store, *, operation: str, request_id: Any,
         # rendered. It is named as malformed content and never echoed.
         return OperationResult(INVALID, supplied, reason=REASON_CONTENT)
 
+    if _REHEARSING.get():
+        # No critical section: it takes a store-global lock and exists to
+        # serialise allocation and the accepted write, neither of which a
+        # rehearsal performs. Replay is not classified either -- there is
+        # nothing to serialise against, and reporting a replay for an operation
+        # that was never submitted would be an answer about a different act.
+        try:
+            kind, record_id = accept(identifier, digest)
+        except _Refusal as refusal:
+            return OperationResult(refusal.outcome, identifier, digest,
+                                   reason=refusal.reason)
+        return OperationResult(PREFLIGHT, identifier, digest, kind, record_id)
+
     with store.request_critical_section(identifier):
         replay = replay_lookup(store, identifier, digest)
         if replay.status == REPLAY_EXACT:
@@ -694,6 +926,10 @@ def _commit(store, kind: str, evidence: Mapping[str, Any],
     nothing behind. Only then does C1 mint the identity the record will carry.
     """
     _constructed(kind, PROBE_IDS[kind], evidence, build)
+    if _REHEARSING.get():
+        # The record is constructible and every governed check above has run.
+        # Stop here: allocation is the first act that cannot be taken back.
+        return kind, None
     identifier = store.allocate_id(kind)
     record = _constructed(kind, identifier, evidence, build)
     store.write(kind, record)
@@ -769,10 +1005,22 @@ def declare_contract(store, *, request_id: Any, actor: Any,
     def accept(identifier, digest):
         _text(contract_version, REASON_CONTENT)
         _effect_class(effect_class)
-        _text(determinism_class, REASON_CONTENT)
-        modes = _sequence(failure_modes)
+        _determinism_class(determinism_class)
+        _shape_reference(request_shape)
+        _response_shape(response_shape)
+        modes = _failure_modes(failure_modes)
         compatible = _sequence(compatible_with)
-        _resolve(store, "capability-definition", capability_id)
+        _resources(resource_requirements)
+        definition = _resolve(store, "capability-definition", capability_id)
+        # One capability, one effect class. The definition names the ability
+        # and the contract is how it is reached, so a contract declaring a
+        # different class would leave two permanent records disagreeing about
+        # what the capability does -- and the runtime reads the *contract*
+        # (capability-runtime-design §11), so the disagreement would be
+        # resolved silently in favour of whichever record was written second.
+        # Refused before allocation, so nothing is spent proving it.
+        if definition.get("effect_class") != effect_class:
+            _refuse(REFUSED, REASON_EFFECT_CLASS_MISMATCH)
         evidence = _evidence(
             "capability-contract", actor=actor,
             approving_authority=approving_authority, reason_category="declaration",
@@ -820,11 +1068,49 @@ def declare_package(store, *, request_id: Any, actor: Any,
                     contract_id: Any, satisfied_contract_versions: Any,
                     package_version: Any, artifact_reference: Any,
                     resource_requirements: Any, trust_domain: Any, provenance: Any,
-                    description: Any = None) -> OperationResult:
-    """Record a package claiming contract versions. Nothing is read or run."""
+                    description: Any = None,
+                    manifest_reference: Any = None,
+                    expected_capability_package_id: Any = None) -> OperationResult:
+    """Record a package claiming contract versions. Nothing is read or run.
+
+    `manifest_reference` is where a package says which integrity evidence
+    resolution must verify it against. Optional here and mandatory at
+    execution, exactly as the design rules it: the record may omit one, and a
+    record that omits one does not execute. Carried, never composed -- nothing
+    in this module builds a reference, infers one from `artifact_reference`, or
+    supplies one a decision body did not.
+
+    `expected_capability_package_id` is an **allocation precondition**, and it
+    is the answer to a race the manifest creates. A manifest names the package
+    it attests, so it can only be written against a *predicted* identifier --
+    and prediction is not reservation. Without this, another caller taking that
+    identifier first left the declaration accepting the next one instead, and a
+    permanent immutable record referenced a manifest for a different package.
+    Staging refused it later, which is far too late: the record is for ever.
+
+    So the caller states which identifier its frozen inputs were built against,
+    and the write happens only if that is still the identifier about to be
+    allocated. What this is not, stated because each was a tempting shortcut:
+    it does not assign the record's identity -- the store remains the sole
+    allocator; it reserves nothing, so an unused expectation blocks no one; and
+    it is never inferred from `manifest_reference`, because this module opens
+    no file and cannot know what a manifest says. A caller that supplies none
+    behaves exactly as before.
+    """
     def accept(identifier, digest):
         _text(package_version, REASON_CONTENT)
         _text(artifact_reference, REASON_CONTENT)
+        # Syntax first, and through the released identifier authority rather
+        # than a second grammar: a malformed expectation is malformed content,
+        # not a moved prediction, and the two must not be reported alike.
+        expected = _optional_identifier(expected_capability_package_id,
+                                        "capability-package")
+        # Checked only when a body supplied one. An absent manifest is a
+        # package that does not execute -- refusing it here would overrule the
+        # design's optional-record ruling; accepting an empty or non-textual
+        # one would write a permanent reference nothing can resolve.
+        if manifest_reference is not None:
+            _text(manifest_reference, REASON_CONTENT)
         if trust_domain != PACKAGE_TRUST_DOMAIN:
             _refuse(REFUSED, REASON_TRUST_DOMAIN)
         versions = _sequence(satisfied_contract_versions)
@@ -838,22 +1124,59 @@ def declare_package(store, *, request_id: Any, actor: Any,
         # Explicit, never inferred from a version string.
         if contract.get("contract_version") not in versions:
             _refuse(REFUSED, REASON_VERSIONS)
+        # The earliest boundary holding both sides of the invariant. A package
+        # may require MORE than its contract -- a stronger implementation is
+        # still an implementation -- but it may not drop or weaken a dimension
+        # the interface declared, because the contract is what a caller was
+        # promised and the package is only how it is met.
+        _resources(resource_requirements)
+        if not satisfies(contract.get("resource_requirements"),
+                         resource_requirements):
+            _refuse(REFUSED, REASON_PACKAGE_WEAKER)
+        # Last, and inside the section that already serialises allocation and
+        # the accepted write. `peek_next_id` reports what `allocate_id` is
+        # about to return -- both apply the store's single candidate rule --
+        # so while this section is held the two cannot disagree, and asking
+        # here refuses *before* the sequence moves. A caller that lost the race
+        # spends no identifier and leaves no gap; nothing is reserved on the
+        # way through, so an expectation that is never used costs nobody the
+        # identifier it named. Asked after every content and reference check,
+        # so a body that is wrong about the contract is told that rather than
+        # being told its prediction moved.
+        if expected is not None and store.peek_next_id("capability-package") != expected:
+            _refuse(REFUSED, REASON_PREDICTED_IDENTITY)
         evidence = _evidence(
             "capability-package", actor=actor,
             approving_authority=approving_authority, reason_category="declaration",
             recorded_at=recorded_at, request_id=identifier, request_digest=digest,
             causal_references=(capability_id, contract_id))
-        return _commit(store, "capability-package", evidence,
-                       lambda allocated, carried: RECORD_MODELS[
-                           "capability-package"](
-                           capability_package_id=allocated,
-                           capability_id=capability_id, contract_id=contract_id,
-                           satisfied_contract_versions=versions,
-                           package_version=package_version,
-                           artifact_reference=artifact_reference,
-                           resource_requirements=resource_requirements,
-                           trust_domain=trust_domain, provenance=provenance,
-                           description=description, evidence=carried))
+        def build(allocated, carried):
+            # The identifier the record will actually carry, checked against
+            # the expectation the peek above already cleared. Held-section
+            # semantics say these agree, and the check is written anyway
+            # because this is the line where an immutable record acquires its
+            # identity: if the store's prediction and its allocation ever
+            # disagreed, the honest outcome is a refusal and a spent
+            # identifier, not a permanent record contradicting the manifest it
+            # names. `_commit` proves constructibility against a probe identity
+            # first, and the probe is not an allocation, so it is not compared.
+            if (expected is not None
+                    and allocated != PROBE_IDS["capability-package"]
+                    and allocated != expected):
+                _refuse(REFUSED, REASON_PREDICTED_IDENTITY)
+            return RECORD_MODELS["capability-package"](
+                capability_package_id=allocated,
+                capability_id=capability_id, contract_id=contract_id,
+                satisfied_contract_versions=versions,
+                package_version=package_version,
+                artifact_reference=artifact_reference,
+                resource_requirements=resource_requirements,
+                trust_domain=trust_domain, provenance=provenance,
+                description=description,
+                manifest_reference=manifest_reference,
+                evidence=carried)
+
+        return _commit(store, "capability-package", evidence, build)
 
     return _governed(store, operation="declare-package", request_id=request_id,
                      payload={"actor": actor,
@@ -868,7 +1191,10 @@ def declare_package(store, *, request_id: Any, actor: Any,
                               "resource_requirements": resource_requirements,
                               "trust_domain": trust_domain,
                               "provenance": provenance,
-                              "description": description},
+                              "description": description,
+                              "manifest_reference": manifest_reference,
+                              "expected_capability_package_id":
+                                  expected_capability_package_id},
                      instants=("recorded_at",),
                      digest_route=LEGACY_DIGEST,
                      preflight=lambda: _human_preflight(
@@ -884,18 +1210,47 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
                   verified_resource_profile: Any, verification_reference: Any,
                   location_class: Any, data_classification: Any,
                   availability_intent: Any, provenance: Any,
-                  name: Any = None, description: Any = None) -> OperationResult:
-    """Make a machine a fabric participant. There is no automatic path."""
+                  name: Any = None, description: Any = None,
+                  evidence_root: Any = None,
+                  evidence_trusted_uid: Any = None) -> OperationResult:
+    """Make a machine a fabric participant. There is no automatic path.
+
+    `evidence_root` and `evidence_trusted_uid` are the trust boundary for
+    resolving a governed `verification_reference`. They are supplied
+    explicitly and have no default: a root discovered from the environment and
+    a uid read off the running process are both this plane agreeing with
+    itself. Where the reference names governed evidence and they are absent,
+    admission refuses as unavailable rather than proceeding unverified.
+    """
     def accept(identifier, digest):
         _text(node_identity_reference, REASON_CONTENT)
-        _text(location_class, REASON_CONTENT)
-        _text(data_classification, REASON_CONTENT)
-        _text(availability_intent, REASON_CONTENT)
-        profile = _mapping(verified_resource_profile)
+        # The governed vocabulary the host schema declares, applied where the
+        # host is CREATED and not only where it is superseded. `withdraw` and
+        # `refresh` already checked membership; admission checked only that the
+        # values were non-empty text, so a machine could be admitted with a
+        # location class nobody governs -- permanently, since the record is
+        # immutable -- and could then never be refreshed, because refresh
+        # applies the rule admission skipped.
+        _member_of(location_class, LOCATION_CLASSES, REASON_CONTENT)
+        _member_of(data_classification, WORKLOAD_DATA_CLASSIFICATIONS,
+                   REASON_UNKNOWN_CLASSIFICATION)
+        _member_of(availability_intent, AVAILABILITY_INTENTS, REASON_UNKNOWN_INTENT)
+        # Syntax before the store is consulted, so a malformed identity is
+        # named as malformed content. Without it the value reached the trust
+        # adapter, which raises rather than refusing -- and an exception
+        # escaping a governed operation is a traceback where an operator needs
+        # a decision.
+        _trust_identifier(fabric_node_trust_record_id)
+        profile = _resources(_mapping(verified_resource_profile))
         # Verified out of band, and provably so. A profile with nothing
         # recording how it was obtained cannot be distinguished from one copied
         # off an advertisement, which §6.2 rejects.
         _text(verification_reference, REASON_UNVERIFIED_PROFILE)
+        # Before trust, so a broken evidence claim is reported as itself
+        # rather than behind the trust standing nobody has established yet.
+        _require_supporting_evidence(verification_reference,
+                                     node_identity_reference, profile,
+                                     evidence_root, evidence_trusted_uid)
         # A subject cannot approve its own admission.
         if (actor == node_identity_reference
                 or approving_authority == node_identity_reference):
@@ -956,6 +1311,28 @@ def admit_subject(store, trust_store, *, request_id: Any, actor: Any,
                      accept=accept)
 
 
+def advertisement_head(store, advertisement_id: str) -> str:
+    """The current advertisement in one supersession chain. Reads; never writes.
+
+    **The head is the record nothing supersedes.** Advertisements are immutable
+    and append-only, so nothing points forward: a renewal states which claim it
+    replaces, and the chain is read backwards from that. `superseded_by` is
+    never written here, and is never written by any released operation for any
+    record kind -- deriving the forward link is the released convention, and a
+    mutable backlink on an immutable record would be a second answer that can
+    disagree with the first.
+
+    This is the same traversal hosts and instances already use, with
+    advertisement-shaped refusals, rather than a second chain algorithm that
+    agrees until it does not. A fork, a cycle, or a successor whose predecessor
+    is missing is refused rather than resolved -- picking a head nobody wrote
+    is the guess this declines to make.
+    """
+    links = _successors(store, "capability-advertisement", "advertisement_id",
+                        REASON_ADVERT_FORKED, REASON_ADVERT_INCOHERENT)
+    return _head_of(links, advertisement_id, REASON_ADVERT_CYCLIC)
+
+
 # --- 6.3 Register an advertisement ------------------------------------------
 
 def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: Any,
@@ -963,6 +1340,7 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                            contract_id: Any, satisfied_contract_versions: Any,
                            advertised_resource_profile: Any, observed_at: Any,
                            valid_until: Any, provenance: Any,
+                           supersedes: Any = None,
                            approving_authority: Any = None) -> OperationResult:
     """The subject's own claim. It grants nothing, including to itself.
 
@@ -989,9 +1367,27 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
         _aware(valid_until)
         if valid_until <= observed_at:
             _refuse(REFUSED, REASON_WINDOW)
+        # **The window must cover the moment the claim is recorded.** A
+        # well-formed window is not enough: one that closed before the request
+        # carrying it, or that opens after it, describes a claim that was never
+        # true at the only instant this record can speak for. Registering it
+        # would spend an immutable identity on a record that no evaluation
+        # could ever find fresh, and an append-only store cannot take it back.
+        #
+        # Judged against `recorded_at` -- the governed request's own instant --
+        # and never against a clock. Reading the current time here would make
+        # the verdict depend on when the request was replayed rather than on
+        # what it says, so a body accepted once could be refused later without
+        # a single byte of it changing.
+        if not observed_at <= recorded_at < valid_until:
+            _refuse(REFUSED, REASON_WINDOW)
+        # Syntax only here. Whether the predecessor exists, is this host's, and
+        # is still current are reference questions, asked after replay has been
+        # classified.
+        _optional_identifier(supersedes, "capability-advertisement")
 
     def accept(identifier, digest):
-        claim = _mapping(advertised_resource_profile)
+        claim = _resources(_mapping(advertised_resource_profile))
         versions = _sequence(satisfied_contract_versions)
         if not versions:
             _refuse(REFUSED, REASON_VERSIONS)
@@ -1018,15 +1414,56 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
         if any(version not in declared for version in versions):
             _refuse(REFUSED, REASON_VERSIONS)
         # Containment against what the operator verified.
-        if not _contained(claim, host.get("verified_resource_profile") or {}):
+        # A self-report may never enlarge what an operator attested: the
+        # verified profile must satisfy the claim, not the other way round.
+        if not satisfies(claim, host.get("verified_resource_profile") or {}):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
 
+        # --- renewal, if this claim replaces an earlier one -----------------
+        #
+        # Every rule above has already run, so a renewal is held to exactly
+        # what a first advertisement is held to and then to more. What "more"
+        # means is that the predecessor must be the same claim about the same
+        # thing: a change of host, package or contract is not this binding
+        # renewed, it is a different binding, and it needs its own first
+        # advertisement rather than a link to someone else's history.
+        #
+        # The prior record is read and never written. Supersession is stated
+        # forward by the successor and read backwards; nothing here gives the
+        # predecessor a `superseded_by`, because an immutable record that
+        # acquires a field later was not immutable.
+        if supersedes is not None:
+            prior = _resolve(store, "capability-advertisement", supersedes)
+            if prior.get("capability_host_id") != capability_host_id:
+                _refuse(REFUSED, REASON_RENEWAL_HOST)
+            if prior.get("capability_package_id") != capability_package_id:
+                _refuse(REFUSED, REASON_RENEWAL_PACKAGE)
+            # The contract needs no separate rule: the package above is
+            # unchanged, a package names one contract, and the body's contract
+            # was already required to be that one. A renewal naming a
+            # different contract is refused as `contract-not-of-package`
+            # before it reaches here.
+            # Only the current claim may be renewed. Renewing a superseded one
+            # would fork the chain, and a fork is two answers to "what does
+            # this host hold now" -- reported here rather than resolved later.
+            if advertisement_head(store, supersedes) != supersedes:
+                _refuse(REFUSED, REASON_RENEWAL_NOT_HEAD)
+
+        # `supersession` is the released category for exactly this, and every
+        # other record kind that replaces a predecessor already declares it.
+        # The evidence layer enforces the pairing symmetrically -- a record
+        # naming a predecessor must declare the category, and one declaring
+        # the category must name a predecessor -- so a renewal cannot be filed
+        # as an ordinary registration, and the predecessor must appear among
+        # the causal references rather than only in the record body.
         evidence = _evidence(
             "capability-advertisement", actor=actor, approving_authority=None,
-            reason_category="advertisement-registration", recorded_at=recorded_at,
+            reason_category="supersession" if supersedes is not None
+            else "advertisement-registration", recorded_at=recorded_at,
             request_id=identifier, request_digest=digest,
             causal_references=(capability_host_id, capability_package_id,
-                               contract_id))
+                               contract_id) + ((supersedes,) if supersedes
+                                               is not None else ()))
         return _commit(store, "capability-advertisement", evidence,
                        lambda allocated, carried: RECORD_MODELS[
                            "capability-advertisement"](
@@ -1037,7 +1474,8 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                            satisfied_contract_versions=versions,
                            advertised_resource_profile=claim,
                            observed_at=observed_at, valid_until=valid_until,
-                           provenance=provenance, evidence=carried))
+                           provenance=provenance, supersedes=supersedes,
+                           evidence=carried))
 
     # `approving_authority` is part of what was asked for even though the only
     # acceptable value is none: supplying one is a different request, refused
@@ -1055,6 +1493,11 @@ def register_advertisement(store, *, request_id: Any, actor: Any, recorded_at: A
                               "observed_at": observed_at,
                               "valid_until": valid_until,
                               "provenance": provenance,
+                              # A renewal is a different request from a first
+                              # claim with the same content, so the
+                              # predecessor is part of the identity rather
+                              # than a detail settled afterwards.
+                              "supersedes": supersedes,
                               "approving_authority": approving_authority},
                      instants=("recorded_at", "observed_at", "valid_until"),
                      digest_route=LEGACY_DIGEST,
@@ -1113,13 +1556,13 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         versions = _exact_strings(satisfied_contract_versions)
         if not versions:
             _refuse(REFUSED, REASON_VERSIONS)
-        _mapping(verified_resource_profile)
+        _resources(_mapping(verified_resource_profile))
         _mapping(provenance)
         _admission_scope(admission_scope)
 
     def accept(identifier, digest):
         versions = _exact_strings(satisfied_contract_versions)
-        profile = _mapping(verified_resource_profile)
+        profile = _resources(_mapping(verified_resource_profile))
         bound = _admission_scope(admission_scope)
 
         # 1. Every reference resolves before any relationship is read from it.
@@ -1157,6 +1600,23 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
             _refuse(REFUSED, REASON_ADVERT_CONTRACT)
         if advertisement.get("capability_package_id") != capability_package_id:
             _refuse(REFUSED, REASON_ADVERT_PACKAGE)
+        # And it must be what the host claims *now*. Freshness and currentness
+        # are independent: a superseded advertisement can still be well inside
+        # its window, and admitting against it would bind this instance to a
+        # claim the host has already replaced -- so an eligibility answer about
+        # the binding would rest on a claim that is no longer the host's.
+        #
+        # Read through the same governed traversal the renewal rule uses, so a
+        # forked, cyclic or unreadable advertisement chain fails closed here
+        # exactly as it does there, rather than through a second lineage walk
+        # that could disagree with the first.
+        #
+        # Ordered before the clocks deliberately. An advertisement that is both
+        # superseded and expired is reported as superseded, because that is the
+        # actionable fact: the operator consumes the head, which is fresh, and
+        # renewing the record they named would not help.
+        if advertisement_head(store, advertisement_id) != advertisement_id:
+            _refuse(REFUSED, REASON_ADVERT_SUPERSEDED)
 
         # 5. Declared versions only: set membership, twice, with no arithmetic.
         declared = tuple(package.get("satisfied_contract_versions") or ())
@@ -1178,6 +1638,22 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
             _refuse(REFUSED, REASON_WINDOW)
         if evaluated_at >= admitted_until:
             _refuse(REFUSED, REASON_ADMISSION_EXPIRED)
+        # A binding may not outlive the claim it rests on. Without this the
+        # interval [valid_until, admitted_until) is admissible, and in it the
+        # instance is lifecycle-admitted with ELIG-7 open while ELIG-6 refuses
+        # -- the R17 tail CINST-000001 carries. C5 already fails closed there,
+        # so this is defence in depth for the write rather than a correctness
+        # gap at invoke; what it removes is the ability to CREATE the tail.
+        #
+        # `<=`, because both windows are half-open on the right: an admission
+        # ending exactly at `valid_until` ends where the claim does, and the
+        # instant itself is outside both. Equality is coincidence, not overhang.
+        #
+        # Compared against the value parsed above rather than re-read, so the
+        # bound and the freshness rule cannot come to disagree about the same
+        # advertisement.
+        if admitted_until > expires:
+            _refuse(REFUSED, REASON_ADMISSION_UNBOUNDED)
 
         # 7. Supersession compatibility, before Trust is troubled.
         prior_root = None
@@ -1227,7 +1703,7 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         if not isinstance(verified, Mapping) or dict(profile) != dict(verified):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
         requirements = package.get("resource_requirements")
-        if not isinstance(requirements, Mapping) or not _contained(requirements, verified):
+        if not isinstance(requirements, Mapping) or not satisfies(requirements, verified):
             _refuse(REFUSED, REASON_RESOURCE_CLAIM)
 
         # 10. The intersection, computed here. Then what it actually covers.
@@ -1241,6 +1717,16 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
         effective = _effective_scope(package_standing.scope, host_standing.scope, bound)
         if capability_id not in effective["permitted_capabilities"]:
             _refuse(REFUSED, REASON_CAPABILITY_SCOPE)
+        # And the machine, by the same rule and for the same reason. A
+        # non-empty target dimension proves some machine is authorised; it
+        # proves nothing about *this* one, and with a single host in the
+        # fabric the two are indistinguishable. The comparison is against the
+        # node identity the host record declares, because that is the identity
+        # a trust grant's `permitted_targets` is written in -- `CHOST-0001`
+        # and `HOST-0001` are different namespaces and equating them would be
+        # inventing a mapping no accepted source declares.
+        if node not in effective["permitted_targets"]:
+            _refuse(REFUSED, REASON_TARGET_SCOPE)
         # Then the classification the machine is declared to handle, compared
         # by membership only.
         declared_class = host.get("data_classification")
@@ -1283,7 +1769,17 @@ def admit_instance(store, trust_store, *, request_id: Any, actor: Any,
                                       notes=notes, evidence=carried))
         # C1 allocates from a sequence that never reuses a value, so a fresh
         # identity cannot be the identity it supersedes.
-        if allocated == supersedes or (prior_root is not None and allocated == prior_root):
+        #
+        # Guarded on an identity having actually been allocated. A rehearsal
+        # stops before allocation and `_commit` reports that as `None`; for a
+        # first admission `supersedes` is `None` too, and comparing the two
+        # absences refused every preflight of the one operation that most needs
+        # one. The check belongs to the committed write, where both operands are
+        # real identities -- there is nothing for it to say about an identity
+        # that was deliberately not minted.
+        if allocated is not None and (
+                allocated == supersedes
+                or (prior_root is not None and allocated == prior_root)):
             _refuse(REFUSED, REASON_SUPERSEDES_CAPABILITY)
         return kind, allocated
 
@@ -1382,12 +1878,45 @@ def create_route(store, *, request_id: Any, actor: Any, approving_authority: Any
         if contract.get("capability_id") != capability_id:
             _refuse(REFUSED, REASON_CONTRACT_OWNER)
 
+        # --- the chain this route joins ------------------------------------
+        #
+        # A route declares which bindings serve a request class, and a class may
+        # have exactly one current declaration. Two is not a preference for
+        # selection to resolve -- it refuses, correctly, because picking a
+        # winner nobody chose would be the selector deriving its own authority.
+        # Routes are immutable and nothing merges them, so a fork written here
+        # leaves the class permanently un-routable through the released path.
+        #
+        # `create_route` checked that a named predecessor existed, matched
+        # subject, and carried a lower version. It never checked that the
+        # predecessor was still the head, and it never checked whether the class
+        # already had one. Both omissions produce a fork; `admit_instance`
+        # already closes the equivalent hole for bindings with this same helper
+        # and this same reason, so routes are the outlier rather than a case
+        # needing its own semantics.
+        route_links = _successors(store, "capability-route", "route_id",
+                                  REASON_ROUTE_FORKED, REASON_ROUTE_INCOHERENT)
+        versions = tuple(versions)
+        current_heads = [
+            record for record in store.list_records("capability-route")
+            if record.get("route_id") not in route_links
+            and record.get("capability_id") == capability_id
+            and record.get("contract_id") == contract_id
+            and record.get("data_classification") == data_classification
+            and record.get("locality") == locality
+            and tuple(record.get("accepted_contract_versions") or ()) == versions]
+
         prior_candidates: tuple = ()
         if supersedes is not None:
             prior = _resolve(store, "capability-route", supersedes)
             if (prior.get("capability_id") != capability_id
                     or prior.get("contract_id") != contract_id):
                 _refuse(REFUSED, REASON_SUPERSEDES_SUBJECT)
+            # The predecessor must still be the head: something already
+            # superseding it means this record would fork the chain at that
+            # point rather than extend it.
+            if supersedes in route_links:
+                _refuse(REFUSED, REASON_SUPERSEDES_SUPERSEDED)
             previous = prior.get("route_version")
             if (isinstance(previous, bool) or not isinstance(previous, int)
                     or route_version <= previous):
@@ -1408,6 +1937,14 @@ def create_route(store, *, request_id: Any, actor: Any, approving_authority: Any
                 _refuse(REFUSED, REASON_NOT_BINDING_ROOT)
             if instance.get("lifecycle_state") != "admitted":
                 _refuse(REFUSED, REASON_NOT_BINDING_ROOT)
+
+        # Checked here rather than with the predecessor above so that a route
+        # naming a candidate that does not resolve is still refused as that,
+        # not as a class already routed. The cheaper structural answer is the
+        # more useful one to an operator, and `admit_instance` orders its own
+        # supersession check late for the same reason.
+        if supersedes is None and current_heads:
+            _refuse(REFUSED, REASON_CLASS_ROUTED)
 
         if overlap_starts_at is not None:
             carried = set(candidates) & set(prior_candidates)
@@ -1587,7 +2124,8 @@ def refresh_subject(store, trust_store, *, request_id: Any, actor: Any,
                     verified_resource_profile: Any, verification_reference: Any,
                     location_class: Any, data_classification: Any,
                     availability_intent: Any, provenance: Any,
-                    notes: Any = None) -> OperationResult:
+                    notes: Any = None, evidence_root: Any = None,
+                    evidence_trusted_uid: Any = None) -> OperationResult:
     """Re-declare what was verified about a machine, against current trust.
 
     The only way a subject returns to service, and the only way a declaration
@@ -1608,7 +2146,7 @@ def refresh_subject(store, trust_store, *, request_id: Any, actor: Any,
         _member_of(data_classification, WORKLOAD_DATA_CLASSIFICATIONS,
                    REASON_UNKNOWN_CLASSIFICATION)
         _member_of(availability_intent, AVAILABILITY_INTENTS, REASON_UNKNOWN_INTENT)
-        _mapping(verified_resource_profile)
+        _resources(_mapping(verified_resource_profile))
         _mapping(provenance)
 
     def accept(identifier, digest):
@@ -1635,6 +2173,12 @@ def refresh_subject(store, trust_store, *, request_id: Any, actor: Any,
         if unchanged:
             _refuse(REFUSED, REASON_REFRESH_NOTHING)
 
+        # The same evidence rule the admission applies, applied where the
+        # declaration is restated. A profile that may not be claimed at
+        # admission may not be claimed by superseding either.
+        _require_supporting_evidence(verification_reference, node,
+                                     _resources(_mapping(verified_resource_profile)),
+                                     evidence_root, evidence_trusted_uid)
         standing = _verified_standing(trust_store, fabric_node_trust_record_id,
                                       evaluated_at, HOST_TRUST_DOMAIN)
         if standing.subject_id != node:

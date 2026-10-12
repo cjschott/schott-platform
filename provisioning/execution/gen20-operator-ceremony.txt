@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# The Generation-20 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. The test suite drives the installer it names against a fixture, so
+# the control flow here is proven rather than assumed.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# THIS IS ONE STAGE, NOT TWO. This generation moves no helper object and no
+# readiness authority: helper compatibility stays `compatible`, blocking stays
+# 0, supervision_ready stays true, and there is no second ceremony to follow.
+#
+# WHAT IT DEPLOYS. Five objects in one coherence group -- backing_store, admin,
+# abandonment, provenance, cli, in that order. Two corrections travel together:
+#
+#   1. EVERY ADMINISTRATIVE MUTATOR NOW TAKES AN EXPLICIT --store-root, with no
+#      default. On 2026-09-20 a rehearsal substituted the runtime path through
+#      every shell gate of a ceremony and ran it; each gate read a fixture and
+#      passed, and then the CLI resolved a compiled-in production constant and
+#      abandoned CINV-000002 in production. After this, a call that names no
+#      target is a usage error instead of a mutation.
+#
+#   2. `correct-provenance` (ADR-0016) can record that a claim in an earlier
+#      administrative record is not truthful provenance, while that record's
+#      effect stands. It is how CADM-000001's attribution can be disputed
+#      without editing it, reversing it, or fabricating a lifecycle transition.
+#
+# THIS IS A BREAKING CHANGE, ON PURPOSE. After this, any script or habit that
+# ran `capability abandon` without `--store-root` fails loudly. That is the
+# defect being removed, and the failure is the fix working.
+#
+# WHAT IT DOES NOT DO. It corrects nothing and abandons nothing. No CADM is
+# written, no invocation changes state, no slot changes hands, and occupancy
+# stays 1 of 2 across this publication. It publishes the ABILITY to record a
+# correction, under a separate reviewed ceremony, and performs none of it.
+#
+# Do NOT abandon CINV-000001. Do NOT run CINV-000003 Stage 2 or Stage 3. Do NOT
+# run the correction ceremony until the reviewer accepts this installation.
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen20-transaction/journal \
+  || { printf 'STOP: a Generation-20 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen20-transaction \
+  || { printf 'STOP: Generation-20 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 19 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 19 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen19-library-digests.txt
+sudo test -f /root/kyri-gen19-helper-digests.txt
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-20.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-20.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-20.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-20.sh --verify-installed
+
+# EXPECTED AFTER THIS CEREMONY:
+#   helper compatibility  compatible      (UNCHANGED -- nothing here moves it)
+#   helpers blocking      0               (UNCHANGED)
+#   supervision_ready     true            (UNCHANGED)
+#   library objects       82 + 1 helper   (was 81 + 1: provenance.py is a CREATE)
+#   CINV sequence         3               CRES sequence  1
+#   CINV-000001           launch_authorized    CINV-000002  abandoned
+#   administrative records 1               (CADM-000001, UNCHANGED and untouched)
+#   occupancy             1 of 2          (UNCHANGED -- nothing is corrected here)
+#   capability --help     now lists `correct-provenance`
+#   capability abandon    now REFUSES without --store-root
+#
+# An `incompatible` verdict here is a FAULT, not an expected intermediate: it
+# would mean something outside this matrix moved. Return the output either way.
+#
+# If the run is interrupted, do NOT rerun --install. Run:
+#   sudo bash /opt/schott-platform/provisioning/execution/install-generation-20.sh --recover
+# and return its output. Do not delete the transaction directory.

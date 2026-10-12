@@ -43,12 +43,17 @@ case "${1:-}" in
   *) printf 'ERROR unknown argument: %s\n' "$1" >&2; exit 2 ;;
 esac
 
-# CI lints `scripts/*.sh tests/*.sh`. The dev scripts are linted too, because a
-# tool that lints everything except itself is the one place a defect hides.
+# CI lints `scripts/*.sh tests/*.sh`. The dev scripts and the operator
+# ceremonies under provisioning/ are linted too, because a tool that lints
+# everything except itself is the one place a defect hides.
 collect_targets() {
   local -a found=()
   local path
-  for path in "${ROOT}"/scripts/*.sh "${ROOT}"/tests/*.sh "${ROOT}"/tools/dev/*.sh; do
+  for path in "${ROOT}"/scripts/*.sh "${ROOT}"/tests/*.sh "${ROOT}"/tests/lib/*.sh \
+              "${ROOT}"/tools/dev/*.sh \
+              "${ROOT}"/provisioning/execution/*.sh \
+              "${ROOT}"/provisioning/artifacts/*.sh \
+              "${ROOT}"/provisioning/evidence/*.sh; do
     [[ -f "${path}" ]] && found+=("${path}")
   done
   printf '%s\n' "${found[@]}"

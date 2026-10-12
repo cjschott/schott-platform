@@ -19,7 +19,10 @@ from typing import Any, Mapping
 from .errors import CapabilityError
 from .evidence import OUTCOME_PREPARED, OUTCOME_REFUSED
 from .records import (INVOCATION_FIELDS, INVOCATION_KIND, RECORD_SCHEMA_VERSION,
-                      RESULT_FIELDS, RESULT_KIND)
+                      RESULT_FIELDS, RESULT_KIND,
+                      INVOCATION_SCHEMA_VERSION, RESULT_SCHEMA_VERSION)
+OUTCOME_CLASS_REFUSED = "refused"
+from .execution.profile import ADAPTER_IDENTITY
 
 STATUS_REPORTED = "reported"
 STATUS_NOT_FOUND = "not-found"
@@ -30,6 +33,14 @@ FINDING_IDENTITY = "record-identity-mismatch"
 FINDING_INTERRUPTED_REFUSAL = "refusal-without-result"
 FINDING_ORPHAN_RESULT = "result-without-invocation"
 FINDING_OUTCOME_MISMATCH = "result-outcome-mismatch"
+# Execution authority was durably bound and no terminal outcome became durable.
+# Design section 17: observable residue, never cleaned, never repaired. Named
+# distinctly from the refusal case because they mean different things -- one is
+# an execution nobody can account for, the other a decision that was never
+# written down.
+FINDING_INTERRUPTED_EXECUTION = "execution-interrupted"
+# A result exists for an invocation that never authorised an execution.
+FINDING_RESULT_WITHOUT_AUTHORITY = "result-without-execution-authority"
 FINDING_DUPLICATE_IDENTITY = "duplicate-invocation-identity"
 FINDING_RESIDUE = "partial-write-left-behind"
 
@@ -37,6 +48,8 @@ KIND_ORDER = (INVOCATION_KIND, RESULT_KIND)
 _ID_FIELD = {INVOCATION_KIND: "invocation_record_id",
              RESULT_KIND: "capability_result_id"}
 _FIELDS = {INVOCATION_KIND: INVOCATION_FIELDS, RESULT_KIND: RESULT_FIELDS}
+_SCHEMA_VERSION = {INVOCATION_KIND: INVOCATION_SCHEMA_VERSION,
+                   RESULT_KIND: RESULT_SCHEMA_VERSION}
 
 
 @dataclass(frozen=True)
@@ -53,8 +66,19 @@ def _shape(kind: str, record: Any) -> str | None:
         return FINDING_MALFORMED
     if record.get("kind") != kind:
         return FINDING_MALFORMED
-    if record.get("schema_version") != RECORD_SCHEMA_VERSION:
+    # Per kind, since G11-AN. The invocation record did not change and keeps
+    # version 1; the result record gained the section 15 fields and is version
+    # 2. One shared constant would have made a correct record of either kind
+    # look malformed the moment the other moved.
+    if record.get("schema_version") != _SCHEMA_VERSION[kind]:
         return FINDING_MALFORMED
+    # A stored invocation may name only the governed execution mechanism, or
+    # none. A record claiming a mechanism this build does not govern is not a
+    # record whose meaning anybody reviewed.
+    if kind == INVOCATION_KIND:
+        bound = record.get("adapter_identity")
+        if bound is not None and bound != ADAPTER_IDENTITY:
+            return FINDING_MALFORMED
     identity = record.get(_ID_FIELD[kind])
     if not isinstance(identity, str) or not identity:
         return FINDING_IDENTITY
@@ -86,14 +110,62 @@ def inspect_records(store, *, kind: Any = None, identifier: Any = None) -> Repor
     return Report(STATUS_REPORTED, (), tuple(found))
 
 
-def validate_store(store) -> Report:
+
+def _execution_authorised(identity: str, adapter_identity: Any, legacy: bool,
+                          authorised: frozenset[str]) -> bool:
+    """Can execution authority for `identity` be PROVEN from durable evidence?
+
+    Exactly three shapes count, and nothing else does:
+
+    1. **SUPERVISED** -- the committed lifecycle journal contains a
+       `LAUNCH_AUTHORIZED` transition for this `CINV`. This is the released
+       model and the authority `launch.py` names: the transition decides, the
+       launch-authorisation record is only a projection of it, and the handoff
+       only a materialisation. It is what every production execution has.
+
+    2. **ADAPTER-BOUND** -- the invocation record names the governed execution
+       mechanism. Architecturally permitted and checked by `_shape` against
+       `ADAPTER_IDENTITY`; currently latent, because no released caller supplies
+       an adapter, which is exactly why asking only this question rejected the
+       whole of production.
+
+    3. **LEGACY** -- retained exactly as accepted. Note that it is unreachable:
+       `_shape` reports any invocation at a different schema version as
+       malformed before this is consulted, so no legacy record arrives here. It
+       is kept rather than removed because removing it is a separate decision
+       from fixing the authority check.
+
+    Everything else is unproven, and unproven fails closed. A fabricated
+    terminal result on an invocation that never left `reserved` has none of the
+    three and is still reported -- which is the property this function exists to
+    keep, not the one it exists to relax.
+    """
+    if adapter_identity is not None:
+        return True
+    if identity in authorised:
+        return True
+    return bool(legacy)
+
+
+def validate_store(store, *,
+                   launch_authorised: Collection[str] | None = None) -> Report:
     """Structural and relational problems, in deterministic order.
 
     Reports; repairs nothing, removes nothing, and rewrites nothing.
+
+    `launch_authorised` is the set of `CINV` identities whose committed
+    lifecycle journal contains a `LAUNCH_AUTHORIZED` transition -- the
+    supervised execution authority, read by the caller from the journal because
+    that namespace is reached through a verified root descriptor and this
+    function is given the record store. `None` means *no journal was readable*,
+    which is treated as *nothing is proven* rather than as *everything is
+    fine*: the check below then behaves exactly as it did before this argument
+    existed, and fails closed.
     """
     findings: list[str] = []
     invocations: dict[str, Mapping[str, Any]] = {}
     by_opaque: dict[str, list[str]] = {}
+    authorised = frozenset(launch_authorised or ())
 
     for record in store.list_records(INVOCATION_KIND):
         problem = _shape(INVOCATION_KIND, record)
@@ -123,10 +195,56 @@ def validate_store(store) -> Report:
         evidence = record.get("evidence")
         outcome = evidence.get("outcome") if isinstance(evidence, Mapping) else None
         linked = results.get(identity, [])
+        # The execution mechanism this invocation durably bound, if any. A
+        # record written before the field existed carries nothing, and nothing
+        # is inferred from that: see the v1 branch below.
+        adapter_identity = record.get("adapter_identity")
+        legacy = record.get("schema_version") != INVOCATION_SCHEMA_VERSION
+
         if outcome == OUTCOME_PREPARED:
-            # Sound: no execution was attempted, so there is no result.
-            if linked:
+            # A prepared invocation WITH a terminal result is the ordinary
+            # successful shape now that G6 is open: CINV is the immutable
+            # pre-execution attempt record and stays `execution-prepared`,
+            # while what the execution did lives in the CRES. Reporting that
+            # pairing as a mismatch was correct only while nothing could
+            # execute.
+            #
+            # A prepared invocation with NO result is deliberately still not
+            # reported. Design section 17 calls that interrupted, but this
+            # record cannot yet tell "execution was attempted and left no
+            # result" from "no adapter was ever authorised, so nothing was
+            # attempted" -- both write `execution-prepared` and nothing else.
+            # Section 14 names an `adapter_identity` field on the invocation
+            # record that would separate them; the implementation does not
+            # carry it. Reporting every prepared invocation as interrupted
+            # would relabel records that were never attempted, and guessing
+            # from a clock is exactly what the doctrine forbids. See the
+            # G11-AN report: this is the checkpoint's stop.
+            #
+            # What IS still a mismatch: a refusal result filed under a prepared
+            # invocation, which is two records disagreeing about whether
+            # anything was attempted, and more than one terminal result for a
+            # single attempt.
+            if len(linked) > 1:
                 findings.append(f"{identity}: {FINDING_OUTCOME_MISMATCH}")
+            elif any(entry.get("outcome_class") == OUTCOME_CLASS_REFUSED
+                     for entry in linked):
+                findings.append(f"{identity}: {FINDING_OUTCOME_MISMATCH}")
+            elif linked and not _execution_authorised(
+                    identity, adapter_identity, legacy, authorised):
+                # A terminal result for an execution nobody authorised.
+                findings.append(
+                    f"{identity}: {FINDING_RESULT_WITHOUT_AUTHORITY}")
+            elif not linked and adapter_identity is not None:
+                # Section 17's case, now separable. Authority was bound and no
+                # outcome is durable, so the adapter cannot be shown not to
+                # have acted. Reported, never repaired, never replayed.
+                findings.append(
+                    f"{identity}: {FINDING_INTERRUPTED_EXECUTION}")
+            # Prepared, nothing authorised, no result: sound. Nothing was
+            # attempted, and a v1 record -- written before the field existed --
+            # falls here too rather than being read as evidence of an attempt
+            # it never recorded.
         elif outcome == OUTCOME_REFUSED:
             if not linked:
                 findings.append(f"{identity}: {FINDING_INTERRUPTED_REFUSAL}")

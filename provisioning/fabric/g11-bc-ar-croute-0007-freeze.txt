@@ -1,0 +1,534 @@
+#!/usr/bin/env bash
+# The CROUTE-0007 PRODUCTION FREEZE, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run blind: the operator pastes it
+# into a root-capable shell so every command and every refusal is visible on the
+# console.
+#
+# WHAT THIS DOES. It puts one reviewed body under /etc/kyri/fabric and asks the
+# released engine what it WOULD do with it. It does not write
+# /var/lib/kyri/fabric, and it proves that afterwards.
+#
+# STEP 3 OF 4. CADV-000008 and CINST-000007 are written and accepted; this
+# freezes the route that points at the renewed admission. CSEL-000005 is NOT
+# prepared and NOT frozen here -- its selection instant must be an actual
+# operator selection decision, made only after CROUTE-0007 is written.
+#
+# =====================================================================
+# THE TEMPORAL GATE IS CEREMONY AUTHORITY, NOT ENGINE AUTHORITY
+# =====================================================================
+#
+# G11-BC-AQ probed the released `create-route` with five bodies differing only in
+# `recorded_at`, each proved distinct by its request digest. The engine returned
+# would_accept=true for ALL FIVE:
+#
+#   2026-10-07T10:08:57-05:00   one second BEFORE its candidate was admitted
+#   2026-10-06T06:26:00-05:00   a day before, the stale G11-BC-AM instant
+#   2026-10-07T10:08:58-05:00   exactly at the admission
+#   (then)                      the real clock
+#   2026-10-20T00:00:00-05:00   AFTER BOTH GOVERNING WINDOWS CLOSE
+#
+# So the engine will persist a route recorded before the instance it routes to
+# existed, or after the authority governing it expired. It does not judge the
+# ordering at all.
+#
+# THEREFORE GATE 5 BELOW IS THE ONLY THING ENFORCING IT. It is not a
+# belt-and-braces check and it must not be removed, softened, or replaced by
+# trusting `create-route`. The required ordering, with the values this ceremony
+# asserts:
+#
+#   CINST-000007 admitted_at   2026-10-07T10:08:58-05:00
+#        <=
+#   CROUTE-0007 recorded_at    2026-10-07T17:36:09-05:00
+#        <
+#   CINST-000007 admitted_until / CADV-000008 valid_until
+#                              2026-10-13T06:25:00-05:00
+#
+# THE OPERATOR ASSERTS THE DECISION INSTANT. This block refuses without it:
+#
+#     ROUTE_DECISION_AT=2026-10-07T17:36:09-05:00 bash <this block>
+#
+# and refuses if what you supply is not the instant the reviewed bytes carry. A
+# route is a DECISION; the instant is inside the reviewed body and every
+# dependent digest derives from it. A mismatch means the body is RE-PREPARED, not
+# edited.
+#
+# NOTHING HERE READS A CLOCK TO FILL IN A VALUE. `date` and its equivalents
+# appear only in gates that REFUSE, and in the eligibility and selection
+# previews, which must judge at the current instant to mean anything.
+#
+# =====================================================================
+# WHY BOTH THE BODY SHA AND THE REQUEST DIGEST ARE PINNED
+# =====================================================================
+#
+# G11-BC-AQ also proved that the request digest DOES NOT COVER `request_id`:
+# rendering the stale G11-BC-AM route body reproduces its pinned digest exactly,
+# and changing only its `request_id` leaves the digest unchanged, while changing
+# `actor` or `recorded_at` changes it.
+#
+# So the request digest alone cannot identify which request produced a record.
+# This block pins BOTH: the body SHA-256, which covers every byte including the
+# request id, and the request digest the engine derives. It also checks the
+# request id out of the rendered body directly. Pinning only the digest would
+# leave the request id unverified.
+#
+# THE STALE G11-BC-AM ROUTE BODY IS 679 BYTES, THE SAME AS THIS ONE -- the two
+# instants are the same width and `g11bcan` and `g11bcar` are the same width. A
+# byte count cannot tell them apart, so the stale body is refused BY NAME below.
+# There is no G11-BC-AN or G11-BC-AQ route body: AN prepared the advertisement
+# and AQ rendered nothing, stopping for this instant.
+#
+# NO AUTHORITY IS BROADENED. capability CAPDEF-0001, contract CCON-0001, version
+# 1.0.0, classification `internal` and locality `local-only` are all equal to
+# CROUTE-0006, field by field. The ONLY semantic change is the candidate, which
+# moves from the superseded CINST-000006 to the admitted CINST-000007 -- which is
+# the entire purpose of this record.
+#
+# AND THE DIMENSIONS A ROUTE DOES NOT CARRY. The package CPKG-0001, the host
+# CHOST-0001, the verified architecture x86-64 and the permitted operation
+# `execute` are ADMISSION fields, carried by CINST-000007 -- which gate 2 pins by
+# its persisted digest, so they are fixed by the record this route points at
+# rather than restated here. A route neither widens nor narrows them. Saying so
+# is the point: a route artifact that pinned the package or the architecture
+# would be claiming authority over a record it does not touch, exactly as an
+# admission artifact claiming locality would.
+#
+# WHAT GOES WRONG IF THIS RECORD IS SKIPPED. Against the current route head a
+# selection preflight returns `selected_instance_id: null` AND
+# `would_accept: true`: the engine would write an accepted selection that selects
+# nothing. It does not fail loudly. Gate 7 proves the renewed route fixes it.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/croute-0007.json
+SOURCE=provisioning/fabric/g11-bc-ar-croute-0007-input.json
+REVIEWED=beb687c26677cad701519b635b7b1ee82bb8721f4da10d0f7d1a9c29b5ca2989
+REVIEWED_BYTES=679
+REQUEST_DIGEST=sha256:db8962e39dcb6efb2b1a91c12ca7b97f8d2ae446e8225f226b4228144cba2e9e
+REVIEWED_REQUEST_ID=g11bcar-create-route-capdef-0001-ccon-0001-cinst-000007-supersedes-croute-0006
+
+REVIEWED_RECORDED_AT=2026-10-07T17:36:09-05:00
+
+# The POST-CINST baselines. d11c939a is the pre-CINST store and must never gate a
+# CROUTE step: the admission write moved it.
+FABRIC_BEFORE=1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb
+RUNTIME_BEFORE=7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+TRUST_BEFORE=53605e4e738d941ad5f1d2d2d08fe5cb776e484f6fee07f1123859d07828b63f
+
+# The governing authority, as production persisted it.
+CADV8_RECORD=8b478c3e8d3ed6c86a63d4dde1901cedfd56d9736b28017cfd384fa78443654c
+CINST7_RECORD=8e577b7df196c80dc380a4e3f62ee98cb60f408b00ec132af50e9da611ce85ad
+# And the predecessor this supersedes, which is NOT rewritten.
+CROUTE6_RECORD=ffa04e0f578b5ae420ef01f5d38ce0e547fef56a13d2976d2923d82fce7ff3f2
+
+# Bodies that are NOT this one, refused BY NAME. Each digest was measured from
+# its own file at G11-BC-AR, not copied from an earlier artifact.
+STALE_AM_ROUTE_BODY=6724622395a7b1ec0c74157b4b354ed9ec894c5f8a5ddde782f9a3a4fa129e25
+ACCEPTED_CROUTE5=6d8311e51560081a765bdb2bce5aacb1b0f296138198c272f26d3200de3f713a
+ACCEPTED_CROUTE6=cd7a1f9a8cd5f982d3f62b7d02ff253bc6c33b006a9aa0717aff162a1e40a78c
+
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+
+# ---- GATE 0: THE OPERATOR SUPPLIES THE ROUTE DECISION INSTANT -------------
+printf -- '\n--- the route decision instant, supplied by the operator ---\n'
+if [[ -z "${ROUTE_DECISION_AT:-}" ]]; then
+  echo "REFUSE: no ROUTE_DECISION_AT was supplied."
+  echo "        Re-run as:  ROUTE_DECISION_AT=${REVIEWED_RECORDED_AT} bash <this block>"
+  echo "        A route is your decision, and the instant is yours to assert."
+  exit 1
+fi
+test "${ROUTE_DECISION_AT}" = "${REVIEWED_RECORDED_AT}" || {
+  echo "REFUSE: you supplied ${ROUTE_DECISION_AT}; the reviewed bytes carry ${REVIEWED_RECORDED_AT}."
+  echo "        If your route decision is a different instant, the body must be"
+  echo "        RE-PREPARED -- the instant is inside it and its digest derives from"
+  echo "        it. Do not edit the body here."
+  exit 1; }
+printf 'ok  operator-supplied route decision %s, equal to the reviewed instant\n' "${ROUTE_DECISION_AT}"
+
+# ---- GATE 1: THE POST-CINST PRODUCTION BASELINES -------------------------
+printf -- '\n--- production baselines, after the CINST-000007 write ---\n'
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store is ${got}, expected ${want}"; exit 1; }
+  printf 'ok  %-8s %s\n' "${label}" "${got}"
+done
+
+# ---- GATE 2: THE GOVERNING AUTHORITY, AS WRITTEN ------------------------
+printf -- '\n--- the governing advertisement and admission ---\n'
+test "$(sha256sum /var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml | cut -d' ' -f1)" \
+     = "${CADV8_RECORD}" \
+  || { echo "REFUSE: CADV-000008 is not the record the operator wrote"; exit 1; }
+test "$(cat /var/lib/kyri/fabric/sequences/capability-advertisement.seq)" = "8" \
+  || { echo "REFUSE: the advertisement sequence is not 8"; exit 1; }
+test -z "$(grep -l '^supersedes: CADV-000008$' \
+             /var/lib/kyri/fabric/capability-advertisements/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: CADV-000008 has already been superseded"; exit 1; }
+test "$(sha256sum /var/lib/kyri/fabric/capability-instances/CINST-000007.yaml | cut -d' ' -f1)" \
+     = "${CINST7_RECORD}" \
+  || { echo "REFUSE: CINST-000007 is not the record the operator wrote"; exit 1; }
+test "$(cat /var/lib/kyri/fabric/sequences/capability-instance.seq)" = "7" \
+  || { echo "REFUSE: the instance sequence is not 7"; exit 1; }
+test -z "$(grep -l '^supersedes: CINST-000007$' \
+             /var/lib/kyri/fabric/capability-instances/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: CINST-000007 has already been superseded"; exit 1; }
+test "$(sed -n 's/^lifecycle_state: //p' \
+          /var/lib/kyri/fabric/capability-instances/CINST-000007.yaml)" = "admitted" \
+  || { echo "REFUSE: CINST-000007 is not in the admitted lifecycle state"; exit 1; }
+printf 'ok  CADV-000008 head at %s\n' "${CADV8_RECORD}"
+printf 'ok  CINST-000007 admitted head at %s\n' "${CINST7_RECORD}"
+
+# ---- GATE 3: THE ROUTE NAMESPACE ---------------------------------------
+printf -- '\n--- the route namespace ---\n'
+test "$(cat /var/lib/kyri/fabric/sequences/capability-route.seq)" = "6" \
+  || { echo "REFUSE: the route sequence is not 6"; exit 1; }
+test ! -e /var/lib/kyri/fabric/capability-routes/CROUTE-0007.yaml \
+  || { echo "REFUSE: CROUTE-0007 already exists in production"; exit 1; }
+test "$(sha256sum /var/lib/kyri/fabric/capability-routes/CROUTE-0006.yaml | cut -d' ' -f1)" \
+     = "${CROUTE6_RECORD}" \
+  || { echo "REFUSE: CROUTE-0006 is not the accepted record; it must be immutable"; exit 1; }
+test -z "$(grep -l '^supersedes: CROUTE-0006$' \
+             /var/lib/kyri/fabric/capability-routes/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: CROUTE-0006 has already been superseded"; exit 1; }
+printf 'ok  route sequence 6, CROUTE-0006 the head at %s, CROUTE-0007 absent\n' \
+  "${CROUTE6_RECORD}"
+
+# ---- GATE 4: THE REVIEWED BODY, BY SHA AND BY REQUEST ID ---------------
+printf -- '\n--- the reviewed body ---\n'
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+sudo test -f /etc/kyri/fabric/cinst-000007.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cinst-000007.json is absent; CROUTE-0007 routes to CINST-000007 and is frozen against it"; exit 1; }
+sudo test -f /etc/kyri/fabric/croute-0006.json \
+  || { echo "REFUSE: /etc/kyri/fabric/croute-0006.json is absent; CROUTE-0007 supersedes CROUTE-0006"; exit 1; }
+test -f "${SOURCE}" || { echo "REFUSE: ${SOURCE} is absent"; exit 1; }
+
+# FROM THE REPOSITORY, NOT RETYPED HERE. A body retyped into a ceremony is a body
+# nobody reviewed.
+TMP="$(mktemp)"
+cp "${SOURCE}" "${TMP}"
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+for pair in "the STALE G11-BC-AM route body, which carries recorded_at 2026-10-06T06:26:00-05:00 -- a day BEFORE CINST-000007 was admitted -- and is the same 679 bytes as this one:${STALE_AM_ROUTE_BODY}" \
+            "the CROUTE-0005 input:${ACCEPTED_CROUTE5}" \
+            "the CROUTE-0006 input, whose candidate CINST-000006 is SUPERSEDED:${ACCEPTED_CROUTE6}"; do
+  name="${pair%:*}"; sha="${pair##*:}"
+  if [[ "${ACTUAL}" == "${sha}" ]]; then
+    echo "REFUSE: this is ${name}, not the G11-BC-AR CROUTE-0007 input"
+    rm -f "${TMP}"; exit 1
+  fi
+done
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+# THE REQUEST ID, CHECKED OUT OF THE BODY. The request digest does not cover it
+# (G11-BC-AQ), so pinning the digest alone would leave it unverified.
+BODY_REQUEST_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "${TMP}")"
+test "${BODY_REQUEST_ID}" = "${REVIEWED_REQUEST_ID}" || {
+  echo "REFUSE: the body carries request_id ${BODY_REQUEST_ID}, reviewed ${REVIEWED_REQUEST_ID}"
+  rm -f "${TMP}"; exit 1; }
+printf 'ok  reviewed body %s, %s bytes\n' "${ACTUAL}" "${REVIEWED_BYTES}"
+printf 'ok  request_id %s, read out of the body\n' "${BODY_REQUEST_ID}"
+
+# ---- GATE 5: THE TEMPORAL GATE -- CEREMONY AUTHORITY -------------------
+#
+# THE ENGINE DOES NOT DO THIS (G11-BC-AQ: create-route accepted a route recorded
+# a second before its candidate's admission, and one recorded after both windows
+# closed). Every bound below is read out of the records it guards, so no bound
+# can drift from the authority it describes. The clock is read HERE, to refuse --
+# never to supply a value.
+printf -- '\n--- the temporal gate: ordering the engine will not enforce ---\n'
+GATE="$(python3 - "${TMP}" \
+        /var/lib/kyri/fabric/capability-instances/CINST-000007.yaml \
+        /var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml <<'GATE_PY'
+import json
+import re
+import sys
+from datetime import datetime
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+instance = open(sys.argv[2], encoding="utf-8").read()
+advertisement = open(sys.argv[3], encoding="utf-8").read()
+now = datetime.now().astimezone()
+
+
+def field(text, name):
+    return re.search(rf"^{name}: '(.+)'$", text, re.M).group(1)
+
+
+recorded = body.get("recorded_at")
+admitted = field(instance, "admitted_at")
+admitted_until = field(instance, "admitted_until")
+adv_observed = field(advertisement, "observed_at")
+adv_until = field(advertisement, "valid_until")
+
+print(f"now                        {now.isoformat()}")
+print(f"CADV-000008 observed_at    {adv_observed}")
+print(f"CADV-000008 valid_until    {adv_until}")
+print(f"CINST-000007 admitted_at   {admitted}")
+print(f"CINST-000007 until         {admitted_until}")
+print(f"CROUTE-0007 recorded_at    {recorded}")
+
+r = datetime.fromisoformat(recorded)
+
+# 1. A route cannot be decided before the instance it routes to was admitted.
+if r < datetime.fromisoformat(admitted):
+    print(f"REFUSE: the route is recorded {recorded}, BEFORE its candidate was "
+          f"admitted at {admitted}. The engine would accept this; it is still a "
+          f"decision about an instance that did not yet exist.")
+    sys.exit(1)
+# 2. Nor after the admission it routes to has expired.
+if r >= datetime.fromisoformat(admitted_until):
+    print(f"REFUSE: the route is recorded {recorded}, at or after the admission "
+          f"expires {admitted_until}")
+    sys.exit(1)
+# 3. Nor after the advertisement governing that admission has expired.
+if r >= datetime.fromisoformat(adv_until):
+    print(f"REFUSE: the route is recorded {recorded}, at or after the governing advertisement expires {adv_until}")
+    sys.exit(1)
+print("ok  admitted_at <= recorded_at < admitted_until, and < the advertisement's expiry")
+
+# 4. A decision cannot be in the future.
+if r > now:
+    print(f"REFUSE: the route is recorded {recorded}, which is in the FUTURE. "
+          f"The body would claim a decision nobody has made.")
+    sys.exit(1)
+print("ok  the route decision instant is in the past and already reached")
+
+# 5. And the ceremony itself must run inside both governing windows.
+for label, opens, closes in (("the advertisement", adv_observed, adv_until),
+                             ("the admission", admitted, admitted_until)):
+    if now < datetime.fromisoformat(opens):
+        print(f"REFUSE: {label} window has not opened")
+        sys.exit(1)
+    if now >= datetime.fromisoformat(closes):
+        print(f"REFUSE: {label} window has CLOSED at the current clock")
+        print("REFUSE: do not extend it -- RE-PREPARE the chain from a fresh observation")
+        sys.exit(1)
+print("ok  the current clock is inside BOTH governing windows")
+GATE_PY
+)" || { printf '%s\n' "${GATE}"; echo "REFUSE: the temporal gate failed"; rm -f "${TMP}"; exit 1; }
+printf '%s\n' "${GATE}"
+
+# ---- GATE 6: THE CANDIDATE IS CURRENTLY ELIGIBLE -----------------------
+#
+# Asked of PRODUCTION, because unlike an admission candidate the instance this
+# route points at already exists there. No copy is needed to answer it.
+printf -- '\n--- the candidate instance, currently eligible ---\n'
+ELIGIBILITY="$(python3 -m tools.fabric.cli compute-eligibility \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --trust-store-root /var/lib/kyri/trust --instance-id CINST-000007 \
+  --capability-id CAPDEF-0001 --contract-id CCON-0001 --accepted-version 1.0.0 \
+  --data-classification internal --evaluated-at "$(date -Is)")"
+read -r ELIGIBLE REASONS <<<"$(printf '%s' "${ELIGIBILITY}" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("eligible"), len(d.get("reasons") or []))')"
+test "${ELIGIBLE}" = "True" \
+  || { printf '%s\n' "${ELIGIBILITY}"
+       echo "REFUSE: CINST-000007 is not currently eligible; a route to an ineligible instance routes nowhere"
+       rm -f "${TMP}"; exit 1; }
+test "${REASONS}" = "0" \
+  || { printf '%s\n' "${ELIGIBILITY}"
+       echo "REFUSE: eligibility carries ${REASONS} reason(s)"; rm -f "${TMP}"; exit 1; }
+printf 'ok  CINST-000007 is eligible with no reasons, at the current clock\n'
+
+# ---- GATE 7: THE ROUTE ACHIEVES ITS PURPOSE, ON A COPY -----------------
+#
+# The whole point of this record is that a selection resolves THROUGH it to the
+# renewed instance. Against the CURRENT head a selection resolves to null while
+# the engine still reports would_accept=true, so "the write succeeded" proves
+# nothing. This applies the candidate to a COPY and asks. The copy is thrown
+# away; production is untouched.
+#
+# THE SELECTION BODY BELOW IS A PREVIEW, NOT CSEL-000005. Its request id says so.
+# CSEL-000005 remains unprepared, and its instant must be a real operator
+# selection decision made after this route is written.
+printf -- '\n--- the route resolves a selection to the renewed instance (on a copy) ---\n'
+SCRATCH="$(mktemp -d -p /data/kyri g11bcar-routeproof.XXXXXX)"
+cp -a /var/lib/kyri/fabric "${SCRATCH}/fabric"
+chmod -R u+w "${SCRATCH}/fabric"
+mkdir -p "${SCRATCH}/approved"
+
+# First: what the OLD head does, so the comparison is on the console.
+python3 - "$(date -Is)" > "${SCRATCH}/approved/preview.json" <<'PREVIEW_PY'
+import json
+import sys
+
+now = sys.argv[1]
+print(json.dumps({
+    "request_id": "g11bcar-PREVIEW-not-csel-000005",
+    "actor": "primary-platform-operator",
+    "recorded_at": now,
+    "evaluated_at": now,
+    "capability_id": "CAPDEF-0001",
+    "contract_id": "CCON-0001",
+    "accepted_contract_versions": ["1.0.0"],
+    "data_classification": "internal",
+    "locality": "local-only",
+    "local_node_identity": "HOST-0001",
+    "provenance": {"class": "declared",
+                   "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
+                   "recorded_at": now[:10]},
+}, indent=2))
+PREVIEW_PY
+chmod 0400 "${SCRATCH}/approved/preview.json"
+BEFORE_SEL="$(python3 -m tools.fabric.cli select \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --input-file preview.json --approved-directory "${SCRATCH}/approved" \
+  --trust-store-root /var/lib/kyri/trust --preflight \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_instance_id"])')"
+printf 'through the CURRENT head CROUTE-0006: selected_instance_id %s\n' "${BEFORE_SEL}"
+
+# Then apply the candidate and ask again.
+cp "${TMP}" "${SCRATCH}/approved/croute-0007.json"
+chmod 0400 "${SCRATCH}/approved/croute-0007.json"
+python3 -m tools.fabric.cli create-route \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --input-file croute-0007.json --approved-directory "${SCRATCH}/approved" > /dev/null \
+  || { echo "REFUSE: the released write refused on a copy of production"
+       chmod -R u+w "${SCRATCH}"; rm -rf "${SCRATCH}" "${TMP}"; exit 1; }
+AFTER_SEL="$(python3 -m tools.fabric.cli select \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --input-file preview.json --approved-directory "${SCRATCH}/approved" \
+  --trust-store-root /var/lib/kyri/trust --preflight \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_instance_id"])')"
+printf 'through the CANDIDATE head CROUTE-0007: selected_instance_id %s\n' "${AFTER_SEL}"
+
+SCRATCH_HEAD=""
+for f in "${SCRATCH}/fabric"/capability-routes/*.yaml; do
+  id="$(basename "${f}" .yaml)"
+  grep -lq "^supersedes: ${id}\$" "${SCRATCH}/fabric"/capability-routes/*.yaml 2>/dev/null \
+    || SCRATCH_HEAD="${id}"
+done
+SCRATCH_SEQ="$(cat "${SCRATCH}/fabric/sequences/capability-route.seq")"
+SCRATCH_VERSION="$(sed -n 's/^route_version: //p' "${SCRATCH}/fabric/capability-routes/CROUTE-0007.yaml")"
+SCRATCH_CANDIDATES="$(sed -n '/^candidate_instances:/,/^capability_id:/p' \
+  "${SCRATCH}/fabric/capability-routes/CROUTE-0007.yaml" | sed -n 's/^- //p' | paste -sd, -)"
+SCRATCH_SUPERSEDES="$(sed -n 's/^supersedes: //p' "${SCRATCH}/fabric/capability-routes/CROUTE-0007.yaml")"
+SCRATCH_FINDINGS="$(python3 -m tools.fabric.cli validate \
+  --store-root "${SCRATCH}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("findings") or []))')"
+SCRATCH_CROUTE6="$(sha256sum "${SCRATCH}/fabric/capability-routes/CROUTE-0006.yaml" | cut -d' ' -f1)"
+chmod -R u+w "${SCRATCH}"; rm -rf "${SCRATCH}"
+
+test "${AFTER_SEL}" = "CINST-000007" \
+  || { echo "REFUSE: through the candidate route a selection resolves to ${AFTER_SEL}, not CINST-000007"
+       rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_HEAD}" = "CROUTE-0007" \
+  || { echo "REFUSE: on the copy the route head is ${SCRATCH_HEAD}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_SEQ}" = "7" \
+  || { echo "REFUSE: on the copy the route sequence is ${SCRATCH_SEQ}, not 7"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_VERSION}" = "7" \
+  || { echo "REFUSE: on the copy route_version is ${SCRATCH_VERSION}, not 7"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_CANDIDATES}" = "CINST-000007" \
+  || { echo "REFUSE: on the copy candidate_instances is ${SCRATCH_CANDIDATES}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_SUPERSEDES}" = "CROUTE-0006" \
+  || { echo "REFUSE: on the copy supersedes is ${SCRATCH_SUPERSEDES}"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_FINDINGS}" = "0" \
+  || { echo "REFUSE: the engine reports ${SCRATCH_FINDINGS} finding(s) on the copy"; rm -f "${TMP}"; exit 1; }
+test "${SCRATCH_CROUTE6}" = "${CROUTE6_RECORD}" \
+  || { echo "REFUSE: CROUTE-0006 was altered on the copy"; rm -f "${TMP}"; exit 1; }
+printf 'ok  head CROUTE-0007 at sequence 7, route_version 7, candidate CINST-000007,\n'
+printf 'ok  superseding CROUTE-0006 which stays immutable, no findings,\n'
+printf 'ok  and a selection resolves %s -> %s\n' "${BEFORE_SEL}" "${AFTER_SEL}"
+
+# ---- THE PREFLIGHT, BEFORE ANYTHING IS INSTALLED -----------------------
+printf -- '\n--- read-only preflight against production (NO Fabric write) ---\n'
+STAGE="$(mktemp -d)"
+cp "${TMP}" "${STAGE}/croute-0007.json"
+chmod 0400 "${STAGE}/croute-0007.json"
+PREFLIGHT="$(python3 -m tools.fabric.cli create-route \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --input-file croute-0007.json --approved-directory "${STAGE}" --preflight)"
+rm -rf "${STAGE}"
+printf '%s\n' "${PREFLIGHT}"
+
+read -r ACCEPT MUTATED EXISTS PREDICTED DIGEST PID <<<"$(printf '%s' "${PREFLIGHT}" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["would_accept"], d["mutated"], d["destination_exists"], d["predicted_record_id"], d["request_digest"], d["request_id"])')"
+test "${ACCEPT}" = "True"   || { echo "REFUSE: would_accept is ${ACCEPT}"; exit 1; }
+test "${MUTATED}" = "False" || { echo "REFUSE: the preflight reports mutated=${MUTATED}"; exit 1; }
+test "${EXISTS}" = "False"  || { echo "REFUSE: the destination already exists"; exit 1; }
+test "${PREDICTED}" = "CROUTE-0007" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CROUTE-0007"; exit 1; }
+test "${DIGEST}" = "${REQUEST_DIGEST}" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed ${REQUEST_DIGEST}"; exit 1; }
+# BOTH, for the reason in the header: the digest does not cover the request id.
+test "${PID}" = "${REVIEWED_REQUEST_ID}" \
+  || { echo "REFUSE: the preflight reports request_id ${PID}, not the reviewed ${REVIEWED_REQUEST_ID}"; exit 1; }
+printf 'ok  would_accept %s, mutated %s, destination_exists %s\n' "${ACCEPT}" "${MUTATED}" "${EXISTS}"
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+printf 'ok  request_id          %s\n' "${PID}"
+
+printf -- '\n--- production Fabric must be byte-identical after the preflight ---\n'
+test "$(aggregate /var/lib/kyri/fabric)" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the preflight"; exit 1; }
+test "$(cat /var/lib/kyri/fabric/sequences/capability-route.seq)" = "6" \
+  || { echo "REFUSE: the route sequence moved during the preflight"; exit 1; }
+printf 'ok  fabric unchanged at %s, route sequence still 6\n' "${FABRIC_BEFORE}"
+
+# ---- THE FREEZE: ONE FILE, INTO /etc, AND NOTHING ELSE -----------------
+printf -- '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf -- '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf -- '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+printf -- '\n--- nothing governed moved ---\n'
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store moved during the freeze: ${got}"; exit 1; }
+  printf 'ok  %-8s %s  unchanged\n' "${label}" "${got}"
+done
+test ! -e /var/lib/kyri/fabric/capability-routes/CROUTE-0007.yaml \
+  || { echo "REFUSE: CROUTE-0007 REACHED PRODUCTION FABRIC"; exit 1; }
+test ! -e /etc/kyri/fabric/csel-000005.json \
+  || { echo "REFUSE: a CSEL-000005 input was frozen; it is not prepared"; exit 1; }
+printf 'ok  CROUTE-0007 is frozen as an INPUT and is not a production record\n'
+printf 'ok  CSEL-000005 is not frozen\n'
+FREEZE
+
+# EXPECTED:
+#   gate 0         operator-supplied route decision 2026-10-07T17:36:09-05:00
+#   gate 1         fabric 1dc83d01…, runtime 7dfb34e6…, trust 53605e4e…
+#   gate 2         CADV-000008 head at 8b478c3e…, CINST-000007 admitted head at 8e577b7d…
+#   gate 3         route sequence 6, CROUTE-0006 head at ffa04e0f…, CROUTE-0007 absent
+#   gate 4         reviewed body beb687c26677cad701519b635b7b1ee82bb8721f4da10d0f7d1a9c29b5ca2989, 679 bytes
+#                  request_id g11bcar-create-route-capdef-0001-ccon-0001-cinst-000007-supersedes-croute-0006
+#   gate 5         10:08:58 <= 17:36:09 < 2026-10-13T06:25:00, instant already
+#                  reached, clock inside both windows
+#   gate 6         CINST-000007 eligible, no reasons
+#   gate 7         selection resolves None -> CINST-000007; head CROUTE-0007 at
+#                  sequence 7, route_version 7, no findings
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CROUTE-0007,
+#                  request_digest sha256:db8962e39dcb6efb2b1a91c12ca7b97f8d2ae446e8225f226b4228144cba2e9e
+#   frozen input   /etc/kyri/fabric/croute-0007.json  root:cschott  640  679 bytes
+#   fabric         1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb  (unchanged)
+#
+# CHAIN POSITION, from the G11-BC-AR scratch rehearsal:
+#   PRE_BASELINE              1dc83d0127e3076d32d4c440ccee28f2b57ee9b6a9e84773cafaf8fa21f1d8cb
+#   EXPECTED_RECORD           CROUTE-0007
+#   EXPECTED_RECORD_DIGEST    3ab79b33558f411d76d62d1dd48dbc2c89a51420ea73caa4032698a970bb7c24
+#   EXPECTED_SEQUENCE_BEFORE  route 6
+#   EXPECTED_SEQUENCE_AFTER   route 7
+#   POST_BASELINE             758c6c6578abdfccc7d29d2f1b7e9d56cbf4d933636853c884fb599ef70862ba
+#                             (rehearsed; UNKNOWN for production until the write)
+#
+# Return this output. The create-route WRITE is a separate authorisation and is
+# not in this block. Do not prepare or freeze CSEL-000005 from here.

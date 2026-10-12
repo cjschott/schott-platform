@@ -1,0 +1,853 @@
+#!/usr/bin/env bash
+# CINV-000003 STAGE 1, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# =====================================================================
+# STAGE 1 IS THE FIRST IRREVERSIBLE STEP
+# =====================================================================
+#
+# Stage 0 created only a work area, outside every governed store, and could be
+# abandoned at no cost. This is different. `capability invoke` ALLOCATES
+# CINV-000003, writes an immutable invocation record and advances
+# capability-invocation.seq from 2 to 3. None of that can be taken back:
+# invocation identities are spent, not reserved, and Fabric and the Capability
+# Runtime are append-only.
+#
+# THE IDENTITY IS SPENT EVEN IF THE INVOCATION IS REFUSED. `record_invocation`
+# allocates the CINV inside its critical section BEFORE it decides whether the
+# evidence supports the invocation, and on a refusal it allocates a CRES too
+# and writes a refusal result. So a Stage 1 that refuses still consumes
+# CINV-000003 and would consume CRES-000002. There is no path through this
+# block that allocates nothing and still reaches the invoke. That is why every
+# gate below runs first, and why they are worth their cost here in a way they
+# were not at Stage 0.
+#
+# =====================================================================
+# rc=1 IS SUCCESS. THE JSON IS THE VERDICT.
+# =====================================================================
+#
+# `command_invoke` ends with an unconditional `return EXIT_DENIED`, under the
+# comment "Every outcome reachable here is a governed negative", and
+# EXIT_DENIED is 1. `command_invoke` supplies neither an adapter nor an
+# execution binding, so `_bound_adapter_identity(None, None)` is None, nothing
+# can execute, and `prepare_invocation` returns `prepared` with
+# `no_authorised_adapter`.
+#
+# So a fully successful Stage 1 writes an immutable CINV and exits 1. The exit
+# code is not the verdict and must not be read as one -- but neither is it
+# ignored: this block requires rc to be EXACTLY 1, because rc=0 from this
+# command would mean the released contract had changed underneath the ceremony.
+#
+# THE INVOKE IS NOT RUN UNDER `set -e`. The block sets `set +e` immediately
+# around it and restores `set -e` after capturing the status. Under `set -e` an
+# expected rc=1 would kill the shell after the record was written and before
+# anything verified it, which is the worst possible moment to lose control of
+# the ceremony.
+#
+# =====================================================================
+# WHAT STAGE 1 MAY AND MAY NOT DO
+# =====================================================================
+#
+# May, and exactly this -- measured by rehearsing the real write against a copy
+# of the production runtime store and diffing the file list:
+#
+#   create  capability-invocations/CINV-000003.yaml      (one file, mode 0600)
+#   change  sequences/capability-invocation.seq  2 -> 3
+#
+# Nothing else. The staged package tree is REUSED, not rebuilt: a tree already
+# published under the same commitment is re-inspected in full and adopted, so
+# staging/ does not change. No lock or journal file survives the critical
+# section.
+#
+# May not: allocate a CRES on the success path, authorise a launch, execute
+# anything, start a container, or touch Fabric. The flow ends before any
+# surface that could run anything.
+#
+# RECOVERY AFTER STAGE 1. An invocation with a durable record and no terminal
+# result is the honest interrupted state, and it is exactly what `capability
+# recover` enumerates. It must NOT be "closed by hand": doing so destroys the
+# evidence the enumeration acts on. If this block refuses after the invoke has
+# run, stop and report -- do not re-run it. A second invoke with the same
+# invocation_id resolves to the existing CINV and returns `consumed`, which is
+# a different and non-idempotent outcome.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# =====================================================================
+# BLOCK A -- CONTAINER AND IMAGE OBSERVATION. READ-ONLY. RUN THIS FIRST.
+# =====================================================================
+#
+# This needs the kyri-capability account, and a sudo prompt must not land in
+# the middle of the irreversible block. So it runs on its own, and records what
+# it found in a witness file that BLOCK B requires and re-checks.
+#
+# `runuser` inherits the caller's working directory, and kyri-capability cannot
+# traverse /opt/schott-platform -- which is why the Stage 0 observation failed
+# the first time it was run. It is run from /tmp for that reason. Nothing
+# governed changed then and nothing changes here.
+#
+# Do NOT pull, build, load or retag anything.
+bash <<'OBSERVE'
+set -Eeuo pipefail
+WITNESS=/data/kyri/work/g11bcn-stage-1-witness
+EXPECTED_IMAGE=5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190
+TARGET_CONTAINER=kyri-CINV-000003
+
+cd /tmp
+
+printf '\n--- containers ---\n'
+CONTAINERS="$(sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman ps -a --format '{{.Names}} {{.Status}}')"
+printf '%s\n' "${CONTAINERS}"
+
+# No container for the identity this ceremony is about to allocate, and no
+# kyri-CINV-* container at all: a stray one means an execution plane that is
+# not in the state this ceremony assumes.
+if printf '%s' "${CONTAINERS}" | grep -q "${TARGET_CONTAINER}"; then
+  echo "REFUSE: a ${TARGET_CONTAINER} container already exists"
+  exit 1
+fi
+if printf '%s' "${CONTAINERS}" | grep -q 'kyri-CINV-'; then
+  echo "REFUSE: a kyri-CINV-* container exists; the execution plane is not idle"
+  exit 1
+fi
+printf 'ok  no %s container, no kyri-CINV-* container\n' "${TARGET_CONTAINER}"
+
+printf '\n--- images ---\n'
+IMAGES="$(sudo runuser -u kyri-capability -- env HOME=/data/kyri/capability \
+  XDG_RUNTIME_DIR=/run/user/999 podman images --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}')"
+printf '%s\n' "${IMAGES}"
+
+printf '%s' "${IMAGES}" | grep -q "${EXPECTED_IMAGE}" \
+  || { echo "REFUSE: the execution image ${EXPECTED_IMAGE} is not present"; exit 1; }
+printf '%s' "${IMAGES}" | grep -q 'localhost/kyri-capability-execution:g5' \
+  || { echo "REFUSE: localhost/kyri-capability-execution:g5 is not present"; exit 1; }
+printf 'ok  execution image %s present\n' "${EXPECTED_IMAGE}"
+
+# The witness. BLOCK B requires it, requires it to be fresh, and requires it to
+# say exactly this. It is not a substitute for the observation -- it is a record
+# that the observation was made and what it concluded.
+umask 077
+printf 'stage-1-observation\nimage %s\nno-target-container %s\n' \
+  "${EXPECTED_IMAGE}" "${TARGET_CONTAINER}" > "${WITNESS}"
+printf '\nok  witness written to %s\n' "${WITNESS}"
+OBSERVE
+
+# =====================================================================
+# BLOCK B -- THE GATES AND THE ONE IRREVERSIBLE COMMAND
+# =====================================================================
+bash <<'STAGE1'
+set -Eeuo pipefail
+WITNESS=/data/kyri/work/g11bcn-stage-1-witness
+WITNESS_MAXIMUM_AGE=900          # seconds; an observation older than this is stale
+WORK_ROOT=/data/kyri/work/g11bcn
+PAYLOAD_NAME=third-invoke.json
+
+REVIEWED_RAW=d01faccc67b83c60051348422861c121211a4079f7748572bad0a4882575a569
+REVIEWED_RAW_BYTES=300
+REVIEWED_CANONICAL=591d4b0d9c81fd5cbb56f7a08a8e9b14ef116c8625b16b19311f75d27d3c59b3
+REVIEWED_CANONICAL_BYTES=271
+
+EXPECTED_IMAGE=5cee2b5305b5c5ebe3e8f4facfd1a6cc2c2057a7d301d6869783dddc463f5190
+
+# The governed chain and runtime as Stage 0 left them.
+FABRIC_BEFORE=a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+RUNTIME_BEFORE=159651ee6c98113f182b80cecdff5a83f5782df8ff8e16c6cf30ac91f0ea92fc
+CINV_SEQ_BEFORE=2
+CRES_SEQ_BEFORE=1
+
+# What Stage 1 must produce, derived by rehearsing the real write against a
+# copy of the production runtime store.
+EXPECTED_CINV=CINV-000003
+EXPECTED_RC=1
+EXPECTED_STATUS=prepared
+EXPECTED_REASON=no_authorised_adapter
+EXPECTED_PAYLOAD_DIGEST=sha256:591d4b0d9c81fd5cbb56f7a08a8e9b14ef116c8625b16b19311f75d27d3c59b3
+EXPECTED_BINDING_DIGEST=sha256:6d5a8d9249c7c9407145a69b55748136020a1a696c2e167d879864dc2dc86289
+EXPECTED_ARTIFACT_DIGEST=sha256:6f2282c58ad8d5bf5a463ca09b8a2c5c3f3faef31aea95e2b07100720e6c9a8e
+EXPECTED_STAGED_PATH=/data/kyri/capability-runtime/staging/tree-sha256-6f2282c58ad8d5bf5a463ca09b8a2c5c3f3faef31aea95e2b07100720e6c9a8e
+CINV_SEQ_AFTER=3
+
+# ---- GATE 0: THE OBSERVATION WAS MADE, AND RECENTLY ---------------------
+printf '\n--- observation witness gate ---\n'
+test -f "${WITNESS}" \
+  || { echo "REFUSE: ${WITNESS} is absent; run BLOCK A first"; exit 1; }
+test "$(stat -c '%u' "${WITNESS}")" = "1000" \
+  || { echo "REFUSE: the witness is not owned by uid 1000"; exit 1; }
+WITNESS_AGE=$(( $(date +%s) - $(stat -c '%Y' "${WITNESS}") ))
+test "${WITNESS_AGE}" -ge 0 \
+  || { echo "REFUSE: the witness is dated in the future"; exit 1; }
+test "${WITNESS_AGE}" -le "${WITNESS_MAXIMUM_AGE}" \
+  || { echo "REFUSE: the observation is ${WITNESS_AGE}s old, older than ${WITNESS_MAXIMUM_AGE}s; re-run BLOCK A"; exit 1; }
+grep -qx "image ${EXPECTED_IMAGE}" "${WITNESS}" \
+  || { echo "REFUSE: the witness does not record the expected execution image"; exit 1; }
+grep -qx "no-target-container kyri-${EXPECTED_CINV}" "${WITNESS}" \
+  || { echo "REFUSE: the witness does not record the absence of a kyri-${EXPECTED_CINV} container"; exit 1; }
+printf 'ok  observation %ss old, image and container absence recorded\n' "${WITNESS_AGE}"
+
+# ---- GATE 1: CURRENT GOVERNED AUTHORITY --------------------------------
+#
+# FIVE INPUTS, FIVE SEPARATE CHANNELS. Each live record arrives as its own
+# named file passed as argv. Python's stdin carries the program text and
+# nothing else; no command in this gate takes a second input redirection.
+#
+# The G11-BC-O form fed the program in on stdin through a heredoc and then
+# tried to read its data from that same stdin through a trailing here-string.
+# The data was never read, and a here-string on its own line is a word-less
+# command with status 0, so it -- not python3 -- supplied the exit status of
+# the enclosing $( ), which masked the failure. A gate that cannot fail closed
+# is not a gate. G11-BC-P is the report; this is the corrected shape.
+# >>> GATE1_BEGIN
+printf '\n--- current governed authority gate ---\n'
+GATE_ADVERT="$(mktemp)"
+GATE_INSTANCE="$(mktemp)"
+GATE_ROUTE="$(mktemp)"
+GATE_SELECTION="$(mktemp)"
+trap 'rm -f "${GATE_ADVERT}" "${GATE_INSTANCE}" "${GATE_ROUTE}" "${GATE_SELECTION}"' EXIT
+
+inspect_into() {
+  python3 -m tools.fabric.cli inspect \
+    --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+    --kind "$1" --identifier "$2" > "$3" \
+    || { echo "REFUSE: could not inspect $2 in the live store"; exit 1; }
+}
+
+inspect_into capability-advertisement CADV-000007 "${GATE_ADVERT}"
+inspect_into capability-instance      CINST-000006 "${GATE_INSTANCE}"
+inspect_into capability-route         CROUTE-0006  "${GATE_ROUTE}"
+inspect_into capability-selection     CSEL-000004  "${GATE_SELECTION}"
+
+if ! python3 - "${GATE_ADVERT}" "${GATE_INSTANCE}" "${GATE_ROUTE}" "${GATE_SELECTION}" <<'GATE_PY'
+import json
+import sys
+from datetime import datetime
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+def load(path, what):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError) as exc:
+        refuse(f"could not read {what} ({exc})")
+
+
+def field(mapping, key, what):
+    if not isinstance(mapping, dict) or key not in mapping:
+        refuse(f"{what} has no {key}")
+    return mapping[key]
+
+
+def only(inspected, what):
+    records = field(inspected, "records", what)
+    if not isinstance(records, list) or len(records) != 1:
+        refuse(f"{what} did not return exactly one record")
+    return records[0]
+
+
+def instant(raw, what):
+    try:
+        value = datetime.fromisoformat(raw)
+    except (TypeError, ValueError) as exc:
+        refuse(f"{what} is not an ISO-8601 instant ({exc})")
+    if value.tzinfo is None or value.utcoffset() is None:
+        refuse(f"{what} carries no timezone offset; refusing to guess one")
+    return value
+
+
+advert = only(load(sys.argv[1], "the inspect output for CADV-000007"),
+              "the inspect output for CADV-000007")
+instance = only(load(sys.argv[2], "the inspect output for CINST-000006"),
+                "the inspect output for CINST-000006")
+route = only(load(sys.argv[3], "the inspect output for CROUTE-0006"),
+             "the inspect output for CROUTE-0006")
+selection = only(load(sys.argv[4], "the inspect output for CSEL-000004"),
+                 "the inspect output for CSEL-000004")
+
+if field(advert, "advertisement_id", "the inspected record") != "CADV-000007":
+    refuse("the inspected advertisement is not CADV-000007")
+if field(instance, "instance_id", "the inspected record") != "CINST-000006":
+    refuse("the inspected instance is not CINST-000006")
+if field(instance, "advertisement_id", "CINST-000006") != "CADV-000007":
+    refuse("CINST-000006 does not rest on CADV-000007")
+if field(instance, "lifecycle_state", "CINST-000006") != "admitted":
+    refuse("CINST-000006 is not in the admitted lifecycle state")
+
+if field(route, "route_id", "the inspected record") != "CROUTE-0006":
+    refuse("the inspected route is not CROUTE-0006")
+if field(route, "route_version", "CROUTE-0006") != 6:
+    refuse("CROUTE-0006 is not route_version 6")
+if field(route, "candidate_instances", "CROUTE-0006") != ["CINST-000006"]:
+    refuse("CROUTE-0006 no longer routes to exactly CINST-000006")
+
+if field(selection, "selection_id", "the inspected record") != "CSEL-000004":
+    refuse("the inspected selection is not CSEL-000004")
+if field(selection, "route_id", "CSEL-000004") != "CROUTE-0006":
+    refuse("CSEL-000004 does not resolve through CROUTE-0006")
+if field(selection, "route_version", "CSEL-000004") != 6:
+    refuse("CSEL-000004 did not resolve route_version 6")
+if field(selection, "selected_instance_id", "CSEL-000004") != "CINST-000006":
+    refuse("CSEL-000004 does not select CINST-000006")
+if field(selection, "considered_candidates", "CSEL-000004") != ["CINST-000006"]:
+    refuse("CSEL-000004 considered an unexpected candidate set")
+if field(selection, "excluded_candidates", "CSEL-000004") not in ([], None):
+    refuse("CSEL-000004 carries unexpected exclusions")
+
+observed = instant(field(advert, "observed_at", "the advertisement"), "observed_at")
+expires = instant(field(advert, "valid_until", "the advertisement"), "valid_until")
+admitted = instant(field(instance, "admitted_at", "the instance"), "admitted_at")
+until = instant(field(instance, "admitted_until", "the instance"), "admitted_until")
+now = datetime.now().astimezone()
+
+print(f"now            {now.isoformat()}")
+print(f"CADV-000007    {observed.isoformat()} .. {expires.isoformat()}")
+print(f"CINST-000006   {admitted.isoformat()} .. {until.isoformat()}")
+
+if now < observed:
+    refuse("the governing advertisement window has not opened yet")
+if now >= expires:
+    print("REFUSE: the governing advertisement window closed; CADV-000007 is EXPIRED at the current clock")
+    refuse("do not extend it -- prepare a fresh renewal chain")
+if now >= until:
+    refuse("the admission of CINST-000006 closed at the current clock")
+if until > expires:
+    refuse("admitted_until outlives the advertisement it rests on")
+
+remaining = int((until - now).total_seconds())
+print(f"window remaining  {remaining // 3600}h {(remaining % 3600) // 60}m")
+
+print("ok  observed_at <= now < valid_until")
+print("ok  now < admitted_until <= valid_until")
+print("ok  CROUTE-0006 routes to exactly CINST-000006")
+print("ok  CSEL-000004 selects CINST-000006 through CROUTE-0006")
+GATE_PY
+then
+  echo "REFUSE: current governed authority gate failed"
+  exit 1
+fi
+rm -f "${GATE_ADVERT}" "${GATE_INSTANCE}" "${GATE_ROUTE}" "${GATE_SELECTION}"
+trap - EXIT
+# <<< GATE1_END
+
+# ---- GATE 2: CURRENT ELIGIBILITY ----------------------------------------
+printf '\n--- current eligibility gate ---\n'
+GATE_DIR="$(mktemp -d)"
+trap 'rm -rf "${GATE_DIR}"' EXIT
+
+# >>> GATE2_CHECK_BEGIN
+ELIG_FILE="${GATE_DIR}/eligibility.json"
+python3 -m tools.fabric.cli compute-eligibility \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --trust-store-root /var/lib/kyri/trust \
+  --instance-id CINST-000006 --capability-id CAPDEF-0001 --contract-id CCON-0001 \
+  --accepted-version 1.0.0 --data-classification internal \
+  --evaluated-at "$(date -Is)" \
+  > "${ELIG_FILE}" \
+  || { echo "REFUSE: compute-eligibility failed against production"; exit 1; }
+
+if ! python3 - "${ELIG_FILE}" <<'ELIG_PY'
+import json
+import sys
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    refuse(f"could not read the compute-eligibility result ({exc})")
+
+if not isinstance(result, dict):
+    refuse("the compute-eligibility result is not an object")
+for key in ("eligible", "conditions", "unmet", "reasons"):
+    if key not in result:
+        refuse(f"the compute-eligibility result has no {key}")
+
+eligible = result["eligible"]
+conditions = result["conditions"]
+unmet = result["unmet"]
+reasons = result["reasons"]
+if not isinstance(conditions, list) or not isinstance(unmet, list):
+    refuse("conditions and unmet must both be lists")
+
+met = sum(1 for c in conditions if isinstance(c, dict) and c.get("status") == "met")
+total = len(conditions)
+print(f"eligible {eligible} | {met} of {total} met | unmet {unmet} | reasons {reasons}")
+
+if total == 0:
+    refuse("compute-eligibility returned no conditions to judge")
+if eligible is not True:
+    refuse("compute-eligibility did not return eligible true")
+if unmet:
+    refuse(f"compute-eligibility reported unmet conditions: {unmet}")
+
+print("ok  eligible true, no unmet conditions")
+ELIG_PY
+then
+  echo "REFUSE: CINST-000006 is not eligible at the current clock"
+  exit 1
+fi
+printf 'ok  CINST-000006 eligible at the current clock\n'
+# <<< GATE2_CHECK_END
+
+# ---- GATE 3: THE CHAIN AND THE RUNTIME HAVE NOT MOVED -------------------
+printf '\n--- governed chain and runtime baseline gate ---\n'
+
+FABRIC_NOW="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+test "${FABRIC_NOW}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: the Fabric store has moved: ${FABRIC_NOW}, expected ${FABRIC_BEFORE}"; exit 1; }
+printf 'ok  fabric   %s\n' "${FABRIC_NOW}"
+
+RUNTIME_NOW="$(find /data/kyri/capability-runtime -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+test "${RUNTIME_NOW}" = "${RUNTIME_BEFORE}" \
+  || { echo "REFUSE: the capability-runtime store has moved: ${RUNTIME_NOW}, expected ${RUNTIME_BEFORE}"; exit 1; }
+printf 'ok  runtime  %s\n' "${RUNTIME_NOW}"
+
+CINV_SEQ="$(cat /data/kyri/capability-runtime/sequences/capability-invocation.seq)"
+CRES_SEQ="$(cat /data/kyri/capability-runtime/sequences/capability-result.seq)"
+test "${CINV_SEQ}" = "${CINV_SEQ_BEFORE}" \
+  || { echo "REFUSE: capability-invocation.seq is ${CINV_SEQ}, expected ${CINV_SEQ_BEFORE}"; exit 1; }
+test "${CRES_SEQ}" = "${CRES_SEQ_BEFORE}" \
+  || { echo "REFUSE: capability-result.seq is ${CRES_SEQ}, expected ${CRES_SEQ_BEFORE}"; exit 1; }
+printf 'ok  capability-invocation.seq %s, capability-result.seq %s\n' "${CINV_SEQ}" "${CRES_SEQ}"
+
+test ! -e "/data/kyri/capability-runtime/capability-invocations/${EXPECTED_CINV}.yaml" \
+  || { echo "REFUSE: ${EXPECTED_CINV} already exists; Stage 1 has already run"; exit 1; }
+printf 'ok  %s absent\n' "${EXPECTED_CINV}"
+
+python3 -m tools.trust.cli validate-store --store-root /var/lib/kyri/trust > "${GATE_DIR}/trust.json" \
+  || { echo "REFUSE: the Trust store could not be validated"; exit 1; }
+if ! python3 - "${GATE_DIR}/trust.json" <<'TRUST_PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    print(f"REFUSE: could not read the trust validation ({exc})")
+    sys.exit(1)
+
+if result.get("valid") is not True:
+    print("REFUSE: the Trust store does not validate")
+    sys.exit(1)
+if result.get("problems"):
+    print(f"REFUSE: the Trust store reports problems: {result.get('problems')}")
+    sys.exit(1)
+print("ok  trust valid, no problems")
+TRUST_PY
+then
+  echo "REFUSE: Trust is not in a state this ceremony may proceed under"
+  exit 1
+fi
+
+# ---- GATE 4: THE STAGE-0 WORK AREA, EXACTLY AS ACCEPTED -----------------
+#
+# These are the properties `open_trusted_regular_file` checks on the DESCRIPTOR
+# at invoke time: a regular file, owned by the expected uid, not group- or
+# other-writable, exactly one hard link, under a root owned by that uid and not
+# group- or world-writable. Checked here as well so a work area that has been
+# tampered with refuses before the identity is spent rather than after.
+printf '\n--- Stage 0 work area gate ---\n'
+PAYLOAD="${WORK_ROOT}/${PAYLOAD_NAME}"
+
+test -d "${WORK_ROOT}" \
+  || { echo "REFUSE: ${WORK_ROOT} is absent; Stage 0 has not been performed"; exit 1; }
+test "$(stat -c '%u' "${WORK_ROOT}")" = "1000" \
+  || { echo "REFUSE: ${WORK_ROOT} is not owned by uid 1000"; exit 1; }
+test "$(stat -c '%a' "${WORK_ROOT}")" = "700" \
+  || { echo "REFUSE: ${WORK_ROOT} is mode $(stat -c '%a' "${WORK_ROOT}"), required 700"; exit 1; }
+
+test -f "${PAYLOAD}" \
+  || { echo "REFUSE: ${PAYLOAD} is absent or not a regular file"; exit 1; }
+test "$(stat -c '%u' "${PAYLOAD}")" = "1000" \
+  || { echo "REFUSE: the payload is not owned by uid 1000"; exit 1; }
+test "$(stat -c '%a' "${PAYLOAD}")" = "600" \
+  || { echo "REFUSE: the payload is mode $(stat -c '%a' "${PAYLOAD}"), required 600"; exit 1; }
+test "$(stat -c '%h' "${PAYLOAD}")" = "1" \
+  || { echo "REFUSE: the payload has $(stat -c '%h' "${PAYLOAD}") hard links, required 1"; exit 1; }
+printf 'ok  work root 0700 uid 1000, payload 0600 uid 1000, one link\n'
+
+RAW="$(sha256sum "${PAYLOAD}" | cut -d' ' -f1)"
+test "${RAW}" = "${REVIEWED_RAW}" \
+  || { echo "REFUSE: the payload raw digest is ${RAW}, reviewed ${REVIEWED_RAW}"; exit 1; }
+test "$(wc -c < "${PAYLOAD}")" = "${REVIEWED_RAW_BYTES}" \
+  || { echo "REFUSE: the payload is $(wc -c < "${PAYLOAD}") bytes, reviewed ${REVIEWED_RAW_BYTES}"; exit 1; }
+printf 'ok  raw        %s  (%s bytes)\n' "${RAW}" "${REVIEWED_RAW_BYTES}"
+
+# >>> GATE4_CANONICAL_BEGIN
+# The governed digest, computed by the RELEASED canonicalizer -- the same
+# function the invoke will use to fill payload_digest.
+if ! python3 - "${PAYLOAD}" "${REVIEWED_CANONICAL}" "${REVIEWED_CANONICAL_BYTES}" <<'CANON_PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+from tools.capability.invocation_identity import canonical_bytes
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+try:
+    raw = pathlib.Path(sys.argv[1]).read_bytes()
+    document = json.loads(raw)
+except (OSError, ValueError) as exc:
+    refuse(f"the payload is not readable JSON ({exc})")
+
+try:
+    blob = canonical_bytes(document)
+except Exception as exc:  # noqa: BLE001
+    refuse(f"the released canonicalizer refused the payload ({exc})")
+
+digest = hashlib.sha256(blob).hexdigest()
+expected_digest = sys.argv[2]
+expected_bytes = int(sys.argv[3])
+
+print(f"canonical  {digest}  ({len(blob)} bytes)")
+
+if digest != expected_digest:
+    refuse(f"canonical digest {digest}, reviewed {expected_digest}")
+if len(blob) != expected_bytes:
+    refuse(f"canonical bytes {len(blob)}, reviewed {expected_bytes}")
+
+if document.get("operation") != "verify-execution-boundary":
+    refuse(f"the payload operation is {document.get('operation')}, reviewed verify-execution-boundary")
+arguments = document.get("arguments")
+if not isinstance(arguments, dict):
+    refuse("the payload carries no arguments object")
+if arguments.get("count") != 1:
+    refuse(f"arguments.count is {arguments.get('count')}, reviewed 1")
+if arguments.get("label") != "g11bcn-third-controlled-production-invoke":
+    refuse(f"arguments.label is {arguments.get('label')}, not the reviewed label")
+note = document.get("note")
+if not isinstance(note, str):
+    refuse("the payload carries no note")
+for bound in ("CADV-000007", "CINST-000006", "CROUTE-0006", "CSEL-000004"):
+    if bound not in note:
+        refuse(f"the payload note does not bind {bound}")
+
+print("ok  operation verify-execution-boundary, count 1, reviewed label")
+print("ok  the note binds CADV-000007 / CINST-000006 / CROUTE-0006 / CSEL-000004")
+CANON_PY
+then
+  echo "REFUSE: the payload is not the reviewed payload"
+  exit 1
+fi
+# <<< GATE4_CANONICAL_END
+
+# ---- GATE 5: THE RELEASED PREFLIGHT AGREES ------------------------------
+#
+# The same governed path, against the same stores opened read-only, stopping at
+# the allocation boundary. If the engine would not accept this invocation, the
+# identity is not spent finding out.
+printf '\n--- released preflight gate ---\n'
+PREFLIGHT_FILE="${GATE_DIR}/preflight.json"
+python3 -m tools.capability.cli invoke \
+  --store-root /data/kyri/capability-runtime \
+  --expected-uid 1000 --expected-gid 1000 \
+  --fabric-root /var/lib/kyri/fabric \
+  --fabric-expected-uid 1000 --fabric-expected-gid 1000 \
+  --approved-artifact-root /var/lib/kyri/artifacts \
+  --trusted-source-uid 0 \
+  --staging-root /data/kyri/capability-runtime/staging \
+  --coordinator-uid 1000 \
+  --approved-payload-root "${WORK_ROOT}" \
+  --payload-source-uid 1000 \
+  --payload-file "${PAYLOAD_NAME}" \
+  --invocation-id g11bcn-third-controlled-invoke \
+  --selection-id CSEL-000004 \
+  --instance-id CINST-000006 \
+  --package-id CPKG-0001 \
+  --operation execute \
+  --trust-store-root /var/lib/kyri/trust \
+  --actor primary-platform-operator \
+  --request-id g11bcn-third-production-invoke \
+  --requested-at "$(date -Is)" --preflight \
+  > "${PREFLIGHT_FILE}" \
+  || { echo "REFUSE: the released preflight did not accept this invocation"; cat "${PREFLIGHT_FILE}"; exit 1; }
+cat "${PREFLIGHT_FILE}"
+
+# >>> GATE5_CHECK_BEGIN
+if ! python3 - "${PREFLIGHT_FILE}" "${EXPECTED_CINV}" "${EXPECTED_PAYLOAD_DIGEST}" <<'PRE_PY'
+import json
+import sys
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    refuse(f"could not read the preflight result ({exc})")
+
+expected_cinv, expected_digest = sys.argv[2], sys.argv[3]
+
+if result.get("would_accept") is not True:
+    refuse(f"the preflight would not accept: {result.get('would_refuse_reason')}")
+if result.get("outcome") != "preflight":
+    refuse(f"the preflight outcome is {result.get('outcome')}, not preflight")
+if result.get("predicted_invocation_record_id") != expected_cinv:
+    refuse(f"the preflight predicts {result.get('predicted_invocation_record_id')}, not {expected_cinv}")
+if result.get("payload_digest") != expected_digest:
+    refuse(f"the preflight payload digest is {result.get('payload_digest')}, not the reviewed one")
+if result.get("selection_id") != "CSEL-000004":
+    refuse(f"the preflight resolved selection {result.get('selection_id')}, not CSEL-000004")
+if result.get("instance_id") != "CINST-000006":
+    refuse(f"the preflight resolved instance {result.get('instance_id')}, not CINST-000006")
+if result.get("capability_package_id") != "CPKG-0001":
+    refuse(f"the preflight resolved package {result.get('capability_package_id')}, not CPKG-0001")
+if result.get("operation") != "execute":
+    refuse(f"the preflight operation is {result.get('operation')}, not execute")
+if result.get("current_eligibility") is not True:
+    refuse(f"the preflight reports current_eligibility false: {result.get('eligibility_reasons')}")
+if result.get("scope_permits_operation") is not True:
+    refuse("the preflight reports the scope does not permit the operation")
+
+print("ok  would_accept true, predicted", expected_cinv)
+print("ok  CSEL-000004 / CINST-000006 / CPKG-0001 / execute")
+print("ok  current eligibility true, scope permits the operation")
+PRE_PY
+then
+  echo "REFUSE: the released preflight does not agree with the reviewed authority"
+  exit 1
+fi
+# <<< GATE5_CHECK_END
+
+printf '\n========================================================\n'
+printf 'ALL GATES PASSED. THE NEXT COMMAND IS IRREVERSIBLE.\n'
+printf 'It allocates %s and advances capability-invocation.seq %s -> %s.\n' \
+  "${EXPECTED_CINV}" "${CINV_SEQ_BEFORE}" "${CINV_SEQ_AFTER}"
+printf '========================================================\n'
+
+# ---- THE ONE IRREVERSIBLE COMMAND ---------------------------------------
+#
+# `set +e` immediately around it: rc=1 IS the expected success code, and under
+# `set -e` the shell would exit here -- after the record was written and before
+# anything verified it.
+printf '\n--- capability invoke (production) ---\n'
+INVOKE_FILE="${GATE_DIR}/invoke.json"
+set +e
+python3 -m tools.capability.cli invoke \
+  --store-root /data/kyri/capability-runtime \
+  --expected-uid 1000 --expected-gid 1000 \
+  --fabric-root /var/lib/kyri/fabric \
+  --fabric-expected-uid 1000 --fabric-expected-gid 1000 \
+  --approved-artifact-root /var/lib/kyri/artifacts \
+  --trusted-source-uid 0 \
+  --staging-root /data/kyri/capability-runtime/staging \
+  --coordinator-uid 1000 \
+  --approved-payload-root "${WORK_ROOT}" \
+  --payload-source-uid 1000 \
+  --payload-file "${PAYLOAD_NAME}" \
+  --invocation-id g11bcn-third-controlled-invoke \
+  --selection-id CSEL-000004 \
+  --instance-id CINST-000006 \
+  --package-id CPKG-0001 \
+  --operation execute \
+  --trust-store-root /var/lib/kyri/trust \
+  --actor primary-platform-operator \
+  --request-id g11bcn-third-production-invoke \
+  --requested-at "$(date -Is)" \
+  > "${INVOKE_FILE}"
+INVOKE_RC=$?
+set -e
+cat "${INVOKE_FILE}"
+printf 'process rc=%s\n' "${INVOKE_RC}"
+
+# ---- THE VERDICT --------------------------------------------------------
+#
+# From here on the record is durable. Every check below is a check on what was
+# written, and a refusal means STOP AND REPORT -- it does not mean re-run.
+printf '\n--- the Stage 1 verdict ---\n'
+test "${INVOKE_RC}" = "${EXPECTED_RC}" \
+  || { echo "REFUSE: the process exited ${INVOKE_RC}, and the released contract returns ${EXPECTED_RC}; STOP AND REPORT, do not re-run"; exit 1; }
+printf 'ok  process rc %s, as the released contract returns\n' "${INVOKE_RC}"
+
+# >>> VERDICT_CHECK_BEGIN
+if ! python3 - "${INVOKE_FILE}" "${EXPECTED_CINV}" "${EXPECTED_STATUS}" \
+                "${EXPECTED_REASON}" "${EXPECTED_PAYLOAD_DIGEST}" \
+                "${EXPECTED_BINDING_DIGEST}" "${EXPECTED_ARTIFACT_DIGEST}" \
+                "${EXPECTED_STAGED_PATH}" <<'VERDICT_PY'
+import json
+import sys
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    print("STOP AND REPORT. The invocation record is durable; do not re-run.")
+    sys.exit(1)
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    refuse(f"the invoke verdict is not readable JSON ({exc})")
+
+(expected_cinv, expected_status, expected_reason, expected_payload,
+ expected_binding, expected_artifact, expected_staged) = sys.argv[2:9]
+
+if result.get("status") != expected_status:
+    refuse(f"status is {result.get('status')}, the released success is {expected_status}")
+if result.get("reason") != expected_reason:
+    refuse(f"reason is {result.get('reason')}, the released success is {expected_reason}")
+if result.get("invocation_record_id") != expected_cinv:
+    refuse(f"the allocated invocation is {result.get('invocation_record_id')}, not {expected_cinv}")
+if result.get("invocation_id") != "g11bcn-third-controlled-invoke":
+    refuse(f"the invocation id is {result.get('invocation_id')}, not the reviewed one")
+if result.get("payload_digest") != expected_payload:
+    refuse(f"the payload digest is {result.get('payload_digest')}, not the reviewed one")
+if result.get("binding_digest") != expected_binding:
+    refuse(f"the binding digest is {result.get('binding_digest')}, not the rehearsed one")
+if result.get("artifact_digest") != expected_artifact:
+    refuse(f"the artifact digest is {result.get('artifact_digest')}, not the rehearsed one")
+if result.get("staged_path") != expected_staged:
+    refuse(f"the staged path is {result.get('staged_path')}, not the expected one")
+
+# A CRES on this path would mean the invocation was REFUSED rather than
+# prepared: `record_invocation` allocates a result only when it writes a
+# refusal. A null result record is what a prepared invocation looks like.
+if result.get("result_record_id") is not None:
+    refuse(f"a result record {result.get('result_record_id')} was allocated; this was a refusal, not a preparation")
+
+print(f"ok  status   {expected_status}")
+print(f"ok  reason   {expected_reason}")
+print(f"ok  invocation_record_id  {expected_cinv}")
+print(f"ok  payload_digest        {expected_payload}")
+print(f"ok  binding_digest        {expected_binding}")
+print(f"ok  artifact_digest       {expected_artifact}")
+print("ok  result_record_id      null -- prepared, not refused")
+VERDICT_PY
+then
+  echo "REFUSE: the Stage 1 verdict is not the released success"
+  exit 1
+fi
+# <<< VERDICT_CHECK_END
+
+# ---- WHAT THE STORE NOW HOLDS -------------------------------------------
+printf '\n--- the immutable record ---\n'
+RECORD="/data/kyri/capability-runtime/capability-invocations/${EXPECTED_CINV}.yaml"
+test -f "${RECORD}" \
+  || { echo "REFUSE: ${RECORD} was not written"; exit 1; }
+sha256sum "${RECORD}"
+stat -c '%n  %U:%G  %a  %s bytes' "${RECORD}"
+cat "${RECORD}"
+
+# The record's SHA is NOT pinned: `requested_at` carries the operator's clock,
+# so the bytes differ on every run by construction. The FIELDS are pinned
+# instead, which is the part the reviewer accepted.
+for pair in "invocation_record_id: ${EXPECTED_CINV}" \
+            "invocation_id: g11bcn-third-controlled-invoke" \
+            "request_id: g11bcn-third-production-invoke" \
+            "selection_id: CSEL-000004" \
+            "instance_id: CINST-000006" \
+            "capability_package_id: CPKG-0001" \
+            "capability_id: CAPDEF-0001" \
+            "contract_id: CCON-0001" \
+            "operation: execute" \
+            "kind: capability-invocation" \
+            "schema_version: 2" \
+            "effect_class: computational" \
+            "adapter_identity: null" \
+            "payload_digest: ${EXPECTED_PAYLOAD_DIGEST}" \
+            "binding_digest: ${EXPECTED_BINDING_DIGEST}" \
+            "artifact_digest: ${EXPECTED_ARTIFACT_DIGEST}" \
+            "staged_path: ${EXPECTED_STAGED_PATH}" \
+            "outcome: execution-prepared"; do
+  grep -qF -- "${pair}" "${RECORD}" \
+    || { echo "REFUSE: the record does not carry '${pair}'"; exit 1; }
+done
+printf 'ok  every reviewed field is present in the record\n'
+test "$(stat -c '%a' "${RECORD}")" = "600" \
+  || { echo "REFUSE: the record is mode $(stat -c '%a' "${RECORD}"), expected 600"; exit 1; }
+printf 'ok  record mode 0600\n'
+
+printf '\n--- sequences and the absence of a result ---\n'
+CINV_SEQ_NOW="$(cat /data/kyri/capability-runtime/sequences/capability-invocation.seq)"
+CRES_SEQ_NOW="$(cat /data/kyri/capability-runtime/sequences/capability-result.seq)"
+test "${CINV_SEQ_NOW}" = "${CINV_SEQ_AFTER}" \
+  || { echo "REFUSE: capability-invocation.seq is ${CINV_SEQ_NOW}, expected ${CINV_SEQ_AFTER}"; exit 1; }
+test "${CRES_SEQ_NOW}" = "${CRES_SEQ_BEFORE}" \
+  || { echo "REFUSE: capability-result.seq is ${CRES_SEQ_NOW}, expected ${CRES_SEQ_BEFORE}; a result was allocated"; exit 1; }
+printf 'ok  capability-invocation.seq %s -> %s\n' "${CINV_SEQ_BEFORE}" "${CINV_SEQ_NOW}"
+printf 'ok  capability-result.seq still %s\n' "${CRES_SEQ_NOW}"
+
+test ! -e "/data/kyri/capability-runtime/capability-results/CRES-000002.yaml" \
+  || { echo "REFUSE: CRES-000002 exists; Stage 1 must not create a result"; exit 1; }
+printf 'ok  no result record was created\n'
+
+# The staged tree was REUSED, not rebuilt, so the staging directory holds
+# exactly the one commitment it held before.
+printf '\n--- staging ---\n'
+ls -1 /data/kyri/capability-runtime/staging
+test -d "${EXPECTED_STAGED_PATH}" \
+  || { echo "REFUSE: the staged tree ${EXPECTED_STAGED_PATH} is absent"; exit 1; }
+test "$(ls -1 /data/kyri/capability-runtime/staging | wc -l)" = "1" \
+  || { echo "REFUSE: the staging directory holds more than the one expected commitment"; exit 1; }
+printf 'ok  one staged commitment, reused not rebuilt\n'
+
+# Nothing under execution/ may exist for this invocation: Stage 1 ends before
+# any surface that could run anything.
+test ! -e "/data/kyri/capability-runtime/execution/${EXPECTED_CINV}" \
+  || { echo "REFUSE: execution state exists for ${EXPECTED_CINV}; something ran"; exit 1; }
+printf 'ok  no execution state for %s\n' "${EXPECTED_CINV}"
+
+printf '\n--- Fabric must be byte-identical: Stage 1 does not touch it ---\n'
+FABRIC_AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+test "${FABRIC_AFTER}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: the Fabric store changed during Stage 1 (${FABRIC_AFTER})"; exit 1; }
+printf 'ok  fabric unchanged at %s\n' "${FABRIC_BEFORE}"
+
+rm -rf "${GATE_DIR}"
+trap - EXIT
+
+printf '\n========================================================\n'
+printf 'STAGE 1 COMPLETE. STOP HERE.\n'
+printf 'Do NOT run authorise-launch. Do NOT run execute.\n'
+printf 'Stage 2 is a separate authorisation.\n'
+printf '========================================================\n'
+STAGE1
+
+# EXPECTED:
+#   gate 0     observation witness fresh, image and container absence recorded
+#   gate 1     observed_at <= now < valid_until, now < admitted_until <= valid_until,
+#              CROUTE-0006 routes to exactly CINST-000006,
+#              CSEL-000004 selects CINST-000006 through CROUTE-0006
+#   gate 2     CINST-000006 eligible, 12 of 12
+#   gate 3     fabric   a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+#              runtime  159651ee6c98113f182b80cecdff5a83f5782df8ff8e16c6cf30ac91f0ea92fc
+#              cinv.seq 2, cres.seq 1, CINV-000003 absent, trust valid
+#   gate 4     raw        d01faccc67b83c60051348422861c121211a4079f7748572bad0a4882575a569  (300 bytes)
+#              canonical  591d4b0d9c81fd5cbb56f7a08a8e9b14ef116c8625b16b19311f75d27d3c59b3  (271 bytes)
+#   gate 5     would_accept true, predicted CINV-000003
+#   invoke     process rc=1
+#              status prepared, reason no_authorised_adapter
+#              invocation_record_id CINV-000003, result_record_id null
+#              payload_digest  sha256:591d4b0d…
+#              binding_digest  sha256:6d5a8d92…
+#              artifact_digest sha256:6f2282c5…
+#   after      capability-invocation.seq 2 -> 3, capability-result.seq still 1
+#              no CRES, no execution state, one staged commitment, fabric unchanged
+#
+# Return this output. STAGE 2 IS A SEPARATE AUTHORISATION.
+#
+# THE WINDOW. CADV-000007 is valid through 2026-09-23T06:00:00-05:00. Stages 2
+# and 3 have to fit inside it. This block does not extend it.

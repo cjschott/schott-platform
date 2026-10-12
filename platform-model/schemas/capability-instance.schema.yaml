@@ -63,10 +63,17 @@ required_fields:
   # from a route no longer naming it, or from absence would answer a lifecycle
   # question with a guess.
   - lifecycle_state
+  # The advertisement this binding was admitted against. Admission has always
+  # required one -- ELIG-6 asks whether the instance's advertisement is fresh,
+  # and an instance that named none could never be answered. Stated here so a
+  # record nobody could have admitted cannot be constructed, stored, or
+  # reloaded either. It is carried forward by a lifecycle successor, never
+  # repointed: a binding admitted against one claim is not evidence about
+  # another.
+  - advertisement_id
   - provenance
 
 optional_fields:
-  - advertisement_id
   - endpoint_reference
   - supersedes
   - superseded_by

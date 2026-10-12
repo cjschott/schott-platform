@@ -46,6 +46,48 @@ EFFECT_CLASSES = (
     "side-effecting",
 )
 
+# How repeatable the interface is, from `enums.determinism_class` in the
+# accepted `capability-contract` schema. The one place this vocabulary is
+# written down in code: admission refuses a value outside it, the model refuses
+# to reconstruct a stored record carrying one, and a test binds both to the
+# schema. A second copy would be a second answer to what a contract promised.
+DETERMINISM_CLASSES = (
+    "deterministic",
+    "bounded-nondeterministic",
+    "nondeterministic",
+)
+
+# The observable ways a call can fail, from `enums.failure_mode` in the
+# accepted `capability-contract` schema. Closed for the same reason the classes
+# above are: `failure_modes` is permanent, and a freely spelled mode is a
+# promise no reader can interpret and no implementation can be held to.
+#
+# `result-missing` is its own outcome and is never folded into
+# `serialisation-failure`. A result that was never produced and a result that
+# could not be represented are different observations, and the difference is
+# what tells an operator whether anything ran at all.
+FAILURE_MODES = (
+    "refused",
+    "adapter-error",
+    "timeout",
+    "interrupted",
+    "serialisation-failure",
+    "result-missing",
+)
+
+# A shape names the authority that enforces it; it never restates what that
+# authority enforces. Three keys, exactly: which module enforces the shape,
+# which schema that module implements, and which version of it. A fourth key is
+# refused rather than ignored, because an ignored key in an immutable record is
+# a claim nobody reviewed.
+SHAPE_REFERENCE_FIELDS = ("authority", "schema", "schema_version")
+
+# A result has two independently enforced layers, and one authority does not
+# enforce both: the envelope is the transport document, the content is what the
+# capability returned. Each part references the code that actually performs its
+# check, so the contract claims no enforcement nobody does.
+RESPONSE_SHAPE_PARTS = ("envelope", "content")
+
 # The workload data sensitivity a machine may handle and a request class
 # carries. Mirrors `enums.data_classification` in the accepted
 # `capability-host` and `capability-route` schemas; a test binds the two.
@@ -101,6 +143,67 @@ def _require_aware(value: Any, name: str) -> datetime:
 def _require_effect_class(value: Any) -> str:
     if value not in EFFECT_CLASSES:
         raise FabricError("effect_class must be one of the accepted classes")
+    return value
+
+
+def _require_determinism_class(value: Any) -> str:
+    """Membership, exactly as `effect_class` is judged. Nothing is corrected.
+
+    Not `_require_text`: a determinism class the platform cannot interpret is a
+    promise nobody can check, and a stored record carrying one would reconstruct
+    here and then satisfy every reader that looked at it.
+    """
+    if value not in DETERMINISM_CLASSES:
+        raise FabricError("determinism_class must be one of the accepted classes")
+    return value
+
+
+def _require_failure_modes(value: Any) -> tuple[str, ...]:
+    """Every declared mode is one the vocabulary governs. Nothing is corrected.
+
+    A stored record carrying a mode nobody released would reconstruct here and
+    then read as a governed promise, which is the whole failure this refuses.
+    """
+    modes = tuple(value or ())
+    for mode in modes:
+        if mode not in FAILURE_MODES:
+            raise FabricError("failure_modes must name only accepted modes")
+    return modes
+
+
+def _require_shape_reference(value: Any, name: str) -> Mapping[str, Any]:
+    """Exactly the three governed keys, each of the governed kind.
+
+    Closed: a fourth key is refused rather than ignored. `schema_version` is a
+    positive integer and not a `bool` wearing one's clothes, because `True` is
+    an `int` in Python and is not a version.
+    """
+    if not isinstance(value, Mapping):
+        raise FabricError(f"{name} must be an authority reference")
+    if set(value) != set(SHAPE_REFERENCE_FIELDS):
+        raise FabricError(f"{name} must carry exactly the reference fields")
+    for field in ("authority", "schema"):
+        if not isinstance(value[field], str) or not value[field].strip():
+            raise FabricError(f"{name} {field} is required")
+    version = value["schema_version"]
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise FabricError(f"{name} schema_version must be a positive integer")
+    return value
+
+
+def _require_response_shape(value: Any) -> Mapping[str, Any]:
+    """Both governed parts, each its own reference. Neither may be omitted.
+
+    A response naming only its envelope claims nothing about what came back
+    inside it, and one naming only its content claims a document that may never
+    have parsed.
+    """
+    if not isinstance(value, Mapping):
+        raise FabricError("response_shape must be an authority reference")
+    if set(value) != set(RESPONSE_SHAPE_PARTS):
+        raise FabricError("response_shape must carry exactly the governed parts")
+    for part in RESPONSE_SHAPE_PARTS:
+        _require_shape_reference(value[part], f"response_shape {part}")
     return value
 
 
@@ -287,9 +390,17 @@ class CapabilityContract(FabricRecord):
         _require_identifier(self.capability_id, "capability-definition", "capability_id")
         _require_text(self.contract_version, "contract_version")
         _require_effect_class(self.effect_class)
-        _require_text(self.determinism_class, "determinism_class")
+        _require_determinism_class(self.determinism_class)
+        _require_shape_reference(self.request_shape, "request_shape")
+        _require_response_shape(self.response_shape)
+        _require_failure_modes(self.failure_modes)
         self._seal()
-        self._freeze("request_shape", "response_shape", "resource_requirements", "provenance")
+        # Deeply, not shallowly: a response shape is a mapping of mappings, and
+        # a proxy around a mutable inner reference would leave a frozen record
+        # able to change which authority it names.
+        for name in ("request_shape", "response_shape"):
+            object.__setattr__(self, name, deep_freeze(dict(getattr(self, name))))
+        self._freeze("resource_requirements", "provenance")
         self._freeze_evidence()
 
 
@@ -354,10 +465,19 @@ class CapabilityHost(FabricRecord):
     # accepted source declares an ordering, so nothing here is above anything.
     data_classification: str
     availability_intent: str
+    # Which governed evidence supports `verified_resource_profile`. Required
+    # for the same reason the profile is: a machine that claims a verified
+    # profile without naming what verified it cannot be told apart from one
+    # that copied the claim off an advertisement. Admission always refused a
+    # host without it; the model said otherwise, and the schema agreed with the
+    # model. A value matching the governed `EVID-NNNNNN` grammar is resolved
+    # through the trusted Evidence authority and must support the claimed
+    # profile; any other value is required to be present and stays opaque,
+    # because a fabric may admit machines the platform model does not describe.
+    verification_reference: str
     provenance: Mapping[str, Any]
     name: str | None = None
     description: str | None = None
-    verification_reference: str | None = None
     supersedes: str | None = None
     superseded_by: str | None = None
     notes: str | None = None
@@ -374,6 +494,7 @@ class CapabilityHost(FabricRecord):
         _require_text(self.location_class, "location_class")
         _require_text(self.data_classification, "data_classification")
         _require_text(self.availability_intent, "availability_intent")
+        _require_text(self.verification_reference, "verification_reference")
         self._freeze("verified_resource_profile", "provenance")
         self._freeze_evidence()
 
@@ -447,7 +568,13 @@ class CapabilityInstance(FabricRecord):
     # from an elapsed expiry, or from a route no longer naming it would be
     # answering a lifecycle question with a guess.
     lifecycle_state: str
-    advertisement_id: str | None = None
+    # The advertisement this binding was admitted against, and never a
+    # different one. Admission already refused a body without it, but the
+    # model said optional -- so a record nobody could have admitted was still
+    # constructible, storable and reloadable, and every eligibility answer
+    # about it would have rested on a claim it never named. Required here so
+    # the model is the authority on what a valid instance is.
+    advertisement_id: str
     endpoint_reference: str | None = None
     supersedes: str | None = None
     superseded_by: str | None = None
@@ -467,6 +594,8 @@ class CapabilityInstance(FabricRecord):
             self.capability_package_id, "capability-package", "capability_package_id")
         _require_identifier(self.capability_host_id, "capability-host", "capability_host_id")
         _require_identifier(self.contract_id, "capability-contract", "contract_id")
+        _require_identifier(self.advertisement_id, "capability-advertisement",
+                            "advertisement_id")
         _require_text(self.admission_decision_id, "admission_decision_id")
         _require_text(self.package_trust_record_id, "package_trust_record_id")
         _require_text(self.host_trust_record_id, "host_trust_record_id")

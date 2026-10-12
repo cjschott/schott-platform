@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# The Generation-15 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. It lives here rather than only in a report so the test suite can
+# execute it against a stub installer and prove the control flow, instead of
+# trusting that a fenced block in prose does what its prose says.
+#
+# The property under test: no later stage can run after an earlier one refused.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen15-transaction/journal \
+  || { printf 'STOP: a Generation-15 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen15-transaction \
+  || { printf 'STOP: Generation-15 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against.
+sudo test -f /root/kyri-gen14-library-digests.txt
+sudo test -f /root/kyri-gen14-helper-digests.txt
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-15.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-15.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-15.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-15.sh --verify-installed

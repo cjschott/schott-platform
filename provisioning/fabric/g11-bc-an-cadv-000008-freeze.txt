@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+# The CADV-000008 PRODUCTION FREEZE, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run blind: the operator pastes it
+# into a root-capable shell so every command and every refusal is visible on the
+# console.
+#
+# WHAT THIS DOES, IN ONE SENTENCE. It puts one reviewed body under
+# /etc/kyri/fabric and asks the released engine what it WOULD do with it. It does
+# not write /var/lib/kyri/fabric, and it proves that afterwards.
+#
+# STEP 1 OF 4, AND THE ONLY ONE PREPARED. CINST-000007, CROUTE-0007 and
+# CSEL-000005 are rehearsed but NOT frozen: each is a separate reviewer
+# authorisation. Do not run their artifacts from here.
+#
+# =====================================================================
+# THE TIMESTAMP POLICY, STATED BEFORE ANYTHING ELSE
+# =====================================================================
+#
+# THE OPERATOR SUPPLIES THE OBSERVATION INSTANT. This block refuses without it:
+#
+#     OBSERVED_AT=2026-10-06T06:25:00-05:00 bash <this block>
+#
+# and refuses if what you supply is not the instant the reviewed bytes carry.
+# That is deliberate. The instant is part of the reviewed body, so it cannot be
+# chosen at the keyboard -- but it must also be ASSERTED by the person performing
+# the observation rather than assumed by the artifact, and a mismatch means the
+# chain is re-prepared rather than nudged.
+#
+# NOTHING HERE READS A CLOCK TO FILL IN A VALUE. `date`, `now()` and their
+# equivalents appear in exactly one place -- the gate that REFUSES -- and never in
+# the rendering. The frozen bytes carry the reviewed timestamp before production
+# Fabric is touched, which is the whole point of freezing them.
+#
+# WHY NOT THE G11-BC-AM WINDOW. That chain's instants were tied to its own
+# preparation, 2026-10-05T15:00:00-05:00. A production observation performed later
+# must not carry an earlier preparation's timestamp, so the window was re-derived
+# at G11-BC-AN from an observation made then -- and every dependent digest and
+# baseline was recomputed. None of the AM numbers is carried forward.
+#
+# THE REVIEWED WINDOW, AND THE POLICY THAT DERIVES IT
+#
+#     observed_at  2026-10-06T06:25:00-05:00   the observation, performed at
+#                                              G11-BC-AN against production
+#     valid_until  2026-10-13T06:25:00-05:00   observed_at + 7 days, the
+#                                              reviewed expiry policy
+#
+# Both are checked below against the rendered body, so the policy cannot drift
+# from the bytes it describes.
+#
+# IF THIS BLOCK REFUSES ON FRESHNESS -- because 2026-10-13T06:25:00-05:00 has
+# passed -- the chain must be RE-PREPARED with a fresh observation. Do not edit
+# the window. That is what a window is for.
+#
+# NO AUTHORITY IS BROADENED. Every dimension is equal to the accepted pre-expiry
+# advertisement: capability CAPDEF-0001, package CPKG-0001, host CHOST-0001,
+# contract CCON-0001, contract version 1.0.0, architecture x86-64. The downstream
+# records keep operation `execute`, classification `internal`, target HOST-0001
+# and locality `local-only`, and the renewal rehearsal asserts all of it field by
+# field. Only the window moves.
+#
+# THE DOWNSTREAM WINDOW IS CONTAINED BY THIS ONE. CINST-000007's admission ends
+# at 2026-10-13T06:25:00-05:00, the same instant this advertisement closes, so it
+# cannot outlive the authority that governs it. That containment is asserted by
+# tests/test-fabric-renewal-freeze-artifacts.sh against the reviewed bodies, and
+# again by the rehearsal.
+#
+# WHAT IT DOES NOT TOUCH. /var/lib/kyri/fabric, /data/kyri/capability-runtime,
+# Trust, the lifecycle, and every CADM, CINV, CRES and CMUT. All measured.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/cadv-000008.json
+SOURCE=provisioning/fabric/g11-bc-am-cadv-000008-input.json
+REVIEWED=f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61
+REVIEWED_BYTES=674
+
+# The reviewed window, and the policy that derives the second from the first.
+REVIEWED_OBSERVED_AT=2026-10-06T06:25:00-05:00
+REVIEWED_VALID_UNTIL=2026-10-13T06:25:00-05:00
+WINDOW_DAYS=7
+
+# The accepted production baselines. Pinned so nothing below can be read as proof
+# against a store that moved underneath it.
+FABRIC_BEFORE=a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+RUNTIME_BEFORE=7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+TRUST_BEFORE=53605e4e738d941ad5f1d2d2d08fe5cb776e484f6fee07f1123859d07828b63f
+
+# The accepted predecessor, which this supersedes and which is NOT rewritten.
+CADV7_RECORD=24689fba6e1652e8adecb63eb0c1dabb2e263456067ad4ed0df843914d098d9c
+# Bodies that are NOT this one, refused BY NAME. Each is an accepted input still
+# sitting in /etc/kyri/fabric, so each is a plausible mis-paste, and the Fabric
+# engine would have nothing to say about the mistake.
+ACCEPTED_CADV6=223d6ec3dbcfa686d32be07d4b6d5b01613de04a14b6bb563f845442ab7348ec
+ACCEPTED_CADV7=962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d
+
+# ---- GATE 0: THE OPERATOR SUPPLIES THE OBSERVATION INSTANT ----------------
+printf -- '\n--- the observation instant, supplied by the operator ---\n'
+if [[ -z "${OBSERVED_AT:-}" ]]; then
+  echo "REFUSE: no OBSERVED_AT was supplied."
+  echo "        Re-run as:  OBSERVED_AT=${REVIEWED_OBSERVED_AT} bash <this block>"
+  echo "        The instant is reviewed, and it is yours to assert."
+  exit 1
+fi
+test "${OBSERVED_AT}" = "${REVIEWED_OBSERVED_AT}" || {
+  echo "REFUSE: you supplied ${OBSERVED_AT}; the reviewed bytes carry ${REVIEWED_OBSERVED_AT}."
+  echo "        If your observation is a different instant, the chain must be"
+  echo "        RE-PREPARED -- the instant is inside the reviewed body and every"
+  echo "        dependent digest derives from it. Do not edit it here."
+  exit 1; }
+printf 'ok  operator-supplied observation %s, equal to the reviewed instant\n' "${OBSERVED_AT}"
+
+# ---- GATE 1: PRODUCTION IS WHERE THE REVIEW LEFT IT -----------------------
+printf -- '\n--- production baselines ---\n'
+aggregate() { find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1; }
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store is ${got}, expected ${want}"; exit 1; }
+  printf 'ok  %-8s %s\n' "${label}" "${got}"
+done
+
+# ---- GATE 2: THE ADVERTISEMENT HEAD, AND ITS PREDECESSOR ------------------
+printf -- '\n--- the advertisement head ---\n'
+test "$(cat /var/lib/kyri/fabric/sequences/capability-advertisement.seq)" = "7" \
+  || { echo "REFUSE: the advertisement sequence is not 7"; exit 1; }
+test "$(sha256sum /var/lib/kyri/fabric/capability-advertisements/CADV-000007.yaml | cut -d' ' -f1)" \
+     = "${CADV7_RECORD}" \
+  || { echo "REFUSE: CADV-000007 is not the accepted record; it must be immutable"; exit 1; }
+# A head is a record nothing supersedes. Asked of the store, not assumed.
+test -z "$(grep -l '^supersedes: CADV-000007$' \
+             /var/lib/kyri/fabric/capability-advertisements/*.yaml 2>/dev/null)" \
+  || { echo "REFUSE: CADV-000007 has already been superseded"; exit 1; }
+test ! -e /var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml \
+  || { echo "REFUSE: CADV-000008 already exists in production"; exit 1; }
+printf 'ok  CADV-000007 is the head, immutable at %s, and CADV-000008 does not exist\n' \
+  "${CADV7_RECORD}"
+# AND IT IS EXPIRED, which is why this renewal exists. Stated, not assumed.
+grep -q "^valid_until: '2026-09-23T06:00:00-05:00'$" \
+  /var/lib/kyri/fabric/capability-advertisements/CADV-000007.yaml \
+  || { echo "REFUSE: CADV-000007 does not carry the expired window this renewal supersedes"; exit 1; }
+printf 'ok  and its authority closed 2026-09-23T06:00:00-05:00\n'
+
+# ---- GATE 3: THE REVIEWED BODY -------------------------------------------
+printf -- '\n--- the reviewed body ---\n'
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+sudo test -f /etc/kyri/fabric/cadv-000007.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cadv-000007.json is absent; CADV-000008 supersedes CADV-000007 and is frozen against it"; exit 1; }
+test -f "${SOURCE}" || { echo "REFUSE: ${SOURCE} is absent"; exit 1; }
+
+# FROM THE REPOSITORY, NOT RETYPED HERE. A body retyped into a ceremony is a body
+# nobody reviewed.
+TMP="$(mktemp)"
+cp "${SOURCE}" "${TMP}"
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+for pair in "the CADV-000006 input:${ACCEPTED_CADV6}" \
+            "the CADV-000007 input, whose authority EXPIRED 2026-09-23T06:00:00-05:00:${ACCEPTED_CADV7}"; do
+  name="${pair%:*}"; sha="${pair##*:}"
+  if [[ "${ACTUAL}" == "${sha}" ]]; then
+    echo "REFUSE: this is ${name}, not the CADV-000008 input"
+    rm -f "${TMP}"; exit 1
+  fi
+done
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+printf 'ok  reviewed body %s, %s bytes\n' "${ACTUAL}" "${REVIEWED_BYTES}"
+
+# ---- GATE 4: THE WINDOW, AND THE POLICY THAT DERIVES IT ------------------
+#
+# Read back out of the rendered body, so neither the gate nor the policy can
+# drift from the bytes they guard. The clock is read HERE, to refuse -- never to
+# supply a value.
+printf -- '\n--- current-time freshness gate ---\n'
+GATE="$(python3 - "${TMP}" "${REVIEWED_OBSERVED_AT}" "${REVIEWED_VALID_UNTIL}" \
+                 "${WINDOW_DAYS}" <<'GATE_PY'
+import json
+import sys
+from datetime import datetime, timedelta
+
+path, reviewed_observed, reviewed_until, days = sys.argv[1:5]
+body = json.load(open(path, encoding="utf-8"))
+observed = body.get("observed_at")
+until = body.get("valid_until")
+recorded = body.get("recorded_at")
+now = datetime.now().astimezone()
+
+print(f"now          {now.isoformat()}")
+print(f"observed_at  {observed}")
+print(f"recorded_at  {recorded}")
+print(f"valid_until  {until}")
+
+# The body must carry exactly the reviewed window.
+if observed != reviewed_observed:
+    print(f"REFUSE: the body observes {observed}, reviewed {reviewed_observed}")
+    sys.exit(1)
+if until != reviewed_until:
+    print(f"REFUSE: the body expires {until}, reviewed {reviewed_until}")
+    sys.exit(1)
+# And the reviewed expiry must be what the policy derives from the observation.
+derived = datetime.fromisoformat(observed) + timedelta(days=int(days))
+if derived != datetime.fromisoformat(until):
+    print(f"REFUSE: the policy derives {derived.isoformat()} from the observation, "
+          f"and the body says {until}")
+    sys.exit(1)
+print(f"ok  valid_until is observed_at + {days} days, by the reviewed policy")
+# The engine's own half-open interval, applied to the body's own recording.
+if not (datetime.fromisoformat(observed) <= datetime.fromisoformat(recorded)
+        < datetime.fromisoformat(until)):
+    print("REFUSE: the body's recorded_at is outside its own window")
+    sys.exit(1)
+print("ok  observed_at <= recorded_at < valid_until, as the engine requires")
+# THE OPERATOR CLOCK. An observation cannot be claimed before it happened, and an
+# expired window cannot be frozen.
+if now < datetime.fromisoformat(observed):
+    print("REFUSE: this observation instant has not arrived yet; the body would "
+          "claim an observation nobody has made")
+    sys.exit(1)
+if now >= datetime.fromisoformat(until):
+    print("REFUSE: the window closed; this authority is EXPIRED at the current clock")
+    print("REFUSE: do not extend it -- RE-PREPARE the chain from a fresh observation")
+    sys.exit(1)
+print("ok  observed_at <= now < valid_until, against the operator's clock")
+GATE_PY
+)" || { printf '%s\n' "${GATE}"; echo "REFUSE: the window gate failed"; rm -f "${TMP}"; exit 1; }
+printf '%s\n' "${GATE}"
+
+# ---- THE PREFLIGHT, BEFORE ANYTHING IS INSTALLED -------------------------
+#
+# Read-only, against production, from a directory that is not /etc. Proving the
+# engine accepts these bytes BEFORE they are frozen is the order the reviewer
+# asked for: gates, then preflight, then the freeze.
+printf -- '\n--- read-only preflight against production (NO Fabric write) ---\n'
+STAGE="$(mktemp -d)"
+cp "${TMP}" "${STAGE}/cadv-000008.json"
+chmod 0400 "${STAGE}/cadv-000008.json"
+PREFLIGHT="$(python3 -m tools.fabric.cli register-advertisement \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --input-file cadv-000008.json --approved-directory "${STAGE}" --preflight)"
+rm -rf "${STAGE}"
+printf '%s\n' "${PREFLIGHT}"
+
+# The facts pinned SEPARATELY. `would_accept` alone says a body is well formed;
+# it does not say the engine resolved it to the record this ceremony is
+# authorised to create.
+read -r ACCEPT MUTATED EXISTS PREDICTED DIGEST <<<"$(printf '%s' "${PREFLIGHT}" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["would_accept"], d["mutated"], d["destination_exists"], d["predicted_record_id"], d["request_digest"])')"
+test "${ACCEPT}" = "True"   || { echo "REFUSE: would_accept is ${ACCEPT}"; exit 1; }
+test "${MUTATED}" = "False" || { echo "REFUSE: the preflight reports mutated=${MUTATED}"; exit 1; }
+test "${EXISTS}" = "False"  || { echo "REFUSE: the destination already exists"; exit 1; }
+test "${PREDICTED}" = "CADV-000008" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CADV-000008"; exit 1; }
+test "${DIGEST}" = "sha256:3a35799239002a7ee9ee09b6002fd804bdc436030d7a3cb66d17d089f7be9a28" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the rehearsed one"; exit 1; }
+printf 'ok  would_accept %s, mutated %s, destination_exists %s\n' "${ACCEPT}" "${MUTATED}" "${EXISTS}"
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+
+printf -- '\n--- production Fabric must be byte-identical after the preflight ---\n'
+test "$(aggregate /var/lib/kyri/fabric)" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the preflight"; exit 1; }
+test "$(cat /var/lib/kyri/fabric/sequences/capability-advertisement.seq)" = "7" \
+  || { echo "REFUSE: the advertisement sequence moved during the preflight"; exit 1; }
+printf 'ok  fabric unchanged at %s, sequence still 7\n' "${FABRIC_BEFORE}"
+
+# ---- THE FREEZE: ONE FILE, INTO /etc, AND NOTHING ELSE -------------------
+printf -- '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf -- '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf -- '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+printf -- '\n--- nothing governed moved ---\n'
+for triple in "fabric:/var/lib/kyri/fabric:${FABRIC_BEFORE}" \
+              "runtime:/data/kyri/capability-runtime:${RUNTIME_BEFORE}" \
+              "trust:/var/lib/kyri/trust:${TRUST_BEFORE}"; do
+  IFS=: read -r label path want <<<"${triple}"
+  got="$(aggregate "${path}")"
+  test "${got}" = "${want}" \
+    || { echo "REFUSE: the ${label} store moved during the freeze: ${got}"; exit 1; }
+  printf 'ok  %-8s %s  unchanged\n' "${label}" "${got}"
+done
+test ! -e /var/lib/kyri/fabric/capability-advertisements/CADV-000008.yaml \
+  || { echo "REFUSE: CADV-000008 REACHED PRODUCTION FABRIC"; exit 1; }
+printf 'ok  CADV-000008 is frozen as an INPUT and is not a production record\n'
+FREEZE
+
+# EXPECTED:
+#   gate 0         operator-supplied observation 2026-10-06T06:25:00-05:00
+#   gate 1         fabric a87c2010…, runtime 7dfb34e6…, trust 53605e4e…
+#   gate 2         CADV-000007 head, immutable at 24689fba…, expired 2026-09-23
+#   gate 3         reviewed body f683104575018b4b77c15852e08358765a3dc70a6677a22938c4cc54a55fcc61, 674 bytes
+#   gate 4         observed_at <= recorded_at < valid_until, and
+#                  valid_until = observed_at + 7 days
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CADV-000008,
+#                  request_digest sha256:3a35799239002a7ee9ee09b6002fd804bdc436030d7a3cb66d17d089f7be9a28
+#   frozen input   /etc/kyri/fabric/cadv-000008.json  root:cschott  640  674 bytes
+#   fabric         a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5  (unchanged)
+#
+# CHAIN POSITION, from the G11-BC-AN scratch rehearsal:
+#   PRE_BASELINE              a87c2010796516ee278c305d00f45e0408654e6d792bbfcb9e4d7d88cd9412e5
+#   EXPECTED_RECORD           CADV-000008
+#   EXPECTED_SEQUENCE_BEFORE  advertisement 7
+#   EXPECTED_SEQUENCE_AFTER   advertisement 8
+#   POST_BASELINE             d11c939a5722beb9e7edb98de9970cfb3c87e93ffb78133cc1ff0b9479ca562c
+#                             (rehearsed; UNKNOWN for production until the write)
+#
+# Return this output. The register-advertisement WRITE is a separate
+# authorisation and is NOT in this block. Do not freeze CINST-000007,
+# CROUTE-0007 or CSEL-000005 from here.

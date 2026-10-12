@@ -49,6 +49,14 @@ ENTITY_DIRS = (
     "roles", "hosts", "services", "networks", "storage", "backup-policies",
 )
 
+# The repository root, so a sibling module resolves when this runs as a script.
+# Same shape as validate_ontology.py and the collector tooling.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.platform_model import evidence_fingerprint  # noqa: E402
+
 DURATION = re.compile(r"^[0-9]+(m|h|d)$")
 
 
@@ -134,6 +142,35 @@ def check_forbidden_keys(record, schema, location, findings) -> None:
                 f"high-impact action field '{dotted}' is not permitted; "
                 "this layer detects and never remediates",
             )
+
+
+def check_fingerprint(record, location, findings) -> None:
+    """Recompute the semantic fingerprint and refuse a record that disagrees.
+
+    Until this existed the field was decorative: a record could carry sixty-four
+    zeroes, or keep a stale digest while its facts were edited, and validate
+    clean. A digest nobody recomputes documents an intention rather than
+    enforcing one.
+    """
+    declared = record.get("content_fingerprint")
+    if not evidence_fingerprint.is_well_formed(declared):
+        findings.error(
+            location,
+            "content_fingerprint must be 'sha256:' followed by 64 lowercase "
+            f"hexadecimal characters, not {declared!r}",
+        )
+        return
+    try:
+        recomputed = evidence_fingerprint.fingerprint(record)
+    except evidence_fingerprint.FingerprintError as error:
+        findings.error(location, f"content_fingerprint cannot be recomputed: {error}")
+        return
+    if recomputed != declared:
+        findings.error(
+            location,
+            f"content_fingerprint {declared} does not match the semantic content, "
+            f"which fingerprints to {recomputed}",
+        )
 
 
 def check_common(record, schema, location, findings, kind) -> None:
@@ -302,6 +339,9 @@ def main() -> int:
         for path, record in entries:
             location = f"{path} [{record.get('id', '<no id>')}]"
             check_common(record, schema, location, findings, kind)
+
+            if kind == "evidence":
+                check_fingerprint(record, location, findings)
 
             for field in schema.get("entity_reference_fields") or []:
                 value = record.get(field)

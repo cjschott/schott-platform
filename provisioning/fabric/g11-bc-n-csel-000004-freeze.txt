@@ -1,0 +1,555 @@
+#!/usr/bin/env bash
+# The CSEL-000004 freeze, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# STEP 7 OF THE G11-BC-N WRITE PLAN. CADV-000007, CINST-000006 and CROUTE-0006
+# are written and accepted. This freezes CSEL-000004 and runs a READ-ONLY
+# preflight; the select WRITE against production is a separate authorisation and
+# is not in this block.
+#
+# It writes exactly one file into /etc/kyri/fabric. It does not touch
+# /var/lib/kyri/fabric, and proves so.
+#
+# THE FILENAME. Labelled g11-bc-n because every artifact in this repository
+# takes the label of the request_id prefix of the body it carries, and this body
+# says g11bcn-. G11-BC-R is the checkpoint that prepared it, which the report
+# records; the label names the authority the body belongs to.
+#
+# THE BODY IS NOT RENDERED HERE FROM MEMORY. The reviewed bytes are committed at
+# provisioning/fabric/g11-bc-n-csel-000004-input.json and this block copies that
+# file. G11-BC-N reviewed this body, pinned its digest in prose and never
+# committed it; G11-BC-Q recovered it -- the timestamp had to be solved for --
+# and required exact agreement with the reviewed sha256 and byte count before
+# committing it. There is one copy of the reviewed bytes, so nothing can drift.
+#
+# THE BASELINE PIN IS STEP-SPECIFIC. The CROUTE-0006 block pinned 1549986cf211...,
+# correct with CINST-000006 written and CROUTE-0006 not. Writing CROUTE-0006
+# moved the store to f122e53034ee..., which is what this block pins. No earlier
+# baseline may be reused.
+#
+# =====================================================================
+# WHY THIS CEREMONY NEEDS THREE GATES AND THE OTHERS NEEDED TWO
+# =====================================================================
+#
+# A selection is the only record in this chain whose correctness is not settled
+# by its own identity. It can accept, match its reviewed request digest, and
+# still have chosen the wrong instance -- or have been resolved through a route
+# that is no longer the one in force. So this ceremony has to be right about
+# TWO INDEPENDENT THINGS, and they are checked separately because they can fail
+# separately.
+#
+#   1. HISTORICAL GOVERNED RESOLUTION. For these exact reviewed bytes, the
+#      engine must resolve route CROUTE-0006 and select CINST-000006. That is a
+#      statement about the reviewed request, judged at the instant the request
+#      names, and it is what the reviewer accepted.
+#
+#   2. CURRENT OPERATIONAL AUTHORITY. At the operator's clock, CADV-000007 must
+#      still be fresh, CINST-000006's admission must still be open, CINST-000006
+#      must still be eligible through the released evaluator, and CROUTE-0006
+#      must still be the route head for this request class.
+#
+# THE FAILURE THIS PREVENTS IS NOT HYPOTHETICAL. The Fabric engine judges every
+# request at the instant the request names and never at a clock -- correct for
+# an append-only store, and exactly why the withdrawn G11-BC-M CSEL artifact
+# still accepted after its authority had expired. A historical evaluated_at
+# must never make an expired or superseded operational authority freezable.
+# Replay semantics are not modified to fix this; the protection belongs in the
+# operator ceremony, which is here.
+#
+# ROUTE HEADSHIP IS STRUCTURAL, NOT TEMPORAL. The selector resolves a route by
+# chain head -- the record for this request class that nothing supersedes --
+# and that resolution is not time-bound. So a CROUTE-0007 written after this
+# artifact was reviewed would silently move the head, and the reviewed bytes
+# would then resolve through a route nobody reviewed while still matching their
+# own request digest. Gate 3 is what catches that, and it asks the RELEASED
+# ENGINE rather than re-deriving headship here: a gate that reimplements the
+# thing it is checking can only agree with itself.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE_CSEL'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/csel-000004.json
+SOURCE=/opt/schott-platform/provisioning/fabric/g11-bc-n-csel-000004-input.json
+REVIEWED=d04171c50397be2d41f8d066b526f237d982ac1df113840eb81afa6ec44c2f29
+REVIEWED_BYTES=605
+
+# The Fabric store as it stands with CROUTE-0006 written and CSEL-000004 not.
+FABRIC_BEFORE=f122e53034eeca45ce7b1d8ac5afdc9562a16a086757e203291a8ce1b018cefb
+
+# Selection bodies that are NOT this one, refused BY NAME rather than by a
+# generic mismatch.
+#
+# WITHDRAWN_BCM is the dangerous one, and it is dangerous in a way the others
+# are not. It carries the SAME selection identity CSEL-000004 and the same 605
+# bytes, it was reviewed, and it was withdrawn only because its authority
+# expired -- it is the body this ceremony replaces, not one it precedes. It
+# survives at commit 77670b71749cd051cb1a0825ca93163dda04b982 and must be
+# refused wherever it appears.
+WITHDRAWN_BCM=60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd
+ACCEPTED_CSEL1=4dbe005137e16c13156318176280f90bf4216a6195d4756efaf3a8d2da3a5a7e
+ACCEPTED_CSEL2=5e3b3be15fe7bd40e8f47b29516c5373296cd729ff95e9d733de3204d8ba870e
+ACCEPTED_CSEL3=700a1390de06ffd770293c50c97391970337b8a2a8fd52b396e49060d453953e
+
+printf '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+# The destination must not exist.
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+
+# And the route this selection resolves through must be present as a frozen input.
+sudo test -f /etc/kyri/fabric/croute-0006.json \
+  || { echo "REFUSE: /etc/kyri/fabric/croute-0006.json is absent; CSEL-000004 resolves through CROUTE-0006 and must be frozen against it"; exit 1; }
+
+# The reviewed bytes come from the committed inert input, not from a heredoc.
+test -f "${SOURCE}" \
+  || { echo "REFUSE: ${SOURCE} is absent; the reviewed CSEL-000004 body is not recoverable"; exit 1; }
+TMP="$(mktemp)"
+cat "${SOURCE}" > "${TMP}"
+
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+case "${ACTUAL}" in
+  "${WITHDRAWN_BCM}")
+    echo "REFUSE: this is the WITHDRAWN G11-BC-M CSEL-000004 body, whose authority expired 2026-09-19T06:00:00-05:00; it carries the same identity and the same byte count as the reviewed body and is not it"
+    rm -f "${TMP}"; exit 1 ;;
+  "${ACCEPTED_CSEL1}")
+    echo "REFUSE: this is the already-accepted CSEL-000001 input"
+    rm -f "${TMP}"; exit 1 ;;
+  "${ACCEPTED_CSEL2}")
+    echo "REFUSE: this is the already-accepted CSEL-000002 input"
+    rm -f "${TMP}"; exit 1 ;;
+  "${ACCEPTED_CSEL3}")
+    echo "REFUSE: this is the already-accepted CSEL-000003 input, which selected CINST-000004 through CROUTE-0004"
+    rm -f "${TMP}"; exit 1 ;;
+esac
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+
+# ---- GATE 1: WALL CLOCK AND BINDING, BEFORE ANYTHING IS INSTALLED --------
+#
+# FOUR INPUTS, FOUR SEPARATE CHANNELS. This gate needs the rendered body and
+# three live records, and each arrives as its own named file passed as argv.
+# Python's stdin carries the program text and nothing else; no command in this
+# gate takes a second input redirection.
+#
+# The G11-BC-O form fed the program in on stdin through a heredoc and then tried
+# to read its data from that same stdin through a trailing here-string. Two
+# faults, one construct. The data was never read, so json.load(sys.stdin) saw a
+# spent stream and raised JSONDecodeError. And a here-string on its own line is
+# a complete word-less command in its own right with status 0, so it -- not
+# python3 -- supplied the exit status of the enclosing $( ), which masked the
+# failure and let control fall through into the next gate. A gate that cannot
+# fail closed is not a gate. G11-BC-P is the report; this is the corrected shape.
+#
+# FAIL CLOSED, EXPLICITLY. Every read, field lookup, instant parse and
+# comparison refuses by name and exits nonzero, an absent timezone is refused
+# rather than guessed, and any unhandled error exits nonzero on its own. The
+# gate runs as a plain command in an `if !`, so its status is its own.
+# >>> GATE1_BEGIN
+printf '\n--- current-time freshness gate ---\n'
+GATE_ADVERT="$(mktemp)"
+GATE_INSTANCE="$(mktemp)"
+GATE_ROUTE="$(mktemp)"
+trap 'rm -f "${GATE_ADVERT}" "${GATE_INSTANCE}" "${GATE_ROUTE}"' EXIT
+
+python3 -m tools.fabric.cli inspect \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --kind capability-advertisement --identifier CADV-000007 \
+  > "${GATE_ADVERT}" \
+  || { echo "REFUSE: could not inspect CADV-000007 in the live store"
+       rm -f "${TMP}"; exit 1; }
+
+python3 -m tools.fabric.cli inspect \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --kind capability-instance --identifier CINST-000006 \
+  > "${GATE_INSTANCE}" \
+  || { echo "REFUSE: could not inspect CINST-000006 in the live store"
+       rm -f "${TMP}"; exit 1; }
+
+python3 -m tools.fabric.cli inspect \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --kind capability-route --identifier CROUTE-0006 \
+  > "${GATE_ROUTE}" \
+  || { echo "REFUSE: could not inspect CROUTE-0006 in the live store"
+       rm -f "${TMP}"; exit 1; }
+
+if ! python3 - "${TMP}" "${GATE_ADVERT}" "${GATE_INSTANCE}" "${GATE_ROUTE}" <<'GATE_PY'
+import json
+import sys
+from datetime import datetime
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+def load(path, what):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError) as exc:
+        refuse(f"could not read {what} ({exc})")
+
+
+def field(mapping, key, what):
+    if not isinstance(mapping, dict) or key not in mapping:
+        refuse(f"{what} has no {key}")
+    return mapping[key]
+
+
+def only(inspected, what):
+    records = field(inspected, "records", what)
+    if not isinstance(records, list) or len(records) != 1:
+        refuse(f"{what} did not return exactly one record")
+    return records[0]
+
+
+def instant(raw, what):
+    try:
+        value = datetime.fromisoformat(raw)
+    except (TypeError, ValueError) as exc:
+        refuse(f"{what} is not an ISO-8601 instant ({exc})")
+    if value.tzinfo is None or value.utcoffset() is None:
+        refuse(f"{what} carries no timezone offset; refusing to guess one")
+    return value
+
+
+body = load(sys.argv[1], "the rendered body")
+advert = only(load(sys.argv[2], "the inspect output for CADV-000007"),
+              "the inspect output for CADV-000007")
+instance = only(load(sys.argv[3], "the inspect output for CINST-000006"),
+                "the inspect output for CINST-000006")
+route = only(load(sys.argv[4], "the inspect output for CROUTE-0006"),
+             "the inspect output for CROUTE-0006")
+
+if field(advert, "advertisement_id", "the inspected record") != "CADV-000007":
+    refuse("the inspected advertisement is not CADV-000007")
+if field(instance, "instance_id", "the inspected record") != "CINST-000006":
+    refuse("the inspected instance is not CINST-000006")
+if field(instance, "advertisement_id", "CINST-000006") != "CADV-000007":
+    refuse("CINST-000006 does not rest on CADV-000007")
+if field(instance, "lifecycle_state", "CINST-000006") != "admitted":
+    refuse("CINST-000006 is not in the admitted lifecycle state")
+
+# The route must be the reviewed one, and must point at exactly this instance.
+if field(route, "route_id", "the inspected record") != "CROUTE-0006":
+    refuse("the inspected route is not CROUTE-0006")
+if field(route, "route_version", "CROUTE-0006") != 6:
+    refuse("CROUTE-0006 is not route_version 6")
+candidates = field(route, "candidate_instances", "CROUTE-0006")
+if candidates != ["CINST-000006"]:
+    refuse(f"CROUTE-0006 routes to {candidates}, not exactly CINST-000006")
+
+# The body must ask the question the reviewed route answers. A selection names
+# a request CLASS rather than a route, so the class is matched field by field
+# against the route that must resolve it; a body that differs in any of them
+# would be resolved by some other route, or by none.
+for key in ("capability_id", "contract_id", "data_classification", "locality",
+            "accepted_contract_versions"):
+    asked = field(body, key, "the rendered body")
+    declared = field(route, key, "CROUTE-0006")
+    if asked != declared:
+        refuse(f"the body asks {key}={asked}, CROUTE-0006 declares {declared}")
+if field(body, "local_node_identity", "the rendered body") != "HOST-0001":
+    refuse("the rendered body does not name HOST-0001 as the local node")
+
+observed = instant(field(advert, "observed_at", "the advertisement"), "observed_at")
+expires = instant(field(advert, "valid_until", "the advertisement"), "valid_until")
+admitted = instant(field(instance, "admitted_at", "the instance"), "admitted_at")
+until = instant(field(instance, "admitted_until", "the instance"), "admitted_until")
+recorded = instant(field(body, "recorded_at", "the body"), "recorded_at")
+evaluated = instant(field(body, "evaluated_at", "the body"), "evaluated_at")
+now = datetime.now().astimezone()
+
+print(f"now            {now.isoformat()}")
+print(f"CADV-000007    {observed.isoformat()} .. {expires.isoformat()}")
+print(f"CINST-000006   {admitted.isoformat()} .. {until.isoformat()}")
+print(f"selection      recorded {recorded.isoformat()}")
+print(f"selection      evaluated {evaluated.isoformat()}")
+
+if now < observed:
+    refuse("the governing advertisement window has not opened yet")
+if now >= expires:
+    print("REFUSE: the governing advertisement window closed; CADV-000007 is EXPIRED at the current clock")
+    refuse("do not extend it -- prepare a fresh renewal chain")
+if now >= until:
+    refuse("the admission of CINST-000006 closed at the current clock")
+if until > expires:
+    refuse("admitted_until outlives the advertisement it rests on")
+if not (admitted <= evaluated < until):
+    refuse("the selection's evaluated_at lies outside the admission of CINST-000006")
+
+print("ok  observed_at <= now < valid_until")
+print("ok  now < admitted_until <= valid_until")
+print("ok  admitted_at <= evaluated_at < admitted_until")
+print("ok  CROUTE-0006 routes to exactly CINST-000006")
+print("ok  the body asks the request class CROUTE-0006 declares")
+GATE_PY
+then
+  echo "REFUSE: current-time freshness gate failed"
+  rm -f "${TMP}"; exit 1
+fi
+rm -f "${GATE_ADVERT}" "${GATE_INSTANCE}" "${GATE_ROUTE}"
+trap - EXIT
+# <<< GATE1_END
+
+# ---- GATE 2: CURRENT ELIGIBILITY, BEFORE ANYTHING IS INSTALLED -----------
+#
+# Computed by the released evaluator at the current clock. CINST-000006 is a
+# written production record, so this needs no candidate applied to a copy and
+# reads production directly. `compute-eligibility` is read-only; the aggregate
+# check at the end of this block proves it mutated nothing.
+printf '\n--- current eligibility gate ---\n'
+GATE_DIR="$(mktemp -d)"
+trap 'rm -rf "${GATE_DIR}"' EXIT
+
+# >>> GATE2_CHECK_BEGIN
+ELIG_FILE="${GATE_DIR}/eligibility.json"
+python3 -m tools.fabric.cli compute-eligibility \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --trust-store-root /var/lib/kyri/trust \
+  --instance-id CINST-000006 --capability-id CAPDEF-0001 --contract-id CCON-0001 \
+  --accepted-version 1.0.0 --data-classification internal \
+  --evaluated-at "$(date -Is)" \
+  > "${ELIG_FILE}" \
+  || { echo "REFUSE: compute-eligibility failed against production"
+       rm -f "${TMP}"; exit 1; }
+
+# The result arrives as a FILE argument and the program arrives on stdin, the
+# same separation GATE 1 uses. The G11-BC-O form piped the result into
+# `python3 -c` and wrote the report line as an f-string containing \" inside its
+# expressions; inside bash single quotes those backslashes are literal, so
+# Python received d[\"eligible\"] and refused to compile it. Nothing below
+# contains a backslash, and every value is bound to a plain name before it is
+# formatted.
+if ! python3 - "${ELIG_FILE}" <<'ELIG_PY'
+import json
+import sys
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    refuse(f"could not read the compute-eligibility result ({exc})")
+
+if not isinstance(result, dict):
+    refuse("the compute-eligibility result is not an object")
+for key in ("eligible", "conditions", "unmet", "reasons"):
+    if key not in result:
+        refuse(f"the compute-eligibility result has no {key}")
+
+eligible = result["eligible"]
+conditions = result["conditions"]
+unmet = result["unmet"]
+reasons = result["reasons"]
+if not isinstance(conditions, list) or not isinstance(unmet, list):
+    refuse("conditions and unmet must both be lists")
+
+met = sum(1 for c in conditions if isinstance(c, dict) and c.get("status") == "met")
+total = len(conditions)
+print(f"eligible {eligible} | {met} of {total} met | unmet {unmet} | reasons {reasons}")
+
+if total == 0:
+    refuse("compute-eligibility returned no conditions to judge")
+if eligible is not True:
+    refuse("compute-eligibility did not return eligible true")
+if unmet:
+    refuse(f"compute-eligibility reported unmet conditions: {unmet}")
+
+print("ok  eligible true, no unmet conditions")
+ELIG_PY
+then
+  echo "REFUSE: CINST-000006 is not eligible at the current clock"
+  rm -f "${TMP}"; exit 1
+fi
+printf 'ok  CINST-000006 eligible at the current clock\n'
+# <<< GATE2_CHECK_END
+
+# ---- GATE 3: GOVERNED RESOLUTION, BEFORE ANYTHING IS INSTALLED ----------
+#
+# What the preflight reports is not enough here. It says `would_accept` and
+# `selected_instance_id`, and it does NOT say which route it resolved through.
+# For a selection that is the fact most worth knowing: the route is resolved by
+# chain head, so a route written after this artifact was reviewed would move
+# the head and the reviewed bytes would resolve through it while still matching
+# their own request digest.
+#
+# So the released selector is run to completion against a COPY of production and
+# the PERSISTED record is read. That is the engine's own answer to "which route
+# governs this request now", obtained without reimplementing headship here.
+# Production is not touched: every path below is inside GATE_DIR, which is
+# removed either way.
+#
+# A preflight that resolves to some other eligible instance must not satisfy
+# this ceremony, which is why the selected instance is pinned here by name and
+# again against production further down.
+printf '\n--- governed resolution gate ---\n'
+RESOLVE_DIR="${GATE_DIR}/resolve"
+mkdir -p "${RESOLVE_DIR}/approved"
+cp -a /var/lib/kyri/fabric "${RESOLVE_DIR}/fabric"
+cp "${TMP}" "${RESOLVE_DIR}/approved/csel-000004.json"
+chmod 0640 "${RESOLVE_DIR}/approved/csel-000004.json"
+
+RESOLVED="${GATE_DIR}/resolved.json"
+python3 -m tools.fabric.cli select \
+  --store-root "${RESOLVE_DIR}/fabric" --expected-uid 1000 --expected-gid 1000 \
+  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
+  --trust-store-root /var/lib/kyri/trust \
+  --input-file csel-000004.json --approved-directory "${RESOLVE_DIR}/approved" \
+  > "${RESOLVED}" \
+  || { echo "REFUSE: the reviewed selection does not resolve against a copy of current production"
+       rm -f "${TMP}"; exit 1; }
+
+# >>> GATE3_CHECK_BEGIN
+if ! python3 - "${RESOLVED}" "${RESOLVE_DIR}/fabric/capability-selections/CSEL-000004.yaml" <<'RESOLVE_PY'
+import json
+import sys
+
+
+def refuse(message):
+    print(f"REFUSE: {message}")
+    sys.exit(1)
+
+
+def scalar(text):
+    value = text.strip().strip("'").strip('"')
+    return value
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        result = json.load(handle)
+except (OSError, ValueError) as exc:
+    refuse(f"could not read the select result ({exc})")
+
+# The persisted record is read as text rather than parsed as YAML: this block
+# may not assume a YAML library is installed on the operator's host, and the
+# fields being read are flat scalars and one-item lists written by the engine.
+try:
+    with open(sys.argv[2], encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+except OSError as exc:
+    refuse(f"could not read the persisted selection ({exc})")
+
+top = {}
+current = None
+for line in lines:
+    if not line.strip():
+        continue
+    if line.startswith("- ") and current is not None:
+        top.setdefault(current + "[]", []).append(scalar(line[2:]))
+        continue
+    if line[0] not in " -":
+        name, _, rest = line.partition(":")
+        current = name
+        if rest.strip():
+            top[name] = scalar(rest)
+    elif not line.startswith("  - "):
+        current = None
+
+if result.get("outcome") != "accepted":
+    refuse(f"the selector did not accept: {result.get('reason')}")
+if result.get("record_id") != "CSEL-000004":
+    refuse(f"the selector allocated {result.get('record_id')}, not CSEL-000004")
+if result.get("selected_instance_id") != "CINST-000006":
+    refuse(f"the selector chose {result.get('selected_instance_id')}, not CINST-000006")
+
+if top.get("selection_id") != "CSEL-000004":
+    refuse("the persisted selection is not CSEL-000004")
+if top.get("selected_instance_id") != "CINST-000006":
+    refuse(f"the persisted selection chose {top.get('selected_instance_id')}, not CINST-000006")
+if top.get("route_id") != "CROUTE-0006":
+    refuse(f"the selection resolved through {top.get('route_id')}, not CROUTE-0006; the route head has moved")
+if top.get("route_version") != "6":
+    refuse(f"the selection resolved route_version {top.get('route_version')}, not 6")
+if top.get("considered_candidates[]") != ["CINST-000006"]:
+    refuse(f"considered {top.get('considered_candidates[]')}, expected exactly CINST-000006")
+if top.get("excluded_candidates[]") not in (None, []):
+    refuse(f"the selection excluded {top.get('excluded_candidates[]')}; none was expected")
+
+print("ok  resolved route      CROUTE-0006 (route_version 6)")
+print("ok  selected instance   CINST-000006")
+print("ok  considered          CINST-000006, excluded none")
+RESOLVE_PY
+then
+  echo "REFUSE: the reviewed selection does not resolve as reviewed against current production"
+  rm -f "${TMP}"; exit 1
+fi
+# <<< GATE3_CHECK_END
+rm -rf "${GATE_DIR}"
+trap - EXIT
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf '\n--- read-only preflight (NO Fabric write) ---\n'
+cd /opt/schott-platform
+PREFLIGHT="$(python3 -m tools.fabric.cli select \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
+  --trust-store-root /var/lib/kyri/trust \
+  --input-file csel-000004.json --approved-directory /etc/kyri/fabric --preflight)"
+printf '%s\n' "${PREFLIGHT}"
+
+# The three facts pinned SEPARATELY. `would_accept` alone says a body is well
+# formed; it does not say the engine resolved it to the record this ceremony is
+# authorised to create, and it does not say which instance it chose.
+PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["predicted_record_id"])')"
+DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
+SELECTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_instance_id"])')"
+test "${PREDICTED}" = "CSEL-000004" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CSEL-000004"; exit 1; }
+test "${DIGEST}" = "sha256:2856ff77601e24e80f9414abf93a6eb4719d0514b386ceaca9472e712f1fd437" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed one"; exit 1; }
+test "${SELECTED}" = "CINST-000006" \
+  || { echo "REFUSE: the preflight selects ${SELECTED}, not CINST-000006"; exit 1; }
+printf 'ok  predicted_record_id   %s\n' "${PREDICTED}"
+printf 'ok  request_digest        %s\n' "${DIGEST}"
+printf 'ok  selected_instance_id  %s\n' "${SELECTED}"
+
+printf '\n--- production Fabric must be byte-identical to before ---\n'
+AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+printf '%s\n' "${AFTER}"
+test "${AFTER}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the freeze (${AFTER}, expected ${FABRIC_BEFORE})"; exit 1; }
+printf 'ok  /var/lib/kyri/fabric unchanged at %s\n' "${FABRIC_BEFORE}"
+
+printf '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+FREEZE_CSEL
+
+# EXPECTED:
+#   gate 1         observed_at <= now < valid_until, now < admitted_until <= valid_until,
+#                  CROUTE-0006 routes to exactly CINST-000006
+#   gate 2         CINST-000006 eligible, 12 of 12, against production
+#   gate 3         resolved route CROUTE-0006 v6, selected CINST-000006,
+#                  considered CINST-000006, excluded none
+#   frozen input   d04171c50397be2d41f8d066b526f237d982ac1df113840eb81afa6ec44c2f29
+#                  /etc/kyri/fabric/csel-000004.json  root:cschott  640  605 bytes
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CSEL-000004,
+#                  selected_instance_id CINST-000006,
+#                  request_digest sha256:2856ff77…
+#   fabric         f122e53034eeca45ce7b1d8ac5afdc9562a16a086757e203291a8ce1b018cefb
+#
+# Return this output. The select WRITE is a separate authorisation.
+#
+# THE WINDOW. CADV-000007 is valid through 2026-09-23T06:00:00-05:00. CINV-000003
+# Stages 0 to 3 all have to fit inside it. This block does not extend it and must
+# not be used to.

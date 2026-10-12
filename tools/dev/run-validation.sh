@@ -100,14 +100,59 @@ skipped_note() {
   printf '\n[--] %s — omitted by --quick\n' "$1"
 }
 
-# Counted, not guessed: 33 checks plus the closing summary. Quick mode drops
-# ten of them. A validation tool that miscounts its own steps invites doubt
-# about everything else it reports.
+# The declared model as it stood BEFORE any suite ran. The backstop at the end
+# compares against this rather than against HEAD, because the property being
+# protected is "no suite mutated the model", and comparing to HEAD cannot tell
+# a suite's write from an operator's deliberate, reviewed schema edit. A
+# schema change under review is a normal state for this repository; a test that
+# writes into platform-model is never one.
+MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
+  | sort | sha256sum | cut -d' ' -f1)"
+
+# Counted, not guessed: every check plus the closing summary. A validation tool
+# that miscounts its own steps invites doubt about everything else it reports.
+# The ENG-0005 execution suites are all always-on, so each one added raises
+# both totals.
+#
+# Both totals are read off a real run rather than computed, which is the only
+# way this number stays true. Each suite added since has been re-measured in
+# both modes rather than incremented on the assumption that it runs in both --
+# the Fabric resource-semantics suite, for instance, runs in full mode only.
+# ADR-0017's conclusion suite was measured the same way and runs in BOTH, so
+# both totals moved by one: 131 -> 132 and 156 -> 157. ADR-0018's multi-field
+# suite is portable and unconditional, so it too runs in BOTH, and both totals
+# moved by one again: 132 -> 133 and 157 -> 158. Measured in both modes, not
+# incremented on the assumption. The Generation-22 installer suite is portable
+# and unconditional too.
+#
+# G11-BC-AM added two: the renewal-chain rehearsal (host-only, but a step that
+# skips inside itself) and the freeze-artifact suite (portable). Measured below,
+# as always.
+#
+# AND THE ARITHMETIC WAS WRONG, WHICH IS WHY THESE ARE MEASURED. At G11-BC-AI a
+# measured run put quick mode at 135 and full at 160, where adding two suites to
+# the declared 132 and 157 predicts 134 and 159. The missing one is G11-BC-AH's
+# `No production escape`, registered without moving either total -- and invisible
+# until now, because the validator has halted on stale host-only rehearsals since
+# G11-BC-AG and so never reached its own closing count. These two numbers are
+# what a run printed, not what an increment implied.
+#
+# G11-BC-AV added two: the result-authority suite and the Generation-24 installer
+# suite, both portable and unconditional. 142 and 167 are what a measured run
+# PRINTED -- the validator refused its own stale 140 and 165 with "step count
+# mismatch", which is the check that exists because an incremented total was
+# wrong by one at G11-BC-AI. The increment would have agreed this time; it was
+# still measured, because a number that happens to be right is not evidence.
+#
+# G11-BC-AL added three: the legacy-compatibility suite and the Generation-23
+# installer suite are portable and unconditional, and the Stage-3 gate matrix is
+# host-only but still a STEP -- it skips inside itself rather than being skipped
+# here. Both totals are re-measured by a run below rather than incremented.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=24
+  TOTAL_STEPS=142
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=35
+  TOTAL_STEPS=167
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -124,6 +169,11 @@ syntax_check() {
   bash -n scripts/*.sh
   bash -n tests/*.sh
   bash -n tools/dev/*.sh
+  # Operator tooling ships beside the runbook it belongs to, so it is syntax
+  # checked here rather than being the one shell script nothing reads.
+  bash -n provisioning/execution/*.sh
+  bash -n provisioning/artifacts/*.sh
+  bash -n provisioning/evidence/*.sh
 }
 run "Shell syntax (bash -n)" syntax_check
 
@@ -143,6 +193,11 @@ fi
 
 # --- 7-9. remaining suites -------------------------------------------------
 run "Evidence validator behaviour" bash tests/test-evidence-validator.sh
+
+# The declarative Evidence fingerprint and the S0 host-architecture ceremony.
+# Fixture-only: every publication case writes into a temporary root, and the
+# suite asserts platform-model/evidence is unchanged when it finishes.
+run "Evidence fingerprint and S0 ceremony" bash tests/test-evidence-fingerprint.sh
 run "Collector framework" bash tests/test-collector-framework.sh
 
 if (( QUICK == 0 )); then
@@ -167,11 +222,105 @@ if (( QUICK == 0 )); then
   # synthetic stores in temp directories and spawns the CLI, so it sits with
   # the other subprocess-driving suites rather than in the quick path.
   run "Trust runtime" bash tests/test-trust-runtime.sh
+
+  # Trust Evidence identity integrity, and rehearsing a decision without
+  # spending one. Fixture-only: copies of the live Trust store, and read-only
+  # opens of it, proving the live store is byte-identical afterwards.
+  run "Trust decision preflight" bash tests/test-trust-decision-preflight.sh
+
+  # The one-time root establishment lineage repair ADR-0014 specifies. It
+  # reconstructs the pre-fix ceremony shape in temp directories rather than
+  # copying the live store, and proves it performs no production backfill.
+  run "Trust root lineage backfill" bash tests/test-trust-root-lineage-backfill.sh
   # After the fabric architecture suite: ENG-0004 implements what ADR-0012
   # specifies, so the runtime is validated downstream of the specification. It
   # builds synthetic records in memory and spawns Python, so it sits with the
   # other subprocess-driving suites rather than in the quick path.
   run "Fabric runtime" bash tests/test-fabric-runtime.sh
+
+  # The governed resource vocabulary and the one satisfaction rule both the
+  # admission and eligibility planes consume. Pure functions over mappings: it
+  # opens no store, writes no record, and allocates no identifier.
+  run "Fabric resource semantics" bash tests/test-fabric-resources.sh
+
+  # The read-only preflight for governed Fabric writes. Fixture-only: every
+  # case works in a temporary root and the suite proves the production store
+  # at /var/lib/kyri/fabric was not touched.
+  run "Fabric write preflight" bash tests/test-fabric-preflight.sh
+
+  # `manifest_reference` from the approved decision body to the staged tree.
+  # The admission surface could not express the field the model, the schema,
+  # the evidence verdict and the resolver all agreed on, so every governed
+  # package was permanently unresolvable. Fixture-only: temporary stores,
+  # artifact roots and staging roots, and it asserts the production package
+  # namespace is still unspent when it finishes.
+  run "Fabric package manifest reference" bash tests/test-fabric-package-manifest.sh
+
+  # CHOST admission: the governed host vocabulary applied where a host is
+  # CREATED and not only where it is superseded, and a rehearsal that reads the
+  # real trust store without provisioning it. Fixture-only: temporary Fabric and
+  # Trust stores, and it proves both production stores are unchanged.
+  run "Fabric host admission" bash tests/test-fabric-host-admission.sh
+
+  # The trusted deployment Evidence authority, the pinned-commit materialisation
+  # into it, and the read-only cross-plane resolution that binds an EVID to the
+  # profile a host claims. Fixture-only: temporary authorities, and it proves
+  # the production Fabric, Trust and Evidence state is unchanged.
+  run "Fabric evidence authority" bash tests/test-fabric-evidence-authority.sh
+
+  # G11-A. The three instance-admission and advertisement-supersession
+  # invariants: an instance is permanently bound to the advertisement that
+  # admitted it, the machine being admitted must be a permitted target of the
+  # composed scope, and a renewal states which claim it replaces without
+  # touching it. Fixture-only: temporary Fabric and Trust stores, and it
+  # proves both production stores are unchanged.
+  run "Fabric G11-A integrity" bash tests/test-fabric-g11-integrity.sh
+
+  # G11-H. Instance admission must be rehearsable and must consume the current
+  # advertisement, not merely a fresh one. The first defect made every preflight
+  # of a FIRST admission refuse; the second let a superseded-but-fresh claim be
+  # admitted. Both were invisible because no suite preflighted an instance
+  # admission and every admission fixture used an advertisement that was fresh
+  # and current at once. Fixture-only: temporary Fabric and Trust stores, and it
+  # proves both production stores are unchanged.
+  run "Fabric instance admission integrity" \
+    bash tests/test-fabric-instance-admission-integrity.sh
+
+  # G11-AG. admit_instance checked three clock facts and never the fourth: it
+  # never required the admission window to end inside the advertisement's. The
+  # interval [valid_until, admitted_until) was therefore admissible, and in it a
+  # binding is lifecycle-admitted with ELIG-7 open while ELIG-6 refuses -- the
+  # R17 tail CINST-000001 carries, and which G11-Q avoided for CINST-000002 by
+  # hand rather than by structure. Defence in depth: C5 already fails closed in
+  # the tail, so what this removes is the ability to CREATE one. Fixture-only;
+  # it proves both production stores are unchanged.
+  run "Fabric admission dependency bound" \
+    bash tests/test-fabric-admission-dependency-bound.sh
+
+  # G11-K. create-route had never been rehearsed by anything, and it was the
+  # next write operation due in production. The released preflight turned out to
+  # be correct, so this suite adds coverage rather than a correction: the CLI
+  # preflight end to end, preflight/write equivalence, every refusal
+  # create_route can produce, and the four-digit route identifier. Fixture-only;
+  # it proves both production stores are unchanged.
+  run "Fabric route preflight" bash tests/test-fabric-route-preflight.sh
+  run "Fabric route head" bash tests/test-fabric-route-head.sh
+
+  # G11-N. register-advertisement had never been rehearsed by anything, and it
+  # is the next write operation due in production for the CADV renewal. The
+  # released preflight is correct in both shapes -- a first advertisement and a
+  # successor -- so this suite adds coverage rather than a correction, and pins
+  # that no post-commit guard exists to reintroduce the R15 shape. Fixture-only.
+  run "Fabric advertisement preflight" \
+    bash tests/test-fabric-advertisement-preflight.sh
+
+  # G11-B. The installed Capability Runtime must satisfy its Fabric dependency
+  # from the installed surface rather than from a repository checkout that
+  # happens to be present. Builds a disposable installation root and proves the
+  # imports resolve with the repository off sys.path. Fixture-only: it installs
+  # nothing and proves the installed runtime and production Fabric are
+  # unchanged. Skips cleanly on a host with no installed runtime.
+  run "Fabric installed dependency closure" bash tests/test-fabric-runtime-install-closure.sh
 
   # ENG-0005 Track A. The Capability Runtime's persistence foundation, plus the
   # permanent backstop asserting the package still executes nothing. It builds
@@ -204,6 +353,747 @@ run "Trust migration" bash tests/test-trust-migration.sh
 # there is no engine to exercise. Builds no store, spawns no subprocess,
 # contacts nothing — it runs in quick mode as well.
 run "Capability fabric" bash tests/test-capability-fabric.sh
+run "Invocation operation authority" \
+  bash tests/test-capability-invocation-operation-authority.sh
+run "Invoke current eligibility" \
+  bash tests/test-capability-invoke-current-eligibility.sh
+run "Invoke preflight" \
+  bash tests/test-capability-invoke-preflight.sh
+run "Generation-12 packaging" \
+  bash tests/test-capability-execution-generation12-packaging.sh
+run "Generation-12 installer" \
+  bash tests/test-capability-execution-generation12-installer.sh
+
+# ENG-0005 first adapter, increments T1-T5. One suite per increment, each
+# carrying the purity or authority backstop for the modules that increment
+# added. They are pure or descriptor-scoped and need no host state, so they run
+# in the always-on path rather than behind the subprocess gate.
+run "Capability execution types" bash tests/test-capability-execution.sh
+run "Capability execution canonical JSON" \
+  bash tests/test-capability-execution-canonical-json.sh
+run "Capability execution payload" bash tests/test-capability-execution-payload.sh
+run "Capability execution implementation authority" \
+  bash tests/test-capability-execution-implementation-authority.sh
+run "Capability execution mutation" bash tests/test-capability-execution-mutation.sh
+run "Capability execution capacity" bash tests/test-capability-execution-capacity.sh
+run "Capability execution capacity race" \
+  bash tests/test-capability-execution-capacity-race.sh
+run "Capability execution handoff" bash tests/test-capability-execution-handoff.sh
+run "Capability execution profile" bash tests/test-capability-execution-profile.sh
+run "Capability execution protocol" bash tests/test-capability-execution-protocol.sh
+
+# ENG-0005 T10. The transition helper POLICY only: this suite runs entirely
+# unprivileged and installs nothing. Helper installation is gate G2.
+run "Capability execution helper policy" \
+  bash tests/test-capability-execution-helper-policy.sh
+
+# ENG-0005 G11-AH. The coordinator is a deployment identity, not the number
+# 1000. The helper used to compile in `COORDINATOR_UID = 1000`, which was true
+# of schai only because cschott happens to be uid 1000; the deployment now
+# states it in root-owned authority and the constant is gone, so there is
+# nothing for a missing authority to degrade to. Policy only: no privilege, no
+# installation, and it proves /etc/kyri is unchanged.
+run "Capability execution coordinator authority" \
+  bash tests/test-capability-execution-coordinator-authority.sh
+
+# ENG-0005 T11. The privileged action layer, exercised through an injected
+# backend: no root, no sudo, no credential change. Real transition is gate G6.
+run "Capability execution transition action" \
+  bash tests/test-capability-execution-transition-action.sh
+
+# ENG-0005 Pass 3B-ii. The sealed profile transport across the privilege
+# boundary. Real memfds, real seals, and one real execve into a controlled
+# child -- but no privilege: credentials and the worker exec are injected.
+run "Capability execution profile transport" \
+  bash tests/test-capability-execution-profile-transport.sh
+
+# ENG-0005 Pass 4A. The create_argv authority gate: policy re-derivation,
+# runtime contracts, image presence through an injected seam, and the payload
+# and package commitments. Builds an argv tuple and executes nothing.
+run "Capability execution authority gate" \
+  bash tests/test-capability-execution-authority-gate.sh
+
+# ENG-0005 Pass 4B. The worker-owned invocation snapshot: the copy that closes
+# the race a second verification could not. Real filesystem mutation against
+# fixture trees; no privilege, no container, no Podman.
+run "Capability execution snapshot" \
+  bash tests/test-capability-execution-snapshot.sh
+
+# ENG-0005 generation-5 installer. Drives the operator installer against
+# throwaway fixture trees only: failure is injected at every commit position
+# and every interrupted transaction is replayed. Installs nothing, needs no
+# privilege, and snapshots the production paths to prove it touched none.
+run "Capability execution generation-5 installer" \
+  bash tests/test-capability-execution-generation5-installer.sh
+
+# ENG-0005 generation-6 installer. The same model with one runtime object that
+# is NEW, so rollback has to REMOVE rather than restore. Failure is injected at
+# every commit position, every interrupted transaction is replayed, and the
+# create pathname is attacked directly. Fixture trees only: it installs no
+# tmpfiles fragment, creates no snapshot root, and never runs systemd-tmpfiles.
+run "Capability execution generation-6 installer" \
+  bash tests/test-capability-execution-generation6-installer.sh
+
+# ENG-0005 G5 preparation. The read-only ceremony preflight: it proves the host
+# is at the ruled G5 starting position and reports the three outstanding
+# rulings. Read-only in every mode, asserted against its own source as well as
+# by fixtures. Builds no image, creates no authority state, invokes no Podman.
+run "Capability execution G5 preflight" \
+  bash tests/test-capability-execution-g5-preflight.sh
+
+# What that declaration may call development and what it must refuse. Drives the
+# real classification functions, extracted from the preflight by name, across
+# the accepted-predecessor, applied-successor and unknown-drift cases.
+run "Capability execution generation succession" \
+  bash tests/test-capability-execution-generation-succession.sh
+
+# The generation-succession primitive every host-only fixture rewinds through:
+# that it restores from governed matrix data and a named commit, leaves objects
+# no ceremony declares alone, and refuses rather than half-restores.
+run "Succession primitive" \
+  bash tests/test-succession-lib.sh
+
+# The Generation-15 runtime installation, proven against a reconstructed
+# Generation-14 baseline: verify non-mutating, install, verify-installed, the
+# CREATE and REPLACE unknown-byte refusals, and the crash matrix at every
+# publication boundary.
+run "Capability execution generation 15 installer" \
+  bash tests/test-capability-execution-generation15-installer.sh
+
+# The Generation-16 recovery-discovery correction, proven against a
+# reconstructed Generation-15 baseline. A one-row generation, so this carries
+# what a multi-row one got for free: the group-R carryover is preserved and
+# still judged, publication is atomic and refuses a second row, and execution
+# readiness is unchanged across the transaction.
+run "Capability execution generation 16 installer" \
+  bash tests/test-capability-execution-generation16-installer.sh
+
+# Generation 17: three objects in two coherence groups, and the ordering that
+# makes the cross-surface deployment safe. helpers.py publishes first and closes
+# execution; the suite refuses a matrix that publishes it late, and walks every
+# interruption point requiring no mixed-and-executable state.
+run "Capability execution generation 17 installer" \
+  bash tests/test-capability-execution-generation17-installer.sh
+
+# Generation 18: two objects in ONE coherence group, and the order is a
+# different property from Generation 17's. Nothing here closes execution -- the
+# defining module publishes before the module that imports it, because the
+# reverse intermediate is an ImportError on every CLI command including
+# `recover`. Measured against all four mixes, not inherited.
+# G11-BC-W. Generation 19 publishes governed administrative abandonment. It must
+# be installed BEFORE any abandonment is written: the Generation-18 reader
+# refuses an `abandoned` record, and `all_states` resolves every chain in one
+# comprehension, so one such record would raise out of capacity, recovery and
+# cleanup for the whole store. Host-only, fixture-driven; mutates no production
+# runtime object.
+run "Capability execution generation 19 installer" \
+  bash tests/test-capability-execution-generation19-installer.sh
+
+# Generation 20: five objects in ONE coherence group, four of them on a single
+# import chain, and cli.py imports two of them at MODULE level -- so a wrong
+# order is an ImportError on every command including `recover`. Every
+# intermediate is imported rather than argued about, and none may expose the
+# new verb before the last step. Host-only; the fixture IS the installed
+# Generation-19 surface, and nothing production is published.
+run "Capability execution generation 20 installer" \
+  bash tests/test-capability-execution-generation20-installer.sh
+
+# G11-BC-Y. The CADM-000001 correction ceremony, rehearsed WHOLE: a real
+# Generation-20 library built by the real installer, a byte copy of the
+# production runtime, and the ceremony's own emitted target asserted to be the
+# fixture's. This is the rehearsal the reclamation ceremony could not have --
+# before Generation 20 the gates followed a substitution and the mutation did
+# not. Host-only; production is measured byte-identical at the end.
+run "CADM-000001 correction rehearsal" \
+  bash tests/test-capability-cadm-000001-correction-rehearsal.sh
+
+# G11-BC-Z. CINV-000003 Stage 2. The gates run whole against fixtures; the
+# irreversible command does NOT, because `authorise-launch` compiles in its
+# roots and a substitution would redirect its checks and not its mutation.
+# Its effect is rehearsed at the API instead, and its post-checks are run as
+# predicates over stores. Host-only.
+run "CINV-000003 Stage 2 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-2-rehearsal.sh
+
+# G11-BC-AA. CINV-000003 Stage 3. The gates run whole against fixtures; the
+# irreversible command does not, for the reason Stage 2's did not. The
+# coordinator half is driven for real over the released protocol, the released
+# package is run against the published payload, and every way the supervision
+# can end is exercised. Host-only.
+run "CINV-000003 Stage 3 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-3-rehearsal.sh
+
+run "Capability execution generation 18 installer" \
+  bash tests/test-capability-execution-generation18-installer.sh
+
+# The G11-BC-E helper ceremony, which must run AFTER Generation 17 and refuses
+# otherwise. Drives the four-state cross-surface matrix that derives the order.
+run "Capability execution BC-E helper ceremony" \
+  bash tests/test-capability-execution-bc-e-helper-ceremony.sh
+
+# The G11-BC-G evidence remediation: the G11-BC-E ceremony wrote its evidence
+# over G11-BB's artifact, so this drives the archive-and-reconstruct repair.
+# Weighted toward refusals, because its product is a claim about the past.
+run "Capability execution evidence remediation" \
+  bash tests/test-capability-execution-evidence-remediation.sh
+
+# The corrected privileged-helper ceremony and the cross-surface order it needs:
+# the coherence matrix across both surfaces, every subset of the three objects,
+# and recovery at each publication boundary.
+run "Capability execution BB helper ceremony" \
+  bash tests/test-capability-execution-bb-helper-ceremony.sh
+
+# The G11-BB anchor corrections. A governed root is opened as a traversal
+# anchor, never for read: both traverse-only production directories refuse the
+# read-mode open, an O_PATH anchor reaches the named child, and neither can be
+# enumerated. Unprivileged fixtures only.
+run "Capability execution handoff root traversal" \
+  bash tests/test-capability-execution-handoff-root-traversal.sh
+
+run "Capability execution authority anchor" \
+  bash tests/test-capability-execution-authority-anchor.sh
+
+# Supervised recovery discovery: an invocation whose CINV carries no adapter
+# identity is still found, from the immutable lifecycle journal.
+run "Capability execution recovery discovery" \
+  bash tests/test-capability-execution-recovery-discovery.sh
+
+# ENG-0005 G5 ceremony. The operator artifact and, above all, the trust
+# boundary it rests on: root materialises the pinned commit from git objects
+# into a root-owned tree and imports nothing else. Each isolation property is
+# proven by attacking it. Builds no image, creates no authority state.
+run "Capability execution G5 ceremony" \
+  bash tests/test-capability-execution-g5-ceremony.sh
+
+# ENG-0005 G5 supply chain. Cosign trust, the Chainguard SPDX attestation, and
+# the candidate/approval separation. Synthetic DSSE envelopes only: no network,
+# no cosign install, no image pull, and no approval is ever written.
+run "Capability execution G5 supply chain" \
+  bash tests/test-capability-execution-g5-supply-chain.sh
+
+# ENG-0005 G5 base discovery. Selection of a base-image candidate by the
+# governed Python version rather than by whatever :latest points at today.
+# Recorded history and recorded SPDX only: no network, no pull, no approval.
+run "Capability execution G5 discovery" \
+  bash tests/test-capability-execution-g5-discovery.sh
+
+# ENG-0005 G5 build context. The execution identity cannot traverse the
+# coordinator's checkout, so the reviewed image context is materialised from
+# pinned git objects onto root-owned ancestry. Fixture trees only: no image is
+# built, no base pulled, and no container runtime invoked.
+run "Capability execution G5 build context" \
+  bash tests/test-capability-execution-g5-build-context.sh
+
+# ENG-0005 G5 authority phases. Mutation eligibility derived from the ruled
+# provisioning evidence, and the bootstrap/genesis/admission chain driven
+# against fixture namespaces with an injected image observation. Touches no
+# production namespace, invokes no Podman, admits nothing real.
+run "Capability execution G5 authority" \
+  bash tests/test-capability-execution-g5-authority.sh
+
+# ENG-0005 T12. The unprivileged worker, driven through a fake Podman backend:
+# no subprocess, no container, no Podman. Real execution is gate G6.
+run "Capability execution lifecycle" \
+  bash tests/test-capability-execution-lifecycle.sh
+
+# ENG-0005 T13. Terminal classification and timeout, decided from immutable
+# observations with an injected clock and termination backend.
+run "Capability execution terminal" \
+  bash tests/test-capability-execution-terminal.sh
+
+# ENG-0005 T14. Result and output-tree collection from a descriptor, over trees
+# this suite builds in a temporary directory. Reads and hashes; creates,
+# deletes, and executes nothing.
+run "Capability execution collector" \
+  bash tests/test-capability-execution-collector.sh
+
+# The result-content authority a capability contract's `response_shape.content`
+# references. It judges a mapping the collector already decoded: no descriptor,
+# no path, no bytes, no clock, and it re-parses no envelope.
+run "Capability execution result content" \
+  bash tests/test-capability-execution-result-content.sh
+
+# How a runtime outcome presents through a governed capability contract, and
+# the closure invariant it makes checkable: every terminal failure reachable by
+# the capability maps to a mode its contract declares. Pure translation over
+# values other authorities formed.
+run "Capability execution contract outcome" \
+  bash tests/test-capability-execution-contract-outcome.sh
+
+# The governed boundary-verification package: the tree CAPDEF-0001 and CCON-0001
+# describe and nothing implemented. Driven through the released package,
+# payload, collector, result-content, and contract-outcome authorities against
+# fixture paths in a temporary directory. It reads the package tree and writes
+# nothing into it, creates no container, opens no governance store, and declares
+# no CPKG record.
+run "Capability execution verification package" \
+  bash tests/test-capability-execution-verification-package.sh
+
+# The CINV-000002 provider-error, held in place. `operation` is spelled in two
+# closed vocabularies that share no member -- the Fabric scope's `execute` and
+# the capability's `verify-execution-boundary` -- and the governed payload
+# carried the first in the field the second is read from. RED and GREEN over the
+# exact reviewed bytes, plus the proof that the coordinator admits the defective
+# document and the capability is the only thing that refuses it.
+run "Capability execution payload operation contract" \
+  bash tests/test-capability-execution-payload-operation-contract.sh
+
+# The committed Fabric freeze artifacts. G11-BC-M shipped the reviewed bodies'
+# DIGESTS in a prose table and not the bytes they name, so nobody could
+# re-render them and each block's own check had nothing to check against. This
+# renders every committed heredoc and asserts the digest, the byte count, the
+# named refusals and the step-specific baseline pin. A new record is a table
+# row here rather than a copy of this file.
+run "Fabric freeze artifacts" \
+  bash tests/test-fabric-freeze-artifacts.sh
+
+# G11-BC-P. The freeze artifacts' GATES, executed rather than asserted. G11-BC-O
+# shipped a CINST-000006 artifact whose two gates had never been run in the
+# shape the operator runs them in: gate 1 fed python3 its program on stdin and
+# then tried to read the advertisement from that same stdin through a trailing
+# here-string, which is its own status-0 null command, so the advertisement was
+# never read AND the failure was masked; gate 2's report line carried
+# backslashes inside f-string expressions and would not compile. The suite above
+# had 136 passing assertions over that artifact. This one runs the constructs.
+run "Fabric freeze gate execution" \
+  bash tests/test-fabric-freeze-gate-execution.sh
+
+# G11-BC-P. The whole CINST-000006 operator block, end to end, against a fixture
+# copied from the production stores, with each stage sabotaged in turn to prove
+# it fails closed. Host-only: it needs the governed stores. Writes only inside
+# its own fixture and proves production unchanged by aggregate afterwards.
+run "Fabric freeze CINST-000006 rehearsal" \
+  bash tests/test-fabric-freeze-cinst-000006-rehearsal.sh
+
+# G11-BC-Q. The whole CROUTE-0006 operator block, end to end, against a fixture
+# copied from the production stores, with each stage sabotaged in turn -- and
+# each sabotage required to refuse FOR ITS OWN REASON, so a crash cannot score
+# as a gate. Also proves the reviewed body resolves through CINST-000006.
+# Host-only: it needs the governed stores. Writes only inside its own fixture
+# and proves production unchanged by aggregate afterwards.
+run "Fabric freeze CROUTE-0006 rehearsal" \
+  bash tests/test-fabric-freeze-croute-0006-rehearsal.sh
+
+# G11-BC-R. The whole CSEL-000004 operator block, end to end. A selection is the
+# only record whose correctness its own identity cannot settle, so this also
+# judges the governed-resolution gate directly against crafted engine output:
+# a moved route head and a selector that chose another eligible instance are
+# states this host is not in and must not be put into. Host-only: it needs the
+# governed stores. Writes only inside its own fixture and proves production
+# unchanged by aggregate afterwards.
+run "Fabric freeze CSEL-000004 rehearsal" \
+  bash tests/test-fabric-freeze-csel-000004-rehearsal.sh
+
+# G11-BC-S. The whole CINV-000003 Stage 0 ceremony, end to end. Stage 0 creates
+# only the reviewed operator work area and allocates nothing, so the assertion
+# that matters most is negative: after the happy path the fixture runtime store
+# is byte-identical and capability-invocation.seq has not moved. Also judges the
+# payload gate's canonical check directly, because the raw check fires first and
+# no substitution of the payload can reach it. Host-only: it needs the governed
+# stores. Writes only inside its own fixture.
+run "CINV-000003 Stage 0 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-0-rehearsal.sh
+
+# G11-BC-T. The whole CINV-000003 Stage 1 ceremony, end to end. Stage 1 is the
+# FIRST IRREVERSIBLE STEP: it allocates the invocation identity, and the
+# identity is spent even when the invocation is refused. So every sabotage
+# asserts not only that the block refused but that the fixture's
+# capability-invocation.seq never moved -- an identity spent in a rehearsal is
+# an identity the gate failed to protect. Host-only: it needs the governed
+# stores and the accepted Stage 0 work area.
+run "CINV-000003 Stage 1 rehearsal" \
+  bash tests/test-capability-cinv-000003-stage-1-rehearsal.sh
+
+# ENG-0005 T15. Forensic quarantine over a temporary store: reserves, copies,
+# and seals inside the suite's own directory. Deletes nothing and, being v1,
+# has no deletion path at all.
+# ADR-0015. Governed administrative abandonment: the exceptional closure that
+# lets a permanently stuck invocation give its execution slot back. Reproduces
+# the production blocker first, then proves the operation, then proves the
+# blocker is gone. Portable: fixtures only, no governed store.
+run "Capability execution abandonment" \
+  bash tests/test-capability-execution-abandonment.sh
+
+# tests/test-capability-cinv-000002-reclamation-rehearsal.sh IS DELIBERATELY NOT
+# RUN, and is named here so that omission is a decision rather than a gap. It is
+# disarmed: on 2026-09-20 it mutated production, because it rehearsed a whole
+# ceremony by substituting the runtime path while `command_abandon` resolved a
+# module constant. It refuses to run and is kept as evidence of what it did. The
+# rehearsal that replaces it, and can be aimed, is the CADM-000001 one below.
+
+# ADR-0016. Provenance correction: the record that says a claim in an earlier
+# CADM is not truthful provenance while that record's effect stands. Most of it
+# proves what the verb CANNOT do -- no transition, no slot, no result, no write
+# to the record it is about. Portable: fixtures only.
+run "Capability execution provenance correction" \
+  bash tests/test-capability-execution-provenance-correction.sh
+
+# ADR-0018. The same verb, widened to the three assertions that make up a
+# record's claimed AUTHORITY. Most of this suite proves the BOUNDARY rather than
+# the widening: that `reason` and every lifecycle claim stay out, that the three
+# instants stay three, and that a correction still spends no mutation and takes
+# no slot. Portable: fixtures only.
+run "Capability provenance multi-field correction" \
+  bash tests/test-capability-provenance-multifield.sh
+
+# G11-BC-AL. ADR-0016 records carry no `actual_occurrence_at`, and a prior record
+# simply missing a later member was being refused as a different authority. The
+# rule that keeps a SHAPE difference and an AUTHORITY difference apart, with the
+# legacy fixture checked key-for-key against production's real CADM-000002.
+# Portable: fixtures only.
+run "Capability provenance legacy compatibility" \
+  bash tests/test-capability-provenance-legacy-compatibility.sh
+
+# G11-BC-AV. The result-authority invariant: a terminal result is sound only
+# when execution authority is PROVABLE, and a fabricated one still fails closed.
+# Portable -- it builds real stores in a temporary directory and takes production's
+# record shapes as templates when they are readable.
+run "Capability execution result authority" \
+  bash tests/test-capability-execution-result-authority.sh
+
+# G11-BC-AV. The Generation-24 installer proves the authority invariant rather
+# than its predecessor's purpose, and 11 sabotages -- each a plausible WRONG fix
+# that would make production validate clean -- are caught by a named property.
+# Static by construction: nothing runs --install. Portable.
+run "Capability execution generation-24 installer" \
+  bash tests/test-capability-execution-generation24-installer.sh
+
+# G11-BC-AL. The Generation-23 installer proves the compatibility rule, and 17
+# sabotages of the reviewed source are each caught by a named property. Static by
+# construction: nothing runs --install. Portable.
+run "Capability execution generation-23 installer" \
+  bash tests/test-capability-execution-generation23-installer.sh
+
+# G11-BC-AI. The Generation-22 installer proves ADR-0018 rather than its
+# predecessor's purpose, and 21 sabotages of the reviewed source are each
+# caught by a named property. Static by construction: nothing here runs
+# --install, and there are no fixtures to drive. Portable.
+run "Capability execution generation-22 installer" \
+  bash tests/test-capability-execution-generation22-installer.sh
+
+# G11-BC-AH. No test may dispatch a governed mutator that can resolve
+# production. Static: it reads the suites rather than running anything. First in
+# this group on purpose -- if the class has returned, that is what a run should
+# say before it spends an hour proving other things.
+run "No production escape" \
+  bash tests/test-no-production-escape.sh
+
+# G11-BC-AM. The minimum Fabric renewal chain that restores current execution
+# authority, rehearsed whole with the RELEASED write verbs against a byte copy --
+# every predicted identity, every sequence step, and the Stage-3 matrix taken to
+# 22 of 22 intended refusals with nothing masked. Host-only: it rehearses against
+# the production Fabric it copies. Every write names an explicit scratch root.
+run "Fabric renewal chain rehearsal" \
+  bash tests/test-fabric-renewal-chain-rehearsal.sh
+
+# G11-BC-AM. The four freeze artifacts, against what a freeze is allowed to be:
+# one reviewed body into /etc, a read-only preflight, and a proof that production
+# Fabric did not move. Static: nothing here runs one. Portable.
+run "Fabric renewal freeze artifacts" \
+  bash tests/test-fabric-renewal-freeze-artifacts.sh
+
+# G11-BC-AL. BLOCK B of the Stage-3 ceremony and its 22-case failure matrix,
+# against a fixture ASSEMBLED by high-water mark rather than rewound from
+# production -- and proved complete because it reproduces the accepted
+# pre-Stage-3 aggregate exactly. Host-only: it is assembled from the reviewed
+# objects the host still holds. The production-host rehearsal stays spent.
+run "CINV-000003 Stage-3 gate matrix" \
+  bash tests/test-capability-cinv-000003-stage-3-gate-matrix.sh
+
+# ADR-0017. Post-execution lifecycle conclusion: the normal closure for an
+# execution that ran. The supervised path journals nothing past
+# `launch_authorized`, so every successful execution otherwise holds a slot for
+# ever -- and `released` is unreachable, because §13 gives the output leaf to
+# the execution identity and `cleaned` cannot truthfully be recorded. Most of
+# this proves what the verb CANNOT do: no result fabricated, no container
+# touched, nothing written on any refusal. Portable: fixtures only.
+run "Capability execution conclusion" \
+  bash tests/test-capability-execution-conclusion.sh
+
+# G11-BC-Y. Which store a mutating command actually writes through. Reproduces
+# the 2026-09-20 incident against the INSTALLED runtime without touching
+# production, then proves the explicit-target surface that replaced it. The
+# audit of every mutating verb's root resolution lives here too. Host-only.
+run "Capability mutation target" \
+  bash tests/test-capability-mutation-target-explicit.sh
+
+run "Capability execution quarantine" \
+  bash tests/test-capability-execution-quarantine.sh
+
+# ENG-0005 T16. Cleanup over handoff trees the suite builds in a temporary
+# directory, and recovery classification over supplied observations. Deletes
+# only inside its own fixture; contacts no runtime.
+run "Capability execution cleanup" \
+  bash tests/test-capability-execution-cleanup.sh
+
+# ENG-0005 T17. Administrative dispatch and CADM over a temporary namespace,
+# with an injected destruction backend. Installs no helper, touches no sudoers,
+# and authenticates nothing. Gates G2 and G3 stay closed.
+run "Capability execution administrative" \
+  bash tests/test-capability-execution-admin.sh
+
+# ENG-0005 T18. The adapter driven through an injected backend: no Podman, no
+# subprocess, no container, and no provisioned runtime. Gates G4-G6 stay closed.
+run "Capability execution adapter" \
+  bash tests/test-capability-execution-adapter.sh
+
+# ENG-0005 T19. Static validation of the production image definition and its
+# admission procedure. Builds nothing, pulls nothing, and admits nothing:
+# building is gate G5 and admission is a governed operator step after it.
+run "Capability execution image definition" \
+  bash tests/test-capability-execution-image.sh
+
+# ENG-0005 G4 increment. Per-invocation output containment policy and the
+# privileged quota source. Sets no quota, opens no device, needs no XFS, and
+# installs nothing: the privileged operation is source only behind G2/G3.
+run "Capability execution output quota" \
+  bash tests/test-capability-execution-quota.sh
+
+# ENG-0005 G5 increment. Offline implementation-authority bootstrap: the CIMP
+# and CGEN counters, the lifecycle mutation lock, and the genesis ceremony.
+# Hermetic against temporary roots -- creates no production authority path,
+# admits no implementation, and opens no gate.
+run "Capability implementation-authority bootstrap" \
+  bash tests/test-capability-authority-bootstrap.sh
+
+# ENG-0005 G5 increment. Ordinary implementation-admission transaction and the
+# canonical provisioning-evidence manifest. Hermetic against temporary roots --
+# builds no image, runs no Podman, and creates no production authority path.
+run "Capability implementation admission" \
+  bash tests/test-capability-authority-admission.sh
+
+# ENG-0005 G5 increment. Pending-disposition ceremonies: COMPLETE and RETIRE,
+# settled in one successor generation. Hermetic against temporary roots.
+run "Capability pending disposition" \
+  bash tests/test-capability-authority-disposition.sh
+
+# ENG-0005 G5 increment. Coordinator authority resolution: a requested CIMP
+# becomes a governed ExecutionProfile. Read-only and hermetic.
+run "Capability authority resolution" \
+  bash tests/test-capability-authority-resolution.sh
+
+# ENG-0005 G4 artifacts. Static validation of the installed worker entrypoint,
+# the backing-store and sudoers examples, and the provisioning runbook.
+# Installs nothing, mounts nothing, and creates no sudoers policy.
+run "Capability execution provisioning artifacts" \
+  bash tests/test-capability-execution-provisioning.sh
+
+# ENG-0005 G11-AI. The authorised image-export ceremony's identity handling,
+# against the rendering Podman actually emits. Sources the ceremony's parsing
+# functions and feeds them fixtures: it invokes no Podman, opens no container
+# store, reads no production path, and exports nothing.
+run "Capability execution G11-AI image export identity" \
+  bash tests/test-capability-execution-image-export.sh
+
+# ENG-0005 G11-AJ. The governed container identity, and the chain that has to
+# agree about it: the admitted image's user contract, the profile constant, the
+# argv, and what T8 verifies. Static and unprivileged -- no Podman, no store.
+run "Capability execution container identity" \
+  bash tests/test-capability-execution-container-identity.sh
+
+# ENG-0005 G11-AK. What a runtime observation may claim to have seen: the
+# profile schema version is not a container property, and socket absence is
+# derived from the runtime's own mount sources rather than copied from the
+# expected profile. Unprivileged; creates a temporary tree because two of the
+# facts under test are filesystem facts.
+run "Capability execution runtime observation" \
+  bash tests/test-capability-execution-runtime-observation.sh
+
+# ENG-0005 G11-AK. The governed Podman backend: the one module that starts a
+# process. Static and fixture-driven -- no Podman runs and no container is
+# created, so it proves the same things on a runner with no container runtime.
+run "Capability execution Podman backend" \
+  bash tests/test-capability-execution-podman-backend.sh
+
+# ENG-0005 G11-AK. The privileged helper must move as one thing: the argv
+# builder and the exec site must agree about where the worker target comes
+# from. G11-AI found them disagreeing on the live host. Source-level and
+# unprivileged; the installed state is reported, never enforced.
+run "Capability execution helper coherence" \
+  bash tests/test-capability-execution-helper-coherence.sh
+
+# ENG-0005 G11-AL. The released worker entrypoint and the backend it binds:
+# the identity gate precedes every execution step, the container's bind sources
+# are the worker's snapshot rather than the coordinator's handoff, and the
+# generation closure reaches the backend without anything being whitelisted.
+run "Capability execution worker binding" \
+  bash tests/test-capability-execution-worker-binding.sh
+
+# ENG-0005 G11-AM. One governed invocation, prepared by the real coordinator
+# and executed in a real container: the front half joined to the backend, the
+# mutation manifest, and the failure matrix. Host-only -- it needs the
+# production store shape, Podman, and the exported OCI archive.
+# ENG-0005 G11-AN. The terminal result contract: whether a result was
+# admitted survives to the caller, and what an execution did becomes durable.
+# Hermetic -- constructed outcomes, temporary stores, no container.
+run "Capability terminal result contract" \
+  bash tests/test-capability-result-contract.sh
+
+# ENG-0005 G11-BC-K. The duplicate-result gate and the boundary it sits in front
+# of. `supervisor.execute` launches the privileged helper on its first line, so
+# the guard that refuses a second terminal result has to run before it, not
+# after the workload. A recording launcher makes "refused before any side
+# effect" a measurement rather than a claim. Hermetic -- temporary stores,
+# stub launcher, no container.
+run "Capability execution duplicate-result gate" \
+  bash tests/test-capability-execution-duplicate-result-gate.sh
+
+# ENG-0005 G11-AO. The execution mechanism bound to an invocation before the
+# adapter runs, and what an invocation with no result therefore means:
+# interrupted only where authority was durably bound. Hermetic.
+run "Capability adapter binding and interrupted semantics" \
+  bash tests/test-capability-adapter-binding.sh
+
+# ENG-0005 G11-AP. The preconditions a coordinator supervisor depends on: the
+# descriptor topology the privileged transition already provides, the protocol
+# state machine it must implement, and the authority split it must not cross.
+# Static and unprivileged.
+run "Capability execution supervision preconditions" \
+  bash tests/test-capability-execution-supervision-preconditions.sh
+
+# ENG-0005 G11-AQ. The orphan a worker's SIGKILL leaves behind, and the
+# governed operation that recovers it. Host-only: it creates and reconciles
+# real containers in a disposable store.
+# ENG-0005 G11-AS. The deployment execution identity authority that closed the
+# G11-AR stop. Both halves are now asserted positively, and every case runs two
+# unrelated fixture deployments through the same code -- because a suite that
+# only ever exercised the schai numbers would pass against a constant too.
+run "Capability execution identity authority" \
+  bash tests/test-capability-execution-identity-authority.sh
+
+# ENG-0005 G11-AX.2. The coherent ten-object privileged helper ceremony, judged
+# by the INSTALLED Generation-14 rule. Host-only: the rule that decides must be
+# the one that is installed, and there is no honest way to fake that.
+run "Capability execution helper ceremony" \
+  bash tests/test-capability-execution-helper-ceremony.sh
+
+# ENG-0005 G11-AX.1. The Generation-14 readiness rule, and the seven dangerous
+# mixed helper states Generation 13 accepted. Portable: both rules are loaded
+# from their own reviewed git objects, so the RED half of the proof survives the
+# working tree moving on.
+run "Capability generation-14 readiness" \
+  bash tests/test-capability-generation14-readiness.sh
+
+# And its transaction. Host-only: the fixture is built from the installed
+# Generation-13 runtime, so it reports HOST_ONLY_SKIP without one.
+run "Capability execution generation-14 installer" \
+  bash tests/test-capability-execution-generation14-installer.sh
+
+# ENG-0005 G11-AW. The boundary between the two deployment identity authorities:
+# cross-role refusal in all four directions, and the proof that installing them
+# cannot open execution on its own. Deployment-neutral -- injected resolvers and
+# two unrelated fixture deployments, never this host's account database.
+run "Capability identity authority schema" \
+  bash tests/test-capability-identity-authority-schema.sh
+
+# And the ceremony that installs them for THIS deployment. Host-only: the
+# reviewed digests are what cschott and kyri-capability render, so a machine
+# without those accounts reports HOST_ONLY_SKIP rather than a verdict about its
+# own /etc/passwd. Every install lands in a disposable root; no sudo.
+run "Capability identity authority ceremony" \
+  bash tests/test-capability-identity-authority-ceremony.sh
+
+# ENG-0005 G11-AT. The coordinator's half of a governed execution: what it
+# authorises, what it refuses, and what it does when the worker stops talking.
+# Real forked children over real pipes, so end of stream and reaping are
+# genuine; no privilege, no Podman, no container.
+run "Capability execution supervision" \
+  bash tests/test-capability-execution-supervision.sh
+
+# ENG-0005 G11-AU. The Generation-13 transaction and everything that can
+# interrupt it. Fixture-only: every case builds a throwaway host from the
+# installed library and drives the ceremony against that.
+run "Capability execution generation-13 installer" \
+  bash tests/test-capability-execution-generation13-installer.sh
+
+# ENG-0005 G11-AU. What that transaction packages, and whether the packaged
+# bytes are a working runtime with the repository out of reach.
+run "Capability execution generation-13 packaging" \
+  bash tests/test-capability-execution-generation13-packaging.sh
+
+# ENG-0005 G11-AS. The privileged reconciliation entrypoint G11-AR could not
+# safely build: what it becomes, in what order, and that Podman is unreachable
+# until after the drop. Credential primitives are injected recorders -- a real
+# drop would drive rootless Podman into the production graphroot.
+run "Capability execution reconcile entrypoint" \
+  bash tests/test-capability-execution-reconcile-entrypoint.sh
+
+run "Capability execution container reconciliation" \
+  bash tests/test-capability-execution-reconciliation.sh
+
+run "Capability invoke execution end to end" \
+  bash tests/test-capability-invoke-execution-e2e.sh
+
+# ENG-0005 G11-AT. The whole chain, supervised: a real container, a worker
+# SIGKILLed while it runs, the orphan reconciled, and the readiness gate that
+# refuses new execution until the container state is proven. Host-only.
+run "Capability supervised execution end to end" \
+  bash tests/test-capability-supervised-execution-e2e.sh
+
+# ENG-0005 G6.1A. The trusted-runtime installation ceremony for the
+# verification-only artifacts: transactional create-once publication of five
+# new objects onto a verified generation-6 baseline, with failure injected at
+# every commit position and every interrupted transaction replayed. Fixture
+# trees only -- it installs nothing, writes no sudoers, invokes no transition
+# or worker, and contacts no container runtime.
+run "Capability execution generation-7 (G6.1A) ceremony" \
+  bash tests/test-capability-execution-generation7-installer.sh
+
+# ENG-0005 G6.1. The whole privileged chain up to, and deliberately short of,
+# container execution: the transition selects a verification-only worker that
+# runs the SAME shared gate production runs and then emits a proof instead of
+# creating a container. Structural non-execution is asserted rather than
+# assumed. Installs no sudoers, invokes no sudo, performs no transition,
+# executes no worker, and invokes no container runtime.
+run "Capability execution G6.1 verification" \
+  bash tests/test-capability-execution-g61-verification.sh
+
+# The coordinator execution-authorization bridge: execution-prepared to a
+# handoff a privileged boundary may later verify, and no further. The lifecycle
+# transition is the authority, the launch-authorisation is its journalled
+# projection, and the handoff is materialisation. Elevates nothing, executes
+# nothing, and contacts no container runtime.
+run "Capability execution launch bridge" \
+  bash tests/test-capability-execution-launch-bridge.sh
+
+# The Generation-8 installation ceremony: one REPLACE and one CREATE, so the
+# accepted Generation-7 mutation.py must survive until the transaction commits
+# and must be restorable exactly. Fixture-only: installs nothing on this host,
+# writes no sudoers, invokes no helper, and contacts no container runtime.
+run "Capability execution generation-8 installer" \
+  bash tests/test-capability-execution-generation8-installer.sh
+
+# The governed S5 operator surface: `capability authorise-launch`, a thin
+# adapter over the Generation-8 bridge. Fixture-only; elevates nothing, seeds
+# no governance store, and contacts no container runtime.
+run "Capability execution launch CLI" \
+  bash tests/test-capability-execution-launch-cli.sh
+
+# The Generation-9 installation ceremony: a single atomic REPLACE of a live
+# Python module, so the retained rollback object is the whole safety story.
+# Fixture-only; installs nothing here, runs the verb it installs never.
+run "Capability execution generation-9 installer" \
+  bash tests/test-capability-execution-generation9-installer.sh
+
+# The Generation-10 installation ceremony: four REPLACE operations, so the
+# transaction spans a genuinely mixed window that rename(2) cannot close on its
+# own. Fixture-only; installs nothing here.
+run "Capability execution generation-10 installer" \
+  bash tests/test-capability-execution-generation10-installer.sh
+
+# The Generation-11 installation ceremony: nine CREATE operations and a new
+# package directory, 48 -> 57. Its delta is an import closure rather than a
+# source diff, so the ceremony recomputes the closure from the reviewed commit
+# on every run. Fixture-only; installs nothing here.
+run "Capability execution generation-11 installer" \
+  bash tests/test-capability-execution-generation11-installer.sh
+
+# The governed artifact authority: git source and runtime artifact authority
+# are two planes, and this is the deterministic materialisation between them
+# from a pinned commit object. Fixture trees only -- it creates no live artifact
+# root, publishes nothing on this host, needs no privilege, opens no Fabric
+# store, stages nothing, and proves the production store did not move.
+run "Governed artifact authority" bash tests/test-artifact-authority.sh
 
 # Static and documentation only: the health plane is architecture in this
 # release, so there is no engine, collector, or probe to exercise. Builds no
@@ -314,13 +1204,26 @@ run "Production path backstop" production_path_check
 # The suites must be read-only with respect to the declared model. This runs
 # last so it observes the state the suites left behind.
 model_mutation_check() {
-  local dirty
-  dirty="$(git status --porcelain platform-model)"
-  if [[ -n "${dirty}" ]]; then
-    printf 'Validation modified platform-model; it must be read-only to tests:\n%s\n' "${dirty}" >&2
+  local after dirty
+  after="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
+    | sort | sha256sum | cut -d' ' -f1)"
+  if [[ "${after}" != "${MODEL_BEFORE}" ]]; then
+    printf 'Validation modified platform-model; it must be read-only to tests.\n' >&2
+    printf 'before=%s after=%s\n' "${MODEL_BEFORE}" "${after}" >&2
+    git status --porcelain platform-model >&2
     return 1
   fi
-  printf '  ok       platform-model unmodified\n'
+  # Uncommitted model changes are reported, never failed on. An operator
+  # reviewing a schema correction should see them named here; a suite that
+  # wrote them would already have failed the comparison above.
+  dirty="$(git status --porcelain platform-model)"
+  if [[ -n "${dirty}" ]]; then
+    printf '  ok       platform-model unmodified by the suites\n'
+    printf '  note     platform-model carries uncommitted changes under review:\n'
+    printf '%s\n' "${dirty}" | sed 's/^/             /'
+  else
+    printf '  ok       platform-model unmodified\n'
+  fi
 }
 run "Platform model mutation backstop" model_mutation_check
 

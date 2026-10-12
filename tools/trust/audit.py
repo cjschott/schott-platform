@@ -15,6 +15,11 @@ class AuditEventKind(str, Enum):
     TRUST_RECORD_CREATED = "trust-record-created"
     LINEAGE_CREATED = "lineage-created"
     LINEAGE_ADVANCED = "lineage-advanced"
+    # A root establishment lineage recorded after the fact, because the
+    # ceremony's write path omitted it. Distinct from LINEAGE_CREATED: that
+    # event says a lineage began, this one says a record of one that had
+    # already begun was finally written.
+    ROOT_LINEAGE_BACKFILLED = "root-establishment-lineage-backfilled"
     SUBJECT_RESTRICTED = "subject-restricted"
     SUBJECT_QUARANTINED = "subject-quarantined"
     SUBJECT_REVOKED = "subject-revoked"

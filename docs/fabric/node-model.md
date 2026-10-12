@@ -136,7 +136,10 @@ recorded.
 
 An **advertisement is a claim published by a subject as it is now**, so it must
 cite the **current** declaration; citing one the operator has already replaced
-is refused. An **instance** cites the declaration that was current when it was
+is refused. *As it is now* also binds the validity window: it must cover the
+moment the claim is recorded, so a window that has already closed, or that has
+not yet opened, is refused at registration rather than stored as a claim
+nothing could ever find fresh. An **instance** cites the declaration that was current when it was
 admitted, and that record stays readable for ever — that is history, not
 staleness. Retaining a claim is not authority to admit: a `draining` or
 `withheld` machine may still say what it holds, and nothing may be admitted

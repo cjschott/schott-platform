@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# TOMBSTONE -- THE G11-BC-M CSEL-000004 FREEZE ARTIFACT IS WITHDRAWN.
+#
+# THIS ARTIFACT MUST NOT BE USED. Pasting it can no longer do anything, and
+# that is deliberate: it exits nonzero before reaching any command.
+#
+# WHY IT WAS WITHDRAWN
+# ====================
+# The G11-BC-M authority expired at 2026-09-19T06:00:00-05:00. CADV-000006 is
+# no longer fresh and the CINST-000005 admission window has closed, so
+# CROUTE-0005 now routes to an instance that is ineligible at any current
+# clock.
+#
+# THE DANGEROUS PART, STATED PLAINLY. This block did NOT fail closed on its
+# own. Rehearsed against production after the lease expired, every one of its
+# seven pins still held and its preflight still returned would_accept true with
+# selected_instance_id CINST-000005. The reason is that the selection carried a
+# reviewed `evaluated_at` of 2026-09-15T06:45:00-05:00, and the Fabric engine
+# judges eligibility at the instant the request names rather than at a clock --
+# see the comment at tools/fabric/admission.py, "Reading the current time here
+# would make the verdict depend on when the request was replayed". That is
+# correct for an append-only engine and it is exactly why the operator artifact,
+# not the engine, has to carry a wall-clock gate.
+#
+# So a backdated `evaluated_at` alone kept an expired chain executable. Left in
+# place, this block would have installed a frozen input binding to an expired
+# instance, and would then have blocked the replacement freeze by occupying
+# /etc/kyri/fabric/csel-000004.json.
+#
+# Its sibling CINST-000005 and CROUTE-0005 artifacts did not need withdrawing:
+# both records are written, so their `sudo test ! -e "${DEST}"` refuses at the
+# first step. This one was reachable only because its destination was still
+# absent.
+#
+# WHERE THE REVIEWED BYTES REMAIN RECOVERABLE
+# ===========================================
+# The original reviewed body -- 605 bytes, sha256
+# 60857d684434657e6b26207308ba630d7007bf1564910d6fadcd91ba3f80dffd -- and the
+# complete freeze block are preserved in git history at:
+#
+#   77670b71749cd051cb1a0825ca93163dda04b982
+#
+#   git show 77670b71749cd051cb1a0825ca93163dda04b982:provisioning/fabric/g11-bc-m-csel-000004-freeze.txt
+#
+# They are historical reviewed evidence. They are not an authority, and that
+# digest must be REFUSED BY NAME by every successor artifact.
+#
+# THE REPLACEMENT
+# ===============
+# G11-BC-N prepares a fresh chain -- CADV-000007, CINST-000006, CROUTE-0006 and
+# a NEW CSEL-000004 body (605 bytes, sha256
+# d04171c50397be2d41f8d066b526f237d982ac1df113840eb81afa6ec44c2f29) resolving to
+# CINST-000006. Same identity, different bytes. Every G11-BC-N artifact carries
+# an independent current-time freshness gate ahead of its install.
+echo "REFUSE: the G11-BC-M CSEL-000004 authority expired at 2026-09-19T06:00:00-05:00." >&2
+echo "REFUSE: this artifact is withdrawn and MUST NOT be used." >&2
+echo "REFUSE: reviewed bytes remain recoverable at commit 77670b71749cd051cb1a0825ca93163dda04b982." >&2
+echo "REFUSE: use the G11-BC-N chain instead; the replacement CSEL-000004 body is d04171c5..." >&2
+exit 1

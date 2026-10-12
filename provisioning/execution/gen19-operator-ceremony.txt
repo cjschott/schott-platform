@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# The Generation-19 operator ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. The test suite executes it against a stub installer to prove the
+# control flow, rather than trusting that a fenced block does what it says.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# THIS IS ONE STAGE, NOT TWO. This generation moves no helper object and no
+# readiness authority: helper compatibility stays `compatible`, blocking stays
+# 0, supervision_ready stays true, and there is no second ceremony to follow.
+#
+# WHAT IT DEPLOYS. Seven objects in one coherence group -- types, state,
+# capacity, recovery, admin, abandonment, cli, in that order -- so that a
+# permanently stuck invocation can be administratively closed and its execution
+# slot reclaimed. ADR-0015 is the architecture.
+#
+# WHY IT MUST HAPPEN BEFORE ANY ABANDONMENT. The Generation-18 runtime cannot
+# parse an `abandoned` lifecycle record:
+#
+#     StateIntegrityFailure: CINV-000002.000003 names an unknown state
+#
+# and `all_states` resolves every chain in ONE comprehension, so a single such
+# record would raise out of capacity, recovery and cleanup for the WHOLE store.
+# Writing one against a Generation-18 host would stop the execution plane
+# entirely. That is why this comes first and why G11-BC-V's ceremony was
+# refused.
+#
+# WHAT IT DOES NOT DO. It abandons nothing. No lifecycle record is written, no
+# invocation is closed, no execution slot changes hands, and occupancy stays
+# 2 of 2 across this publication. It publishes the ABILITY to reclaim a slot,
+# under a separate reviewed ceremony, and performs none of it.
+#
+# Do NOT abandon CINV-000001 or CINV-000002 after this. Do NOT run CINV-000003
+# Stage 2 or Stage 3. None of those is authorised by this ceremony.
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-gen19-transaction/journal \
+  || { printf 'STOP: a Generation-19 transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-gen19-transaction \
+  || { printf 'STOP: Generation-19 transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The predecessor evidence the installer verifies against. Generation 18 wrote
+# both when it committed; their absence means this host did not reach
+# Generation 18 the way the accepted plan says it did.
+sudo test -f /root/kyri-gen18-library-digests.txt
+sudo test -f /root/kyri-gen18-helper-digests.txt
+
+sudo bash /opt/schott-platform/provisioning/execution/install-generation-19.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-19.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-19.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-generation-19.sh --verify-installed
+
+# EXPECTED AFTER THIS CEREMONY:
+#   helper compatibility  compatible      (UNCHANGED -- nothing here moves it)
+#   helpers blocking      0               (UNCHANGED)
+#   supervision_ready     true            (UNCHANGED)
+#   library objects       81 + 1 helper   (was 80 + 1: abandonment.py is a CREATE)
+#   CINV sequence         3               CRES sequence  1
+#   CINV-000001           launch_authorized    CINV-000002  launch_authorized
+#   occupancy             2 of 2          (UNCHANGED -- nothing is abandoned here)
+#   capability --help     now lists `abandon`
+#
+# An `incompatible` verdict here is a FAULT, not an expected intermediate: it
+# would mean something outside this matrix moved. Return the output either way.
+#
+# If the run is interrupted, do NOT rerun --install. Run:
+#   sudo bash /opt/schott-platform/provisioning/execution/install-generation-19.sh --recover
+# and return its output. Do not delete the transaction directory.

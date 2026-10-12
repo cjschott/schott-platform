@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# The CINST-000005 freeze, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# WHY IT IS A COMMITTED ARTIFACT. G11-BC-M reviewed and accepted this body but
+# shipped only its digest in a prose table, so the reviewed 1269 bytes existed
+# nowhere in the repository. A digest without the bytes it names is not a
+# reviewable artifact -- nobody can re-render it, and the freeze check below has
+# nothing to check against. The test suite renders this block and asserts the
+# digest, so "the committed block produces the accepted body" is a checked fact
+# rather than a claim.
+#
+# STEP 4 OF THE G11-BC-M WRITE PLAN. CADV-000006 is already written and
+# accepted. This freezes CINST-000005 and runs a READ-ONLY preflight; the
+# admit-instance WRITE is a separate authorisation and is not in this block.
+#
+# It writes exactly one file, into /etc/kyri/fabric. It does not touch
+# /var/lib/kyri/fabric, and proves so.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE_CINST'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/cinst-000005.json
+REVIEWED=850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da
+REVIEWED_BYTES=1269
+
+# The Fabric store as it stands with CADV-000006 written and CINST-000005 not.
+# Pinned so the preflight below cannot be read as proof against a store that
+# moved underneath it.
+FABRIC_BEFORE=e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b
+
+# Bodies that are NOT this one, refused BY NAME rather than by a generic
+# mismatch. The first is the G11-BC-J candidate, superseded for lease age; the
+# Fabric engine accepts it, so this block is the only thing between a stale
+# paste and an immutable record carrying a lease that is already part spent.
+SUPERSEDED_BCJ=a242a4b3c7bef26fc8fcdcfcf1d3f9fad7a7b0d6671bfe17e949036013a52f5b
+ACCEPTED_CINST4=5d268f703d01f5e07106e77333a766e23e1d489eddbb974d60f5d4522a5e699c
+
+printf '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+# The destination must not exist.
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+
+# And its predecessor in the chain must. Admitting an instance against an
+# advertisement whose own frozen input is absent would mean freezing a body
+# whose authority nobody can re-render.
+sudo test -f /etc/kyri/fabric/cadv-000006.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cadv-000006.json is absent; CADV-000006 must be frozen and written first"; exit 1; }
+
+TMP="$(mktemp)"
+cat > "${TMP}" <<'BODY'
+{
+  "request_id": "g11bcm-admit-instance-cpkg-0001-chost-0001-cadv-000006-supersedes-cinst-000004",
+  "actor": "primary-platform-operator",
+  "approving_authority": "primary-platform-operator",
+  "recorded_at": "2026-09-15T06:15:00-05:00",
+  "evaluated_at": "2026-09-15T06:15:00-05:00",
+  "capability_id": "CAPDEF-0001",
+  "capability_package_id": "CPKG-0001",
+  "capability_host_id": "CHOST-0001",
+  "contract_id": "CCON-0001",
+  "satisfied_contract_versions": [
+    "1.0.0"
+  ],
+  "verified_resource_profile": {
+    "architecture": "x86-64"
+  },
+  "admission_decision_id": "eng-0005-cinst-000005-admission",
+  "package_trust_record_id": "TREC-000002",
+  "host_trust_record_id": "TREC-000001",
+  "advertisement_id": "CADV-000006",
+  "supersedes": "CINST-000004",
+  "admission_scope": {
+    "permitted_capabilities": [
+      "CAPDEF-0001"
+    ],
+    "permitted_operations": [
+      "execute"
+    ],
+    "permitted_data_classifications": [
+      "internal"
+    ],
+    "permitted_targets": [
+      "HOST-0001"
+    ]
+  },
+  "admitted_at": "2026-09-15T06:15:00-05:00",
+  "admitted_until": "2026-09-19T06:00:00-05:00",
+  "provenance": {
+    "class": "declared",
+    "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
+    "recorded_at": "2026-09-15"
+  }
+}
+BODY
+
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+case "${ACTUAL}" in
+  "${SUPERSEDED_BCJ}")
+    echo "REFUSE: this is the SUPERSEDED G11-BC-J CINST candidate (lease age)"
+    rm -f "${TMP}"; exit 1 ;;
+  "${ACCEPTED_CINST4}")
+    echo "REFUSE: this is the already-accepted CINST-000004 input"
+    rm -f "${TMP}"; exit 1 ;;
+esac
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf '\n--- read-only preflight (NO Fabric write) ---\n'
+cd /opt/schott-platform
+PREFLIGHT="$(python3 -m tools.fabric.cli admit-instance \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --trust-store-root /var/lib/kyri/trust \
+  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
+  --input-file cinst-000005.json --approved-directory /etc/kyri/fabric --preflight)"
+printf '%s\n' "${PREFLIGHT}"
+
+# The two facts pinned SEPARATELY. `would_accept` alone says a body is well
+# formed; it does not say the engine resolved it to the record this ceremony is
+# authorised to create.
+PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["predicted_record_id"])')"
+DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
+test "${PREDICTED}" = "CINST-000005" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CINST-000005"; exit 1; }
+test "${DIGEST}" = "sha256:be0daf493301139aabb7ef6224b93203d744545665ef6f470a8d6236713ede8b" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed one"; exit 1; }
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+
+printf '\n--- production Fabric must be byte-identical to before ---\n'
+AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+printf '%s\n' "${AFTER}"
+test "${AFTER}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the freeze (${AFTER}, expected ${FABRIC_BEFORE})"; exit 1; }
+printf 'ok  /var/lib/kyri/fabric unchanged at %s\n' "${FABRIC_BEFORE}"
+
+printf '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+FREEZE_CINST
+
+# EXPECTED:
+#   frozen input   850af1361812ee04212c6c525a276868ae5ab81883291367ebc18cee91fda8da
+#                  /etc/kyri/fabric/cinst-000005.json  root:cschott  640  1269 bytes
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CINST-000005,
+#                  request_digest sha256:be0daf49…
+#   fabric         e542651a4c6f2afd27b6c1141f75b6433f6f348267477608b24658710758c56b
+#
+# Return this output. The admit-instance WRITE is a separate authorisation.

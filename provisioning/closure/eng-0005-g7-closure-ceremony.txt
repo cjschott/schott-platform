@@ -1,0 +1,139 @@
+# ENG-0005 CLOSURE CEREMONY — prepared at G7, NOT executed.
+#
+# This file is reference text. Every step below crosses an operator boundary
+# that G7 is explicitly forbidden to cross, so nothing here was run.
+#
+# =====================================================================
+# WHERE THIS SEQUENCE COMES FROM
+# =====================================================================
+#
+# Not from assumption. From what the ledger records about ENG-0001 and ENG-0002,
+# which are the only two increments in this repository that have completed a full
+# closure:
+#
+#   "Independently reviewed at 3b929cc, then merged to main as de6de9f via pull
+#    request #26 on 2026-08-04. The review was conducted and attested OUTSIDE
+#    GitHub: pull request #26 carries no GitHub review record, no review comment,
+#    and was merged by its author. Provenance for the independent review is the
+#    operator's attestation, not a repository-native artefact."
+#
+#   "Released as v0.9.7 on 2026-08-04. The annotated, unsigned tag targets
+#    19ec85c on main, and that released tree contains the reviewed implementation
+#    3b929cc. No GitHub Release, release branch, release commit, or release PR was
+#    created -- the tag alone is the release, matching every prior version."
+#
+# Verified independently at G7: all 21 existing tags are annotated tag objects,
+# and `git cat-file tag` shows NO PGP signature block on any of v0.9.7, v0.9.8,
+# v0.9.9 or v0.10.0. So "annotated, unsigned" is the measured convention, not a
+# remembered one.
+#
+# THERE IS NO RELEASE-NOTES ARTEFACT in this project. docs/history/ holds two
+# incident records and the engineering ledger; it holds no release notes. Do not
+# invent one for ENG-0005.
+#
+# =====================================================================
+# STEP 0 — WHAT MUST BE TRUE BEFORE ANY OF THIS
+# =====================================================================
+#
+# Measured at G7, 2026-10-09. Re-measure before proceeding, because one of these
+# is wall-clock bounded.
+#
+#   branch          arch/eng-0005-execution-transition
+#   HEAD            the G7 report commit, clean tree, equal to origin
+#   Fabric          7e2a4ed0e9c11cf1f3790360542232649946a9bf31400e9dd442d8c2ad2f376b
+#   runtime         7dfb34e6270a2f67292b90cdefcc829a19c94ece99a0ed24779b7059c5382e99
+#   Trust           53605e4e738d941ad5f1d2d2d08fe5cb776e484f6fee07f1123859d07828b63f
+#   occupancy       0/2
+#   chain           CADV-000008 CINST-000007 CROUTE-0007 CSEL-000005
+#
+# WALL-CLOCK BOUND. The renewed Fabric authority expires
+# 2026-10-13T06:25:00-05:00. After that instant the Stage-3 matrix masks 14 of 22
+# again -- not a regression, just expiry. O3's evidence is dated and remains
+# valid for what it proved; but if closure happens after expiry and anyone wants
+# a LIVE matrix run as part of it, the renewal ceremony must run first. The
+# renewal is now a proved four-step chain (G11-BC-AN/AP/AR/AS).
+
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# ---- STEP 1: the ledger ---------------------------------------------------
+#
+# THREE statements in docs/history/v1.0-engineering-ledger.md are now false. Two
+# are about ENG-0004, not ENG-0005, and whether they belong in this closure is a
+# reviewer decision -- they are listed because G7 found them, not because this
+# ceremony assumes the answer.
+#
+#   (a) ENG-0005 row: "reviewer gate G7 is unentered, the design's §36 criteria
+#       have no criterion-by-criterion audit, and three recorded obligations are
+#       open". The audit exists; O1, O2 and O3 are closed; G7 is this checkpoint.
+#
+#   (b) ENG-0005 row: "the adapter is live through Generation 22". Generation 23
+#       is installed and accepted -- provenance.py at
+#       39141cd453d74c8cfb4fee7348f45fff4dfa68b5155edaff6886daf990387647,
+#       byte-identical to the repository copy.
+#
+#   (c) ENG-0004 row AND the prose at line 245: "Release v0.10.0 is authorised;
+#       the release record is integrating and the tag is not yet created".
+#       v0.10.0 EXISTS -- an annotated tag at 9ee4a6c, an ancestor of origin/main.
+#       This is stale in two places.
+#
+# Do NOT rewrite history in the ledger. Its own convention is to state what
+# changed and when, leaving the prior claim visible.
+
+# ---- STEP 2: independent review ------------------------------------------
+#
+# OPERATOR BOUNDARY. The exit gate is an independent review, and the precedent is
+# explicit that it is conducted and attested OUTSIDE GitHub, with the operator's
+# attestation as its provenance. Nothing in this repository can satisfy it and
+# nothing in this ceremony attempts to.
+#
+# Record, as ENG-0001 did: the reviewed commit, who reviewed it, and that the
+# provenance is an attestation rather than a repository artefact.
+
+# ---- STEP 3: merge to main, via pull request -----------------------------
+#
+# OPERATOR BOUNDARY.
+#
+#   gh pr create --base main --head arch/eng-0005-execution-transition \
+#     --title "ENG-0005: Capability Runtime and the first adapter" \
+#     --body "<the closure summary; see the G7 report>"
+#
+# The branch is 452 commits ahead of origin/main and 0 behind, so no rebase is
+# required. Precedent is a merge commit on main via PR, not a fast-forward and
+# not a squash.
+
+# ---- STEP 4: the tag, which IS the release -------------------------------
+#
+# OPERATOR BOUNDARY.
+#
+# Annotated, UNSIGNED, targeting the merge commit on main:
+#
+#   git tag -a vX.Y.Z <merge-commit> -m "Schott Platform vX.Y.Z - <title>"
+#   git push origin vX.Y.Z
+#
+# THE VERSION NUMBER IS NOT DECIDED HERE. The latest tag is v0.10.0 (ENG-0004).
+# The precedent is a minor bump per engineering increment -- ENG-0002 took
+# v0.9.8, ENG-0004 took v0.10.0 -- which points at v0.11.0 for ENG-0005. That is
+# an inference from two data points and the operator's call, not this ceremony's.
+#
+# Do NOT create: a GitHub Release object, a release branch, a release commit, a
+# release PR, or a release-notes file. The tag alone is the release.
+
+# ---- STEP 5: the ledger again --------------------------------------------
+#
+# Record the reviewed commit, the merge commit, the PR number, the tag, the date,
+# and that ENG-0005's exit gate is satisfied -- in the shape ENG-0001 and
+# ENG-0002 use.
+
+# ---- STEP 6: the branch --------------------------------------------------
+#
+# The ledger records no branch deletion for any prior increment, and the ENG-0001
+# and ENG-0002 branches are not described as deleted. RETAIN unless the operator
+# decides otherwise. Deleting it would remove the only place the checkpoint-by-
+# checkpoint history of ENG-0005 is addressable.
+
+# ---- WHAT THIS CEREMONY MUST NOT DO -------------------------------------
+#
+# No Fabric write. No capability execution. No lifecycle mutation. No sudoers
+# change. No evidence cleanup -- see the G7 report's evidence inventory: every
+# item is KEEP, and nothing in the governed stores is authorised for removal.

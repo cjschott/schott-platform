@@ -1,8 +1,9 @@
 # Runs ShellCheck against every repository shell script. Warnings are NOT
 # suppressed globally; if a specific finding ever needs an exclusion, add a
 # scoped `# shellcheck disable=SCxxxx` with a justification in the script itself
-# rather than disabling checks here. Reproduce locally with:
-#   shellcheck scripts/*.sh tests/*.sh
+# rather than disabling checks here. Reproduce locally with the same command
+# this workflow runs:
+#   tools/dev/run-shellcheck.sh
 name: ShellCheck
 
 on:
@@ -25,11 +26,16 @@ jobs:
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      # shellcheck is preinstalled on ubuntu-24.04. The version printed here is
-      # the one tools/dev/versions.env pins (SHELLCHECK_VERSION), so a local run
-      # via tools/dev/run-shellcheck.sh reports the same findings this step does.
-      # The file list must stay identical to that script's, or the two diverge.
+      # shellcheck is preinstalled on ubuntu-24.04 at the version
+      # tools/dev/versions.env pins (SHELLCHECK_VERSION), so run-shellcheck.sh
+      # resolves the host path and reports exactly what a developer sees.
+      #
+      # This step used to inline its own glob, with a comment warning that the
+      # list had to stay identical to that script's. It did not: the script also
+      # lints provisioning/, so it could resolve
+      # `source provisioning/execution/generation-11-surface.sh` while CI could
+      # not, and CI alone raised SC1091 for a file the developer had linted.
+      # Calling the script removes the possibility of the two disagreeing rather
+      # than restating the list and asking the next person to keep it in step.
       - name: Run ShellCheck on all shell scripts
-        run: |
-          shellcheck --version
-          shellcheck scripts/*.sh tests/*.sh tools/dev/*.sh
+        run: tools/dev/run-shellcheck.sh

@@ -1,0 +1,67 @@
+# Reviewed example only. NOT INSTALLED BY ANYTHING, and not by G4.
+#
+# Installing a sudoers drop-in is gate G3. This file exists so the grant can be
+# reviewed as text before it is policy, and so that "what exactly did we agree
+# to give away?" has a written answer.
+#
+# The accepted authority is exactly one sentence:
+#
+#   cschott may execute exactly the Kyri transition helper with exactly one
+#   valid CINV identity.
+#
+# It is not general passwordless root, not switch-user authority, and not a
+# grant over any other Kyri helper. kyri-exec-quota and kyri-exec-admin are
+# deliberately absent: the quota operation runs inside the transition that this
+# rule already authorises, and the administrative helper is interactively
+# authenticated with no NOPASSWD at all.
+#
+# Boundary specification §3.2 and §3.3 are normative for every property below.
+#
+# --- required properties, and why -------------------------------------------
+#
+# exact absolute path        never a directory, never ALL, never a wildcard
+# one caller, one runas      cschott, and root only
+# regex argument             ^CINV-[0-9]{6}$ -- sudoers 1.9 treats an argument
+#                            beginning with ^ as a regular expression, so the
+#                            policy layer refuses a malformed identity before
+#                            the helper is executed at all
+# NOPASSWD                   the coordinator is non-interactive; ruling R4
+#                            accepts it for this one reviewed helper only
+# env_reset in force         no env_keep addition, no SETENV; the helper trusts
+#                            none of the surviving variables and constructs the
+#                            worker environment explicitly
+# no shell, no !authenticate beyond NOPASSWD
+#
+# Argument validation is NOT delegated to this file. The helper independently
+# revalidates ^CINV-[0-9]{6}$; the regex here is defence in depth, because a
+# policy layer that is the only validator is one syntax error away from being
+# no validator.
+#
+# --- integrity ---------------------------------------------------------------
+#
+# Primary control is immutable root-owned ancestry: the helper and every
+# writable ancestor are root:root and non-writable by cschott, by
+# kyri-capability, and by any unprivileged user or group. sudoers(5) is explicit
+# that a grant over a command the user can write is void -- a digest cannot
+# repair a writable binary.
+#
+# Secondary control is the SHA-256 digest below, defence in depth and never a
+# substitute for that ancestry. sudo's fdexec default is digest_only, so the
+# descriptor that was hashed is the one executed and the hash-then-swap race is
+# closed by the mechanism rather than by our code.
+#
+# The digest is captured at G3 from the INSTALLED artifact and pasted here. It
+# is deliberately a placeholder in the repository: a real-looking digest
+# committed as an example is one somebody ships by accident. A helper upgrade
+# that changes it is an intentional review event, and the transition fails
+# closed on mismatch.
+#
+# Capture it with:
+#     sha256sum /usr/libexec/kyri-exec-transition
+#
+# Install (G3 only) as /etc/sudoers.d/kyri-exec, root:root, mode 0440, and
+# validate with `visudo -c -f` BEFORE moving it into place.
+
+Cmnd_Alias KYRI_EXEC_TRANSITION = sha256:REPLACE_WITH_INSTALLED_HELPER_DIGEST /usr/libexec/kyri-exec-transition ^CINV-[0-9]{6}$
+
+cschott ALL=(root) NOPASSWD: KYRI_EXEC_TRANSITION

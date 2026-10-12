@@ -1,0 +1,1050 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# READ-ONLY preflight for the ENG-0005 G5 ceremony: production image build and
+# CIMP admission.
+#
+# THIS SCRIPT MUTATES NOTHING, IN ANY MODE. It builds no image, creates no
+# authority root, runs no genesis, allocates no CIMP or CGEN, writes no sudoers
+# policy, and invokes neither Podman, the transition, nor the worker. It reads
+# and reports. The ceremony itself is provisioning/execution/g5-ceremony.sh.
+#
+# WHAT THIS IS FOR, NOW THAT THE CEREMONY EXISTS
+# ==============================================
+# The three architecture rulings that once blocked G5 are resolved, and
+# --blockers records their resolution rather than the block. This stays the
+# cheap, dependency-free check that the host is at the ruled starting position
+# before an operator begins: it needs no commit, materialises nothing, and can
+# be run by the coordinator.
+#
+# Usage:
+#   g5-preflight.sh --verify-host    is this host at the ruled G5 starting state?
+#   g5-preflight.sh --verify-source  is the root-owned execution model in place?
+#   g5-preflight.sh --blockers       the three rulings, and how each was resolved
+#
+# Test-only:
+#   --fixture DIR   operate on a fixture tree instead of the host.
+
+COMMIT="cd0dc13ba3f4b45a1af01672c3a5f0e95a120234"
+GEN6_COMMIT="32c3091b6457e06b4ebb86fed3e2d126cd3e7b07"
+GEN5_COMMIT="cfb0edd31b3589f12b6ba583ebfa48bb64e89519"
+BRANCH="arch/eng-0005-execution-transition"
+REPOSITORY="/opt/schott-platform"
+
+LIBRARY_ROOT="/usr/lib/kyri/python"
+LIBEXEC="/usr/libexec"
+KYRI_STATE="/var/lib/kyri"
+AUTHORITY_ROOT="/var/lib/kyri/implementation-authority"
+CONTROL_ROOT="/var/lib/kyri/implementation-authority-control"
+SUDOERS="/etc/sudoers.d/kyri-exec"
+TMPFILES_TARGET="/etc/tmpfiles.d/kyri-execution-material.conf"
+SNAPSHOT_PARENT="/run/kyri"
+SNAPSHOT_ROOT="/run/kyri/execution-material"
+
+EXPECTED_LIBRARY_FILES=44
+EXECUTION_USER="kyri-capability"
+EXECUTION_GROUP="kyri-capability"
+EXECUTION_UID=999
+EXECUTION_GID=987
+EXECUTION_HOME="/data/kyri/capability"
+EXECUTION_RUNTIME_DIR="/run/user/999"
+COORDINATOR="cschott"
+
+TMPFILES_DIGEST="10d27e19e298ebf78d9d1d18332cf9d513c5af50b1b3f27182a38a44e02a34d9"
+
+# --- the declared next-generation delta -------------------------------------
+#
+# THE DURABLE RULE. An intentional byte change to an object inside an accepted
+# installed Kyri runtime generation creates a new runtime generation, unless an
+# existing normative generation mechanism explicitly defines otherwise. There
+# is no list of "important" installed modules and no object is exempt: the
+# installed surface is the unit, so a change anywhere in it advances the whole
+# generation.
+#
+# WHAT THIS DECLARATION IS, AND IS NOT. Generation 9 is the accepted, installed,
+# live generation. Generation 10 exists only in this checkout: it is not
+# installed, not live-accepted, and nothing here installs it. This block says
+# exactly which installed-runtime objects the checkout is legitimately ahead on,
+# so that "a new generation is in development" and "an installed object quietly
+# changed" stop being the same observation. Everything outside it is still drift
+# and still fails.
+#
+# A declaration describes a TRANSITION, and a transition is coherent whether it
+# is still pending or has already been applied. So an installed object may hold
+# either the declared baseline (pending) or the declared new bytes (applied);
+# what is never coherent is an installed object holding neither, or a checkout
+# holding anything but the declared new bytes. That is what lets one declaration
+# be checked against both a live host and a fixture pinned to an older
+# generation, without either being described loosely.
+#
+# The rows are cumulative from the oldest baseline this file is checked against,
+# which is why an entry can survive its own generation being installed.
+#
+# Digests, not a commit. The newest generation has no reviewed source authority
+# until it is committed, and inventing a SHA before the commit exists would be
+# pinning something nobody reviewed. The bytes are pinned instead, so the delta
+# is exact today and a later ordinary commit can become the reviewed authority
+# an installer would pin.
+#
+# TWO ROWS WERE WRONG ABOUT THE LIVE HOST, AND NOTHING NOTICED. Found at
+# G11-AU while re-deriving the Generation-12 baseline the Generation-13
+# installer has to pin.
+#
+# `records.py` carried the Generation-11 baseline only. Generation 12 installed
+# a newer one and the row was never widened, so from the moment that generation
+# went in, the live host held bytes this declaration called undeclared drift.
+#
+# `execution/launch.py` was declared CREATE|ABSENT. Generation 8 installed it
+# and it has been present ever since; G11-AT then moved the checkout, and a
+# CREATE row demands the installed object be absent or already at the new
+# bytes. It was neither.
+#
+# Both installed objects are reviewed bytes -- traced to `9300250` and
+# `bc05f911` respectively -- so the host was never in an unexplained state. What
+# was wrong was the declaration, and the reason it stayed wrong is that the
+# suite only ever ran this against fixtures. It now runs against the live host
+# too.
+#
+#   source_path|operation|installed_baseline_digest|next_generation_digest
+GENERATION_DELTA=(
+"tools/capability/execution/mutation.py|REPLACE|9a8d071f4c8f6148ab8fcf1c34007d6d26cec9f16a6bbac539ff3a3fda3a2552|94500b6aa0480d8413bedd96ce59a56378b4c0450b40b9fa7dbc1779c325a9cd"
+"tools/capability/execution/launch.py|REPLACE|ABSENT,ca606a942494cbf789e63c0a63621a9878d93b0bbfb2388ef6b6a1bba3dd8d0f|665a1f5696292541a3b2708e3fc445941b0b6de496a38f92030b3c9b5c46d577"
+"tools/capability/cli.py|REPLACE|990bd8cafb0ae50e5c575970747ba581c0c854f2a3791d8aa327e378e949f745,c10bf11e8382face3d8020ea6be971c359f8a4bcd0b5fe9e862a460c0d7c4305,b45f5332dcd98f38c2479c13cca17e1e61c535b6a6b4b6e2c89beaebfc7c3d98,752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c,9459b09f2d0545c3a490f21e5223c2cfe95f2f4431132e275b6eae0b4502927f|752951f7688af9ced5b326ad5be6d690c47e0ddee89d6b511f31296683e3d295,7b4fac3e8543829b5e5fa7e8041d29be8bb53083c9b87b09df5cb7beb254c6b1,a350b7884471d57f55826331ea858f1210d2b10bbfb2486b330e8e1a3f0df407,90979a0247d9cc0c28d9bce10be96e0b5205acca1d887db96f5794d6602c9c23,82eb3ffe2d73655913f8d5e6e9cb4e799f47d15b4b266843e58b9fea3cc7425c,9459b09f2d0545c3a490f21e5223c2cfe95f2f4431132e275b6eae0b4502927f,211cf173e780d7031ec78180c9890b046ae0ec70fdcddd9e479eaa3e6fad3095"
+# Generation 10. The package pipeline becomes tree-native: generation 9 staged
+# the package as a regular file while the launch bridge opened the staged path
+# with O_DIRECTORY, so the two ends of that contract could not meet. Note that
+# cli.py is NOT here -- the launch bridge was already correct, and confirming
+# that it needed no change is part of the evidence that the resolver was the
+# outlier rather than its consumers.
+"tools/common/trusted_source.py|REPLACE|e0f32e1f5372dbdb24ebf22e35cfa7d3a52af570f87a3160f634dae2fffea4f8|d1e8ac5933834deb7b7aa07a847312ac10d8c4e3f0c0d2d93400c6eafe04865f"
+"tools/capability/execution/package_contract.py|REPLACE|812dc878cb7b7082b42086a9adce714a152617e718536c039ed759b12d3e511a|79a9f7d4befb490833c5c5b764a03c02696ab3555e8081a89af92f5f79a4dc13"
+"tools/capability/package_resolution.py|REPLACE|678bcabd341f8a76fa7000cfe0f66174b443c4ca5b2782846bed7baf94681f6c,0c5c94874570d38693fe46bbc4d1193e59751941c1d25199589c4cdfaa9e5d1b|2124005cb97309f7417543f5765a92a5857bf979a6df4798ee2a6b600909bd14"
+"tools/capability/evidence.py|REPLACE|6240ad761004808051bf4d9685a02220c7b911ed90ff96155a15c8e4f7b7b59e,394bc94fe8f5aee36c81ef97b6228b6f32c577c05724d7277072d58471f2cfc7,d2429646966462508fb27e4c6b96d1a0f698cf93fa841d66f0640bd344232426,25f65bd345efc84faadfefff635d50b850df9362ae20130f47b55fc9cf8588b8|25f65bd345efc84faadfefff635d50b850df9362ae20130f47b55fc9cf8588b8,a571ad02ace56dbb93a5cc9385a4b2cca4e5c1922fa16bfa9f59848a25a386f6"
+# Generation 12, ENG-0005 G11-X. Per-invocation operation authority: the
+# invocation boundary now names the action being requested and checks it,
+# with the capability, the classification, and the node identity, against
+# the admitted binding's effective_scope. The operation joins the binding
+# digest and the durable record, so what was authorised cannot be changed
+# without changing its evidence.
+"tools/capability/fabric_evidence.py|REPLACE|e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742,e1e508e5db9a589bf007362a252d45b2c60fe506d9ad51121f6aab8913023742|e51d893936ba5e465fa94893a46a3f85c66ad4904a29970f66dc00f63fb67e67"
+"tools/capability/invocation_identity.py|REPLACE|617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2,617d2f5a4c98e25bfc753e73a3f81836030c1b24d6a4c5e3218c511ccbd8b2a2|3a01471a43c1f0b27aac987c77941446368e17ba293cfaf0451191a587c5def8"
+"tools/capability/records.py|REPLACE|563e4adc72ae8f12a422f787dad775d907048f5d4732aa369696362e1f9ccc31,a6744501a1f58eafb926f128fec1eadcc2ccced9ebb601718c8cc55a4b1da38e|90312ba3096aad7f3c09628536f5a17d594d4f70d63c6147570f8ed65616e27e"
+"tools/capability/coordinator.py|REPLACE|829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,829eca2aa56a9b03909243dce75716021cdf2eaafcfe417ae1187bf9e333c924,1df5e494d5cbf35e98b1ac70c1ef7e852d18c94797d3779794029dcf66be48ea,b72e7e2576095c96ffd5b4a3a48acc2fed7c1852b631a5f6f7d691e0bf8603c0|b72e7e2576095c96ffd5b4a3a48acc2fed7c1852b631a5f6f7d691e0bf8603c0,acb80cb93084b2b196d6b806b278128458be8947a9575eac7c7c509e9f045585"
+# Generation 13 candidate, ENG-0005 G11-AB. `invoke --preflight`: the rehearsal
+# every other governed write in this platform already had. G11-AA proved the
+# cost of its absence -- the only way to learn whether an invocation would be
+# accepted was to spend CINV-000001 finding out, and a refused first attempt
+# consumed CINV-000001 and CRES-000001 permanently. `rehearsal.py` carries the
+# state; `store.py` gains the read-only prediction; `package_resolution.py` and
+# `evidence.py` each stop at the point they stop being reversible; `cli.py` and
+# `coordinator.py` carry the surface and the verdict.
+#
+# Declared here as pending. NOT INSTALLED: this is source and tests only, and
+# the generation that publishes it is a separate governed ceremony.
+"tools/capability/store.py|REPLACE|581901bfc8ce623d60214e796639261fd1ae9afabadbdba6bfab5fb64d4042b6|a476c5ec72f6ea66f33e8291d78cd9f99934710519ddf0acf2f658037e999fe6"
+"tools/capability/rehearsal.py|CREATE|ABSENT|ed8479391aa2a4abc29ab2c9ab287d8f39aa3486549acc9d0fb856486fcd0355"
+#
+# G11-AI. `create_argv` gains `--pull=never`.
+#
+# `--network none` isolates the container; it says nothing about the runtime,
+# which resolves images on the host network before any container exists. Under
+# Podman's default (`missing`) an absent image ID would be read as a repository
+# reference and fetched, so an image that failed the store presence check could
+# still arrive from a registry. The image is governed by CIMP and must already
+# be present or the invocation refuses: there is now no acquisition path by
+# flag as well as by policy.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/worker.py|REPLACE|2e46ec066b2cd6e859d47d92e48e86269b66700dcb2be0ac17949b145a08378e|df9d252e3c1e90418a9b841ed6f3f873446dcbc35893c4c593b54b0e9dad0a6b"
+#
+# G11-AJ. The governed container identity, corrected and bound.
+#
+# The runtime launched workloads as container uid 1000 while the admitted image
+# CIMP-000001 declares 65532:65532. 1000 was true of the Track B alpine image
+# and was never revisited. It survived because every layer agreed with every
+# other: the profile said 1000, the worker restated 1000, the argv requested
+# 1000, Podman echoed 1000, and T8 compared 1000 against 1000.
+#
+# `profile.py` now states the identity once, at 65532:65532, and adds the
+# mapping helper. `worker.py` aliases it rather than restating it, and the argv
+# carries the user-namespace mapping that makes a worker-owned 0700 output
+# directory writable by that identity without any chown. `lifecycle.py` reports
+# the uid/gid map the runtime established, because Config.User is an echo of
+# the request and reads correctly even when no mapping exists.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/profile.py|REPLACE|f87947fe096dc981248195a29ba18a38a30287f04091031ab59781730e2bbe97|3072e4557d6fae4912d872547b5cd26597be3a19254451fefc3c642c99f2748b"
+"tools/capability/execution/lifecycle.py|REPLACE|65f40fd3aaf48ccd73db52c5d36048353c43731bb80f7a338bd9dd58eafe703d|f64d58359acaeeaa02fd3fe0521641b179e267f2c07d986b18b356abdf1d536a"
+"tools/capability/execution/mount_evidence.py|CREATE|ABSENT|acbcb2e0ea9ac458c3e17ec909dfdf2f234db842152c086ce23fc327d1dca973"
+#
+# G11-AN. The terminal result contract. `records.py` splits the invocation and
+# result schema versions and names the section 15 fields; `evidence.py` gains
+# the terminal result writer and carries the admission verdict to the caller;
+# `coordinator.py` persists the outcome after the adapter returns;
+# `inspection.py` validates each kind against its own schema version and stops
+# reporting a prepared invocation with a result as a mismatch, which is now the
+# ordinary successful shape.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/inspection.py|REPLACE|9ddf6cbba02063bc9f0a204d4565f4a11cea0afccd29dcfc8bbe9f4b9bf6a202,adb0e46b03c649895564aabccf95cbd7b2bdd6d4a71bbc94773630691bef1297|adb0e46b03c649895564aabccf95cbd7b2bdd6d4a71bbc94773630691bef1297,1c2d27d7f003e70ee4fcc4ede004530b0587dfcd65f7180a59caaa03b2d3b99b"
+#
+# G11-AS. The deployment execution identity authority.
+#
+# A compiled-in worker uid and gid lived in `worker.py`, and they were true of
+# `schai` only because account creation happened to assign those numbers. G11-AH had
+# already removed the equivalent coordinator constant and left the argument in
+# the source it corrected; the argument was never applied to the identity on the
+# far side of the transition. G11-AR proved no authority existed to apply it
+# with and stopped rather than building an eighth site.
+#
+# `identity.py` carries the runtime half of the parser and reads
+# `/etc/kyri/execution-identity.json`; `worker.py` and `verification.py` take
+# the identity as an argument instead of restating it; `profile.py` corrects a
+# comment that described the host identity as a fixed pair.
+#
+# The authority file itself is NOT part of this generation. It is deployment
+# authority, installed by its own ceremony, and a runtime that consumed it must
+# not be installed against a host that has not been given it.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/identity.py|CREATE|ABSENT|f7a01f2f64ef5d494f198f443a717d9ef110496042298935105bfa1d8ce684bc"
+"tools/capability/execution/verification.py|REPLACE|ABSENT,ed5b49ed03add16c8ba7a233d53a8c5528e5ba4d0fc23f53cdd41bb788bd2e73|7a792aaf3c59ed0bb4bd32cb55267e6fc26dfae06f5da1b8b36efff9e1efa952"
+#
+# G11-AT. Coordinator supervision, recovery, and the readiness gate.
+#
+# `protocol.py` gains a duplex channel and the two facts a terminal state has
+# to carry across the boundary -- T13's outcome class and the runtime's own
+# timings -- because the coordinator cannot observe the container and a fact
+# that is not reported is one it will never have. `adapter.py` announces what it
+# establishes as it establishes it; until now nothing in production ever called
+# `protocol.encode`, which is how the coordinator ended up blind to an execution
+# it had authorised. `supervision.py` is the adapter implementation that fits
+# the coordinator's seam from the other side of the privilege boundary;
+# `recovery.py` enumerates interrupted invocations from records rather than from
+# containers; `helpers.py` is how a runtime refuses to supervise through helper
+# bytes it was not built against. `cli.py` gains the two released verbs that
+# reach them, and `coordinator.py` the one narrow entry that keeps result
+# authority where it has always been.
+#
+# Declared here as pending. NOT INSTALLED.
+"tools/capability/execution/protocol.py|REPLACE|613ff30d5999e47e615ac28023b2e9a6e799439154b0e353eb385888b2484cfb|c2040807fa26c349f6948b7c44ca28aeea6e2fdd8f57cb54d0e608c12c9d09c1"
+"tools/capability/execution/adapter.py|REPLACE|5bebf09a6268fc57ee47e19f4c8f14731b77ca0f81b8779b63690cc97655ff4e|5bd4d3496167e663c5684721ee606e072b6ec2acc07619c09b667b59bed287cb"
+"tools/capability/execution/supervision.py|CREATE|ABSENT|f892861dc252175e87eecc41c1897aa52cf1149b79993f442061187960038e64"
+"tools/capability/execution/recovery.py|CREATE|ABSENT|a93819d1400d981097eab6e2f31413ea90bc094d5dfd09265a368ccc0e59ab8f,f44ada7f3272d6f231fa05a99d30f04ec820385e0c4c92a1d31f680dc0222a03,fdad3cecdf72eeb7b00c21f0ba04ee9bbc4ca3ebd6d6c4a571037518c2c567f0,d044cb29a32714945d0d76db59ca3c44cd77d4978e5781fedc073e675b897173,5efec912fdf27add88dadefd2afcb50c698bae4db3296f9926897e272aad9490"
+"tools/capability/execution/helpers.py|REPLACE|ABSENT,eff6c4fd6f7420ba86491b7923e14cb2951a9c078decacc09dc20f38cefd5cbb,74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07|74b84015b18a6f38e88633e068cb9c4bdf2753804f3c336ca45aa9a577125874,6dd936064f1c6d3813cbdbd9fb175b03902b18623493638cded55e3e930b8b07,78da8519db99fa06e809755808397fe36bb8c83872deab142987c98308b38a4f"
+#
+# G11-AX. `helpers.py` again, and this time as a REPLACE off its own installed
+# Generation-13 bytes rather than as a CREATE.
+#
+# The compatibility check declared the four privileged EXECUTABLES a supervised
+# execution reaches and none of the privileged MODULES they load. Root loads
+# those by name after it has already elevated, so the gap was not theoretical:
+# G11-AX drove the partial-deployment matrix and found seven mixed states
+# reported `compatible`, among them new entrypoints beside a stale
+# `kyri_exec_transition.py` -- the G11-AI split-generation defect surviving
+# inside the check written to prevent it -- and a reconcile entrypoint installed
+# without the `kyri_exec_reconcile.py` it execs for.
+#
+# The declaration now covers the closure: four executables plus the four modules
+# they name. The supervision suite derives that closure from each helper's own
+# `*_MODULE` constants and from the generation matrix, so it is checked rather
+# than remembered.
+#
+# Declared here as pending. NOT INSTALLED: the installed object is still
+# `eff6c4fd`, and publishing these bytes is a runtime generation ceremony, not a
+# helper ceremony. G11-AX is not authorised to perform one.
+#
+# G11-BC-B. Generation 16: `recovery.py` gains one more declared successor,
+# `fdad3cec`.
+#
+# `_invocation_identity` preferred the OPAQUE `invocation_id` over the record's
+# `invocation_record_id`. The lifecycle journal is keyed by the CINV, so
+# `states.get(identity)` missed on every real invocation, `unresolved_invocations`
+# returned nothing, and `execution_safety` reported READY having inspected
+# nothing. G11-BC-A corrected it; `fdad3cec` is those bytes.
+#
+# THIS ROW IS WHY THAT CORRECTION COULD NOT SIMPLY BE COMMITTED AND FORGOTTEN.
+# The checkout side of a declaration is absolute -- `require_operator_source`
+# refuses a declared object carrying anything but a declared successor -- so
+# from the moment G11-BC-A landed, this preflight refused the branch. That
+# refusal is the deployment rule working: a generation-declared runtime object
+# cannot be corrected in the repository without a generation declaring the
+# successor.
+#
+# ADDING THE DIGEST IS NOT WIDENING THE RULE. No check is relaxed, no comparison
+# becomes a wildcard, and nothing is derived from git. One more reviewed digest
+# is written down, and every byte sequence that is not one of these three is
+# refused exactly as before -- including, per requirement 10, on any other row.
+# The predecessors stay listed because the rows are cumulative and a host at an
+# earlier hop must still classify.
+#
+# Declared here as pending. NOT INSTALLED: the installed object is `f44ada7f`,
+# and publishing `fdad3cec` is what
+# `provisioning/execution/install-generation-16.sh` exists to do, under its own
+# operator ceremony.
+#
+# G11-BC-E. Generation 17: `helpers.py` gains one more declared successor,
+# `78da8519`, and `6dd93606` joins its BASELINE list.
+#
+# Stage 3 for CINV-000002 returned unresolved on two defects. The fixes live in
+# the privileged action module and the two runtime-side process-creation sites,
+# and `helpers.py` has to move because it is the rule that declares which
+# privileged bytes the runtime expects -- it now names the CORRECTED action
+# module. That is what makes Generation 17 and the G11-BC-E helper ceremony one
+# ordered pair rather than two independent changes.
+#
+# BOTH SIDES WIDEN, AND BOTH ONLY BY DECLARATION. `6dd93606` moves into the
+# baseline list because it is what the host installed at Generation 15 and is
+# therefore a legitimate predecessor to move FROM; `78da8519` joins the
+# successor list because it is the reviewed bytes to move TO. No check is
+# relaxed and nothing is derived from git -- three digests are written down on
+# the baseline side and three on the successor side, and every other byte
+# sequence is refused exactly as before.
+#
+# The other two Generation-17 objects are NOT here and do not need to be: both
+# are flattened `kyri_exec_*` modules living at the library root, and this
+# declaration's drift loop walks `tools/` only. They are governed by their
+# ceremony's own matrix.
+#
+# Declared here as pending. NOT INSTALLED: the installed object is `6dd93606`,
+# and publishing `78da8519` is what
+# `provisioning/execution/install-generation-17.sh` exists to do, under its own
+# operator ceremony -- which must run BEFORE the helper ceremony that publishes
+# the action module the new declaration names.
+#
+# G11-BC-K. Generation 18: `evidence.py` and `coordinator.py` each gain one
+# declared successor, and each moves its Generation-17 digest into the baseline
+# list.
+#
+# The guard that refuses a second terminal result ran AFTER the workload.
+# `ExecutionSupervisor.execute` launches the privileged helper on its first
+# line, so a re-execute of an invocation that already has a `CRES` would run the
+# transition, the container and the provider, and only then decline to write the
+# result down -- an execution that happened and was never recorded. G11-BC-I
+# found it on CINV-000002; the correction moves the check in front of
+# `supervisor.execute` and gives both callers one shared reader.
+#
+# THE TWO ARE ONE COHERENCE GROUP AND MOVE TOGETHER. `coordinator.py` imports
+# `require_no_terminal_result` at module load, so publishing it against the old
+# `evidence.py` fails every invocation with `ImportError`; publishing
+# `evidence.py` alone leaves the gate defined and never called, which is a host
+# that looks corrected and is not. Publication order is `evidence.py` first --
+# the provider of the symbol -- then `coordinator.py`.
+#
+# BOTH SIDES WIDEN, AND BOTH ONLY BY DECLARATION, exactly as at G11-BC-E.
+# `25f65bd3` and `b72e7e25` move into the baseline lists because they are what
+# the host installed at Generation 17 and are therefore legitimate predecessors
+# to move FROM; the two new digests join the successor lists because they are
+# the reviewed bytes to move TO. No check is relaxed, no comparison becomes a
+# wildcard, and nothing is derived from git.
+#
+# Neither object is in `helpers.REQUIRED_HELPERS`, so `helpers.compatibility()`
+# is unaffected and NO HELPER CEREMONY is required -- this is a library-only
+# generation, unlike the 17/BC-E pair.
+#
+# Declared here as pending. NOT INSTALLED: the installed objects are still
+# `25f65bd3` and `b72e7e25`, and publishing the successors is a runtime
+# generation ceremony that G11-BC-K is not authorised to perform and has not
+# written.
+#
+# G11-BC-V. Generation 19: governed administrative abandonment (ADR-0015).
+#
+# THE DEFECT IT ANSWERS. An invocation that reached `launch_authorized` and
+# never went further held an execution slot for ever: `released` is reachable
+# only from `cleaned`, `recover` writes nothing, and no administrative verb
+# repairs or forces. CINV-000001 and CINV-000002 held both slots between them,
+# and CINV-000003 Stage 2 refused with `CapacityExhausted` before mutating
+# anything. G11-BC-U found it; this is the correction.
+#
+# `MAXIMUM_SLOTS` IS UNCHANGED at 2. The ceiling was never the defect -- it did
+# exactly what it is for. The defect was that a slot could never be given back.
+#
+# SEVEN OBJECTS, ONE COHERENCE GROUP, AND THEY MOVE TOGETHER. `types.py` adds
+# the `ABANDONED` member; `state.py` adds the two edges into it and none out;
+# `capacity.py` states occupancy as an exclusion so the new state holds no
+# slot; `recovery.py` refuses it explicitly rather than by an index lookup that
+# would raise; `admin.py` adds the closed-set `abandon` verb; `abandonment.py`
+# is the operation; `cli.py` carries the surface. Publishing any subset leaves
+# a host that is worse than either end: `state.py` alone would permit a
+# transition to a state `types.py` has never heard of, and `abandonment.py`
+# alone fails at import. Publication order is `types.py`, `state.py`,
+# `capacity.py`, `recovery.py`, `admin.py`, `abandonment.py`, `cli.py` -- each
+# after everything it imports.
+#
+# THE WIDENING IS BY DECLARATION ONLY. The Generation-18 digests move into the
+# baseline lists because they are what the host installed and are therefore
+# legitimate predecessors to move FROM; the new digests join the successor
+# lists because they are the reviewed bytes to move TO. No check is relaxed, no
+# comparison becomes a wildcard, and nothing is derived from git.
+#
+# `abandonment.py` is a CREATE: it does not exist on the installed host, and
+# ABSENT is the honest baseline for an object that has never been published.
+#
+# None of the seven is in `helpers.REQUIRED_HELPERS`, so `helpers.compatibility()`
+# is unaffected and NO HELPER CEREMONY is required -- a library-and-surface
+# generation, like 18 and unlike the 17/BC-E pair.
+#
+# Declared here as pending. NOT INSTALLED: the installed objects are still the
+# Generation-18 bytes, and publishing the successors is a runtime generation
+# ceremony that G11-BC-V is not authorised to perform and has not written. The
+# CINV-000002 reclamation ceremony runs the coordinator CLI out of this
+# checkout, which is why it is executable before that publication.
+"tools/capability/execution/types.py|REPLACE|7dc35046fafdb4e7218739cdbc86deff18ed804b2a37d66a173df58016258b5c,da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae|da2e01f9f13a9b8dfbf736f7b66839cf2e688e350d8f0515340fd051e98e66ae,6f0c8fa63333cb2880ba195c25fac35f15ad81a9fe82811e112d89f706520f44"
+"tools/capability/execution/state.py|REPLACE|f0b00112db5090f1885149e4eaee0df79ef03fa3c72a5b618d51cf9263486241,88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b,9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980|88b05c076d9da134ddb1dfe38c38624297246cd313e243b540eaff7af1901f3b,9257af07498d5922107f55502f9f07c26ca70ec7544ad4f4628c515964a07980,87abff5bdde4ad295f605df2f39bac3a2e028f833dc53e6f2725cd2d457bba53"
+"tools/capability/execution/capacity.py|REPLACE|25bab08cd2f517e28d5a9add58a4d0fff6d6d720cd20df241d4a4003eaa27afb,f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e|f037119f9a986558fe8e6c8bbc77a4ba49d28d97ddc3d4d5c4328b707757159e,650c05dd3c5ebe3496c468181c7c8770954f79fe73675eec6efa210b01472eb3"
+"tools/capability/execution/admin.py|REPLACE|be899d7a193f6aa5c80d3887109fa07212d757f94503ba994bac104f217633d5,2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606|2dbc29412469a3a7060c133b4673ec3b0c60a2bd283929723fc7182a227b67f3,f691f914058491b1e7ccb3dd8498a667588a4fe36ffee13b0777733617845606,b4ea351b3e34e5d4674c72fce14465761eff1eb8444edb7019fcd7d1c0dc7be9"
+"tools/capability/execution/abandonment.py|CREATE|ABSENT|4fb431ca5f74e45aba8cb4ed7f80699e9a16b4743b5c554e992747926f9b1903,7d2f1857f16c54dda9f39658857a0d03b94198af75a04d21cef942bf2a224f24"
+
+# Generation 20, ENG-0005 G11-BC-Y. Explicit mutation targets, and a way to
+# correct provenance.
+#
+# WHAT WENT WRONG. On 2026-09-20 a rehearsal harness drove `capability abandon`
+# against production. It substituted the runtime path through every shell gate
+# of the ceremony it was rehearsing -- each gate read a fixture and passed --
+# and then `command_abandon` resolved `CAPABILITY_RUNTIME_ROOT`, a module
+# constant with no argument able to override it, and abandoned CINV-000002 in
+# production. The store now holds a materially valid lifecycle effect under an
+# untrue attribution.
+#
+# FIVE OBJECTS, ONE COHERENCE GROUP, AND THEY MOVE TOGETHER. `backing_store.py`
+# adds `target_fingerprint`, which asks the kernel which object a mutation is
+# about to be written through; `admin.py` adds the closed-set
+# `correct-provenance` verb; `abandonment.py` reports the root it held;
+# `provenance.py` is the correction operation; `cli.py` requires an explicit
+# `--store-root` for both administrative mutators and carries the new surface.
+# Publication order is `backing_store.py`, `admin.py`, `abandonment.py`,
+# `provenance.py`, `cli.py` -- each after everything it imports. `cli.py`
+# imports two of them at MODULE level, so a subset is an ImportError on every
+# command including `recover`.
+#
+# `abandonment.py` is no longer a CREATE against this host: Generation 19
+# published it, so the row's successor CHAIN gains a hop rather than the row
+# changing shape. `provenance.py` is this generation's CREATE, and ABSENT is
+# the honest baseline for an object that has never been published.
+#
+# ADR-0016 is the architecture. None of the five is in
+# `helpers.REQUIRED_HELPERS`, so no helper ceremony is required.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-20.sh`
+# is the ceremony that publishes them, and it has not been run.
+"tools/capability/execution/backing_store.py|REPLACE|03331aa8b974d636a39710c53867af5a4ae6e1480cc68404009df118e24c4c32|e82aa24b6fe2ef2336737ca344bb5d6b35af9c95b70f0c2ce78bc8dcb786259f"
+"tools/capability/execution/provenance.py|REPLACE|ABSENT,2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6,e0f6ffeb57f78db460a126e6e1e8b58a7575401c13e681ac0d7d6e8cd21c0435|2783c5438f1154111dc3700b6b9da74f54b3a71d7ec9fc12f17585bc01ab0bd6,e0f6ffeb57f78db460a126e6e1e8b58a7575401c13e681ac0d7d6e8cd21c0435,39141cd453d74c8cfb4fee7348f45fff4dfa68b5155edaff6886daf990387647"
+
+# --- GENERATION 21: post-execution lifecycle conclusion (ADR-0017) -----------
+#
+# CINV-000003 executed successfully and is still `launch_authorized`. That is
+# designed behaviour -- the journal is written before the privilege boundary and
+# the states past `launch_authorized` live on the wire -- but the consequence
+# had never been stated: EVERY successful supervised execution strands, holding
+# a slot for ever, because `released` is reachable only through states nothing
+# writes.
+#
+# Journalling the progression and letting `cleanup` finish does not work. §13
+# gives the output leaf to the execution identity (uid 999, mode 0700) and the
+# coordinator is uid 1000, so `cleanup` refuses with `CleanupIncomplete` and
+# nothing in the system removes that leaf. `cleaned` is structurally
+# unreachable, and `released` with it.
+#
+# SEVEN OBJECTS, ONE COHERENCE GROUP. `types.py` appends `CONCLUDED`;
+# `state.py` permits `launch_authorized -> concluded`; `capacity.py` names it in
+# the occupancy exclusion; `recovery.py` treats it as administratively closed;
+# `admin.py` adds the closed-set `conclude` verb; `conclusion.py` is the
+# operation; `cli.py` carries the surface and closes a supervised execution
+# inline. `conclusion.py` is this generation's CREATE.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-21.sh`
+# is the ceremony that publishes them, and it has not been run.
+"tools/capability/execution/conclusion.py|CREATE|ABSENT|d24ad855e787fce1720df1f8d15f068f65aba46464c1e1382b5e3b68749297b2"
+
+# --- GENERATION 22: multi-field provenance correction (ADR-0018) -------------
+#
+# On 2026-09-24 an unauthorised test harness abandoned CINV-000001 in production.
+# The reviewer RETAINED the lifecycle effect and REJECTED the asserted authority,
+# so CADM-000004 records a truthful effect under three false assertions: `actor`,
+# `request_id`, and a `recorded_at` backdated four days. ADR-0016 could record
+# ONE of them -- `CORRECTABLE_FIELDS` was `{actor}` -- so two thirds of the
+# falsehood was unrecordable and the backdating could not be disputed at all.
+#
+# TWO OBJECTS, ONE COHERENCE GROUP. `provenance.py` widens the correctable set to
+# exactly {actor, request_id, recorded_at} and adds the third instant; `cli.py`
+# is the only operator surface that reaches the verb, and it BUILDS ITS PARSER
+# FROM that set, so the two are coupled in both directions.
+#
+# NO ROW IS ADDED, AND NOTHING IS RELAXED. Both objects are already declared:
+# `cli.py` moves its Generation-21 digest into the baseline list and gains its
+# Generation-22 digest as a successor, exactly as at G11-BC-E and G11-BC-K.
+#
+# `provenance.py` STOPS BEING A CREATE, which is the truthful shape now that
+# Generation 20 has published it: the row becomes a REPLACE and keeps ABSENT
+# among its baselines, because a tree that predates Generation 20 does not carry
+# the object at all and one declaration is checked against both kinds of host.
+# That is the G11-AS case, stated above, and not a loosening: the checkout must
+# still carry exactly the declared bytes, and a host that HAS the object must
+# still hold either a named baseline or the new bytes.
+#
+# Declared here as pending. NOT INSTALLED at the time of writing; Generation 22
+# was published by `provisioning/execution/install-generation-22.sh` on
+# 2026-10-01 and both digests above are now the installed ones.
+
+# --- GENERATION 23: ADR-0016 correction shape compatibility (ADR-0018 §C) -----
+#
+# `CADM-000002` was written under ADR-0016 and carries no `actual_occurrence_at`.
+# The Generation-22 resume check compares every recorded member, so a prior
+# record simply missing a LATER member was refused as "already corrected under
+# different authority" -- untrue twice: the authority is identical, and what
+# differs is the record SHAPE. Omitting the argument instead raised a TypeError.
+# Both failed closed, but a refusal that misdescribes itself is the defect this
+# subsystem exists to remove.
+#
+# ONE OBJECT, DERIVED RATHER THAN ASSUMED. `provenance.py` gains the closed set
+# of later-schema members, a resume comparison that skips the ones a prior record
+# does not carry, and a return that reports what the record HOLDS instead of
+# echoing the request. `cli.py` does NOT move: it reads the field and serialises
+# it, so a `None` becomes `null` with no code change, and nothing else in the
+# installed tree imports what changed. Measured, not assumed: exactly one
+# installed object differs from the reviewed tree.
+#
+# NO VERSION BUMP, and that was proved rather than preferred.
+# `correction_schema_version` is 1 on BOTH shapes, so the version discriminates
+# nothing; the presence of `actual_occurrence_at` discriminates totally, because
+# the ADR-0018 source writes it unconditionally and the ADR-0016 source had no
+# such member. The smallest reader-side rule is therefore sufficient, and no old
+# record is rewritten.
+#
+# `provenance.py` moves its Generation-22 digest into the baseline list and gains
+# its Generation-23 digest as a successor, exactly as at G11-BC-E and G11-BC-K.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-23.sh`
+# is the ceremony that publishes it, and it has not been run.
+#
+# --- Generation 24, G11-BC-AV: execution-authority evidence ------------------
+#
+# THREE OBJECTS, DERIVED RATHER THAN ASSUMED, and unlike Generation 23 the
+# operator surface is one of them:
+#
+#   state.py       gains `launch_authorised`, a read-only accessor answering from
+#                  the append-only journal which `CINV` identities ever committed
+#                  LAUNCH_AUTHORIZED. The only new symbol in the generation.
+#   inspection.py  `validate_store` takes that set keyword-only, and the
+#                  authority predicate becomes the three accepted shapes.
+#   cli.py         reads the journal for the validator and still exits
+#                  EXIT_DENIED on any finding.
+#
+# WHAT IT FIXES. The released validator rejected the whole of production --
+# `CINV-000002` and `CINV-000003` both reported
+# `result-without-execution-authority`, with EXIT_DENIED -- because it tested
+# `adapter_identity`, which `coordinator.py` says is always null on the released
+# path, and never read the journal `launch.py` names as the authority.
+#
+# HISTORY, NOT CURRENT STATE. `CONCLUDED` would prove authority; `ABANDONED`
+# would not, because only `reserved` and `launch_authorized` are abandonable.
+# Production's two flagged invocations differ exactly there, which is why the
+# accessor reads the journal's history rather than `all_states`.
+#
+# Each of the three rows moves its installed digest into the baseline list and
+# gains its Generation-24 digest as a successor, exactly as Generation 23 did for
+# `provenance.py`.
+#
+# NO ADR. ADR-0015, ADR-0017 and the first-adapter design §6, §13 and §16 already
+# define supervised launch authority. This is a validator implementation defect
+# measured against that architecture, and no record is migrated or rewritten.
+#
+# Declared here as pending. NOT INSTALLED: `provisioning/execution/install-generation-24.sh`
+# is the ceremony that publishes it, and it has not been run.
+)
+
+# The reviewed operator modules. Pinned so root is told exactly which bytes it
+# would be executing, and so a later edit to any of them is visible here rather
+# than at the moment it runs as root.
+OPERATOR_MODULES=(
+"tools/provisioning/__init__.py|f5ff47311a43e29a46e89f3856ec25638519d8852566127211fc53a86abcedc7"
+"tools/provisioning/authority_bootstrap.py|2e84ff0d9e9ee5b8ce4a410044055ab6ce1f234dc05b0964c8494d5749a1c5ef"
+"tools/provisioning/authority_admission.py|32b484afb0798af1122ea8469f4bae47dc83153fbcebd0faadb0e0e0b84ebba0"
+"tools/provisioning/authority_disposition.py|5f950ef2f6e7a48d3507e368aa851a363737723d7e2b85d159fd855c73a2cfc7"
+"tools/provisioning/provisioning_evidence.py|1a392efffd2a1972752f838dde74921be1a464481a6c4ab4719a0e9f1188932c"
+)
+
+# The image build material, pinned for the same reason.
+IMAGE_MATERIAL=(
+"provisioning/image/Containerfile|f543c458fcb1793570010b58417c175e6510fe0d90d2a295ef9d38b0cfdedcbb"
+"provisioning/image/README.md|9ca8002e7e70295aeffd8884318ef709b06d62f6e0d8d49f801379571307439d"
+)
+
+MODE=""
+FIXTURE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --verify-host|--verify-source|--blockers)
+      [[ -z "${MODE}" ]] || { printf 'ERROR one mode only\n' >&2; exit 2; }
+      MODE="$1"; shift ;;
+    --fixture)
+      FIXTURE="${2:-}"; shift 2
+      [[ -n "${FIXTURE}" && "${FIXTURE}" != "/" ]] || { printf 'ERROR --fixture needs a directory\n' >&2; exit 2; }
+      ;;
+    *) printf 'ERROR unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+MODE="${MODE:---verify-host}"
+
+if [[ -n "${FIXTURE}" ]]; then
+  LIBRARY_ROOT="${FIXTURE}${LIBRARY_ROOT}"
+  LIBEXEC="${FIXTURE}${LIBEXEC}"
+  KYRI_STATE="${FIXTURE}${KYRI_STATE}"
+  AUTHORITY_ROOT="${FIXTURE}${AUTHORITY_ROOT}"
+  CONTROL_ROOT="${FIXTURE}${CONTROL_ROOT}"
+  SUDOERS="${FIXTURE}${SUDOERS}"
+  TMPFILES_TARGET="${FIXTURE}${TMPFILES_TARGET}"
+  SNAPSHOT_PARENT="${FIXTURE}${SNAPSHOT_PARENT}"
+  SNAPSHOT_ROOT="${FIXTURE}${SNAPSHOT_ROOT}"
+fi
+
+FAILURES=0
+BLOCKED=0
+ok()    { printf 'ok       %s\n' "$1"; }
+note()  { printf 'note     %s\n' "$1"; }
+bad()   { printf 'FAIL     %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
+block() { printf 'BLOCKED  %s\n' "$1" >&2; BLOCKED=$((BLOCKED + 1)); }
+halt()  { printf '\nSTOP: %s\n' "$1" >&2; exit 1; }
+
+digest_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+field() { IFS='|' read -r -a _f <<<"$1"; printf '%s' "${_f[$2]}"; }
+
+# --- repository ------------------------------------------------------------
+require_repository() {
+  cd "${REPOSITORY}" || halt "the repository is not at ${REPOSITORY}"
+  local head_now owner residue
+  head_now="$(git rev-parse HEAD)"
+  git merge-base --is-ancestor "${COMMIT}" HEAD 2>/dev/null \
+    || halt "the reviewed commit ${COMMIT} is not an ancestor of HEAD ${head_now}"
+  [[ "$(git rev-parse --abbrev-ref HEAD)" == "${BRANCH}" ]] \
+    || halt "the checkout is not on ${BRANCH}"
+  owner="$(stat -c '%U' "${REPOSITORY}")"
+  if [[ "$(id -un)" == "${owner}" ]]; then
+    residue="$(git -C "${REPOSITORY}" status --porcelain --untracked-files=all)"
+  else
+    residue="$(runuser -u "${owner}" -- git -C "${REPOSITORY}" status --porcelain --untracked-files=all)"
+  fi
+  if [[ -n "${residue}" ]]; then
+    [[ -n "${FIXTURE}" ]] || halt "the working tree is not clean:"$'\n'"${residue}"
+    note "the working tree is not clean; permitted in fixture mode only"
+  fi
+  ok "repository on ${BRANCH} at ${head_now} (contains ${COMMIT}), tree checked (as ${owner})"
+}
+
+# --- generation 6 is what must be running ---------------------------------
+require_generation_6() {
+  local installed
+  installed="$(find "${LIBRARY_ROOT}" -type f -name '*.py' 2>/dev/null | wc -l)"
+  [[ "${installed}" -eq "${EXPECTED_LIBRARY_FILES}" ]] \
+    || bad "the installed library holds ${installed} .py files, expected ${EXPECTED_LIBRARY_FILES}"
+
+  local drift=0 checked=0 file observed expected
+  while IFS= read -r file; do
+    expected="$(git -C "${REPOSITORY}" cat-file blob "${GEN6_COMMIT}:${file}" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+    observed="$(digest_of "${LIBRARY_ROOT}/${file}")"
+    checked=$((checked + 1))
+    [[ "${observed}" == "${expected}" ]] || { bad "runtime object drifted: ${file}"; drift=$((drift + 1)); }
+  done < <(git -C "${REPOSITORY}" ls-tree -r --name-only "${GEN6_COMMIT}" \
+             -- tools/__init__.py tools/capability tools/common | grep '\.py$' | grep -v '__pycache__')
+  (( drift == 0 )) && ok "the generation-6 library surface is exact (${checked} objects from ${GEN6_COMMIT})"
+
+  # /usr/libexec must still be Generation 5, byte for byte. Generation 6
+  # changed no privileged object, and the whole boundary argument rests on it.
+  local pair source target
+  for pair in "provisioning/execution/kyri-exec-transition-entrypoint.py|${LIBEXEC}/kyri-exec-transition" \
+              "provisioning/execution/kyri-exec-worker.py|${LIBEXEC}/kyri-exec-worker.py" \
+              "provisioning/execution/kyri-exec-quota.py|${LIBEXEC}/kyri-exec-quota"; do
+    source="$(field "${pair}" 0)"; target="$(field "${pair}" 1)"
+    expected="$(git -C "${REPOSITORY}" cat-file blob "${GEN5_COMMIT}:${source}" | sha256sum | cut -d' ' -f1)"
+    [[ "$(digest_of "${target}")" == "${expected}" ]] \
+      || bad "privileged helper is not the accepted Generation-5 object: ${target}"
+  done
+  (( FAILURES == 0 )) && ok "/usr/libexec unchanged from Generation 5: the privileged boundary is intact"
+
+  [[ ! -d "${LIBRARY_ROOT}/tools/provisioning" ]] \
+    || bad "operator provisioning modules are installed in the runtime library"
+  local residue
+  residue="$(find "${LIBRARY_ROOT}" "${LIBEXEC}" -maxdepth 6 \
+               \( -name '*.kyri-gen*.new' -o -name '*.kyri-gen*.old' \) 2>/dev/null | wc -l)"
+  [[ "${residue}" -eq 0 ]] || bad "${residue} installation transaction artefacts remain"
+  ok "no operator tooling in the runtime library, no installation residue"
+}
+
+# --- the generation-6 host prerequisite ------------------------------------
+require_snapshot_root() {
+  [[ "$(digest_of "${TMPFILES_TARGET}")" == "${TMPFILES_DIGEST}" ]] \
+    || bad "${TMPFILES_TARGET} is not the reviewed artifact"
+  [[ -d "${SNAPSHOT_PARENT}" && ! -L "${SNAPSHOT_PARENT}" ]] \
+    || bad "${SNAPSHOT_PARENT} is not a directory"
+  [[ -d "${SNAPSHOT_ROOT}" && ! -L "${SNAPSHOT_ROOT}" ]] \
+    || bad "${SNAPSHOT_ROOT} is not a directory"
+  if [[ -z "${FIXTURE}" ]]; then
+    [[ "$(stat -c '%U:%G %a' "${SNAPSHOT_PARENT}" 2>/dev/null)" == "root:root 755" ]] \
+      || bad "${SNAPSHOT_PARENT} is not root:root 0755"
+    [[ "$(stat -c '%U:%G %a' "${SNAPSHOT_ROOT}" 2>/dev/null)" == "root:${EXECUTION_GROUP} 770" ]] \
+      || bad "${SNAPSHOT_ROOT} is not root:${EXECUTION_GROUP} 0770"
+  fi
+  # Emptiness is only observable by root or by the execution identity. Reported
+  # honestly rather than claimed: 0770 is what makes the coordinator unable to
+  # look, and a check that silently passed because it could not see would be
+  # worse than one that says so.
+  if [[ -r "${SNAPSHOT_ROOT}" && -x "${SNAPSHOT_ROOT}" ]]; then
+    local children
+    children="$(find "${SNAPSHOT_ROOT}" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"
+    if [[ "${children}" -eq 0 ]]; then
+      ok "${SNAPSHOT_ROOT} is empty: no invocation snapshot exists"
+    else
+      bad "${SNAPSHOT_ROOT} holds ${children} entries and no worker has run"
+    fi
+  else
+    note "${SNAPSHOT_ROOT} is not readable as $(id -un): emptiness must be confirmed as root"
+  fi
+  (( FAILURES == 0 )) && ok "the generation-6 snapshot-root prerequisite is exactly as ruled"
+}
+
+# --- the G5 starting position ----------------------------------------------
+require_gates_closed() {
+  [[ ! -e "${SUDOERS}" ]] || bad "${SUDOERS} exists: G3 is not closed and G5 must not depend on it"
+  [[ ! -e "${AUTHORITY_ROOT}" ]] || bad "${AUTHORITY_ROOT} already exists"
+  [[ ! -e "${CONTROL_ROOT}" ]] || bad "${CONTROL_ROOT} already exists"
+  ok "no sudoers policy, no authority root, no control root: no CIMP or CGEN state exists"
+
+  if [[ -z "${FIXTURE}" ]]; then
+    [[ "$(stat -c '%U:%G %a' "${KYRI_STATE}" 2>/dev/null)" == "root:root 711" ]] \
+      || bad "${KYRI_STATE} is not root:root 0711"
+    ok "${KYRI_STATE} is root:root 0711: the authority parent is not coordinator-writable"
+  fi
+}
+
+require_no_live_caller() {
+  local callers=0 unit
+  [[ ! -e "${SUDOERS}" ]] || callers=$((callers + 1))
+  if [[ -z "${FIXTURE}" ]]; then
+    unit="$(grep -rl 'kyri-exec' /etc/systemd/system /lib/systemd/system \
+              /etc/cron.d /etc/crontab 2>/dev/null || true)"
+    [[ -z "${unit}" ]] || { bad "a systemd or cron entry references kyri-exec:"$'\n'"${unit}"; callers=$((callers + 1)); }
+  fi
+  (( callers == 0 )) && ok "no live caller into the kyri-exec boundary"
+}
+
+require_execution_identity() {
+  local uid gid home
+  uid="$(getent passwd "${EXECUTION_USER}" | cut -d: -f3)"
+  gid="$(getent group "${EXECUTION_GROUP}" | cut -d: -f3)"
+  home="$(getent passwd "${EXECUTION_USER}" | cut -d: -f6)"
+  [[ "${uid}" == "${EXECUTION_UID}" ]] || bad "${EXECUTION_USER} is uid ${uid:-absent}, expected ${EXECUTION_UID}"
+  [[ "${gid}" == "${EXECUTION_GID}" ]] || bad "${EXECUTION_GROUP} is gid ${gid:-absent}, expected ${EXECUTION_GID}"
+  [[ "${home}" == "${EXECUTION_HOME}" ]] || bad "${EXECUTION_USER} home is ${home:-absent}, expected ${EXECUTION_HOME}"
+  if id -nG "${COORDINATOR}" 2>/dev/null | tr ' ' '\n' | grep -qx "${EXECUTION_GROUP}"; then
+    bad "${COORDINATOR} is a member of ${EXECUTION_GROUP}"
+  fi
+  ok "execution identity: ${EXECUTION_USER} ${uid}:${gid}, HOME=${home}, ${COORDINATOR} excluded"
+  note "the rootless store is ${EXECUTION_HOME}/.local/share/containers and ${EXECUTION_RUNTIME_DIR};"
+  note "neither is readable as ${COORDINATOR}, so its inventory is an operator observation (see --blockers)"
+}
+
+# --- image build inputs ----------------------------------------------------
+require_image_material() {
+  local row source expected observed
+  for row in "${IMAGE_MATERIAL[@]}"; do
+    source="$(field "${row}" 0)"; expected="$(field "${row}" 1)"
+    observed="$(digest_of "${REPOSITORY}/${source}")"
+    [[ "${observed}" == "${expected}" ]] \
+      || bad "${source} is ${observed:-absent}, expected the reviewed ${expected}"
+  done
+  local containerfile="${REPOSITORY}/provisioning/image/Containerfile"
+  # §27: the definition must name no base at all. A default here would mean the
+  # image Kyri admitted and the image Kyri later built were the same text and
+  # different bytes.
+  grep -qE '^ARG BASE_IMAGE$' "${containerfile}" \
+    || bad "the Containerfile does not declare BASE_IMAGE without a default"
+  grep -qE '^ARG BASE_IMAGE=' "${containerfile}" \
+    && bad "the Containerfile gives BASE_IMAGE a default"
+  grep -qE '^FROM \$\{BASE_IMAGE\}$' "${containerfile}" \
+    || bad "the Containerfile does not build FROM the supplied argument"
+  # A floating tag anywhere in the definition is the failure §27 exists to
+  # prevent, and the Track-B Alpine digest must never appear.
+  grep -qiE '^(FROM|ARG BASE_IMAGE=).*(:latest|alpine)' "${containerfile}" \
+    && bad "the Containerfile names a floating tag or the Track-B base"
+  local banned
+  for banned in apk apt-get dpkg dnf yum 'pip ' curl wget sudo ssh; do
+    grep -qiE "(RUN|CMD|ENTRYPOINT).*${banned}" "${containerfile}" \
+      && bad "the Containerfile invokes ${banned}"
+  done
+  ok "the image definition is reviewed, names no base, and pins no floating tag"
+}
+
+# Whether one observed difference is exactly a declared generation REPLACE.
+#
+# Both ends are checked. The installed copy must be the baseline the delta says
+# it moves from, and the checkout must be the bytes it says it moves to -- so an
+# installed object holding something nobody declared, or a checkout carrying
+# bytes nobody reviewed, is drift rather than development. Anything not named
+# in the declaration returns false and is reported as drift by the caller.
+generation_declares() {
+  local file="$1" installed="$2" checkout="$3" row
+  for row in "${GENERATION_DELTA[@]}"; do
+    [[ "$(field "${row}" 0)" == "${file}" ]] || continue
+    # A CREATE row is handled distinctly, and only once its object exists.
+    #
+    # `ABSENT` is a CREATE's pending state and the drift loop can never reach
+    # this function for it -- that loop walks installed objects. So arriving
+    # here means the object IS installed, which means the CREATE was applied,
+    # and a further change to an applied CREATE is REPLACE-shaped against the
+    # digest that CREATE put there. The successor list already records that
+    # chain, so the check is that the host sits at an earlier declared hop than
+    # the checkout: both digests declared, and installed strictly before
+    # checkout. A pair in the wrong order is a downgrade, not development.
+    if [[ "$(field "${row}" 1)" == "CREATE" ]]; then
+      local chain here there position=0
+      chain=" $(field "${row}" 3 | tr ',' ' ') "
+      here=-1; there=-1
+      for entry in ${chain}; do
+        [[ "${entry}" == "${installed}" ]] && here="${position}"
+        [[ "${entry}" == "${checkout}" ]] && there="${position}"
+        position=$((position + 1))
+      done
+      (( here >= 0 && there > here )) && return 0
+      return 1
+    fi
+    [[ "$(field "${row}" 1)" == "REPLACE" ]] || return 1
+    # A row may name several installed baselines, comma-separated: a checkout
+    # can be ahead of one host by one hop and another by two.
+    #
+    # **Both sides widen, and both only by explicit declaration.** The checkout
+    # side was a single value until G11-BB, on the reasoning that widening it
+    # would let unreviewed bytes become admissible. That reasoning holds for a
+    # wildcard and does not hold for a list: a successor named here is as
+    # reviewed as the target it follows, because naming it *is* the review.
+    #
+    # What forced the change is that a correction cannot otherwise be expressed
+    # at all. When the checkout moves past the declared target -- which is what
+    # a reviewed, not-yet-installed correction *is* -- a single-valued row has
+    # no verdict for it but drift, so the artefact reported reviewed source as
+    # corruption and there was no way to say otherwise without rewriting the
+    # historical digest it had already accepted.
+    #
+    # Nothing is loosened. Every admissible digest, on either side, is still
+    # written down in this file and reviewed as part of it. There is no
+    # "anything newer", no "any commit after", and no derivation from git.
+    local baselines successors
+    baselines=",$(field "${row}" 2),"
+    successors=",$(field "${row}" 3),"
+    [[ "${baselines}" == *",${installed},"* ]] || return 1
+    [[ "${successors}" == *",${checkout},"* ]] || return 1
+    return 0
+  done
+  return 1
+}
+
+# Whether a declared row is coherent on this host, independent of whether the
+# difference is still pending. `satisfied` names the rows the drift loop already
+# saw as a declared difference; anything else must be provably already applied.
+generation_row_coherent() {
+  local source="$1" operation="$2" expected="$3" installed successors
+  installed="$(digest_of "${LIBRARY_ROOT}/${source}")"
+  # "Applied" means the installed object holds any declared successor, not only
+  # the newest. A host that took an earlier hop of a multi-hop row is applied
+  # at that hop and pending for the next, and both are coherent states of the
+  # same declaration.
+  successors=",${expected},"
+  if [[ "${operation}" == "CREATE" ]]; then
+    # Absent is the pending state of a CREATE, and the drift loop can never
+    # report it: that loop walks installed objects, and this one is not there
+    # yet. Present with the declared bytes is the applied state. Present with
+    # anything else is somebody else's object.
+    if [[ ! -e "${LIBRARY_ROOT}/${source}" ]]; then return 0; fi
+    [[ "${successors}" == *",${installed},"* ]]
+    return
+  fi
+  # A REPLACE whose object is ABSENT from this installed tree, on a row that
+  # names ABSENT as one of its baselines. That is a real and coherent state the
+  # declaration could not express before G11-AS: the object was created by a
+  # generation later than the one installed here, so this tree predates it
+  # entirely, while a newer host carries an intermediate version the row lists.
+  # One declaration has to describe both, because it is checked against both.
+  #
+  # It is not a loosening. The row must still name ABSENT explicitly, the
+  # checkout must still carry exactly the declared bytes, and a host that HAS
+  # the object must still hold either a named baseline or the new bytes.
+  if [[ ! -e "${LIBRARY_ROOT}/${source}" ]]; then
+    local baselines
+    baselines=",$4,"
+    [[ "${baselines}" == *",ABSENT,"* ]]
+    return
+  fi
+  [[ "${successors}" == *",${installed},"* ]]
+}
+
+# --- root-execution trust model --------------------------------------------
+require_operator_source() {
+  local row source expected observed
+  for row in "${OPERATOR_MODULES[@]}"; do
+    source="$(field "${row}" 0)"; expected="$(field "${row}" 1)"
+    observed="$(digest_of "${REPOSITORY}/${source}")"
+    [[ "${observed}" == "${expected}" ]] \
+      || bad "${source} is ${observed:-absent}, expected the reviewed ${expected}"
+  done
+  ok "all five reviewed operator modules match their pinned digests"
+
+  # The runtime half these modules import must be the same bytes the root-owned
+  # runtime carries. They import ADAPTER_IDENTITY, ARGV_CONTRACT_IDENTITY, both
+  # schema versions and CONTAINER_INTERPRETER, and every one of those is
+  # committed verbatim into an admission record -- so "which copy did root
+  # import" decides what gets admitted.
+  local drift=0 checked=0 declared=0 file installed checkout
+  local -a satisfied=()
+  while IFS= read -r file; do
+    checked=$((checked + 1))
+    installed="$(digest_of "${LIBRARY_ROOT}/${file}")"
+    checkout="$(digest_of "${REPOSITORY}/${file}")"
+    [[ "${installed}" == "${checkout}" ]] && continue
+    if generation_declares "${file}" "${installed}" "${checkout}"; then
+      declared=$((declared + 1)); satisfied+=("${file}")
+      note "generation-10 development: ${file} is ahead of the installed generation by declaration"
+    else
+      bad "checkout and installed runtime disagree at ${file}"; drift=$((drift + 1))
+    fi
+  done < <(cd "${LIBRARY_ROOT}" && find tools -type f -name '*.py' | sort)
+
+  # The declaration is closed the other way too. A REPLACE nobody observed as a
+  # difference describes a change that is not there -- an abandoned, partial, or
+  # already-applied generation-8 source state -- and a CREATE has to be present
+  # in the checkout, absent from the installed tree, and carry the declared
+  # bytes. Either way the answer is a refusal, not a quieter report.
+  local row source operation expected observed entry seen complete
+  for row in "${GENERATION_DELTA[@]}"; do
+    source="$(field "${row}" 0)"; operation="$(field "${row}" 1)"
+    expected="$(field "${row}" 3)"
+    complete=1
+    # The checkout side is absolute: whatever the installed generation is, the
+    # checkout must carry exactly the bytes the row declares.
+    observed="$(digest_of "${REPOSITORY}/${source}")"
+    if [[ ",${expected}," != *",${observed},"* ]]; then
+      bad "the declared object ${source} is ${observed:-absent}, which is not a declared successor (${expected})"
+      drift=$((drift + 1)); complete=0
+    fi
+    seen=0
+    for entry in ${satisfied[@]+"${satisfied[@]}"}; do
+      if [[ "${entry}" == "${source}" ]]; then seen=1; break; fi
+    done
+    if (( seen == 0 )); then
+      # Not observed as a pending difference, so it must be already applied --
+      # the installed object holding the declared new bytes. Anything else is a
+      # row that describes neither the host nor the checkout.
+      if ! generation_row_coherent "${source}" "${operation}" "${expected}" \
+           "$(field "${row}" 2)"; then
+        bad "the declared change at ${source} is neither pending nor applied"
+        drift=$((drift + 1)); complete=0
+      fi
+    fi
+    if (( complete == 1 && seen == 1 )); then declared=$((declared + 1)); fi
+  done
+
+  if (( drift == 0 )); then
+    if (( declared == 0 )); then
+      ok "the checkout's runtime half is byte-identical to the installed root-owned runtime (${checked} objects)"
+    else
+      ok "the checkout is the declared generation-10 candidate: ${declared} declared object(s) ahead, ${checked} installed object(s) compared, no undeclared difference"
+      note "generation 9 remains the accepted installed generation; generation 10 is not installed and is not live-accepted"
+    fi
+  fi
+
+  # Compiled bytecode and a coordinator-writable checkout are both still facts
+  # about this tree. They stopped being blockers when the ceremony stopped
+  # importing the tree: root materialises the pinned commit from git objects
+  # into a root-owned 0700 directory and runs `python3 -I -B` against that
+  # alone. Reported, because an operator reading this should know why the
+  # obvious hazard is not one, rather than not seeing it mentioned.
+  local caches owner mode
+  caches="$(find "${REPOSITORY}/tools" -name '__pycache__' -type d 2>/dev/null | wc -l)"
+  owner="$(stat -c '%U:%G' "${REPOSITORY}/tools/provisioning" 2>/dev/null)"
+  mode="$(stat -c '%a' "${REPOSITORY}/tools/provisioning" 2>/dev/null)"
+  note "${caches} coordinator-owned __pycache__ directories exist under ${REPOSITORY}/tools"
+  note "${REPOSITORY}/tools/provisioning is ${owner} ${mode}: writable by the coordinator"
+  note "neither reaches root: see provisioning/execution/g5-ceremony.sh --verify-materialisation"
+
+  local ceremony="${REPOSITORY}/provisioning/execution/g5-ceremony.sh"
+  [[ -f "${ceremony}" ]] || bad "the G5 ceremony artifact is absent"
+  # The unexpanded literal IS the assertion, so it must not expand.
+  # shellcheck disable=SC2016
+  grep -qF 'cat-file blob "${COMMIT}:' "${ceremony}" \
+    || bad "the ceremony does not materialise from pinned git objects"
+  grep -qF '/usr/bin/python3 -I -B -c' "${ceremony}" \
+    || bad "the ceremony does not run Python in isolation"
+  (( FAILURES == 0 )) \
+    && ok "root-owned pinned-code execution is implemented; the checkout is never imported"
+}
+
+report_blockers() {
+  cat <<'BLOCKERS'
+All three architecture rulings that blocked the G5 ceremony are RESOLVED and
+implemented. Recorded here so the resolution is as visible as the block was.
+
+1. BASE IMAGE AUTHORITY -- RESOLVED IN MECHANISM, PENDING AN OPERATOR INPUT.
+   Candidate discovery and production build are now two ceremonies with an
+   operator review between them. Discovery may reach the network; its output is
+   a CANDIDATE. Only a reviewed approval recorded at
+   /root/kyri-g5-approved-base.txt (root:root 0400) makes the build eligible,
+   and the build consumes that digest and nothing else. A tag, a :latest, or a
+   digest derived from the build result is refused.
+   STILL REQUIRED, and deliberately not chosen here: the candidate digest
+   itself, and the exact SBOM bytes. Both are operator inputs.
+
+2. AUTHORITY OWNERSHIP -- RESOLVED. Setgid inheritance is now the architecture,
+   not a workaround. The authority root and staging/ carry 2750; published
+   directories and records inherit group cschott with no chown anywhere, so
+   there is no publish-then-chown window. provision_control_state no longer
+   creates staging: it requires an operator-provisioned one, because whatever
+   creates it decides what every published object inherits.
+
+3. ROOT EXECUTION -- RESOLVED. Root materialises the pinned commit from git
+   objects into a root-owned 0700 tree, verifies a pinned manifest digest and
+   every file, and runs python3 -I -B with that tree as the only import root.
+   Git runs as the repository owner, never as root. The single coordinator-
+   authored artefact root executes before the boundary is the ceremony script
+   itself, verified by digest in root-owned space.
+
+Run: provisioning/execution/g5-ceremony.sh --print-plan
+BLOCKERS
+  printf '\n'
+  ok "all three rulings are implemented; the ceremony is prepared"
+}
+
+
+# ===========================================================================
+printf '== G5 preflight (%s) ==\n\n' "${MODE#--}"
+[[ -n "${FIXTURE}" ]] && note "FIXTURE MODE: operating under ${FIXTURE}"
+
+case "${MODE}" in
+--verify-host)
+  require_repository
+  require_generation_6
+  require_snapshot_root
+  require_gates_closed
+  require_no_live_caller
+  require_execution_identity
+  require_image_material
+  ;;
+--verify-source)
+  require_repository
+  require_operator_source
+  ;;
+--blockers)
+  report_blockers
+  ;;
+esac
+
+printf '\n'
+if (( FAILURES != 0 )); then
+  printf 'G5 preflight %s FAILED: %d\n' "${MODE#--}" "${FAILURES}" >&2
+  exit 1
+fi
+if (( BLOCKED != 0 )); then
+  printf 'G5 preflight %s: host checks passed, %d blocker(s) outstanding.\n' \
+    "${MODE#--}" "${BLOCKED}"
+  printf 'Run --blockers for the full statement. The ceremony must not run yet.\n'
+  exit 3
+fi
+printf 'G5 preflight %s: all checks passed.\n' "${MODE#--}"
+printf 'Nothing was built, admitted, created, or invoked. G5 remains CLOSED.\n'

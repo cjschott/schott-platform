@@ -1,0 +1,33 @@
+api_version: schott-platform/v1
+kind: Evidence
+id: EVID-000001
+type: evidence
+target: HOST-0001
+source_type: command-output
+collector: s0-host-architecture
+collected_at: '2026-08-20T14:38:01.386121+00:00'
+status: success
+facts:
+  observations:
+  - source: uname_m
+    command: uname -m
+    raw_value: x86_64
+  - source: lscpu_architecture
+    command: 'LC_ALL=C lscpu | sed -n ''s/^Architecture: *//p'''
+    raw_value: x86_64
+  - source: dpkg_architecture
+    command: dpkg --print-architecture
+    raw_value: amd64
+  governed_field: architecture
+  canonical_value: x86-64
+  normalization_rule: tools/fabric/resources.py::normalise_host_architecture
+  all_sources_consistent: true
+provenance:
+  class: observed
+  observed_at: '2026-08-20T14:38:01.386121+00:00'
+sensitivity: public
+retention: 3650d
+redaction:
+  performed: false
+references: []
+content_fingerprint: sha256:ef8e46f8fdafd0342853b8f802665ecb9be8246c820d866373eb88cc75b30537

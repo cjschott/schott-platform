@@ -113,6 +113,7 @@ run_case() {
 # --- Valid baseline -------------------------------------------------------
 VALID="$(new_fixture c18)"
 cat >"${VALID}/evidence/evid-0001.yaml" <<'YAML'
+api_version: schott-platform/v1
 id: EVID-000001
 type: evidence
 target: HOST-9001
@@ -125,7 +126,11 @@ provenance:
   observed_at: 2026-08-01T09:00:00-05:00
 sensitivity: internal
 retention: 90d
-content_fingerprint: sha256:0000000000000000000000000000000000000000000000000000000000000000
+# Recomputed and enforced by the validator. Derived with
+# tools/platform_model/evidence_fingerprint.py over this record's semantic
+# preimage; editing any of api_version/target/source_type/collector/status/
+# facts above without updating this digest is exactly what the check refuses.
+content_fingerprint: sha256:922b0f0fed187cc756827a771e22dd2426bfe26af4a5e244446798ec94d9617b
 redaction:
   performed: false
 facts:
@@ -171,6 +176,30 @@ drift_rules:
     remediation_mode: advisory
 YAML
 run_case "valid fixture passes" "${VALID}" expect-zero
+
+# api_version is required on evidence because it is the fingerprint preimage's
+# schema_version: a record omitting it would be fingerprinted over an
+# interpretation nobody declared.
+D="$(new_fixture c20)"
+grep -v '^api_version:' "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
+run_case "evidence without api_version is rejected" "${D}" expect-nonzero
+
+# The digest is recomputed, not trusted.
+D="$(new_fixture c21)"
+sed "s/^content_fingerprint: .*/content_fingerprint: sha256:$(printf '0%.0s' {1..64})/" \
+  "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
+run_case "a stale content_fingerprint is rejected" "${D}" expect-nonzero
+
+D="$(new_fixture c22)"
+sed "s/hostname: fixture-host/hostname: something-else/" \
+  "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/e.yaml"
+run_case "edited facts with an unchanged fingerprint are rejected" "${D}" expect-nonzero
+
+# Audit metadata may move without invalidating the semantic claim.
+D="$(new_fixture c23)"
+sed "s/^retention: 90d/retention: 365d/" \
+  "${VALID}/evidence/evid-0001.yaml" >"${D}/evidence/evid-0001.yaml"
+run_case "changing retention keeps the record valid" "${D}" expect-zero
 
 # --- Invalid cases --------------------------------------------------------
 D="$(new_fixture c01)"

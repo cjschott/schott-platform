@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 
+from .admission import PREFLIGHT, is_rehearsing
 from .eligibility import evaluate_eligibility
 from .errors import FabricError
 from .evidence import assemble_evidence
@@ -123,6 +124,12 @@ class SelectionResult:
     record_kind: str | None = None
     record_id: str | None = None
     reason: str | None = None
+    # Which candidate the declared order chose. Carried on the result because a
+    # rehearsal has no record to read it back from, and reporting a preflight
+    # that named no candidate would leave the operator with a prediction they
+    # could not compare against the write. `None` is a real answer: it means
+    # nothing was eligible, or no route resolved.
+    selected_instance_id: str | None = None
 
     @property
     def accepted(self) -> bool:
@@ -136,6 +143,7 @@ class SelectionResult:
             "record_kind": self.record_kind,
             "record_id": self.record_id,
             "reason": self.reason,
+            "selected_instance_id": self.selected_instance_id,
         }
 
 
@@ -363,15 +371,23 @@ def _exclusions(store, trust_store, candidate, *, instance, host_heads, contract
     return tuple(reasons)
 
 
-def _commit(store, kind, evidence, build) -> str:
+def _commit(store, kind, evidence, build) -> str | None:
     """Prove the record is constructible, then allocate through C1 and write.
 
     Allocation advances a persistent sequence, so nothing is allocated until
     the exact content is known to be constructible. The proof is a
     construction against a probe identity of this width, which allocates
     nothing and leaves nothing behind.
+
+    Under a rehearsal it stops at that proof and returns no identity.
+    Allocation is the first act that cannot be taken back, and the probe has
+    already applied the model's own rules to the real content -- so what a
+    rehearsal has left to learn from allocating is nothing, and what it would
+    cost is a spent sequence position.
     """
     _constructed("CSEL-000000", evidence, build)
+    if is_rehearsing():
+        return None
     identifier = store.allocate_id(kind)
     record = _constructed(identifier, evidence, build)
     store.write(kind, record)
@@ -455,6 +471,26 @@ def select_candidate(store, trust_store, *, request_id: Any, actor: Any,
              "accepted_contract_versions": versions,
              "data_classification": data_classification, "locality": locality}
 
+    if is_rehearsing():
+        # No critical section: it takes a store-global lock and exists to
+        # serialise allocation and the accepted write, neither of which a
+        # rehearsal performs. Replay is not classified either -- there is
+        # nothing to serialise against, and reporting a replay for an operation
+        # that was never submitted would answer about a different act. Route
+        # resolution, candidate judgement and every exclusion still run against
+        # the real store, so what this reports is what the write would decide.
+        try:
+            _, selected = _decide(
+                store, trust_store, identifier, digest, asked=asked, actor=actor,
+                recorded_at=recorded_at, instant=instant, provenance=provenance,
+                node_identity=node_identity, removals=removals, notes=notes)
+        except _Refusal as refusal:
+            return SelectionResult(refusal.outcome, identifier, digest,
+                                   reason=refusal.reason)
+        return SelectionResult(PREFLIGHT, identifier, digest,
+                               "capability-selection", None,
+                               selected_instance_id=selected)
+
     with store.request_critical_section(identifier):
         replay = replay_lookup(store, identifier, digest)
         if replay.status == REPLAY_EXACT:
@@ -464,22 +500,27 @@ def select_candidate(store, trust_store, *, request_id: Any, actor: Any,
             return SelectionResult(CONFLICT, identifier, digest,
                                    reason="request_identity_conflict")
         try:
-            record_id = _decide(store, trust_store, identifier, digest,
-                                asked=asked, actor=actor, recorded_at=recorded_at,
-                                instant=instant, provenance=provenance,
-                                node_identity=node_identity, removals=removals,
-                                notes=notes)
+            record_id, selected = _decide(
+                store, trust_store, identifier, digest, asked=asked, actor=actor,
+                recorded_at=recorded_at, instant=instant, provenance=provenance,
+                node_identity=node_identity, removals=removals, notes=notes)
         except _Refusal as refusal:
             return SelectionResult(refusal.outcome, identifier, digest,
                                    reason=refusal.reason)
         return SelectionResult(ACCEPTED, identifier, digest,
-                               "capability-selection", record_id)
+                               "capability-selection", record_id,
+                               selected_instance_id=selected)
 
 
 def _decide(store, trust_store, identifier: str, digest: str, *, asked, actor,
             recorded_at, instant, provenance, node_identity, removals,
-            notes) -> str:
-    """Resolve the route, judge every candidate it declares, and record it."""
+            notes) -> tuple[str | None, str | None]:
+    """Resolve the route, judge every candidate it declares, and record it.
+
+    Returns the record identity and the candidate the declared order chose. A
+    rehearsal has no record identity, so the first element is `None` there --
+    the second is the answer it was asked for either way.
+    """
     route = _resolve_route(store, asked)
 
     if route is None:
@@ -490,7 +531,7 @@ def _decide(store, trust_store, identifier: str, digest: str, *, asked, actor,
                       reason=NO_ROUTE_REASON, asked=asked, actor=actor,
                       recorded_at=recorded_at, provenance=provenance,
                       node_identity=None, notes=notes, identifier=identifier,
-                      digest=digest)
+                      digest=digest), None
 
     contract = _referenced(store, "capability-contract", asked["contract_id"])
     host_heads = _chain_heads(store, "capability-host")
@@ -525,12 +566,12 @@ def _decide(store, trust_store, identifier: str, digest: str, *, asked, actor,
                   provenance=provenance,
                   node_identity=node_identity if asked["locality"] == "local-only"
                   else None,
-                  notes=notes, identifier=identifier, digest=digest)
+                  notes=notes, identifier=identifier, digest=digest), selected
 
 
 def _write(store, outcome: str, *, route, considered, excluded, selected,
            refusal, reason, asked, actor, recorded_at, provenance,
-           node_identity, notes, identifier, digest) -> str:
+           node_identity, notes, identifier, digest) -> str | None:
     """Assemble the evidence, then let C1 allocate and commit the record."""
     references = list(considered)
     if route is not None:

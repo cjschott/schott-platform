@@ -1,0 +1,84 @@
+# Reviewed example only. NOT INSTALLED BY ANYTHING.
+#
+# Installing this drop-in is the G6.1 ceremony, and it is closed until an
+# operator review authorises it. This file exists so the grant can be reviewed
+# as text before it is policy, and so that "what exactly did we agree to give
+# away?" has a written answer.
+#
+# The accepted authority is exactly one sentence:
+#
+#   cschott may execute exactly the Kyri VERIFICATION transition helper with
+#   exactly one valid CINV identity.
+#
+# --- what this grant cannot become ------------------------------------------
+#
+# This is the property the whole G6.1 boundary rests on, so it is stated first
+# and proven by construction rather than by a check somebody remembered.
+#
+# The command is /usr/libexec/kyri-exec-verify. That program compiles in
+# POLICY_MODULE = "kyri_exec_verify"; that module compiles in
+# WORKER_SCRIPT = /usr/libexec/kyri-exec-verify-worker.py; the transition execs
+# the worker named by the policy it was authorised to act on. There is no
+# argument, environment variable, working directory, PATH entry, module name,
+# or file that a caller can supply which changes any link in that chain.
+#
+# Therefore this rule does NOT make /usr/libexec/kyri-exec-worker.py callable,
+# and cannot be made to:
+#
+#   no wildcard          the command is one absolute path, never a directory,
+#                        never ALL, never a glob
+#   no free argument     the sole argument is constrained to ^CINV-[0-9]{6}$
+#   no worker path       the worker target is not an argument to anything
+#   no mode selector     there is no --dry-run, no KYRI_* variable, no flag;
+#                        selection is which of two installed programs runs
+#   no shell             no /bin/sh, no sudoedit, no SETENV, no !authenticate
+#   env_reset in force   no env_keep addition; the helper trusts none of the
+#                        surviving variables and constructs the worker
+#                        environment explicitly
+#
+# Reaching production execution from here would require a different installed
+# artifact at this path, which would change the digest below, which is a review
+# event that fails closed rather than a value somebody can pass.
+#
+# --- relationship to the production grant ------------------------------------
+#
+# /etc/sudoers.d/kyri-exec (production, gate G3) and this file are separate
+# grants over separate paths. Installing this one does not open G6 and does not
+# widen that one. Removing this one does not affect that one. The production
+# execution path remains closed after G6.1 succeeds: G6 is a different gate,
+# and the production worker still refuses for want of a bound runtime backend.
+#
+# kyri-exec-quota and kyri-exec-admin are deliberately absent here for the same
+# reason they are absent there: the quota operation runs inside the transition
+# this rule already authorises, and the administrative helper is interactively
+# authenticated with no NOPASSWD at all.
+#
+# Boundary specification §3.2 and §3.3 are normative for every property above.
+#
+# --- integrity ---------------------------------------------------------------
+#
+# Primary control is immutable root-owned ancestry: the helper and every
+# writable ancestor are root:root and non-writable by cschott, by
+# kyri-capability, and by any unprivileged user or group. sudoers(5) is explicit
+# that a grant over a command the user can write is void -- a digest cannot
+# repair a writable binary.
+#
+# Secondary control is the SHA-256 digest below, defence in depth and never a
+# substitute for that ancestry. sudo's fdexec default is digest_only, so the
+# descriptor that was hashed is the one executed and the hash-then-swap race is
+# closed by the mechanism rather than by our code.
+#
+# The digest is captured at G6.1 from the INSTALLED artifact and pasted here. It
+# is deliberately a placeholder in the repository: a real-looking digest
+# committed as an example is one somebody ships by accident.
+#
+# Capture it with:
+#     sha256sum /usr/libexec/kyri-exec-verify
+#
+# Install (G6.1 only, after operator review) as /etc/sudoers.d/kyri-exec-verify,
+# root:root, mode 0440, and validate with `visudo -c -f` BEFORE moving it into
+# place.
+
+Cmnd_Alias KYRI_EXEC_VERIFY = sha256:REPLACE_WITH_INSTALLED_VERIFY_HELPER_DIGEST /usr/libexec/kyri-exec-verify ^CINV-[0-9]{6}$
+
+cschott ALL=(root) NOPASSWD: KYRI_EXEC_VERIFY

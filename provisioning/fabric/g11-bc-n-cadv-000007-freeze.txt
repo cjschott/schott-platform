@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# The CADV-000007 freeze, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a shell so every command and every refusal is visible on the console.
+#
+# STEP 1 OF THE G11-BC-N WRITE PLAN. The G11-BC-M chain expired at
+# 2026-09-19T06:00:00-05:00 and is not being extended. This freezes the renewal
+# advertisement and runs a READ-ONLY preflight; the register-advertisement
+# WRITE is a separate authorisation and is not in this block.
+#
+# It writes exactly one file, into /etc/kyri/fabric. It does not touch
+# /var/lib/kyri/fabric, and proves so.
+#
+# THE CURRENT-TIME FRESHNESS GATE, AND WHY IT IS HERE AND NOT IN THE ENGINE
+# ========================================================================
+# The withdrawn G11-BC-M CSEL artifact did not fail closed after its authority
+# expired: every pin held and its preflight still accepted, because the request
+# carried a reviewed `evaluated_at` inside the old window and the Fabric engine
+# judges at the instant the request names, never at a clock. That is correct and
+# deliberate -- see tools/fabric/admission.py: "Reading the current time here
+# would make the verdict depend on when the request was replayed rather than on
+# what it says, so a body accepted once could be refused later without a single
+# byte of it changing." An append-only engine must be replay-deterministic.
+#
+# The consequence is that nothing inside the engine will ever tell an operator
+# that the authority they are about to extend has already lapsed. So the
+# artifact carries that check, ahead of the install:
+#
+#     observed_at <= NOW < valid_until
+#
+# which is the same half-open interval the engine applies at
+# `observed_at <= recorded_at < valid_until`, evaluated against the operator's
+# wall clock instead of the pinned instant. The values are read back out of the
+# rendered body itself rather than restated here, so the gate cannot drift from
+# the bytes it guards, and the embedded recorded_at/observed_at/valid_until stay
+# pinned and unchanged. This is additional operator safety, not a second
+# eligibility model.
+#
+# No instance eligibility is checked at this step: CINST-000006 does not exist
+# until step 3, so there is nothing yet to compute. Every later G11-BC-N
+# artifact adds `compute-eligibility` at the current clock on top of this gate.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+bash <<'FREEZE_CADV'
+set -Eeuo pipefail
+DEST=/etc/kyri/fabric/cadv-000007.json
+REVIEWED=962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d
+REVIEWED_BYTES=673
+
+# The Fabric store as it stands with the whole G11-BC-M chain written and
+# nothing of G11-BC-N. Pinned so the preflight below cannot be read as proof
+# against a store that moved underneath it.
+FABRIC_BEFORE=8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add
+
+# Bodies that are NOT this one, refused BY NAME rather than by a generic
+# mismatch. Both are accepted advertisement inputs still sitting in
+# /etc/kyri/fabric, so both are a plausible mis-paste, and the Fabric engine
+# would have nothing to say about the mistake.
+ACCEPTED_CADV5=ee862cc2d9d946df895962fe6f165e610554813f0d712b5c1dbac67c83cd09ad
+ACCEPTED_CADV6=223d6ec3dbcfa686d32be07d4b6d5b01613de04a14b6bb563f845442ab7348ec
+
+printf '\n--- /etc/kyri/fabric BEFORE ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+
+# The destination must not exist.
+sudo test ! -e "${DEST}" || { echo "REFUSE: ${DEST} already exists"; exit 1; }
+
+# And the advertisement it supersedes must still be present as a frozen input.
+sudo test -f /etc/kyri/fabric/cadv-000006.json \
+  || { echo "REFUSE: /etc/kyri/fabric/cadv-000006.json is absent; CADV-000007 supersedes CADV-000006 and must be frozen against it"; exit 1; }
+
+TMP="$(mktemp)"
+cat > "${TMP}" <<'BODY'
+{
+  "request_id": "g11bcn-register-advertisement-cpkg-0001-chost-0001-supersedes-cadv-000006",
+  "actor": "CHOST-0001",
+  "recorded_at": "2026-09-19T06:00:00-05:00",
+  "capability_host_id": "CHOST-0001",
+  "capability_package_id": "CPKG-0001",
+  "contract_id": "CCON-0001",
+  "satisfied_contract_versions": [
+    "1.0.0"
+  ],
+  "advertised_resource_profile": {
+    "architecture": "x86-64"
+  },
+  "observed_at": "2026-09-19T06:00:00-05:00",
+  "valid_until": "2026-09-23T06:00:00-05:00",
+  "supersedes": "CADV-000006",
+  "provenance": {
+    "class": "declared",
+    "source": "docs/decisions/ADR-0012-distributed-capability-fabric.md",
+    "recorded_at": "2026-09-19"
+  }
+}
+BODY
+
+ACTUAL="$(sha256sum "${TMP}" | cut -d' ' -f1)"
+case "${ACTUAL}" in
+  "${ACCEPTED_CADV5}")
+    echo "REFUSE: this is the already-accepted CADV-000005 input"
+    rm -f "${TMP}"; exit 1 ;;
+  "${ACCEPTED_CADV6}")
+    echo "REFUSE: this is the already-accepted CADV-000006 input, whose authority expired 2026-09-19T06:00:00-05:00"
+    rm -f "${TMP}"; exit 1 ;;
+esac
+test "${ACTUAL}" = "${REVIEWED}" || {
+  echo "REFUSE: rendered ${ACTUAL}, reviewed ${REVIEWED}"; rm -f "${TMP}"; exit 1; }
+test "$(wc -c < "${TMP}")" = "${REVIEWED_BYTES}" || {
+  echo "REFUSE: rendered $(wc -c < "${TMP}") bytes, reviewed ${REVIEWED_BYTES}"
+  rm -f "${TMP}"; exit 1; }
+
+# ---- CURRENT-TIME FRESHNESS GATE, BEFORE ANYTHING IS INSTALLED ------------
+#
+# Read back out of the rendered body, so the gate guards the actual bytes.
+# `datetime.fromisoformat` is the same parse the released CLI uses for these
+# fields (tools/fabric/cli.py, INSTANT_FIELDS / _instant).
+printf '\n--- current-time freshness gate ---\n'
+GATE="$(python3 - "${TMP}" <<'GATE_PY'
+import json, sys
+from datetime import datetime
+body = json.load(open(sys.argv[1]))
+observed = datetime.fromisoformat(body["observed_at"])
+expires = datetime.fromisoformat(body["valid_until"])
+now = datetime.now().astimezone()
+print(f"now          {now.isoformat()}")
+print(f"observed_at  {observed.isoformat()}")
+print(f"valid_until  {expires.isoformat()}")
+if now < observed:
+    print("REFUSE: the advertised window has not opened yet"); sys.exit(1)
+if now >= expires:
+    print("REFUSE: the advertised window closed; this authority is EXPIRED at the current clock")
+    print("REFUSE: do not extend it -- prepare a fresh renewal chain")
+    sys.exit(1)
+print("ok  observed_at <= now < valid_until")
+GATE_PY
+)" || { printf '%s\n' "${GATE}"; echo "REFUSE: current-time freshness gate failed"; rm -f "${TMP}"; exit 1; }
+printf '%s\n' "${GATE}"
+
+sudo install -o root -g cschott -m 0640 "${TMP}" "${DEST}"
+rm -f "${TMP}"
+
+printf '\n--- frozen input ---\n'
+sudo sha256sum "${DEST}"
+sudo stat -c '%n  %U:%G  %a  %s bytes' "${DEST}"
+
+printf '\n--- read-only preflight (NO Fabric write) ---\n'
+cd /opt/schott-platform
+PREFLIGHT="$(python3 -m tools.fabric.cli register-advertisement \
+  --store-root /var/lib/kyri/fabric --expected-uid 1000 --expected-gid 1000 \
+  --evidence-root /var/lib/kyri/evidence --evidence-trusted-uid 0 \
+  --input-file cadv-000007.json --approved-directory /etc/kyri/fabric --preflight)"
+printf '%s\n' "${PREFLIGHT}"
+
+# The two facts pinned SEPARATELY. `would_accept` alone says a body is well
+# formed; it does not say the engine resolved it to the record this ceremony is
+# authorised to create.
+PREDICTED="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["predicted_record_id"])')"
+DIGEST="$(printf '%s' "${PREFLIGHT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_digest"])')"
+test "${PREDICTED}" = "CADV-000007" \
+  || { echo "REFUSE: the preflight predicts ${PREDICTED}, not CADV-000007"; exit 1; }
+test "${DIGEST}" = "sha256:f3fe5fa5960f0a623e7da2cd2be860136b039676f1536a4805fec38f2328de62" \
+  || { echo "REFUSE: the request digest is ${DIGEST}, not the reviewed one"; exit 1; }
+printf 'ok  predicted_record_id %s\n' "${PREDICTED}"
+printf 'ok  request_digest      %s\n' "${DIGEST}"
+
+printf '\n--- production Fabric must be byte-identical to before ---\n'
+AFTER="$(find /var/lib/kyri/fabric -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+printf '%s\n' "${AFTER}"
+test "${AFTER}" = "${FABRIC_BEFORE}" \
+  || { echo "REFUSE: /var/lib/kyri/fabric changed during the freeze (${AFTER}, expected ${FABRIC_BEFORE})"; exit 1; }
+printf 'ok  /var/lib/kyri/fabric unchanged at %s\n' "${FABRIC_BEFORE}"
+
+printf '\n--- /etc/kyri/fabric AFTER ---\n'
+sudo find /etc/kyri/fabric -mindepth 1 -printf '%p  %u:%g  %m  %s\n' | sort
+FREEZE_CADV
+
+# EXPECTED:
+#   gate           observed_at <= now < valid_until, against the operator clock
+#   frozen input   962555b33e62918f2fbd8dde9d6c26068de0c100436f125b0ba0072cbb6eb81d
+#                  /etc/kyri/fabric/cadv-000007.json  root:cschott  640  673 bytes
+#   preflight      would_accept true, mutated false, destination_exists false,
+#                  predicted_record_id CADV-000007,
+#                  request_digest sha256:f3fe5fa5…
+#   fabric         8f1df4b739ca5dd416fc90fba97401eda7996da22f7b145d0be4d69c46258add
+#
+# Return this output. The register-advertisement WRITE is a separate
+# authorisation.
+#
+# THE NEW WINDOW. CADV-000007 is valid 2026-09-19T06:00:00-05:00 through
+# 2026-09-23T06:00:00-05:00. Everything after it -- CINST-000006, CROUTE-0006,
+# CSEL-000004 and CINV-000003 Stages 0 to 3 -- has to fit inside that. This
+# block does not extend it and must not be used to.

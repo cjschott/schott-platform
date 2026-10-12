@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# The corrected privileged-helper ceremony, exactly as it is to be typed.
+#
+# This file is reference text, not a script to run: the operator pastes it into
+# a root-capable shell so every command and every refusal is visible on the
+# console. It lives here rather than only in a report so the test suite can
+# execute it against a stub installer and prove the control flow, instead of
+# trusting that a fenced block in prose does what its prose says -- which is the
+# defect that let the Generation-15 block reach --install after a refusal.
+#
+# The property under test: no later stage can run after an earlier one refused.
+#
+# ORDER. This ceremony is second. It must run only against an installed and
+# accepted Generation 15: the installer refuses otherwise, because Generation
+# 15 carries the readiness rule that declares these corrected helper digests.
+set -Eeuo pipefail
+cd /opt/schott-platform
+
+# An unexpected transaction is the one condition that must stop everything
+# before any installer runs. It would mean a previous ceremony did not finish,
+# and the correct response is inspection, not cleanup.
+sudo test ! -e /root/kyri-g11-bb-helper-transaction/journal \
+  || { printf 'STOP: a helper transaction journal exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+sudo test ! -e /root/kyri-g11-bb-helper-transaction \
+  || { printf 'STOP: helper transaction residue exists. Do not delete it. Report to the reviewer.\n' >&2; exit 1; }
+
+# The runtime this ceremony is judged by. Generation 15 must already be
+# installed and accepted; the installer checks it too, and refuses.
+sudo test -e /root/kyri-gen15-library-digests.txt \
+  || { printf 'STOP: Generation-15 evidence is absent. Install and accept Generation 15 first.\n' >&2; exit 1; }
+
+# The verification entrypoint stays unauthorised through this ceremony.
+sudo test ! -e /etc/sudoers.d/kyri-exec-verify \
+  || { printf 'STOP: the verification grant exists. Nothing authorised it.\n' >&2; exit 1; }
+
+sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --verify-source \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --verify \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --install \
+  && sudo bash /opt/schott-platform/provisioning/execution/install-g11-bb-helpers.sh --verify-installed

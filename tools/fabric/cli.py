@@ -54,6 +54,23 @@ EXIT_USAGE = 2
 # and is still structured output rather than a traceback.
 ACCEPTING = ("accepted", "exact-replay")
 
+# The record kind each creating write operation allocates. Withdrawals,
+# retirements and refreshes supersede or amend an existing record rather than
+# minting a new kind, so they have no identifier to predict.
+CREATED_KINDS = {
+    "declare-capability": "capability-definition",
+    "declare-contract": "capability-contract",
+    "declare-package": "capability-package",
+    "admit-subject": "capability-host",
+    "register-advertisement": "capability-advertisement",
+    "admit-instance": "capability-instance",
+    "create-route": "capability-route",
+}
+
+# The operations that resolve a governed Evidence reference. Both declare a
+# verified resource profile, so both must prove the evidence supports it.
+NEEDS_EVIDENCE = ("admit-subject", "refresh-subject")
+
 # Which §8 write operations exist, and the released function each delegates to.
 # One entry per spelling, so the interface never branches on a governance-
 # relevant flag: choosing between withdrawing and retiring is the operator's
@@ -135,10 +152,32 @@ def _fabric_store(args, *, for_read: bool = False) -> FabricStore:
                        expected_gid=args.expected_gid)
 
 
-def _trust_store(args) -> TrustStore:
+def _trust_store(args, *, for_read: bool = False) -> TrustStore:
+    """The trust store, opened to write or opened to read.
+
+    `for_read` is the difference between a rehearsal and a write. The writing
+    constructor provisions the store's directories, so opening one to answer
+    *would this succeed* would create the very state the rehearsal promises not
+    to touch. `open_for_read` is the released opener that creates nothing.
+    """
     if not getattr(args, "trust_store_root", None):
         raise _Unusable("this operation requires --trust-store-root")
+    if for_read:
+        return TrustStore.open_for_read(args.trust_store_root)
     return TrustStore(args.trust_store_root)
+
+
+def _evidence_authority(args) -> dict:
+    """The Evidence trust boundary, passed through only where it is consumed.
+
+    Supplied explicitly and never defaulted: an operation that resolves a
+    governed Evidence reference without being told which authority to trust
+    would be choosing one, and the resolver refuses rather than guessing.
+    """
+    if args.command not in NEEDS_EVIDENCE:
+        return {}
+    return {"evidence_root": getattr(args, "evidence_root", None),
+            "evidence_trusted_uid": getattr(args, "evidence_trusted_uid", None)}
 
 
 def _governed(result) -> int:
@@ -149,13 +188,16 @@ def _governed(result) -> int:
 
 def command_write(args) -> int:
     """One governed mutation, delegated whole."""
+    if getattr(args, "preflight", False):
+        return command_preflight(args)
     function_name, needs_trust = WRITE_OPERATIONS[args.command]
     body = _decision_body(args.input_file, args.approved_directory)
     store = _fabric_store(args)
     operation = getattr(admission, function_name)
     try:
         if needs_trust:
-            return _governed(operation(store, _trust_store(args), **body))
+            return _governed(operation(store, _trust_store(args),
+                                       **_evidence_authority(args), **body))
         return _governed(operation(store, **body))
     except TypeError:
         # The body named something the operation does not take, or omitted
@@ -164,14 +206,142 @@ def command_write(args) -> int:
         raise _Unusable("the decision body does not match this operation") from None
 
 
-def command_select(args) -> int:
-    """Operation 10. The `CSEL` is the governed component's to write."""
+def command_preflight(args) -> int:
+    """Rehearse one governed write, mutating nothing.
+
+    **The production store is only ever read.** It is opened through
+    `open_for_read`, so an absent store is reported as absent rather than built
+    and then described, and no sequence, lock, record, or temporary is created
+    by asking whether the write would succeed.
+
+    **The real operation runs.** Restating the model's rules here would be a
+    second implementation that agrees until it does not, so the body is carried
+    through the same approved-directory reader into the same governed
+    operation, under `admission.rehearsing()`. Every field check, vocabulary
+    check, reference resolution and construction rule therefore runs against
+    the real store; the operation stops at its first irreversible act.
+
+    **The identifier is predicted, not taken.** `peek_next_id` reads the real
+    store's sequence and applies the allocator's own rule, so the answer cannot
+    disagree with what allocation would hand out. It remains a prediction:
+    another caller may take it in between, which is why the write path
+    allocates for itself rather than being handed this value.
+
+    **The trust store is read the same way.** An operation that needs trust
+    standing gets the real trust store opened through `open_for_read`, so the
+    real query runs and nothing is provisioned by asking. This surface used to
+    refuse those operations outright, on the correct observation that the
+    writing constructor creates its root and the mistaken conclusion that no
+    read-only opener existed. One does, and it is inherited -- so the governed
+    write that most needs a rehearsal was the one that could not have one.
+    Trust standing is never simulated here and never skipped; the rehearsal
+    asks exactly what the write asks.
+    """
+    function_name, needs_trust = WRITE_OPERATIONS[args.command]
+
     body = _decision_body(args.input_file, args.approved_directory)
-    store = _fabric_store(args)
+    store = _fabric_store(args, for_read=True)
+
+    kind = CREATED_KINDS.get(args.command)
+    predicted = destination = None
+    if kind is not None:
+        predicted = store.peek_next_id(kind)
+        destination = store.path_for(kind, predicted)
+        if destination.exists():
+            raise _Unusable(
+                f"{predicted} already exists at {destination}; the store and its "
+                "sequence disagree and require operator disposition")
+
+    operation = getattr(admission, function_name)
     try:
-        return _governed(select_candidate(store, _trust_store(args), **body))
+        with admission.rehearsing():
+            if needs_trust:
+                # The same trust query and the same Evidence resolution the
+                # real write performs, against the real stores, opened so they
+                # cannot provision anything. Skipping either would make the
+                # rehearsal answer a different question from the write, which
+                # is the one thing a rehearsal may not do.
+                outcome = operation(store, _trust_store(args, for_read=True),
+                                    **_evidence_authority(args), **body)
+            else:
+                outcome = operation(store, **body)
     except TypeError:
         raise _Unusable("the decision body does not match this operation") from None
+
+    would_accept = outcome.outcome == admission.PREFLIGHT
+    _emit({
+        "outcome": "preflight",
+        "operation": args.command,
+        "would_accept": would_accept,
+        "rehearsal_outcome": outcome.outcome,
+        "rehearsal_reason": outcome.reason,
+        "record_kind": kind,
+        "predicted_record_id": predicted,
+        "destination": str(destination) if destination else None,
+        "destination_exists": False if destination else None,
+        "store_root": str(store.root),
+        "store_exists": store.root.exists(),
+        "request_id": outcome.request_id,
+        "request_digest": outcome.request_digest,
+        "mutated": False,
+    })
+    return EXIT_SUCCESS if would_accept else EXIT_DENIED
+
+
+def command_select(args) -> int:
+    """Operation 10. The `CSEL` is the governed component's to write.
+
+    `--preflight` runs the same governed selection against the same stores
+    opened read-only and stops at the allocation boundary. The route is
+    resolved, every candidate the route declares is judged by the same
+    eligibility path, and the same declared-order rule picks the same winner --
+    what differs is that nothing is allocated and nothing is written.
+    """
+    rehearse = bool(getattr(args, "preflight", False))
+    body = _decision_body(args.input_file, args.approved_directory)
+    store = _fabric_store(args, for_read=rehearse)
+
+    kind = "capability-selection"
+    predicted = destination = None
+    if rehearse:
+        predicted = store.peek_next_id(kind)
+        destination = store.path_for(kind, predicted)
+        if destination.exists():
+            raise _Unusable(
+                f"{predicted} already exists at {destination}; the store and its "
+                "sequence disagree and require operator disposition")
+
+    try:
+        if not rehearse:
+            return _governed(select_candidate(store, _trust_store(args), **body))
+        with admission.rehearsing():
+            outcome = select_candidate(
+                store, _trust_store(args, for_read=True), **body)
+    except TypeError:
+        raise _Unusable("the decision body does not match this operation") from None
+
+    would_accept = outcome.outcome == admission.PREFLIGHT
+    _emit({
+        "outcome": "preflight",
+        "operation": args.command,
+        "would_accept": would_accept,
+        "rehearsal_outcome": outcome.outcome,
+        "rehearsal_reason": outcome.reason,
+        "record_kind": kind,
+        "predicted_record_id": predicted,
+        # The decision itself, which is the whole reason to rehearse a
+        # selection: an operator wants to know which binding would serve
+        # before a `CSEL` identity is spent on finding out.
+        "selected_instance_id": outcome.selected_instance_id,
+        "destination": str(destination) if destination else None,
+        "destination_exists": False if destination else None,
+        "store_root": str(store.root),
+        "store_exists": store.root.exists(),
+        "request_id": outcome.request_id,
+        "request_digest": outcome.request_digest,
+        "mutated": False,
+    })
+    return EXIT_SUCCESS if would_accept else EXIT_DENIED
 
 
 def command_compute_eligibility(args) -> int:
@@ -233,6 +403,10 @@ def build_parser() -> argparse.ArgumentParser:
     def with_body(sub):
         # No identity, authority, or decision content is accepted as an
         # argument; the body is a file inside an approved directory.
+        sub.add_argument("--evidence-root", default=None,
+                         help="the trusted deployment Evidence authority root")
+        sub.add_argument("--evidence-trusted-uid", default=None, type=int,
+                         help="the uid the Evidence authority must be owned by")
         sub.add_argument("--input-file", required=True,
                          help="file name inside the approved directory")
         sub.add_argument("--approved-directory", required=True,
@@ -243,9 +417,20 @@ def build_parser() -> argparse.ArgumentParser:
         sub = with_body(with_store(subparsers.add_parser(name)))
         if needs_trust:
             with_trust(sub)
+        # Rehearse without governing. Every write subcommand takes it, because
+        # a preflight only some operations offer is one an operator has to
+        # remember the exceptions to.
+        sub.add_argument("--preflight", action="store_true",
+                         help="validate everything reachable without mutating: "
+                              "creates no store, allocates no identifier, "
+                              "writes nothing")
         sub.set_defaults(handler=command_write)
 
     choose = with_trust(with_body(with_store(subparsers.add_parser("select"))))
+    choose.add_argument("--preflight", action="store_true",
+                        help="resolve the route and judge every candidate "
+                             "without mutating: allocates no identifier and "
+                             "writes nothing")
     choose.set_defaults(handler=command_select)
 
     eligible = with_trust(with_store(subparsers.add_parser("compute-eligibility")))

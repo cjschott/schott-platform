@@ -24,11 +24,41 @@ jobs:
       - name: Check out repository
         # actions/checkout v4.4.0
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # Full history, because the generation-5 installer suite builds its
+          # generation-4 fixture baseline from pinned historical blobs rather
+          # than from whatever generation the machine happens to have installed.
+          # The default depth-1 checkout would leave those objects absent and
+          # the suite would fail closed on every run.
+          fetch-depth: 0
 
-      - name: Shell syntax check (scripts and tests)
+      - name: Shell syntax check (scripts, tests, operator tooling)
         run: |
           bash -n scripts/*.sh
           bash -n tests/*.sh
+          bash -n provisioning/execution/*.sh
+          bash -n provisioning/artifacts/*.sh
+          bash -n provisioning/evidence/*.sh
+
+      # What this job does NOT prove. Fifteen suites test the accepted production
+      # host -- operator ceremonies pinned to /opt/schott-platform, and the
+      # installed Generation-12 runtime -- and report HOST_ONLY_SKIP here rather
+      # than failing. Publishing the list means a green run cannot be mistaken
+      # for coverage it does not have. test-static.sh asserts this manifest
+      # matches the suites that actually declare themselves host-only.
+      - name: Declare host-only coverage
+        run: |
+          printf '## Host-only suites (not proven by GitHub CI)\n\n' >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          printf 'These %d suites require the accepted production host and are\n' \
+            "$(grep -cvE '^#|^$' tests/host-only.manifest)" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          printf 'proven only by the validator on schai:\n\n' >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          while IFS=$'\t' read -r suite reason; do
+            case "${suite}" in ''|\#*) continue ;; esac
+            printf -- '- `%s` — %s\n' "${suite}" "${reason}" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          done < tests/host-only.manifest
+          printf '\n'
+          grep -cvE '^#|^$' tests/host-only.manifest \
+            | xargs printf 'host-only suites declared: %s\n'
 
       - name: Static repository assertions
         run: bash tests/test-static.sh
@@ -76,6 +106,10 @@ jobs:
 
       - name: Evidence validator behaviour tests
         run: bash tests/test-evidence-validator.sh
+
+      # Declarative Evidence fingerprint and the S0 ceremony. Fixture-only.
+      - name: Evidence fingerprint and S0 ceremony tests
+        run: bash tests/test-evidence-fingerprint.sh
 
       # Repository-only: reads manifests and imports plugin modules to confirm
       # they implement the contract. No network access, no SSH, no subprocess,
@@ -171,11 +205,85 @@ jobs:
       - name: Trust runtime tests
         run: bash tests/test-trust-runtime.sh
 
+      # Trust Evidence identity integrity and read-only decision rehearsal.
+      - name: Trust decision preflight tests
+        run: bash tests/test-trust-decision-preflight.sh
+
+      # The one-time root establishment lineage repair ADR-0014 specifies.
+      # Reconstructs the pre-fix ceremony shape in temporary directories; it
+      # never copies or writes a production store.
+      - name: Trust root lineage backfill tests
+        run: bash tests/test-trust-root-lineage-backfill.sh
+
       # Builds synthetic fabric records in memory and destroys nothing because
       # it writes nothing. No network, no SSH, no subprocess from library code,
       # no Docker, no secrets file of any kind, and no store of any kind.
       - name: Fabric runtime tests
         run: bash tests/test-fabric-runtime.sh
+
+      # The governed resource vocabulary and its one satisfaction rule. Pure
+      # functions over mappings: no store, no record, no identifier.
+      - name: Fabric resource semantics tests
+        run: bash tests/test-fabric-resources.sh
+
+      # Read-only preflight for governed Fabric writes. Fixture-only.
+      - name: Fabric write preflight tests
+        run: bash tests/test-fabric-preflight.sh
+
+      # `manifest_reference` from the approved decision body to the staged
+      # tree. Fixture-only: temporary stores, artifact roots and staging roots.
+      - name: Fabric package manifest reference tests
+        run: bash tests/test-fabric-package-manifest.sh
+
+      # CHOST admission vocabulary and read-only trust rehearsal. Fixture-only.
+      - name: Fabric host admission tests
+        run: bash tests/test-fabric-host-admission.sh
+
+      # The trusted deployment Evidence authority and the read-only cross-plane
+      # resolution that binds an EVID to a claimed profile. Fixture-only.
+      - name: Fabric evidence authority tests
+        run: bash tests/test-fabric-evidence-authority.sh
+
+      # G11-A: an instance is bound to the advertisement that admitted it, the
+      # admitted host must be a permitted target of the composed scope, and a
+      # renewal states which claim it replaces without touching it.
+      # Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric G11-A integrity tests
+        run: bash tests/test-fabric-g11-integrity.sh
+
+      # G11-H: a first instance admission must be rehearsable, and admission
+      # must consume the current advertisement rather than merely a fresh one.
+      # Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric instance admission integrity tests
+        run: bash tests/test-fabric-instance-admission-integrity.sh
+
+      # G11-AG: an admission must not claim authority past the advertisement it
+      # depends on. Without the bound, [valid_until, admitted_until) is an R17
+      # tail -- lifecycle-admitted with ELIG-7 open while ELIG-6 refuses.
+      # Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric admission dependency bound tests
+        run: bash tests/test-fabric-admission-dependency-bound.sh
+
+      # G11-K: create-route must be rehearsable before the first production
+      # route is written. Fixture-only: temporary Fabric and Trust stores.
+      - name: Fabric route preflight tests
+        run: bash tests/test-fabric-route-preflight.sh
+
+      # A route may supersede only the current head of its chain, and a class
+      # may have only one current route. Fixture-only.
+      - name: Fabric route head tests
+        run: bash tests/test-fabric-route-head.sh
+
+      # G11-N: register-advertisement must be rehearsable in both shapes before
+      # the CADV renewal ceremony. Fixture-only.
+      - name: Fabric advertisement preflight tests
+        run: bash tests/test-fabric-advertisement-preflight.sh
+
+      # G11-B: the installed Capability Runtime must satisfy its Fabric
+      # dependency from the installed surface, not from a checkout. Builds a
+      # disposable installation root; skips cleanly where none is installed.
+      - name: Fabric installed dependency closure tests
+        run: bash tests/test-fabric-runtime-install-closure.sh
 
       # ENG-0005 Track A: the Capability Runtime's persistence foundation, and
       # the permanent backstop asserting the package executes nothing. Builds
@@ -193,6 +301,19 @@ jobs:
       # engine, registry service, scheduler, placement, or execution exists.
       - name: Capability fabric tests
         run: bash tests/test-capability-fabric.sh
+      - name: Invocation operation authority
+        run: bash tests/test-capability-invocation-operation-authority.sh
+      - name: Invoke current eligibility
+        run: bash tests/test-capability-invoke-current-eligibility.sh
+
+      # The rehearsal that keeps a first invocation from costing an identity to
+      # discover it would be refused. Fixture-only.
+      - name: Invoke preflight
+        run: bash tests/test-capability-invoke-preflight.sh
+      - name: Generation-12 packaging
+        run: bash tests/test-capability-execution-generation12-packaging.sh
+      - name: Generation-12 installer
+        run: bash tests/test-capability-execution-generation12-installer.sh
 
       # Architecture only: ADR-0013, six immutable schemas, ontology, and
       # documentation. Asserts the specification is complete and that no health
@@ -200,6 +321,559 @@ jobs:
       # rerouting, drain, quarantine, or remediation exists.
       - name: Capability health tests
         run: bash tests/test-capability-health.sh
+
+      # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
+      # carrying the purity or authority backstop for the modules that increment
+      # added. Pure or descriptor-scoped: no host state, no Podman, no network.
+      - name: Capability execution types tests
+        run: bash tests/test-capability-execution.sh
+
+      - name: Capability execution canonical JSON tests
+        run: bash tests/test-capability-execution-canonical-json.sh
+
+      - name: Capability execution payload tests
+        run: bash tests/test-capability-execution-payload.sh
+
+      - name: Capability execution implementation authority tests
+        run: bash tests/test-capability-execution-implementation-authority.sh
+
+      - name: Capability execution mutation tests
+        run: bash tests/test-capability-execution-mutation.sh
+
+      - name: Capability execution capacity tests
+        run: bash tests/test-capability-execution-capacity.sh
+
+      # Forks real processes against a pipe barrier: the two-slot ceiling only
+      # means something if it holds under a genuine race.
+      - name: Capability execution capacity race tests
+        run: bash tests/test-capability-execution-capacity-race.sh
+
+      - name: Capability execution handoff tests
+        run: bash tests/test-capability-execution-handoff.sh
+
+      - name: Capability execution profile tests
+        run: bash tests/test-capability-execution-profile.sh
+
+      - name: Capability execution protocol tests
+        run: bash tests/test-capability-execution-protocol.sh
+
+      # Policy logic only, run as the ordinary CI user. Installs no helper,
+      # touches no sudoers file, and requires no privilege.
+      - name: Capability execution helper policy tests
+        run: bash tests/test-capability-execution-helper-policy.sh
+
+      # G11-AH: the coordinator identity is read from root-owned deployment
+      # authority rather than compiled in. Policy only; no privilege.
+      - name: Capability execution coordinator authority tests
+        run: bash tests/test-capability-execution-coordinator-authority.sh
+
+      # Privileged action layer, driven through an injected backend. Changes no
+      # credentials and requires no privilege.
+      - name: Capability execution transition action tests
+        run: bash tests/test-capability-execution-transition-action.sh
+
+      # Sealed profile transport: real memfds, real seals, and one real execve
+      # into a controlled child. No credential change and no privilege.
+      - name: Capability execution profile transport tests
+        run: bash tests/test-capability-execution-profile-transport.sh
+
+      # The create_argv authority gate: profile policy re-derivation, runtime
+      # contracts, image presence through an injected seam, and the payload
+      # and package commitments. Builds argv and executes nothing.
+      - name: Capability execution authority gate tests
+        run: bash tests/test-capability-execution-authority-gate.sh
+
+      # The worker-owned invocation snapshot: real filesystem mutation against
+      # fixture trees, proving the container-consumed material is independent
+      # of the coordinator handoff. No privilege, no container, no Podman.
+      - name: Capability execution snapshot tests
+        run: bash tests/test-capability-execution-snapshot.sh
+
+      # Generation-5 installer, driven against throwaway fixture trees only:
+      # failure injected at every commit position, every interrupted
+      # transaction replayed. Installs nothing and needs no privilege.
+      - name: Capability execution generation-5 installer tests
+        run: bash tests/test-capability-execution-generation5-installer.sh
+
+      # Generation-6 installer: one NEW runtime object, so rollback removes
+      # rather than restores. Fixture trees only -- no tmpfiles fragment is
+      # installed, no snapshot root is created, systemd-tmpfiles never runs.
+      - name: Capability execution generation-6 installer tests
+        run: bash tests/test-capability-execution-generation6-installer.sh
+
+      # The read-only G5 ceremony preflight. Fixture trees only: it builds no
+      # image, creates no authority state, and invokes no container runtime.
+      - name: Capability execution G5 preflight tests
+        run: bash tests/test-capability-execution-g5-preflight.sh
+
+      # What the generation declaration may call development, and what it must
+      # refuse. Unprivileged; drives the real classification functions.
+      - name: Capability execution generation succession tests
+        run: bash tests/test-capability-execution-generation-succession.sh
+
+      # The succession primitive the host-only fixtures rewind through.
+      - name: Succession primitive tests
+        run: bash tests/test-succession-lib.sh
+
+      # The Generation-15 runtime installation, fixture only.
+      - name: Capability execution generation 15 installer tests
+        run: bash tests/test-capability-execution-generation15-installer.sh
+
+      # The Generation-16 recovery-discovery correction, fixture only. Host-only:
+      # it reconstructs its baseline from the installed runtime, so on a runner
+      # it reports HOST_ONLY_SKIP and the local validator is the authority.
+      - name: Capability execution generation 16 installer tests
+        run: bash tests/test-capability-execution-generation16-installer.sh
+
+      # Generation 17 and the helper ceremony that must follow it. Host-only:
+      # both reconstruct their baseline from the installed runtime, so on a
+      # runner they report HOST_ONLY_SKIP and the local validator is authority.
+      - name: Capability execution generation 17 installer tests
+        run: bash tests/test-capability-execution-generation17-installer.sh
+
+      # Generation 18. Host-only: it reconstructs its baseline path set from the
+      # installed runtime, so on a runner it reports HOST_ONLY_SKIP and the
+      # local validator is the authority.
+      - name: Capability execution generation 18 installer tests
+        run: bash tests/test-capability-execution-generation18-installer.sh
+
+      # Generation 19: governed administrative abandonment, published before it
+      # can be used. Host-only: skips here.
+      - name: Capability execution generation-19 installer tests
+        run: bash tests/test-capability-execution-generation19-installer.sh
+
+      # tests/test-capability-cinv-000002-reclamation-rehearsal.sh IS
+      # DELIBERATELY NOT RUN, here or locally, and is named so that omission is
+      # a decision rather than a gap. It is disarmed: on 2026-09-20 it mutated
+      # production, because it rehearsed a whole ceremony by substituting the
+      # runtime path while the mutator resolved a module constant. It refuses to
+      # run and is kept as evidence. The rehearsal that replaces it, and can be
+      # aimed, is the CADM-000001 one below.
+
+      # Generation 20: explicit mutation targets and provenance correction.
+      # Host-only: the fixture IS the installed Generation-19 surface, so on a
+      # runner it reports HOST_ONLY_SKIP and the local validator is authority.
+      - name: Capability execution generation-20 installer tests
+        run: bash tests/test-capability-execution-generation20-installer.sh
+
+      # ADR-0016, the correction verb itself. Portable: fixtures only.
+      - name: Capability execution provenance correction tests
+        run: bash tests/test-capability-execution-provenance-correction.sh
+
+      # ADR-0018, the same verb widened to three fields -- and the boundary that
+      # keeps `reason` and every lifecycle claim out of it. Portable.
+      - name: Capability provenance multi-field correction tests
+        run: bash tests/test-capability-provenance-multifield.sh
+
+      # The Generation-22 installer proves ADR-0018, and 21 sabotages of the
+      # reviewed source are each caught. Static: nothing runs --install.
+      - name: Capability execution generation-22 installer tests
+        run: bash tests/test-capability-execution-generation22-installer.sh
+
+      # ADR-0016/ADR-0018 shape compatibility: a missing later member is a shape,
+      # not a different authority. Portable.
+      - name: Capability provenance legacy compatibility tests
+        run: bash tests/test-capability-provenance-legacy-compatibility.sh
+
+      # The Generation-23 installer proves that rule, with 17 sabotages. Static.
+      - name: Capability execution generation-23 installer tests
+        run: bash tests/test-capability-execution-generation23-installer.sh
+
+      # F7: a terminal result is authorised by the lifecycle journal, not by a
+      # field the released writer never fills in. A fabricated result with no
+      # journalled launch still fails closed. Portable.
+      - name: Capability execution result authority tests
+        run: bash tests/test-capability-execution-result-authority.sh
+
+      # The Generation-24 installer proves that invariant, with 11 sabotages --
+      # each a plausible wrong fix that would make production validate clean.
+      # Static: nothing runs --install.
+      - name: Capability execution generation-24 installer tests
+        run: bash tests/test-capability-execution-generation24-installer.sh
+
+      # BLOCK B of the Stage-3 ceremony and its 22-case matrix. Host-only: the
+      # fixture is assembled from the reviewed objects the host holds, so on a
+      # runner it reports HOST_ONLY_SKIP and the local validator is authority.
+      - name: CINV-000003 Stage-3 gate matrix tests
+        run: bash tests/test-capability-cinv-000003-stage-3-gate-matrix.sh
+
+      # The Fabric renewal chain, rehearsed with the released write verbs against
+      # a byte copy. Host-only: it copies the production Fabric it rehearses.
+      - name: Fabric renewal chain rehearsal tests
+        run: bash tests/test-fabric-renewal-chain-rehearsal.sh
+
+      # The four freeze artifacts, checked statically. Portable.
+      - name: Fabric renewal freeze-artifact tests
+        run: bash tests/test-fabric-renewal-freeze-artifacts.sh
+
+      # Which store a mutating command actually writes through. Host-only: it
+      # reproduces the 2026-09-20 incident against the installed runtime.
+      - name: Capability mutation target tests
+        run: bash tests/test-capability-mutation-target-explicit.sh
+
+      # The CADM-000001 correction ceremony, rehearsed whole. Host-only.
+      - name: CADM-000001 correction rehearsal tests
+        run: bash tests/test-capability-cadm-000001-correction-rehearsal.sh
+
+      # CINV-000003 Stage 2. Host-only: it drives the installed launch bridge
+      # against copies of the governed stores.
+      - name: CINV-000003 Stage 2 rehearsal tests
+        run: bash tests/test-capability-cinv-000003-stage-2-rehearsal.sh
+
+      # CINV-000003 Stage 3. Host-only: it drives the installed supervision
+      # path against copies of the governed stores.
+      - name: CINV-000003 Stage 3 rehearsal tests
+        run: bash tests/test-capability-cinv-000003-stage-3-rehearsal.sh
+
+      - name: Capability execution BC-E helper ceremony tests
+        run: bash tests/test-capability-execution-bc-e-helper-ceremony.sh
+
+      # The G11-BC-G evidence remediation. Host-only: the fixture carries the
+      # installed helper objects the remediation verifies against, so on a
+      # runner it reports HOST_ONLY_SKIP and the local validator is authority.
+      - name: Capability execution evidence remediation tests
+        run: bash tests/test-capability-execution-evidence-remediation.sh
+
+      # The corrected privileged-helper ceremony, fixture only.
+      - name: Capability execution BB helper ceremony tests
+        run: bash tests/test-capability-execution-bb-helper-ceremony.sh
+
+      # The G11-BB anchor corrections and supervised recovery discovery.
+      # Unprivileged fixtures only.
+      - name: Capability execution handoff root traversal tests
+        run: bash tests/test-capability-execution-handoff-root-traversal.sh
+
+      - name: Capability execution authority anchor tests
+        run: bash tests/test-capability-execution-authority-anchor.sh
+
+      - name: Capability execution recovery discovery tests
+        run: bash tests/test-capability-execution-recovery-discovery.sh
+
+      # The G5 ceremony and its trust boundary: pinned-object materialisation,
+      # isolated execution, and each isolation property proven by attack.
+      - name: Capability execution G5 ceremony tests
+        run: bash tests/test-capability-execution-g5-ceremony.sh
+
+      # Cosign trust and Chainguard SPDX attestation semantics, against
+      # synthetic DSSE envelopes. No network, no install, no approval.
+      - name: Capability execution G5 supply chain tests
+        run: bash tests/test-capability-execution-g5-supply-chain.sh
+
+      # Base-image selection by governed version, against recorded history
+      # and recorded SPDX. No network, no pull, no approval.
+      - name: Capability execution G5 discovery tests
+        run: bash tests/test-capability-execution-g5-discovery.sh
+
+      # The production build context: pinned git objects onto root-owned
+      # ancestry the coordinator cannot touch. No image build, no Podman.
+      - name: Capability execution G5 build context tests
+        run: bash tests/test-capability-execution-g5-build-context.sh
+
+      # Mutation eligibility derived from ruled evidence, and the
+      # bootstrap/genesis/admission chain over fixture namespaces.
+      - name: Capability execution G5 authority tests
+        run: bash tests/test-capability-execution-g5-authority.sh
+
+      # Worker driven through a fake backend: no Podman, no subprocess, no
+      # container. Real execution is gate G6.
+      - name: Capability execution lifecycle tests
+        run: bash tests/test-capability-execution-lifecycle.sh
+
+      - name: Capability execution terminal classification tests
+        run: bash tests/test-capability-execution-terminal.sh
+
+      # Output collection over trees built in a temporary directory. Reads and
+      # hashes; creates, deletes, and executes nothing.
+      - name: Capability execution collector tests
+        run: bash tests/test-capability-execution-collector.sh
+
+      # The result-content authority a capability contract's
+      # `response_shape.content` references. Judges a decoded mapping only: no
+      # descriptor, no path, no bytes, no clock.
+      - name: Capability execution result content tests
+        run: bash tests/test-capability-execution-result-content.sh
+
+      # Runtime outcome -> governed contract failure mode, and the closure
+      # invariant over every reachable terminal disposition.
+      - name: Capability execution contract outcome tests
+        run: bash tests/test-capability-execution-contract-outcome.sh
+
+      # The governed boundary-verification package, driven through the released
+      # package, payload, collector, result-content, and contract-outcome
+      # authorities against fixture paths. Creates no container, opens no
+      # governance store, and declares no CPKG record.
+      - name: Capability execution verification package tests
+        run: bash tests/test-capability-execution-verification-package.sh
+
+      # The CINV-000002 provider-error: the governed payload named the Fabric
+      # scope verb in the field the capability reads. RED and GREEN over the
+      # exact reviewed bytes. Fixture-only; no store, handoff or container.
+      - name: Capability execution payload operation contract tests
+        run: bash tests/test-capability-execution-payload-operation-contract.sh
+
+      # The committed Fabric freeze artifacts: renders each heredoc and asserts
+      # the reviewed digest, byte count and baseline pin. Reads committed files.
+      - name: Fabric freeze artifact tests
+        run: bash tests/test-fabric-freeze-artifacts.sh
+
+      # The freeze artifacts' gates, executed rather than asserted: the real
+      # extracted constructs, real python3, real shell status propagation.
+      # Fixture-only; no store, no sudo.
+      - name: Fabric freeze gate execution tests
+        run: bash tests/test-fabric-freeze-gate-execution.sh
+
+      # The whole CINST-000006 operator block against a fixture copied from the
+      # production stores, each stage sabotaged in turn. Host-only: skips here.
+      - name: Fabric freeze CINST-000006 rehearsal
+        run: bash tests/test-fabric-freeze-cinst-000006-rehearsal.sh
+
+      # The whole CROUTE-0006 operator block against a fixture copied from the
+      # production stores, each stage sabotaged in turn and required to refuse
+      # for its own reason. Host-only: skips here.
+      - name: Fabric freeze CROUTE-0006 rehearsal
+        run: bash tests/test-fabric-freeze-croute-0006-rehearsal.sh
+
+      # The whole CSEL-000004 operator block, plus the governed-resolution gate
+      # judged directly against crafted engine output. Host-only: skips here.
+      - name: Fabric freeze CSEL-000004 rehearsal
+        run: bash tests/test-fabric-freeze-csel-000004-rehearsal.sh
+
+      # The whole CINV-000003 Stage 0 ceremony, plus the payload gate's
+      # canonical check judged directly. Host-only: skips here.
+      - name: CINV-000003 Stage 0 rehearsal
+        run: bash tests/test-capability-cinv-000003-stage-0-rehearsal.sh
+
+      # The whole CINV-000003 Stage 1 ceremony -- the first irreversible step.
+      # Every sabotage proves no invocation identity was spent. Host-only:
+      # skips here.
+      - name: CINV-000003 Stage 1 rehearsal
+        run: bash tests/test-capability-cinv-000003-stage-1-rehearsal.sh
+
+      # Quarantine over a temporary store. Deletes nothing; v1 has no deletion
+      # path at all.
+      # Governed administrative abandonment (ADR-0015): the exceptional closure
+      # that lets a permanently stuck invocation give its execution slot back.
+      - name: Capability execution abandonment tests
+        run: bash tests/test-capability-execution-abandonment.sh
+
+      # G11-BC-AH. No test may dispatch a governed mutator that can resolve a
+      # production root. Static, so it runs anywhere.
+      - name: No production escape
+        run: bash tests/test-no-production-escape.sh
+
+      # Post-execution lifecycle conclusion (ADR-0017): the NORMAL closure for
+      # an execution that ran. Distinct from abandonment, and deliberately so --
+      # the supervised path strands every success, so reusing the exceptional
+      # closure for them would destroy the distinction ADR-0015 exists to make.
+      - name: Capability execution conclusion tests
+        run: bash tests/test-capability-execution-conclusion.sh
+
+      - name: Capability execution quarantine tests
+        run: bash tests/test-capability-execution-quarantine.sh
+
+      # Cleanup and recovery classification. Deletes only inside its own
+      # fixture and contacts no runtime.
+      - name: Capability execution cleanup tests
+        run: bash tests/test-capability-execution-cleanup.sh
+
+      # Administrative dispatch and CADM with an injected backend. Installs no
+      # helper and authenticates nothing.
+      - name: Capability execution administrative tests
+        run: bash tests/test-capability-execution-admin.sh
+
+      # The adapter driven through an injected backend. No Podman, no
+      # container, no provisioned runtime.
+      - name: Capability execution adapter tests
+        run: bash tests/test-capability-execution-adapter.sh
+
+      # Static image-definition validation. Builds nothing and pulls nothing.
+      - name: Capability execution image definition tests
+        run: bash tests/test-capability-execution-image.sh
+
+      # Output containment policy and the privileged quota source. Sets no
+      # quota and installs nothing.
+      - name: Capability execution output quota tests
+        run: bash tests/test-capability-execution-quota.sh
+
+      # G5 offline authority bootstrap: counters, lifecycle lock, genesis.
+      # Hermetic against temporary roots; creates no production authority path.
+      - name: Capability implementation-authority bootstrap tests
+        run: bash tests/test-capability-authority-bootstrap.sh
+
+      # G5 ordinary admission transaction and provisioning evidence.
+      # Hermetic; builds no image and creates no production authority path.
+      - name: Capability implementation admission tests
+        run: bash tests/test-capability-authority-admission.sh
+
+      # G5 pending-disposition ceremonies. Hermetic; no production path.
+      - name: Capability pending disposition tests
+        run: bash tests/test-capability-authority-disposition.sh
+
+      # G5 coordinator authority resolution. Read-only and hermetic.
+      - name: Capability authority resolution tests
+        run: bash tests/test-capability-authority-resolution.sh
+
+      # G4 provisioning artifacts. Installs nothing and mounts nothing.
+      - name: Capability execution provisioning artifact tests
+        run: bash tests/test-capability-execution-provisioning.sh
+
+      # G11-AI: image-export identity handling against the rendering Podman
+      # actually emits. Invokes no Podman and touches no container store.
+      - name: Capability execution G11-AI image export identity tests
+        run: bash tests/test-capability-execution-image-export.sh
+
+      # G11-AJ: the governed container identity and the chain that must agree
+      # about it. Static and unprivileged.
+      - name: Capability execution container identity tests
+        run: bash tests/test-capability-execution-container-identity.sh
+
+      # G11-AK: what a runtime observation may claim to have seen.
+      - name: Capability execution runtime observation tests
+        run: bash tests/test-capability-execution-runtime-observation.sh
+
+      # G11-AK: the governed Podman backend. No Podman runs here.
+      - name: Capability execution Podman backend tests
+        run: bash tests/test-capability-execution-podman-backend.sh
+
+      # G11-AK: the privileged helper's halves must agree about the worker
+      # target. Source-level; the installed state is reported, not enforced.
+      - name: Capability execution helper coherence tests
+        run: bash tests/test-capability-execution-helper-coherence.sh
+
+      # G11-AL: the worker entrypoint's backend binding and privilege ordering.
+      - name: Capability execution worker binding tests
+        run: bash tests/test-capability-execution-worker-binding.sh
+
+      # G11-AM: full isolated invoke through to a real container. Host-only;
+      # reports HOST_ONLY_SKIP on a runner with no production layout.
+      # G11-AN: the terminal result contract. Hermetic.
+      - name: Capability terminal result contract tests
+        run: bash tests/test-capability-result-contract.sh
+
+      # G11-BC-K: the duplicate-result gate must refuse before the privileged
+      # helper is launched. Hermetic; a recording launcher proves the ordering.
+      - name: Capability execution duplicate-result gate tests
+        run: bash tests/test-capability-execution-duplicate-result-gate.sh
+
+      # G11-AO: adapter identity on the invocation record, and interrupted
+      # semantics that depend on it. Hermetic.
+      - name: Capability adapter binding tests
+        run: bash tests/test-capability-adapter-binding.sh
+
+      # G11-AP: supervisor preconditions -- descriptor topology, protocol state
+      # machine, and the authority split. Static.
+      - name: Capability execution supervision precondition tests
+        run: bash tests/test-capability-execution-supervision-preconditions.sh
+
+      # G11-AQ: governed container reconciliation. Host-only; reports
+      # HOST_ONLY_SKIP where there is no Podman or exported archive.
+      # G11-AS: the deployment execution identity authority, and the privileged
+      # reconciliation entrypoint it made buildable. Both static: fixture
+      # authorities, injected account resolvers, injected credential recorders.
+      - name: Capability execution identity authority tests
+        run: bash tests/test-capability-execution-identity-authority.sh
+
+      # G11-AX.2: the ten-object helper ceremony. Host-only; reports
+      # HOST_ONLY_SKIP without an installed Generation-14 runtime to judge it.
+      - name: Capability execution helper ceremony tests
+        run: bash tests/test-capability-execution-helper-ceremony.sh
+
+      # G11-AX.1: the Generation-14 readiness rule and the seven mixed helper
+      # states Generation 13 accepted. Both rules loaded from reviewed git
+      # objects, so this proves the defect and the fix, not just the fix.
+      - name: Capability generation-14 readiness tests
+        run: bash tests/test-capability-generation14-readiness.sh
+
+      # And its transaction. Host-only; reports HOST_ONLY_SKIP without an
+      # installed runtime to build the fixture from.
+      - name: Capability execution generation-14 installer tests
+        run: bash tests/test-capability-execution-generation14-installer.sh
+
+      # G11-AW: the boundary between the two authorities -- cross-role refusal
+      # in all four directions, and the proof that installing them cannot open
+      # execution. Injected resolvers and two unrelated fixture deployments, so
+      # it proves the grammar rather than the runner's account database.
+      - name: Capability identity authority schema tests
+        run: bash tests/test-capability-identity-authority-schema.sh
+
+      # G11-AW: the ceremony that installs them for the accepted deployment.
+      # Host-only; reports HOST_ONLY_SKIP where those accounts do not exist.
+      - name: Capability identity authority ceremony tests
+        run: bash tests/test-capability-identity-authority-ceremony.sh
+
+      # G11-AT: coordinator supervision, recovery enumeration and the
+      # readiness gate. Forked children and pipes only.
+      - name: Capability execution supervision tests
+        run: bash tests/test-capability-execution-supervision.sh
+
+      # G11-AU: the Generation-13 transaction and its packaging. Host-only;
+      # both report HOST_ONLY_SKIP without an installed runtime to build from.
+      - name: Capability execution generation-13 installer tests
+        run: bash tests/test-capability-execution-generation13-installer.sh
+
+      - name: Capability execution generation-13 packaging tests
+        run: bash tests/test-capability-execution-generation13-packaging.sh
+
+      - name: Capability execution reconcile entrypoint tests
+        run: bash tests/test-capability-execution-reconcile-entrypoint.sh
+
+      - name: Capability execution container reconciliation tests
+        run: bash tests/test-capability-execution-reconciliation.sh
+
+      - name: Capability invoke execution end-to-end tests
+        run: bash tests/test-capability-invoke-execution-e2e.sh
+
+      # G11-AT: the supervised chain against real containers. Host-only;
+      # reports HOST_ONLY_SKIP where there is no Podman or exported archive.
+      - name: Capability supervised execution end-to-end tests
+        run: bash tests/test-capability-supervised-execution-e2e.sh
+
+      # G6.1A: the trusted-runtime installation ceremony. Transactional
+      # create-once publication of five new objects onto a verified
+      # generation-6 baseline, driven against throwaway fixture trees only.
+      - name: Capability execution generation-7 (G6.1A) ceremony tests
+        run: bash tests/test-capability-execution-generation7-installer.sh
+
+      # G6.1: the privileged chain up to, and short of, container execution.
+      # The verification-only worker runs the same shared gate production runs
+      # and emits a proof instead of creating a container. Installs no sudoers,
+      # invokes no sudo, performs no transition, runs no container runtime.
+      - name: Capability execution G6.1 verification tests
+        run: bash tests/test-capability-execution-g61-verification.sh
+
+      # The coordinator execution-authorization bridge: execution-prepared to a
+      # verifiable handoff, and no further. Elevates nothing, executes nothing,
+      # and contacts no container runtime.
+      - name: Capability execution launch bridge tests
+        run: bash tests/test-capability-execution-launch-bridge.sh
+
+      # The Generation-8 installation ceremony, fixture-only. Installs nothing,
+      # writes no sudoers, invokes no helper, contacts no container runtime.
+      - name: Capability execution generation-8 installer tests
+        run: bash tests/test-capability-execution-generation8-installer.sh
+
+      # The governed S5 operator surface, fixture-only. Elevates nothing,
+      # seeds no governance store, contacts no container runtime.
+      - name: Capability execution launch CLI tests
+        run: bash tests/test-capability-execution-launch-cli.sh
+
+      # The Generation-9 installation ceremony, fixture-only.
+      - name: Capability execution generation-9 installer tests
+        run: bash tests/test-capability-execution-generation9-installer.sh
+
+      # The Generation-10 installation ceremony, fixture-only.
+      - name: Capability execution generation-10 installer tests
+        run: bash tests/test-capability-execution-generation10-installer.sh
+
+      # The Generation-11 installation ceremony, fixture-only.
+      - name: Capability execution generation-11 installer tests
+        run: bash tests/test-capability-execution-generation11-installer.sh
+
+      # The governed artifact authority and the pinned-commit materialisation
+      # into it. Fixture trees only: creates no live artifact root, publishes
+      # nothing, needs no privilege, and stages nothing.
+      - name: Governed artifact authority tests
+        run: bash tests/test-artifact-authority.sh
 
       # Compose rendering uses the sanitized template only — never a real secret.
       # ubuntu-24.04 ships Docker Compose v2 (`docker compose`).
