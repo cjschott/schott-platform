@@ -7,7 +7,7 @@
 **RESULT: REVIEW_REQUIRED.** Discovery and specification only. No runtime code,
 no provisioning, no production record of any kind.
 
-**ADR-0013 status: CONFLICTS_FOUND.** Three conflicts, ten gaps. The Health
+**ADR-0013 status: CONFLICTS_FOUND.** Three conflicts, thirteen gaps. The Health
 architecture is substantially sound and unusually well defended — its governance
 boundaries, its treatment of `unknown`, and its refusal of a health score are all
 reconcilable against the released platform without change. It is **not yet
@@ -138,7 +138,9 @@ naming here because the Health test strategy in §K is the place to not repeat i
 
 ## D. Specification gaps
 
-**SPECIFICATION_GAPS = 10.**
+**SPECIFICATION_GAPS = 13.** G1–G10 are set out below; G11, G12 and G13 were
+found inside questions E, F and I and are stated there, then carried into the
+summary at §J with the same identifiers. All thirteen are counted.
 
 ### GAP-1 — Selection visibility is not implementable on the released selection record
 
@@ -372,14 +374,22 @@ forbidden, and the adapter must carry per-dimension freshness or the removal
 cannot be justified.
 
 **Fail-closed on malformed health records — and note which way "closed" points.**
-Everywhere else in this platform fail-closed means *refuse*. Here it means
-**refuse the health claim**, which leaves the candidate eligible, because health
-only ever subtracts. A malformed health record must therefore: produce no
-removal; never be read as `healthy`; surface as a refusal in a controlled
-vocabulary; and be conspicuous in the selection explanation. Treating malformed
-health as removal would hand an attacker a denial-of-service through the
-observability layer — corrupt the health store, empty every route — which is the
-`unknown`-removes-candidates failure arriving by a different door.
+Everywhere else in this platform fail-closed means *refuse the request*. Here it
+means **refuse the health claim**: Health contributes **no subtraction**, which is
+not the same as the candidate being eligible. Eligibility was never Health's to
+confer, and Trust, Fabric eligibility, quarantine, `availability_intent`,
+restricted scope and revocation all continue to decide it independently. A
+malformed health record must therefore: produce no removal; never be read as
+`healthy`; surface as a refusal in a controlled vocabulary; and be conspicuous in
+the selection explanation. Treating malformed health as removal would hand an
+attacker a denial-of-service through the observability layer — corrupt the health
+store, empty every route — which is the `unknown`-removes-candidates failure
+arriving by a different door.
+
+*(Wording corrected 2026-10-13 at ENG-0006-B. This paragraph previously said
+refusing the health claim "leaves the candidate eligible", which is exactly the
+misreading the reviewer flagged: it reads as though a Health failure were a grant.
+It never is. See §Q.)*
 
 ---
 
@@ -745,6 +755,48 @@ ADR, or in ADR-0012 is the reviewer's decision.
 **`SPECIFICATION_GAPS=13`** counts G1–G13. The brief's template anticipated a
 single figure; G11, G12 and G13 were found inside questions E, F and I rather
 than in the gap sweep, and they are counted rather than left out of the total.
+
+## Q. Reviewer disposition, recorded 2026-10-13 — ACCEPTED
+
+**ENG-0006-A is accepted as the architecture-reconciliation checkpoint**,
+following independent review. The three conflicts are **confirmed**, and the
+reviewer agreed that the corrected semantic positions are already established by
+the schemas and the subsidiary Health documents. G1–G13 are confirmed as real
+findings, each requiring an explicit architecture resolution proposal. The
+twenty-one proposed increments are accepted as **planning input only** and are
+**not** a frozen implementation plan. **Health Runtime implementation remains NOT
+AUTHORIZED.**
+
+**Nothing in §A–§P has been rewritten.** This checkpoint required review and got
+it; the report stands as what was found and recommended on 2026-10-12. Two
+bookkeeping corrections were applied on 2026-10-13 and are marked where they
+occur: the gap count, which said ten in the introduction and §D while the summary
+correctly enumerated thirteen; and the fail-closed wording in §F.
+
+### The reviewer clarification this report had wrong
+
+**A future Health adapter must not copy the Trust adapter's failure semantics
+literally.** §F recommended `trust_adapter.py` as the structural precedent, which
+the reviewer accepted — read-only, owns no policy, instant from the caller,
+controlled refusal vocabulary, no mutation, no hidden memory. The **failure
+semantics differ**, and §F stated the difference loosely enough to be read
+backwards:
+
+- **Trust fails closed by denying authority.** A trust failure removes
+  eligibility.
+- **Health fails closed on the health claim.** Unreadable, unavailable, malformed
+  or unverifiable Health evidence must **never become positive evidence for
+  removal** — and must equally never be read as a positive claim of health.
+
+**"No Health subtraction" must never be described as "eligible."** It means only
+that Health did not remove the candidate. Trust, Fabric eligibility, quarantine,
+`availability_intent`, restricted scope, revocation and every other independent
+eligibility rule continue to apply with undiminished authority. A Health failure
+is not a grant, and the sentence corrected in §F could have been read as saying
+it was.
+
+The resolution package carrying this forward is
+[ENG-0006-B](2026-10-13-eng-0006-b-architecture-resolution-package.md).
 
 ## Related
 
