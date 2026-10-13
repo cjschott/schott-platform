@@ -42,8 +42,12 @@ keep an observability layer from acquiring authority over the Fabric, and the
 mechanism that keeps that true during implementation is the **ordering**: every
 component that computes must be built, tested and reviewed before any component
 that is *read by* the Fabric. This plan therefore puts four pure, fixture-only
-increments first, and places the single increment that first changes Fabric
-behaviour — **H13** — behind its own named gate.
+increments first, and places the two increments that change Fabric behaviour
+behind their own named gates: **H15**, the first Fabric **write** crossing, which
+introduces mandatory CSEL Health disclosure, and **H16**, the first Fabric
+**decision** crossing, which enables governed Health subtraction. **H13 is not a
+selection crossing** — it is read-only execution-outcome collection, gated because
+it is the first component to read another plane's records.
 
 **The baseline validation debt is worse than ENG-0006-C reported, and the
 diagnosis it offered is wrong.** ENG-0006-C said three pre-existing failures; the
@@ -85,8 +89,9 @@ proven two independent ways.
 `cschott`. Its existing children `fabric` and `trust` are `cschott:cschott 0700`.
 **The Health Runtime therefore cannot create its own store root**: a root-owned
 directory must be created and chowned by an operator ceremony before any Health
-component can initialise. That is increment **H16**, and it is the reason the
-first increment is fixture-only rather than "create the store and start small".
+component can initialise. That is increment **H18**, the operator store-provisioning
+ceremony, and it is the reason the first increment is fixture-only rather than
+"create the store and start small".
 
 **Verified implementation surfaces that the plan depends on:**
 
@@ -185,7 +190,7 @@ unrelated numbering schemes.
 - **Trust boundary:** separation is the mechanism — filesystem authority rather than application discipline.
 - **Failure:** refuse a root inside a git repository unless an explicit fixture opt-in; a partial write leaves a `.tmp` that `validate()` reports.
 - **Tests:** six record dirs and six sequences created; modes `0700`/`0600`; **`validate()` overridden** for Health identifier keys; no write path to Fabric or Trust by module and by path; rollover refused at width.
-- **Deferred:** none. **Production-safe:** yes **with fixture roots only**; the production root is H16.
+- **Deferred:** none. **Production-safe:** yes **with fixture roots only**; the production root is created by H18.
 
 **B2. Sequence allocation and identifier widths**
 - **Purpose:** `CHENV-0000` (4 digits) and the five six-digit families.
