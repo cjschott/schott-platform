@@ -90,6 +90,45 @@ cited.
 until fresh evidence contradicts it. Ageing out of a problem is not the same as
 fixing it.
 
+### Two freshnesses exist, and they are not the same
+
+A health state carries a freshness, and a consumer needs one. **They are
+different facts and must not be confused.**
+
+- **Stored on the record: freshness at `evaluated_at`.** A historical fact about
+  what the evidence looked like when the assessment was made. That is what an
+  incident review needs, and it is why the record stores it.
+- **Computed at the moment of use: freshness now.** Anything deciding anything
+  **recomputes** freshness from each cited observation's `observed_at` against
+  that dimension's declared policy and the caller's evaluation instant.
+
+**A stored `freshness: current` never remains operationally current.** Nothing
+may read the stored label to decide whether a candidate is subtracted. If it
+could, a dead collector would freeze a favourable assessment permanently and a
+six-month-old `healthy` would keep reading as fresh.
+
+A state whose evidence has aged past policy contributes **no subtraction** — and
+still does not become `healthy`, and still does not clear its finding. Ageing out
+of a problem is not the same as fixing it, in either direction.
+
+Derivation itself is **explicitly invoked and append-only**: every evaluation
+writes a new state carrying its own `evaluated_at`, and there is no background
+writer.
+
+### Unknown carries a review flag when the policy is missing
+
+The Null Policy Rule is inherited **exactly**, and the standard it comes from
+requires `freshness: unknown` to arrive **with `review_required: true`** — never a
+default maximum age. A state carries that flag when it arises from a null
+freshness policy, from `insufficient-policy`, or from contradicting sources, with
+its written reason naming **which** gap, because "review required" without a
+subject is an alert rather than a finding.
+
+The flag is **stored**, not derived when read. An envelope is superseded rather
+than edited, and a later version declaring the missing policy must not
+retroactively clear the flag on a past assessment — that is the same rule as
+"supersession never rewrites prior evaluations".
+
 ### Freshness is evaluated independently per observation
 
 Each dimension carries its own freshness policy, so a subject may hold current
@@ -123,6 +162,29 @@ subtracts from what other layers allowed; it never adds.
 
 A quarantined subject reporting `healthy` is quarantined. A drained node
 reporting `healthy` stays drained.
+
+## "No subtraction" is not "eligible"
+
+The sentence this document is most likely to be misread on.
+
+Health fails closed **on the claim**. Where Trust fails closed by *denying
+authority* — a trust failure removes eligibility — Health has no authority to
+deny, so unreadable, unavailable, malformed, unverifiable, stale, `unknown`,
+`unmonitored`, `insufficient-policy` and `withheld` evidence all produce the same
+outcome: **Health contributes no subtraction.**
+
+**That is not a statement about eligibility.** Eligibility was never Health's to
+confer. Trust standing, the eligibility conditions, quarantine,
+`availability_intent`, restricted scope and revocation all decide it
+independently, and every one is evaluated **before** health is consulted. A
+candidate Health did not remove may be ineligible for any of them.
+
+An attacker who can corrupt, block or forge Health therefore gains **neither a
+grant nor a denial**. Absent or unusable evidence can produce no positive claim —
+no `healthy`, no "assumed healthy" — and no negative one either. That symmetry is
+the whole point: if malformed health removed candidates, corrupting the store
+would empty every route, and the observability layer's blast radius would exceed
+that of the thing it observes.
 
 ## Related
 

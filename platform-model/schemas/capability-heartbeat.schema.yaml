@@ -49,13 +49,66 @@ required_fields:
   - heartbeat_id
   - subject_type
   - subject_id
+  # SUBJECT-AUTHORED, AND A CLAIM. Never an input to heartbeat-freshness: a
+  # subject that chose this number would be choosing its own liveness.
   - observed_at
+  # HEALTH-AUTHORED AT THE RECEIVING SURFACE, and the ONLY input to
+  # heartbeat-freshness. Subject clock skew is therefore irrelevant to freshness
+  # by construction, and remains visible as the recorded divergence.
+  - received_at
+  # HEALTH-AUTHORED, bound to the authenticated session the heartbeat arrived
+  # in, monotonic per subject. A subject cannot advance its own epoch -- a
+  # counter the subject controlled would let it replay an old sequence simply by
+  # claiming a new epoch, which is the replay bypass this field exists to close.
+  - epoch
+  # SUBJECT-AUTHORED, and must strictly increase within an epoch. Required, not
+  # optional: without it a replay is indistinguishable from a new claim.
+  - sequence
   - provenance
 
 optional_fields:
-  - sequence
   - reported_uptime_seconds
   - notes
+
+# NEITHER TIMESTAMP ALONE IS SUFFICIENT, and seeing both fail is what fixes the
+# rule. Freshness from a subject-chosen instant lets the subject choose its own
+# liveness. Freshness from a receipt time with no replay protection lets a
+# replayed old heartbeat arrive now and read as fresh. Each closes the other's
+# hole.
+freshness_input: received_at
+observed_at_authored_by: subject
+received_at_authored_by: health
+epoch_authored_by: health
+epoch_bound_to: authenticated-session
+sequence_authored_by: subject
+
+# A pair not strictly greater than the last accepted pair for that subject is
+# refused, and the refusal is recorded -- so a replay never acquires a
+# received_at. A bare sequence decrease within an epoch is a replay. A genuine
+# restart advances the epoch only by re-authenticating, and establishing a new
+# authenticated session is itself evidence that something is alive.
+monotonicity: strictly-increasing-epoch-then-sequence
+replay: refuse
+duplicate: refuse
+out_of_order: refuse
+missing_sequence: refuse
+restart_advances_epoch_via: re-authentication
+epoch_self_advancement: forbidden
+
+# Taking subject_id from the payload alone would let any subject heartbeat on
+# another's behalf, which is a reference-substitution attack with a trivially
+# cheap payload.
+subject_identity_binding: authenticated-channel-identity
+subject_identity_mismatch: refuse
+
+# An observed_at in the future, or diverging from received_at, beyond declared
+# tolerances is refused.
+clock_divergence_beyond_tolerance: refuse
+
+# A heartbeat may support BOUNDED LIVENESS and never a complete health
+# conclusion. No subject self-report independently establishes Health standing.
+supports: bounded-liveness-only
+alone_supports_healthy: false
 
 enums:
   subject_type:

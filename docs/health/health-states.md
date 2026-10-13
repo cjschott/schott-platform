@@ -11,7 +11,7 @@ Seven states. **`unknown` is the default.**
 | `unmonitored` | No envelope declared at all; health is not assessable. | No | **Inert** |
 | `insufficient-policy` | An envelope exists but a metric it should govern has no declared threshold. | No | **Inert** |
 | `healthy` | Within the declared envelope on every measured dimension. | Yes | None — health never adds |
-| `degraded` | Outside the envelope on at least one dimension, still responding. | No | May remove, per route policy, on fresh evidence |
+| `degraded` | Outside the envelope on at least one dimension, still responding. | No | **Inert in v1** — disclosed, and the primary trigger for a recommendation |
 | `unavailable` | Not responding, or heartbeat stale beyond its declared threshold. | No | **Removes**, on fresh evidence |
 | `withheld` | Health conclusions are intentionally not asserted or published. | Not a health finding | **Inert** — removes nothing on its own |
 
@@ -105,7 +105,7 @@ questions, and neither maps onto the other.
 | | Trust asks | Health asks |
 |---|---|---|
 | Question | May this subject participate? | Is it working right now? |
-| Set | Eight states, defined in ADR-0011 | The six above |
+| Set | Eight states, defined in ADR-0011 | The seven above |
 | Changed by | A trust decision, by a human authority | Deterministic evaluation of evidence |
 | Default | `Unknown`, which fails closed | `unknown`, which is inert |
 
@@ -113,10 +113,60 @@ A subject that is quarantined and `healthy` is quarantined. A subject that is
 trusted and `unavailable` is trusted. Reporting either as the other destroys
 the distinction an operator needs during an incident.
 
+## Why degraded is inert, and unavailable is not
+
+This table once made `degraded` removal conditional on a route-level health
+policy. **No such policy exists.** The route schema declares its health rules as
+uniform invariants of the route kind — health may remove, may not reorder, may
+not add — and carries no per-route health field, so the condition that sentence
+placed on removal had no referent.
+
+The condition is therefore unsatisfied, and a layer that removes "only on fresh
+positive evidence of an **ineligible condition**" removes nothing when the
+condition for removal does not exist. Two things reinforce that reading:
+
+- **`degraded` means "still responding".** It is a working capability outside a
+  limit a human wrote down, and ADR-0013 admits those limits "will be wrong at
+  first". Removing working capacity on a first-draft guess is the worse failure,
+  and the one an operator cannot see, because the route silently narrows.
+- **An over-tight threshold could empty a route.** With automatic rerouting
+  forbidden, nothing would catch it, and a thresholds-wrong problem would become
+  an outage.
+
+A `degraded` finding is made conspicuous in the selection explanation and handed
+to a human. **Fresh `unavailable` — not responding — subtracts.** That is the
+ineligible condition.
+
+Adding an explicit route-level health policy later would activate selective
+subtraction without invalidating anything written now. It is deliberately not
+done here: a restriction that can be lifted per route is one that gets lifted
+during an incident.
+
+## What "inert" does not mean
+
+**Inert is a statement about Health, never about eligibility.** A candidate
+Health did not remove may still be ineligible: trust standing, the eligibility
+conditions, quarantine, `availability_intent`, restricted scope and revocation
+all decide independently, and every one of them is evaluated **before** health is
+consulted at all. Health failing to subtract is not a grant, because Health has
+nothing to grant.
+
+## What healthy requires
+
+**`healthy` requires at least one satisfied dimension measured by something other
+than the subject.** A heartbeat is a claim: it may support **bounded liveness**
+and can never, alone, support a `healthy` conclusion. An envelope declaring only
+subject-reported dimensions yields `insufficient-policy` — it has not declared
+enough to tell "alive" from "working".
+
 ## Transitions
 
 - Every transition between health states produces a
   [degradation event](degradation-semantics.md), including recovery.
+- **A subject's first evaluation is not a transition** and produces no event.
+  `unknown` is the default, not a state the subject was previously in, so there
+  is nothing to transition from — and a declared hysteresis could not be
+  satisfied over a span that does not exist.
 - Transitions are **deterministic**: identical observations and envelope
   produce identical states.
 - A state is **superseded, never edited**, so what was believed at the moment

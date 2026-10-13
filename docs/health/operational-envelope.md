@@ -17,15 +17,47 @@ Each dimension entry carries:
 | Field | Purpose |
 |---|---|
 | `dimension` | Which measurement this governs |
-| `unit` | What the numbers mean |
-| `entry_condition` | When the subject becomes degraded on this dimension |
-| `exit_condition` | When it stops being degraded |
-| `hysteresis` | How long or how often the condition must hold |
+| `unit` | What the numbers mean; must equal the observation's unit, never converted |
+| `aggregation` | How the dimension's observations combine before comparison — `instant` or `windowed_count` |
+| `entry_condition` | When the subject becomes degraded — `{operator, value}`, structured |
+| `exit_condition` | When it stops being degraded — same form |
+| `hysteresis` | `{kind: duration, seconds, max_gap_seconds, min_samples}` |
 | `freshness_policy_seconds` | Maximum age before observations are stale; **null is permitted** |
 
 Entry and exit are **separate** because a single threshold used for both is
 what produces flapping. Hysteresis is **required**, not optional: a subject
 that crosses a boundary once has not degraded.
+
+**Conditions are structured, not written as text.** The grammar is
+[ADR-0019](../decisions/ADR-0019-health-condition-grammar.md): five comparison
+operators, decimal-string values, one declared unit per dimension, and two
+aggregations. There is no parser, because the smallest thing that satisfies
+"same inputs, same state, every time" is a form that cannot be mis-parsed — and
+every token a parser accepts is a threshold decision an implementer would be
+making on an operator's behalf.
+
+**Hysteresis is `duration` only in v1**, and all four of its members are
+required. "How often" is expressible in the *condition* through
+`windowed_count`, so a second hysteresis kind would add a discriminator and a
+second proof shape for a distinction already covered.
+
+### A gap is not a violation
+
+**Two observations separated by a long gap do not establish continuous threshold
+violation.** The interval must hold for the declared duration, every usable
+observation in it must violate the entry condition, it must contain at least
+`min_samples` usable observations, and no two consecutive ones — nor either
+interval boundary — may be more than `max_gap_seconds` apart.
+
+**A gap resets the interval regardless of why it exists**, whether nothing was
+measured or only unusable observations were. That is "a collection failure is not
+a capability failure" enforced arithmetically: a monitoring outage leaves a gap
+in usable observations, the gap breaks continuity, and **a monitoring failure
+therefore cannot manufacture a transition.**
+
+Neither continuity parameter has a default. A defaulted one would be an
+unanswered configuration question rendered as a confident assessment, which is
+the mistake the Null Policy Rule exists to prevent.
 
 ## Declared, never learned
 

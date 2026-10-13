@@ -670,9 +670,11 @@ an execution that cannot occur would be vocabulary without a referent.
 **Architecture defined; no runtime exists.**
 
 [ADR-0013](decisions/ADR-0013-capability-health-plane.md) specifies the
-Capability Health Plane: six schemas, six ontology entity types, four
+Capability Health Plane: six schemas, six ontology entity types, six
 relationships, and the observation, envelope, degradation, audit, and
-governance rules. **No health engine, no collectors, no probes, no heartbeat
+governance rules. *(Four relationships at acceptance; the two evidence-chain
+edges a derived state needs to cite what produced it were added at
+ENG-0006-C.)* **No health engine, no collectors, no probes, no heartbeat
 receiver, no evaluation loop, no remediation.**
 
 Observe the availability, performance, trust state, and operational condition

@@ -6,6 +6,17 @@
 
 > **Numbering note.** ADR-0005 and ADR-0006 remain unassigned and reserved.
 
+> **Amended 2026-10-13 at ENG-0006-C**, after independent review of the
+> ENG-0006-A reconciliation and the ENG-0006-B resolution package. Three
+> self-contradictions were corrected — the state count, the recommendation
+> vocabulary and the `withheld` definition — and the normative gaps that blocked
+> implementation were closed: collector identity, the heartbeat trust model,
+> execution-outcome attribution, the evaluation trigger and the two freshnesses,
+> the store boundary, referential integrity, and what subtracts. Publication
+> authority for `withheld` is explicitly **deferred**. Each correction names the
+> text it replaces rather than quietly overwriting it. The condition and
+> hysteresis grammar is a separate ADR.
+
 > **This ADR defines architecture only. There is no runtime implementation in
 > this release** — no health engine, no collectors, no probes, no heartbeat
 > receiver, no evaluation loop, no rerouting, no drain, no quarantine, no
@@ -134,6 +145,127 @@ Standard. A dimension with no declared policy produces `unknown`, never a
 default maximum age. Inventing an age would convert an unanswered configuration
 question into a confident-looking assessment.
 
+### The heartbeat trust model
+
+A heartbeat is a **claim**. The question this section settles is how much a claim
+is worth, because the released schema conferred nothing and also defended nothing.
+
+**Neither timestamp alone is sufficient, and seeing both fail is what fixes the
+rule.** If freshness came from the subject's `observed_at`, the subject would
+choose the number deciding its own liveness. If freshness came from a
+Health-authored receipt time with no replay protection, a **replayed** old
+heartbeat would arrive now and read as fresh. Each closes the other's hole.
+
+- **`observed_at` is subject-authored and is never an input to
+  `heartbeat-freshness`.** It is retained as a claim. An `observed_at` in the
+  future, or diverging from the receipt time, beyond declared tolerances is
+  refused.
+- **`received_at` is Health-authored at the receiving surface, and is the only
+  input to `heartbeat-freshness`.** Subject clock skew is therefore irrelevant to
+  freshness by construction, and remains visible as the recorded divergence.
+- **`epoch` is Health-authored, not subject-asserted.** It is bound to the
+  authenticated session in which the heartbeat arrived, and increases
+  monotonically per subject. **A subject cannot advance its own epoch**, which is
+  what stops the epoch becoming an unverified replay bypass: a counter the subject
+  controls would let it replay an old sequence simply by claiming a new epoch.
+- **`sequence` is subject-authored and must strictly increase within an epoch.** A
+  pair that is not strictly greater than the last accepted pair for that subject
+  is **refused** and the refusal recorded, so a replay never acquires a
+  `received_at`.
+- **A restart advances the epoch only by re-authenticating.** Establishing a new
+  authenticated session is itself evidence that something is alive, so a genuine
+  restart is admitted and a passive replay is not. A bare `sequence` decrease
+  within an epoch is a replay.
+- **`subject_id` is bound to the authenticated channel identity**, and a mismatch
+  is refused. Taking it from the payload alone would let any subject heartbeat on
+  another's behalf.
+
+#### A subject cannot establish its own health
+
+> **INDEPENDENT-EVIDENCE INVARIANT.** `healthy` requires at least one satisfied
+> dimension established by an observation whose `collector_id` is **not the
+> subject itself**. Dimensions derived from a subject's own claims —
+> `heartbeat-freshness` foremost — may support **bounded liveness** and can never,
+> alone, support a `healthy` conclusion.
+
+**No subject self-report independently establishes Health standing.** An envelope
+declaring only subject-derived dimensions yields **`insufficient-policy`**, not
+`healthy`: an envelope that cannot distinguish "alive" from "working" has not
+declared enough to assert health. That is visible, inert, and creates pressure to
+finish the envelope — the Null Policy Rule's mechanism applied to a different
+incompleteness.
+
+### Collector identity, and contradicting sources
+
+**An observation names a governed collector, not a free-text source.** Every
+`capability-health-observation` carries a **`collector_id`** drawn from the
+platform's existing closed collector registry, and a **`source_fingerprint`** —
+exactly the two fields the released `observation` schema already requires. An
+unregistered `collector_id` is **refused**. A self-chosen string is not an
+identity: it cannot be weighed against a contradicting one, and it lets a forged
+observation name any origin it likes.
+
+**Contradicting fresh observations yield `unknown`, never a winner.** Two or more
+fresh observations of the same dimension for the same subject, from different
+`collector_id`s, disagreeing about the declared condition, produce **`unknown`**
+for that dimension, **citing every contradicting observation**, with
+`review_required: true`.
+
+The alternatives were each rejected for the same underlying reason. *Newest wins*
+lets a compromised collector win by writing last, which is the cheapest attack
+available. *Trusted-source precedence* would make Health read trust standing as an
+input to a health verdict, which is the direction ADR-0011 exists to keep closed.
+Uncertainty must become **neither a positive claim nor positive evidence for
+removal**, and that property is worth more than a resolution rule. The cost is
+accepted and named: one compromised collector can force a dimension to `unknown`
+and so prevent `healthy`. That is a denial of *reassurance*, not of service — it
+removes no candidate.
+
+### Execution outcomes as health evidence
+
+Capability execution history is **an input to a collector**, never a push from the
+Capability Runtime. The Capability Runtime is architecturally barred from this
+plane and its test suite enforces that by module name; the only permitted
+direction is **Health reads Capability**.
+
+A Health-side collector reads `capability-result` records and emits observations
+on the `success-count` and `failure-count` dimensions. The mapping is normative
+here rather than left to a collector's private judgement, and it carries a second
+column — **attribution** — because a failure the platform caused is not evidence
+about the subject:
+
+| `outcome_class` | Counts as | Attribution |
+|---|---|---|
+| `completed` | success | capability-instance |
+| `refused` | neither | platform-governed |
+| `cancelled` | neither | external-decision |
+| `provider-error` | failure | capability-instance |
+| `adapter-error` | failure | platform-side |
+| `timeout` | failure | ambiguous |
+| `interrupted` | failure | ambiguous |
+| `serialisation-failure` | failure | platform-side |
+
+**Only a failure attributed to `capability-instance` may contribute to
+`failure-count`**, and so to a negative health finding. A governed `refused` is
+the platform working correctly, and counting it as degradation would let anyone
+who can provoke refusals manufacture a finding. A `cancelled` is somebody else's
+decision. An `adapter-error` or a `serialisation-failure` is **Kyri's** failure,
+and reading it as the subject's is the same mistake as a collector reporting its
+own outage as the host being broken.
+
+**`timeout` and `interrupted` are ambiguous and are excluded from
+`failure-count`.** A timeout may be a hanging provider or a misconfigured
+supervisor; an interruption may be the host, the supervisor or a signal. Nothing
+in the released record distinguishes them, so attributing either automatically is
+exactly what this section forbids. Whether additional evidence could later make
+them attributable is **deferred architecture** and requires its own decision.
+
+**No dimension counts platform-side failures.** A platform-side failure rate is a
+fact about Kyri, not about the subject, and belongs with the
+observability-of-the-observer dimensions rather than among a subject's health
+findings. Defining it is deferred; inventing it now would create a dimension
+whose semantics could not be defended.
+
 ### The operational envelope
 
 Health is meaningless without a declared limit to be inside or outside of.
@@ -150,16 +282,26 @@ defined this", never a favourable default.
 
 ### Health states
 
-Six states. **`unknown` is the default.**
+Seven states. **`unknown` is the default.**
 
 | State | Meaning | Healthy? |
 |---|---|---|
 | `unknown` | No fresh observation exists. | No |
 | `unmonitored` | No envelope declared; health is not assessable. | No |
+| `insufficient-policy` | An envelope exists but a metric it should govern has no declared threshold. | No |
 | `healthy` | Within the declared envelope on every measured dimension. | Yes |
 | `degraded` | Outside the envelope on at least one dimension, still responding. | No |
 | `unavailable` | Not responding, or heartbeat stale beyond its declared threshold. | No |
-| `withheld` | The operator set the host's availability intent to draining or withheld. | Not a health finding |
+| `withheld` | Health conclusions are intentionally not asserted or published for this subject. | Not a health finding |
+
+> **Corrected at ENG-0006-C.** This table previously declared **six** states,
+> omitting `insufficient-policy` — which the Accepted Consequences below already
+> named as a visible state, and which `health-states.md`, the `capability-health-state`
+> schema and both `capability-degradation-event` state enums have always carried.
+> The `withheld` row previously read "The operator set the host's availability
+> intent to draining or withheld", which is the definition the next section
+> repudiates; it made a *health state* into a *selection control*. Both were stale
+> prose, and the schemas held the corrected position throughout.
 
 ### Withheld is not the Fabric's availability intent
 
@@ -196,6 +338,31 @@ the moment they diverge — a published health finding on a node nobody withdrew
 or a withdrawn node still reporting healthy — is exactly the moment the
 distinction earns its keep.
 
+### Withheld publication authority is deferred
+
+The state and its semantics are settled. **Who may cause Health to publish
+`withheld` is not, and is deliberately left unresolved in this release.**
+
+- **No v1 mechanism produces `withheld`.** Deterministic derivation never emits
+  it: it is the one state that is not a finding about a subject, so observations
+  and an envelope cannot produce it.
+- **There is no implicit mapping from `availability_intent` to `withheld`.** That
+  mapping is the defect this ADR corrected above, and it does not return as an
+  implementation shortcut.
+- **No publication-control block is added to the envelope.** An envelope declares
+  limits. Attaching a publication decision to it to avoid defining an authority
+  would mix two concerns on one record, and the Accepted Risks below already note
+  that `withheld`'s publication rules may belong somewhere else entirely.
+- **Publication authority is deferred architecture.** A future producer must be
+  human-authorised, auditable, immutable or superseding rather than mutable,
+  unable to mutate Fabric, and unable to masquerade as evidence-derived health.
+  Whether that is a new record family or a field on an existing one is a decision
+  this release does not take.
+
+Keeping the state with no producer is the honest position: the vocabulary can
+express "we are deliberately not asserting", and nothing yet has the standing to
+say it.
+
 ### Why unknown does not remove a candidate
 
 The load-bearing decision of this layer, and the one most likely to be
@@ -221,6 +388,32 @@ evidence. Eligibility remains the Trust Plane's fail-closed gate; health only
 ever subtracts from what trust already allowed, and only when it has something
 to show.
 
+### What subtracts, in this release
+
+**Fresh `unavailable` subtracts. Nothing else does.**
+
+| State | Effect on eligibility |
+|---|---|
+| `unavailable`, fresh positive evidence | **removes** |
+| `degraded`, however fresh | **inert** — disclosed, and the primary trigger for a recommendation |
+| `healthy`, however fresh | nothing; health never adds |
+| `unknown`, `unmonitored`, `insufficient-policy`, `withheld` | **inert** |
+| stale evidence, any state | **inert**; cited with its age, carrying no current claim |
+| malformed, unreadable or unverifiable evidence | **inert** |
+
+`degraded` means "outside the envelope on at least one dimension, **still
+responding**" — a working capability outside a hand-authored limit that the
+Accepted Consequences below admit "will be wrong at first". Removing working
+capacity on the strength of a first-draft guess is the worse failure, and it is
+the one an operator cannot see, because the route silently narrows. A
+`degraded` finding is therefore made conspicuous and handed to a human.
+
+**"Inert" is a statement about Health, not about eligibility.** A candidate Health
+did not remove may still be ineligible: trust standing, the eligibility
+conditions, quarantine, `availability_intent`, restricted scope and revocation all
+decide independently, and all of them are evaluated before health is consulted at
+all.
+
 ### Degradation semantics
 
 Degradation is a **recorded transition**, not a status flag.
@@ -236,20 +429,53 @@ Degradation is a **recorded transition**, not a status flag.
   is not a warning that something will fail. The Occurrence and Experience
   layers already refuse to predict; health refuses for the same reason.
 
+#### A first evaluation is not a transition
+
+A health state with no predecessor for its subject is an **initial state**. It
+produces **no** transition record. `unknown` is the *default* — "no fresh
+observation exists" — not a state a subject was previously in, so there is nothing
+to transition from, and a declared hysteresis could not be satisfied over a span
+that does not exist. Re-deriving the **same** state value is a new state record
+and also produces no transition, because nothing transitioned.
+
+#### The record is named for degradation and records every transition
+
+`capability-degradation-event` records **all** state transitions, including
+recovery and including movement between non-findings. The name is historical: it
+comes from the v0.9.6 reservation's `degradation-event`, and this ADR has always
+required recovery to be recorded by the same family. A transition toward `healthy`
+is not a degradation, and it is recorded here regardless. **The family is not
+renamed in this release** — the identifier prefix, the schema, the ontology entry
+and the reserved name all depend on it, and a rename is a deliberate identifier
+change rather than a readability fix.
+
 ### The only output
 
 **A `capability-health-recommendation` is the single thing this layer produces
 that touches operations, and it is a record rather than an act.**
 
-- It may recommend **`investigate`** or **`drain`**. Nothing else.
+- It draws from a **closed vocabulary of exactly four**: **`investigate`**,
+  **`review-envelope`**, **`verify-observation-source`**, and
+  **`consider-manual-drain`**. Nothing else, and the list is closed rather than
+  merely enumerated.
+- **`consider-manual-drain` is not `drain`.** *Consider*, not do: the drain is a
+  Fabric decision taken by an operator, and health neither performs nor triggers
+  one. A bare `drain` kind names an act and is a permitted value nowhere.
+
+  > **Corrected at ENG-0006-C.** This bullet previously read "It may recommend
+  > `investigate` or `drain`. Nothing else." That named a value no schema permits
+  > and omitted the two kinds that distinguish a wrong threshold
+  > (`review-envelope`) and a wrong measurement (`verify-observation-source`) from
+  > a broken subject — the collection-failure distinction applied to advice.
 - It **may never propose** quarantine, revocation, rerouting, restart, or
   remediation. Those are trust decisions or fabric changes, and neither belongs
   to an observer.
 - It **requires a human to act on it**. It is never executed automatically.
 
 Stated as the roadmap reservation stated it: the Health Monitor **may recommend
-investigation or draining**.
-The Health Monitor **cannot execute remediation**.
+investigation, or that an operator consider a drain**.
+The Health Monitor **cannot execute remediation**, and cannot perform, trigger or
+reverse a drain.
 
 That asymmetry is the whole design. A monitor that can change trust is a
 monitor that can be induced to grant it.
@@ -279,6 +505,68 @@ Two new entities were added that the reservation did not anticipate: the
 without a record of the envelope; and the **recommendation**, because the
 reservation granted the power to recommend without saying what a recommendation
 is.
+
+### When a state is derived, and which freshness it carries
+
+**Derivation is explicitly invoked and append-only.** There is no background
+daemon and no scheduler: every evaluation writes a new state record carrying its
+own `evaluated_at`, and a state is superseded rather than edited.
+
+**Two different freshnesses exist and must not be confused.**
+
+- **Stored on the record: freshness at `evaluated_at`.** A historical fact about
+  what the evidence looked like when the assessment was made. This is what an
+  incident review needs, and it is `freshness-at-evaluated-at`.
+- **Computed at the moment of use: freshness now.** A consumer deciding anything
+  recomputes freshness from each cited observation's `observed_at` against that
+  dimension's declared policy and the caller's evaluation instant.
+
+**A stored `freshness: current` never remains operationally current.** Nothing may
+read the stored label to decide a subtraction. A state whose evidence has aged
+past policy contributes **no subtraction** — and still does not become `healthy`,
+and still does not clear its finding, because silence is not recovery.
+
+### The Health store, and the authority boundary
+
+Health records live in their own immutable store at **`/var/lib/kyri/health`**,
+beside the Fabric and Trust stores and separate from both.
+
+The separation is the mechanism, not a convention. If health records lived inside
+the Fabric store, the Health writer would hold write access to the Fabric store,
+and "Health cannot mutate Trust or Fabric state" would rest on application
+discipline rather than on filesystem authority. Discipline does not survive a bug.
+
+| Direction | Permitted |
+|---|---|
+| Health writes its own store | **Yes** |
+| Health reads Fabric and Trust | **Only** through read-only adapters, never by direct record access |
+| The Fabric reads Health | **Only** through a read-only adapter |
+| The Fabric writes Health | **Never** — a Fabric defect must not be able to manufacture the evidence that removes its own candidates |
+| Trust reads or writes Health | **Never**, in either direction |
+
+Human-authored envelope inputs follow the approved-input precedent and are
+reviewed before they reach the store, so that authoring a threshold and running
+the evaluator are not the same authority.
+
+### Referential integrity
+
+Identifier format is **not** sufficient to validate a citation. A state citing
+another subject's observations is well-formed, correctly typed, and false — and it
+is the cheapest route to a forged positive claim, because every individual record
+passes inspection while the relationship between them lies.
+
+- Every health state's subject equals the subject of **every** observation it
+  cites.
+- Every transition record's subject equals the subject of the observations and
+  states it cites.
+- Every recommendation's subject equals the subject of its cited state and, where
+  present, its cited transition.
+- A cited envelope's subject equals the state's subject.
+- A reference to a record that does not exist is **refused**, not skipped.
+- A refusal names the mismatch from a controlled vocabulary and echoes no value.
+
+These are enforced at write time, because that is the only point at which a false
+citation can be stopped before it becomes evidence.
 
 ### Audit requirements
 

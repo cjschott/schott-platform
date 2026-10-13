@@ -33,9 +33,35 @@ A `capability-degradation-event` names:
 - the **from state** and **to state**
 - the **dimension** that moved — a transition with no dimension cannot be
   investigated
-- the **entry condition** that was met, quoted from the envelope, so the event
-  stays readable after the envelope is superseded
-- the **observations it was derived from**
+- the **entry condition** that was met, quoted from the envelope as its
+  structured value, so the event stays readable after the envelope is superseded
+- the **observations it was derived from**, in order
+- the **hysteresis proof**: the resolved declaration, the achieved duration, the
+  first and last observation of the satisfying interval, the usable sample count,
+  and the largest observed gap
+
+Every hysteresis parameter has a matching **observed** value beside it, so an
+operator can recompute the verdict from the record and the cited observations
+without access to the evaluator. These fields were optional, which left an
+unprovable transition writable; they are required now.
+
+**A subject's first evaluation is not a transition** and produces no event. There
+is no prior state to move from, and a hysteresis cannot be satisfied over a span
+that does not exist. Re-deriving the same state value also produces no event:
+nothing transitioned.
+
+### The name is historical
+
+This family records **every** health-state transition, including recovery and
+including movement between non-findings — `unknown → healthy` and
+`unknown → unmonitored` are both recorded here. "Degradation" comes from the
+v0.9.6 reservation's `degradation-event`, and this layer has always required
+recovery to be recorded by the same family, so the name was already being used
+for non-degradations by choice rather than oversight.
+
+**It is not renamed.** The identifier prefix, the schema, the ontology entry and
+the reserved name all depend on it, and a rename is a deliberate identifier
+change rather than a readability fix.
 
 **Recovery is a transition too.** Moving from `degraded` back to `healthy`
 produces an event, because "when did it come back, and on what evidence" is as

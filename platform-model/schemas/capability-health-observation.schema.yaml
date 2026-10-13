@@ -56,9 +56,13 @@ required_fields:
   - measured_value
   - unit
   - observed_at
-  # The named source that produced it. A measurement with no source cannot be
-  # weighed against a contradicting one.
-  - source
+  # A GOVERNED identity from the platform's existing closed collector registry,
+  # not a self-chosen string. A free-text source is not an identity: it cannot
+  # be weighed against a contradicting one, and it lets a forged observation
+  # name any origin it likes. These are the two fields the released
+  # `observation` schema already requires, reused rather than reinvented.
+  - collector_id
+  - source_fingerprint
   - collection_status
   - provenance
 
@@ -68,11 +72,41 @@ optional_fields:
   - sample_window_seconds
   - notes
 
+# An unregistered collector_id is refused. The registry is the existing closed
+# one, so no parallel identity system is introduced.
+collector_identity: closed-registry
+free_text_source: forbidden
+
+# Two or more FRESH observations of the same dimension for the same subject,
+# from different collector_ids, disagreeing about the declared condition,
+# produce `unknown` for that dimension with every contradicting observation
+# cited and review_required: true.
+#
+# Newest-wins was rejected because it lets a compromised collector win by
+# writing last, which is the cheapest attack available. Trusted-source
+# precedence was rejected because it would make Health read trust standing as
+# an input to a health verdict. Uncertainty must become NEITHER a positive
+# claim NOR positive evidence for removal.
+contradicting_sources: unknown-with-all-cited
+contradiction_requires_review: true
+
+# ADR-0013. Only a failure attributed to the capability instance may contribute
+# to failure-count. A governed `refused` is the platform working correctly; an
+# adapter or serialisation failure is Kyri's; a timeout or an interruption is
+# ambiguous and is not attributed. Counting any of them would let the platform's
+# own faults read as the subject's.
+failure_count_counts: subject-attributable-only
+platform_side_failures_count: never
+ambiguous_failures_count: never
+
 enums:
   subject_type:
+    # A package is not a running thing and has no operational health. Package
+    # integrity and verification evidence belong to the Integrity plane; this
+    # is the same reasoning that reconciled `endpoint-health` away rather than
+    # shipping a schema whose subject does not exist.
     - capability-instance
     - capability-host
-    - capability-package
   collection_status:
     - collected
     - failed
@@ -104,9 +138,30 @@ enums:
     - stale
     - unknown
 
+# Which subjects each dimension may describe. Declared here rather than left to
+# a collector's judgement: an `availability` observation about a package is a
+# claim about something that does not run.
+dimension_subjects:
+  availability: [capability-instance, capability-host]
+  heartbeat-freshness: [capability-instance, capability-host]
+  transport-health: [capability-instance, capability-host]
+  latency: [capability-instance, capability-host]
+  queue-depth: [capability-instance, capability-host]
+  success-count: [capability-instance, capability-host]
+  failure-count: [capability-instance, capability-host]
+  cpu-utilization: [capability-instance, capability-host]
+  memory-utilization: [capability-instance, capability-host]
+  gpu-utilization: [capability-instance, capability-host]
+  vram-utilization: [capability-instance, capability-host]
+  storage-pressure: [capability-instance, capability-host]
+  # A fact about the collector rather than about the subject, so it is valid
+  # wherever an observation is.
+  collector-freshness: [capability-instance, capability-host]
+
 # An observation measures. It never concludes, predicts, or scores, and it
 # never carries the standing of the thing it measured.
 forbidden_fields:
+  - source
   - health_state
   - verdict
   - conclusion

@@ -2,8 +2,14 @@
 # Declarative schema for capability health recommendations.
 #
 # The single thing this layer produces that touches operations, and it is a
-# record rather than an act. It may recommend that a human investigate, or that
-# a human drain a node. Nothing else, and never automatically.
+# record rather than an act. It draws from a CLOSED vocabulary of exactly four:
+# investigate, review-envelope, verify-observation-source, and
+# consider-manual-drain. Never automatically, and `consider-manual-drain` is
+# deliberately not `drain` -- consider, not do. A bare `drain` kind would name
+# an act, and is a permitted value nowhere.
+#
+# This comment previously named two kinds, which contradicted the enum below and
+# named a value no schema permits. Corrected at ENG-0006-C.
 #
 # It may not propose quarantine, revocation, rerouting, restart, or
 # remediation. Those are trust decisions or fabric changes, and neither belongs
@@ -75,9 +81,10 @@ optional_fields:
 
 enums:
   subject_type:
+    # A package has no operational health state, so no recommendation can be
+    # derived about one.
     - capability-instance
     - capability-host
-    - capability-package
   recommendation:
     # Ask a human to look. The safe default and the usual answer.
     - investigate
@@ -94,6 +101,13 @@ enums:
     # triggers it. Draining is reversible and changes no trust state, which is
     # why it is the only operational recommendation permitted at all.
     - consider-manual-drain
+
+# A recommendation cites a state and optionally a transition; its subject must
+# equal theirs. Identifier format is not sufficient.
+subject_binding: must-match-every-cited-record
+identifier_format_sufficient: false
+nonexistent_reference: refuse
+cross_subject_citation: refuse
 
 # Named as forbidden fields rather than merely omitted from the enum, so that
 # no future field can reintroduce them under another spelling.

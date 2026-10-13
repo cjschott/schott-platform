@@ -99,9 +99,12 @@ optional_fields:
 
 enums:
   subject_type:
+    # A package is not a running thing. Operational health is a property of the
+    # instances that run it, so a package is not a subject here -- the same
+    # reasoning that reconciled `endpoint-health` away. Package integrity is the
+    # Integrity plane's concern.
     - capability-instance
     - capability-host
-    - capability-package
   evaluation:
     # Any dimension outside its limit degrades the subject. The conservative
     # default, and the only one defined in this release.
@@ -121,6 +124,108 @@ dimension_fields:
     # Null is permitted and produces freshness: unknown, per the Null Policy
     # Rule. It must never be defaulted to a number.
     - freshness_policy_seconds
+    # How the dimension's observations combine before comparison. Declared, not
+    # inferred from the dimension.
+    - aggregation
+
+# ADR-0019. Conditions are STRUCTURED, not expression strings: there is no
+# parser, because the smallest thing that satisfies "same inputs, same state,
+# every time" is a form that cannot be mis-parsed. An expression string is
+# refused.
+condition_form: structured
+condition_expression_strings: forbidden
+
+condition_fields:
+  required:
+    - operator
+    - value
+
+# Closed, five. No ne, no ranges, no boolean combinators, no negation: a
+# dimension needing two bounds declares two dimensions, or uses the asymmetry
+# between entry and exit, which is what that asymmetry is for.
+condition_operators:
+  - gt
+  - ge
+  - lt
+  - le
+  - eq
+
+# A decimal string compared as an exact decimal, never a binary float. A
+# threshold that compares differently on two hosts is not deterministic.
+condition_value_representation: decimal-string
+
+# Closed, two. No percentile in v1: it is not expressible against an
+# observation model whose record is one measurement at one moment, "p95" is not
+# one definition, and hysteresis already provides the flap protection a
+# percentile was reaching for.
+aggregations:
+  - instant
+  - windowed_count
+percentile_aggregation: forbidden
+
+# Reuses the convention capability-route already declares for its overlap
+# window rather than inventing a second one.
+window_boundaries: start-inclusive-end-exclusive
+
+# Required on windowed_count. One sample in an empty window is not a verdict.
+windowed_count_fields:
+  required:
+    - kind
+    - window_seconds
+    - min_samples
+
+# Exactly one unit per dimension. The envelope's unit must EQUAL the
+# observation's; a mismatch is refused, never converted. Implicit conversion is
+# how 2000ms and 2s become a silent disagreement.
+unit_mismatch: refuse
+unit_conversion: forbidden
+dimension_units:
+  availability: boolean
+  heartbeat-freshness: seconds
+  transport-health: boolean
+  latency: milliseconds
+  queue-depth: items
+  success-count: count
+  failure-count: count
+  cpu-utilization: percent
+  memory-utilization: percent
+  gpu-utilization: percent
+  vram-utilization: percent
+  storage-pressure: percent
+  collector-freshness: seconds
+
+# ADR-0019. One kind in v1. `occurrences` is expressible in the CONDITION
+# through windowed_count, so supporting it here would mean two proof shapes on
+# the transition record and a discriminator, for a distinction already covered.
+hysteresis_kinds:
+  - duration
+
+# All four required. A defaulted continuity parameter is an unanswered
+# configuration question rendered as a confident assessment -- the same mistake
+# the Null Policy Rule exists to prevent -- so an envelope omitting either
+# continuity member is refused.
+hysteresis_fields:
+  required:
+    - kind
+    - seconds
+    - max_gap_seconds
+    - min_samples
+
+# Two observations separated by a long gap do not establish continuous
+# threshold violation. A gap resets the interval REGARDLESS of why it exists,
+# which is collection_failure_implies_subject_failure enforced arithmetically:
+# a monitoring outage produces a gap in usable observations, the gap breaks
+# continuity, and a monitoring failure therefore cannot manufacture a
+# transition.
+hysteresis_continuity:
+  usable_observation: collected-with-value-within-freshness-policy
+  violation_required: every-usable-observation-in-interval
+  minimum_coverage: min_samples
+  maximum_gap: max_gap_seconds
+  gap_applies_to_interval_boundaries: true
+  reset_on_non_violating_usable_observation: true
+  reset_on_gap_exceeding_maximum: true
+  gap_cause_affects_reset: false
 
 forbidden_fields:
   - learned_threshold

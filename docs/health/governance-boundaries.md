@@ -111,6 +111,44 @@ approver to click through them, which is an automatic path with a human-shaped
 delay in it. Health recommends investigation; a human decides what the
 investigation found.
 
+## The store boundary
+
+Health records live in their own immutable store at **`/var/lib/kyri/health`**,
+beside the Fabric and Trust stores and separate from both.
+
+**The separation is the mechanism, not a convention.** If health records lived
+inside the Fabric store, the Health writer would hold write access to the Fabric
+store, and "Health cannot mutate Fabric state" would rest on application
+discipline rather than on filesystem authority. Discipline does not survive a
+bug.
+
+| Direction | Permitted |
+|---|---|
+| Health writes its own store | **Yes** |
+| Health reads Fabric and Trust | **Only** through read-only adapters, never by direct record access |
+| The Fabric reads Health | **Only** through a read-only adapter |
+| The Fabric writes Health | **Never** — a Fabric defect must not be able to manufacture the evidence that removes its own candidates |
+| Trust reads or writes Health | **Never**, in either direction |
+
+Human-authored envelope inputs are reviewed before they reach the store, so that
+authoring a threshold and running the evaluator are not the same authority.
+
+## Referential integrity
+
+Identifier format does **not** validate a citation. A state citing another
+subject's observations is well-formed, correctly typed, and false — and it is the
+cheapest route to a forged positive claim, because every individual record passes
+inspection while the relationship between them lies.
+
+A health state's subject must equal the subject of **every** observation it
+cites; a transition's must equal the subjects of what it cites; a
+recommendation's must equal its cited state's; a cited envelope's must match. A
+reference to a record that does not exist is **refused**, not skipped, and a
+refusal names the mismatch from a controlled vocabulary without echoing values.
+
+These are enforced at write time, because that is the only point at which a false
+citation can be stopped before it becomes evidence.
+
 ## Audit requirements
 
 Every health record is immutable, append-only, and superseded rather than

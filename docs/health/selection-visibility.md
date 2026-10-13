@@ -55,11 +55,47 @@ The second and third produce the same eligibility outcome and mean opposite
 things. Without the warning, an operator cannot tell a monitored-and-fine
 capability from an unmonitored one.
 
-## No runtime fields are added here
+## The forward boundary
 
-This is a specification statement, not an implementation. The Fabric's
-selection schema carries the requirement as a declared block; the fields above
-are what a future runtime must produce, not columns that exist today.
+**Corrected at ENG-0006-C.** This section previously asserted that the released
+Fabric selection schema already carried this requirement as a declared block. It
+did not. The released schema mentioned health only as `health_score` among its
+forbidden fields, and the five selections in production carry no health field at
+all.
+
+The requirement now has a declared boundary, and the mechanism matters:
+
+- **Disclosure is required from `CSEL-000006` onward.** Every new selection
+  carries selection-level context and a per-candidate result for every considered
+  candidate, the selected one included.
+- **`CSEL-000001` through `CSEL-000005` are a closed pre-disclosure set.** They
+  stay exactly as written and are read as what they are — selections made when no
+  Health runtime existed. They are **not** read as `consulted: false`, and are
+  **not** assigned a default health state.
+- **A new write cannot disguise itself as a legacy one.** Selection identities
+  come from a monotonic sequence that refuses rollover, so every identity a new
+  write can receive is strictly greater than every member of the closed set.
+  Membership is decided by identity, not by shape, and omitting the fields does
+  not buy exemption.
+- **The global Fabric `schema_version` is unchanged.** It is one value shared by
+  eight record families and enforced by equality; moving it would invalidate
+  every record in the store.
+
+## Three cases that must stay distinguishable
+
+| Case | `consulted` | `health_state` | `health_effect` | warning |
+|---|---|---|---|---|
+| Health was never asked | `false` | `not-consulted` | `none` | **required** |
+| Health was asked and had nothing fresh | `true` | `unknown` | `none` | **required** |
+| Health was asked and agreed | `true` | `healthy` | `none` | not required |
+
+All three end with no removal. The first two were byte-identical in the released
+record, and they mean opposite things.
+
+**Malformed, unreadable or unverifiable health evidence** is disclosed as its own
+case — `adapter_outcome` plus an `evidence_unusable_reason` — and contributes
+**no subtraction**. That is not a statement that the candidate is eligible;
+eligibility was decided before health was consulted.
 
 Nothing in this release records a selection, because nothing selects.
 

@@ -47,7 +47,7 @@ and unavailable**, or **restricted and healthy**.
 | **Health Observation** | `CHOBS-000000` | One measurement. **Evidence, carrying no verdict.** |
 | **Health State** | `CHSTATE-000000` | Deterministic derived standing, citing its observations. |
 | **Degradation Event** | `CHDEG-000000` | A recorded transition. **Observed history, never the future.** |
-| **Health Recommendation** | `CHREC-000000` | Asks a human to investigate or drain. **Never an act.** |
+| **Health Recommendation** | `CHREC-000000` | Asks a human to investigate, check a threshold, check a measurement, or **consider** a drain. **Never an act.** |
 
 ## The shape of the thing
 

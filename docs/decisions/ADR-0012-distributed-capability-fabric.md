@@ -644,6 +644,55 @@ appears in this sprint**. Until it exists, health is *declared or unknown*, and
 unknown stays unknown — treating missing data as healthy is how an unmonitored
 node becomes the preferred one.
 
+**Which health states subtract** is settled in ADR-0013 and restated here because
+the Fabric is what honours it: **fresh `unavailable` removes a candidate, and
+nothing else does.** `degraded` is disclosed and inert, because it describes a
+capability that is still responding and outside a hand-authored limit that may
+itself be wrong. No per-route health policy exists, and the route schema's health
+rules are uniform invariants of the route kind rather than fields on a route.
+
+#### Health disclosure on a selection — amended 2026-10-13 at ENG-0006-C
+
+ADR-0013 requires that **health never silently disappear from the explanation of
+a selection**. The selection record as released could not satisfy that: it
+carried no health field, and recorded health's effect only as an exclusion reason
+on a *removed* candidate. Three different facts therefore produced byte-identical
+records — health **not consulted**, health **consulted and silent**, and health
+**consulted and agreeing** — and the first two are opposite facts to read during
+an incident.
+
+**Every selection from a declared forward boundary carries health disclosure**, in
+two parts, because one subject-level field cannot express both:
+
+- **Selection-level context** — whether health was `consulted` at all, the
+  adapter's own outcome, the aggregate `effect`, and a **required warning**
+  whenever the effect was `none` and any candidate was not `healthy`.
+- **A per-candidate result for every considered candidate**, the selected one
+  included. The released record gave an entry only to excluded candidates, so a
+  winner about which health said nothing was indistinguishable from one health had
+  endorsed.
+
+**The boundary is a closed set of pre-disclosure identities, and the global
+`schema_version` does not move.** That version is a single value shared by all
+eight Fabric families and enforced by equality, so changing it would invalidate
+every record in the store. Instead, the five selections written before disclosure
+existed are named in a **closed** set. Selection identities come from a monotonic
+sequence that refuses rollover, so every identity a new write can receive is
+strictly greater than every member of that set: **a new write cannot join it, and
+cannot disguise itself as a legacy record by omitting the fields.** Membership is
+decided by identity, not by shape.
+
+A record in the closed set is read as what it is — a selection made when no Health
+runtime existed. It is **not** read as `consulted: false` and **not** assigned a
+default health state; both would be asserting something about a decision taken
+before the field existed. **Nothing is written back into an existing record.**
+
+Disclosure is **derived by the Fabric from an adapter answer**. It is never
+supplied by a caller and never by a subject: a field a candidate could write about
+its own health would be a candidate writing its own eligibility. And disclosure is
+a *record of what health contributed*, not a new power — health still may only
+remove, still may not reorder, and still may not add.
+
 ### The core carries no capability semantics
 
 The fabric knows about contracts, packages, hosts, instances, routes, and

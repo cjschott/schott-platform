@@ -381,10 +381,19 @@ check(env.get("supersession_rewrites_prior_evaluations") is False,
 
 # --- Observation: evidence, never a conclusion ------------------------------
 obs = schemas.get("capability-health-observation", {})
+# `source` was a free-text field until ENG-0006-C. A self-chosen string is not
+# an identity: it cannot be weighed against a contradicting observation, and it
+# lets a forged observation name any origin it likes. It is now a governed
+# collector_id from the existing closed registry, with a source_fingerprint --
+# the two fields the released `observation` schema already requires.
 for field in ("observation_id", "subject_type", "subject_id", "dimension",
-              "measured_value", "unit", "observed_at", "source",
-              "collection_status", "provenance"):
+              "measured_value", "unit", "observed_at", "collector_id",
+              "source_fingerprint", "collection_status", "provenance"):
     check(field in (obs.get("required_fields") or []), f"observation requires {field}")
+check("source" in (obs.get("forbidden_fields") or []),
+      "a free-text observation source is forbidden")
+check(obs.get("collector_identity") == "closed-registry",
+      "an observation's collector identity comes from the closed registry")
 check(obs.get("record_class") == "evidence",
       "an observation is evidence")
 # The distinction that stops a monitoring outage manufacturing findings.

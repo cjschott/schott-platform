@@ -322,6 +322,9 @@ jobs:
       - name: Capability health tests
         run: bash tests/test-capability-health.sh
 
+      - name: Capability health cross-artefact agreement
+        run: bash tests/test-capability-health-agreement.sh
+
       # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
       # carrying the purity or authority backstop for the modules that increment
       # added. Pure or descriptor-scoped: no host state, no Podman, no network.

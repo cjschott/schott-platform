@@ -60,18 +60,60 @@ required_fields:
   - observed_at
   - derived_from_observation_ids
   - provenance
+  # THE HYSTERESIS PROOF. A transition that cannot show its hysteresis was
+  # satisfied is not recordable, so every parameter has a matching OBSERVED
+  # value beside it and an operator can recompute the verdict from this record
+  # and the cited observations without access to the evaluator. These were
+  # optional, which left an unprovable transition writable.
+  - hysteresis
+  - hysteresis_satisfied_over_seconds
+  - hysteresis_first_observation_id
+  - hysteresis_last_observation_id
+  - hysteresis_sample_count
+  - hysteresis_observed_max_gap_seconds
 
 optional_fields:
   - exit_condition
   - envelope_id
-  - hysteresis_satisfied_over_seconds
   - notes
+
+# ADR-0019. Structured, matching the envelope: the condition is quoted as the
+# structured value so the event stays readable after the envelope is superseded.
+condition_form: structured
+
+# Two observations separated by a long gap do not establish continuous threshold
+# violation, and a gap resets the interval regardless of why it exists. A
+# monitoring outage therefore cannot manufacture a transition.
+hysteresis_continuity: declared-required
+unprovable_transition: refuse
+
+# A transition cites observations and states; its subject must equal theirs.
+# Identifier format is not sufficient -- a cross-subject citation is well-formed
+# and false.
+subject_binding: must-match-every-cited-record
+identifier_format_sufficient: false
+nonexistent_reference: refuse
+cross_subject_citation: refuse
+
+# A state with no predecessor is an initial state, not a transition, so no event
+# is produced for a subject's first evaluation. Re-deriving the same state value
+# also produces none: nothing transitioned.
+first_evaluation_is_transition: false
+unchanged_state_produces_event: false
+
+# The name is historical, from the v0.9.6 reservation's `degradation-event`.
+# This family records EVERY state transition, including recovery and including
+# movement between non-findings -- a transition toward `healthy` is not a
+# degradation and is recorded here regardless. Not renamed in this release: the
+# identifier prefix, the ontology entry and the reserved name all depend on it.
+records: all-health-state-transitions
+name_is_historical: true
 
 enums:
   subject_type:
+    # A package is not a running thing and has no operational health.
     - capability-instance
     - capability-host
-    - capability-package
   from_state:
     - unknown
     - unmonitored

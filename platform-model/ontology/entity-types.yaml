@@ -382,6 +382,6 @@ entity_types:
 
   capability-health-recommendation:
     name: Capability Health Recommendation
-    description: A record asking a human to investigate or drain. Never an action, never executed automatically.
+    description: A record asking a human to investigate, check a threshold, check a measurement, or consider a drain. Never an action, never executed automatically.
     id_prefix: CHREC
     lifecycle_supported: [declared, archived]

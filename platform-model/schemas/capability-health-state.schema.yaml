@@ -84,6 +84,52 @@ forbidden_renderings:
 freshness_required_for_all_states: true
 reason_required_for_all_states: true
 
+# TWO DIFFERENT FRESHNESSES EXIST AND MUST NOT BE CONFUSED.
+#
+# What is STORED here is freshness as it stood at `evaluated_at` -- a historical
+# fact about what the evidence looked like when the assessment was made, which
+# is what an incident review needs.
+#
+# What a consumer USES is recomputed at the moment of use, from each cited
+# observation's observed_at against that dimension's declared policy and the
+# caller's evaluation instant. Nothing may read the stored label to decide a
+# subtraction: a stored `current` would otherwise remain operationally current
+# forever, and a dead collector would freeze a favourable assessment.
+stored_freshness: freshness-at-evaluated-at
+stored_freshness_authoritative_for_eligibility: false
+freshness_recomputed_at_use: true
+
+# Explicitly invoked and append-only. Every evaluation writes a new record
+# carrying its own evaluated_at; there is no background daemon and no scheduler.
+evaluation_trigger: explicitly-invoked
+background_writer: none
+
+# A state with no predecessor for its subject is an INITIAL state and produces
+# no transition record: `unknown` is the default, not a state the subject was
+# previously in, so there is nothing to transition from -- and a declared
+# hysteresis could not be satisfied over a span that does not exist.
+first_evaluation_is_transition: false
+
+# ADR-0013. `healthy` requires at least one satisfied dimension established by
+# an observation whose collector_id is NOT the subject itself. A heartbeat is a
+# claim: it may support bounded liveness and can never, alone, support a
+# `healthy` conclusion. An envelope declaring only subject-derived dimensions
+# yields `insufficient-policy` -- it has not declared enough to assert health.
+healthy_requires_independent_evidence: true
+subject_reported_dimensions_alone_support_healthy: false
+envelope_of_only_subject_reported_dimensions: insufficient-policy
+
+# A citation is not validated by identifier format. A state citing another
+# subject's observations is well-formed, correctly typed, and false -- and it is
+# the cheapest route to a forged positive claim, because every individual record
+# passes inspection while the relationship between them lies. Enforced at write
+# time, because that is the only point a false citation can be stopped before it
+# becomes evidence.
+subject_binding: must-match-every-cited-record
+identifier_format_sufficient: false
+nonexistent_reference: refuse
+cross_subject_citation: refuse
+
 # A later envelope never reaches back. Re-evaluating one observation against a
 # newer envelope produces a new record; the old one stands as what was believed
 # at the time, which is the only thing that makes an incident review possible.
@@ -114,6 +160,16 @@ withheld_semantics:
   # The influence runs one way: an operator withdrawing a node is a reason to
   # stop publishing conclusions about it, not the other way round.
   availability_intent_may_influence_publication: true
+  # ADR-0013, ENG-0006-C. The state and its meaning are settled; who may cause
+  # it to be published is NOT, and is deliberately unresolved in this release.
+  # Deterministic derivation never emits it: it is the one state that is not a
+  # finding about a subject, so observations and an envelope cannot produce it.
+  # No publication-control block was added to the envelope to avoid defining an
+  # authority -- an envelope declares limits, and mixing a publication decision
+  # into it would put two concerns on one record.
+  v1_producer: none
+  derivable_from_observations: false
+  publication_authority: deferred-architecture
 
 required_fields:
   - state_id
@@ -136,6 +192,17 @@ required_fields:
   - evaluated_at
   - provenance
 
+# The Null Policy Rule, inherited EXACTLY from the Confidence and Freshness
+# Standard -- which requires `freshness: unknown` to arrive WITH
+# review_required: true, never a default maximum age. Conditionally required:
+# present and true when the state arises from a null freshness policy, from
+# insufficient-policy, or from contradicting sources; present and false
+# otherwise. Stored rather than derived at read time, because an envelope is
+# superseded rather than edited and a later version declaring the missing policy
+# must not retroactively clear the flag on a past assessment.
+conditionally_required_fields:
+  - review_required
+
 optional_fields:
   - dimension_results
   - supersedes
@@ -144,9 +211,10 @@ optional_fields:
 
 enums:
   subject_type:
+    # A package is not a running thing and has no operational health. Package
+    # integrity belongs to the Integrity plane.
     - capability-instance
     - capability-host
-    - capability-package
   state:
     # No fresh observation exists. The default, and inert for eligibility.
     - unknown

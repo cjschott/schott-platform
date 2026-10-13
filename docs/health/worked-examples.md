@@ -99,13 +99,27 @@ confirms it.
 ```yaml
 envelope_id:      CHENV-0004
 dimensions:
-  latency:        { entry_condition: "p95 > 2000ms", ... }
-  queue_depth:    { entry_condition: "> 32", ... }
+  latency:
+    unit: milliseconds
+    aggregation:     { kind: instant }
+    entry_condition: { operator: gt, value: "2000" }
+  queue_depth:
+    unit: items
+    aggregation:     { kind: instant }
+    entry_condition: { operator: gt, value: "32" }
   gpu_utilization: null              # no declared threshold
 health_state:     insufficient-policy
 health_effect:    none
+review_required:  true
 reason:           no declared threshold for gpu-utilization
 ```
+
+*Conditions corrected at ENG-0006-C to the structured grammar of
+[ADR-0019](../decisions/ADR-0019-health-condition-grammar.md). This example
+previously expressed its latency threshold as a free-text percentile comparison,
+which could not be evaluated against an observation model whose record is one
+measurement at one moment. Percentile aggregation is not supported in v1 —
+hysteresis provides the flap protection a percentile was reaching for.*
 
 The envelope covers three dimensions and declares two. The third is **not
 reported as satisfied**.
@@ -122,7 +136,7 @@ the envelope.
 CHSTATE-000411:
   derived_from_observation_ids: [CHOBS-002190]
   envelope_id: CHENV-0004
-  envelope_version: 1               # latency entry: p95 > 2000ms
+  envelope_version: 1               # latency entry: gt 2000 milliseconds
   state: healthy
   evaluated_at: "2026-08-02T14:00:00-05:00"
 
@@ -130,7 +144,7 @@ CHSTATE-000411:
 CHSTATE-000587:
   derived_from_observation_ids: [CHOBS-002190]   # the same observation
   envelope_id: CHENV-0004
-  envelope_version: 2               # latency entry: p95 > 900ms
+  envelope_version: 2               # latency entry: gt 900 milliseconds
   state: degraded
   evaluated_at: "2026-08-03T10:30:00-05:00"
 ```

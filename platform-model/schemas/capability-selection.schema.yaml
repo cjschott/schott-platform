@@ -65,6 +65,19 @@ conditionally_required_fields:
   # The route version that applied at the moment of selection, so a later route
   # edit cannot change the explanation of a past choice.
   - route_version
+  # HEALTH DISCLOSURE. Required on every selection from the forward boundary
+  # declared below. ADR-0013 requires that health never silently disappear from
+  # the explanation, and the released record could not tell three different
+  # facts apart: health not consulted, health consulted and silent, and health
+  # consulted and agreeing. All three ended with no removal and were byte-
+  # identical.
+  - health_disclosure
+  # Per-candidate, for EVERY considered candidate including the selected one.
+  # A single subject-level health field cannot express several candidates in
+  # different states, and the released record gave an entry only to EXCLUDED
+  # candidates -- so a winner about which health said nothing was
+  # indistinguishable from one health endorsed.
+  - candidate_health
 
 optional_fields:
   - refusal_reason
@@ -85,6 +98,132 @@ route_identity_placeholder: forbidden
 
 # A refusal is written down. Silence is not an outcome.
 records_refusal: true
+
+# ===========================================================================
+# THE FORWARD DISCLOSURE BOUNDARY
+# ===========================================================================
+#
+# The problem: health disclosure must be MANDATORY for every new selection,
+# while five immutable records written before it existed must stay valid,
+# unchanged and uninterpreted.
+#
+# WHY NOT schema_version. The Fabric's schema_version is a SINGLE GLOBAL value
+# shared by all eight record families and enforced by equality -- a stored
+# record declaring a different one is refused outright. Moving it to make
+# disclosure mandatory here would invalidate every capability-definition,
+# contract, package, host, advertisement, instance, route and selection record
+# in existence. That is a migration by rewrite of the whole store, and the
+# global version is therefore NOT TOUCHED by this boundary.
+#
+# WHY NOT optional fields. Optional-and-absent IS the silent case, so a
+# conforming writer could still say nothing about health and pass.
+#
+# THE MECHANISM: a CLOSED set of pre-disclosure identities.
+#
+# Selection identities are allocated from a monotonic sequence under an
+# exclusive lock, and the sequence refuses rollover rather than reusing a name.
+# So every identity a new write can receive is strictly greater than every
+# identity in the closed set below, and A NEW WRITE CAN NEVER JOIN IT. Omitting
+# the disclosure fields cannot make a new record look like a legacy one,
+# because membership is decided by identity rather than by shape.
+#
+# A record IN the closed set may omit disclosure and is read as what it is: a
+# selection made when no Health runtime existed. It is NOT read as
+# "consulted: false" and NOT assigned a default health state -- both would be
+# this runtime asserting something about a decision taken before the field
+# existed.
+#
+# A record NOT in the closed set MUST carry disclosure, on write and on read.
+#
+# Nothing is ever written back into an older record.
+health_disclosure_boundary:
+  set: closed
+  pre_disclosure_selection_ids:
+    - CSEL-000001
+    - CSEL-000002
+    - CSEL-000003
+    - CSEL-000004
+    - CSEL-000005
+  disclosure_required_from: CSEL-000006
+  global_schema_version_changed: false
+  legacy_record_reading: pre-disclosure-shape
+  legacy_record_default_meaning: forbidden
+  new_write_may_omit_disclosure: false
+  new_write_may_join_closed_set: false
+  rewrite_of_existing_records: forbidden
+
+# Selection-level context: what health contributed to the decision AS A WHOLE.
+# `consulted` is the field that separates "health was never asked" from "health
+# was asked and had nothing fresh to say", and those are opposite facts during
+# an incident.
+health_disclosure_fields:
+  required:
+    - consulted
+    - adapter_outcome
+    - effect
+  conditionally_required:
+    # Required whenever effect is `none` and any candidate's state is not
+    # `healthy`. This is "health must never silently disappear" made structural
+    # rather than asked for in prose.
+    - warning
+  optional:
+    - evaluated_at
+
+# Per-candidate result: what health said about THIS one.
+candidate_health_fields:
+  required:
+    - instance_id
+    - health_state
+    - health_effect
+  conditionally_required:
+    - health_freshness
+    - envelope_id
+    - envelope_version
+    - warning
+    # Present only when the input was malformed, unreadable, unverifiable or
+    # unavailable.
+    - evidence_unusable_reason
+
+health_disclosure_enums:
+  consulted: [true, false]
+  adapter_outcome:
+    - answered
+    - unreadable
+    - unavailable
+    - malformed
+  effect:
+    - removed-at-least-one
+    - none
+  health_effect:
+    - removed
+    - none
+  health_state:
+    # The seven health states, plus the one value that is not a health state at
+    # all: no health runtime was asked.
+    - not-consulted
+    - unknown
+    - unmonitored
+    - insufficient-policy
+    - healthy
+    - degraded
+    - unavailable
+    - withheld
+
+# Disclosure is DERIVED by the Fabric from an adapter answer. It is never
+# supplied by a caller and never by a subject: a field a candidate could write
+# about its own health would be a candidate writing its own eligibility.
+health_disclosure_authored_by: fabric
+health_disclosure_caller_supplied: forbidden
+
+# Every considered candidate gets an entry, selected and excluded alike. A
+# candidate already excluded for another reason carries the health state as
+# observed with health_effect: none -- health is consulted after eligibility, so
+# it changed nothing, and recording that keeps "health never disappears" true
+# without implying health agreed.
+candidate_health_covers: every-considered-candidate
+# A refusal is still a decision health contributed to, so the selection-level
+# block is required even when nothing was selected.
+required_on_refusal: true
 
 # The selection record describes a decision. It is not a transcript: prompts,
 # payloads, and responses are never written here.
