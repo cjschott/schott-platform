@@ -1,0 +1,692 @@
+"""Immutable, schema-conformant Health record models — ENG-0006-H1.
+
+**This is a representation layer and nothing else.** It parses a mapping into a
+frozen record, refuses anything that is not one, and serialises back. There is
+no store, no sequence allocation, no evaluation of a condition, no freshness
+calculation, no hysteresis judgement, no state derivation, no ingestion, no
+network and no subprocess. Those are later increments with their own gates, and
+the reason they are absent here is that a Health record foundation has to be
+trustworthy before the platform gains any Health authority at all.
+
+**Health enforces its own required fields.** The Fabric's record reader refuses
+unknown keys and never checks for missing ones, which is safe there because its
+dataclass defaults carry the meaning. That omission is deliberately *not* copied:
+a Health record with a field absent is refused, because an absent field in this
+plane is an absent assertion, and the layer's whole purpose is to avoid asserting
+what it does not know.
+
+**The declarative specs below mirror the committed schemas.** They are declared
+in code rather than read from YAML at import time, so the model has no runtime
+file dependency; the behavioural suite uses the schemas as its oracle and
+compares this module against them, which is what keeps the two from drifting.
+
+**Immutability is deep and covers retained references.** A caller who keeps a
+reference to the mapping or list it supplied cannot change what the record says
+afterwards, and `to_dict()` hands back a fresh structure rather than the
+record's own.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
+from typing import Any, Mapping, Sequence
+
+from . import errors as E
+
+# --- identifier patterns, per family -------------------------------------
+PATTERNS: Mapping[str, re.Pattern[str]] = {
+    "capability-health-envelope": re.compile(r"^CHENV-[0-9]{4}$"),
+    "capability-heartbeat": re.compile(r"^CHBEAT-[0-9]{6}$"),
+    "capability-health-observation": re.compile(r"^CHOBS-[0-9]{6}$"),
+    "capability-health-state": re.compile(r"^CHSTATE-[0-9]{6}$"),
+    "capability-degradation-event": re.compile(r"^CHDEG-[0-9]{6}$"),
+    "capability-health-recommendation": re.compile(r"^CHREC-[0-9]{6}$"),
+}
+
+# --- closed vocabularies -------------------------------------------------
+SUBJECT_TYPES = ("capability-instance", "capability-host")
+
+HEALTH_STATES = ("unknown", "unmonitored", "insufficient-policy", "healthy",
+                 "degraded", "unavailable", "withheld")
+
+RECOMMENDATIONS = ("investigate", "review-envelope", "verify-observation-source",
+                   "consider-manual-drain")
+
+COLLECTION_STATUSES = ("collected", "failed", "unavailable")
+
+FRESHNESS = ("current", "aging", "stale", "unknown")
+
+EVALUATIONS = ("worst-dimension-wins",)
+
+CONDITION_OPERATORS = ("gt", "ge", "lt", "le", "eq")
+
+AGGREGATIONS = ("instant", "windowed_count")
+
+HYSTERESIS_KINDS = ("duration",)
+
+# Exactly one unit per dimension. A mismatch is refused and never converted:
+# implicit conversion is how two readings of the same limit disagree silently.
+DIMENSION_UNITS: Mapping[str, str] = {
+    "availability": "boolean",
+    "heartbeat-freshness": "seconds",
+    "transport-health": "boolean",
+    "latency": "milliseconds",
+    "queue-depth": "items",
+    "success-count": "count",
+    "failure-count": "count",
+    "cpu-utilization": "percent",
+    "memory-utilization": "percent",
+    "gpu-utilization": "percent",
+    "vram-utilization": "percent",
+    "storage-pressure": "percent",
+    "collector-freshness": "seconds",
+}
+
+DIMENSIONS = tuple(DIMENSION_UNITS)
+
+# Which subjects each dimension may describe. A package is absent from every
+# one: it is not a running thing, so an availability or latency claim about one
+# would describe something that does not run.
+DIMENSION_SUBJECTS: Mapping[str, tuple[str, ...]] = {
+    name: ("capability-instance", "capability-host") for name in DIMENSIONS
+}
+
+
+# --- deep freeze ---------------------------------------------------------
+def _frozen(value: Any) -> Any:
+    """Freeze all the way down.
+
+    A proxy around a mutable list would leave a frozen record editable through
+    its own contents, so mappings become read-only proxies and sequences become
+    tuples, recursively. The convention is the platform's; the implementation is
+    local, because importing it would make this plane depend on another.
+    """
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _frozen(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(item) for item in value)
+    return value
+
+
+def _thawed(value: Any) -> Any:
+    """A fresh mutable structure, for serialisation."""
+    if isinstance(value, Mapping):
+        return {key: _thawed(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thawed(item) for item in value]
+    return value
+
+
+# --- field validators ----------------------------------------------------
+# Each takes the kind, the field name and the value, and either returns the
+# value or raises a refusal naming the code and the field. None of them ever
+# places the value in the refusal.
+
+def _text(kind: str, field: str, value: Any) -> str:
+    if not isinstance(value, str):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="string")
+    if not value.strip():
+        raise E.refuse(E.FIELD_EMPTY, kind=kind, field=field)
+    return value
+
+
+def _boolean(kind: str, field: str, value: Any) -> bool:
+    # `isinstance(True, int)` is true in Python, so booleans are checked before
+    # integers everywhere in this module and integers exclude them explicitly.
+    if not isinstance(value, bool):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="boolean")
+    return value
+
+
+def _whole(kind: str, field: str, value: Any, *, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="integer")
+    if value < minimum:
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail=f"integer-at-least-{minimum}")
+    return value
+
+
+def _mapping(kind: str, field: str, value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="mapping")
+    if not value:
+        raise E.refuse(E.FIELD_EMPTY, kind=kind, field=field)
+    return value
+
+
+def _member(kind: str, field: str, value: Any, permitted: Sequence[str],
+            *, code: str = E.ENUM_VALUE_NOT_PERMITTED) -> str:
+    if not isinstance(value, str) or value not in permitted:
+        raise E.refuse(code, kind=kind, field=field)
+    return value
+
+
+def _identifier(kind: str, field: str, value: Any, family: str,
+                *, code: str = E.IDENTIFIER_MALFORMED) -> str:
+    if not isinstance(value, str) or not PATTERNS[family].match(value):
+        raise E.refuse(code, kind=kind, field=field, detail=family)
+    return value
+
+
+def _instant(kind: str, field: str, value: Any) -> str:
+    """An RFC3339 instant that carries an offset.
+
+    An instant with no offset is not a moment: the same string means different
+    moments on two hosts, and a record that cannot be ordered against another
+    cannot support an audit. The Fabric refuses a naive evaluation instant for
+    the same reason.
+    """
+    if not isinstance(value, str):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="instant")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise E.refuse(E.TIMESTAMP_NOT_OFFSET_AWARE, kind=kind, field=field) from None
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        raise E.refuse(E.TIMESTAMP_NOT_OFFSET_AWARE, kind=kind, field=field)
+    return value
+
+
+def _decimal_text(kind: str, field: str, value: Any) -> str:
+    """A decimal written as a string, compared exactly.
+
+    Not a binary float: `0.1` must not depend on representation, and a threshold
+    that compares differently on two hosts is not deterministic.
+    """
+    if not isinstance(value, str):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail="decimal-string")
+    try:
+        Decimal(value)
+    except InvalidOperation:
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail="decimal-string") from None
+    return value
+
+
+def _id_sequence(kind: str, field: str, value: Any, family: str) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="sequence")
+    if not value:
+        raise E.refuse(E.FIELD_EMPTY, kind=kind, field=field)
+    return tuple(_identifier(kind, field, item, family, code=E.REFERENCE_MALFORMED)
+                 for item in value)
+
+
+def _condition(kind: str, field: str, value: Any) -> Mapping[str, Any]:
+    """A structured condition. There is no expression string to parse.
+
+    A free-text predicate would need a grammar nobody declared, and every token
+    such a parser accepted would be a threshold decision taken on an operator's
+    behalf.
+    """
+    if not isinstance(value, Mapping):
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="structured-condition")
+    present = set(value)
+    if present != {"operator", "value"}:
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="operator-and-value")
+    _member(kind, field, value.get("operator"), CONDITION_OPERATORS,
+            code=E.OPERATOR_NOT_PERMITTED)
+    _decimal_text(kind, field, value.get("value"))
+    return value
+
+
+def _aggregation(kind: str, field: str, value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="aggregation")
+    which = value.get("kind")
+    _member(kind, field, which, AGGREGATIONS, code=E.AGGREGATION_NOT_PERMITTED)
+    if which == "instant":
+        if set(value) != {"kind"}:
+            raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                           detail="instant-takes-no-parameter")
+    else:
+        if set(value) != {"kind", "window_seconds", "min_samples"}:
+            raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                           detail="window_seconds-and-min_samples")
+        _whole(kind, field, value.get("window_seconds"), minimum=1)
+        # One sample in an empty window is not a verdict, so a minimum is
+        # declared rather than defaulted.
+        _whole(kind, field, value.get("min_samples"), minimum=1)
+    return value
+
+
+def _hysteresis(kind: str, field: str, value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="hysteresis")
+    _member(kind, field, value.get("kind"), HYSTERESIS_KINDS,
+            code=E.HYSTERESIS_KIND_NOT_PERMITTED)
+    if set(value) != {"kind", "seconds", "max_gap_seconds", "min_samples"}:
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="kind-seconds-max_gap_seconds-min_samples")
+    # Neither continuity member has a default. A defaulted one would be an
+    # unanswered configuration question rendered as a confident assessment.
+    _whole(kind, field, value.get("seconds"), minimum=1)
+    _whole(kind, field, value.get("max_gap_seconds"), minimum=1)
+    _whole(kind, field, value.get("min_samples"), minimum=1)
+    return value
+
+
+def _dimension_entry(kind: str, name: Any, entry: Any) -> Mapping[str, Any]:
+    field = "dimensions"
+    if not isinstance(name, str) or name not in DIMENSION_UNITS:
+        raise E.refuse(E.DIMENSION_NOT_DECLARED, kind=kind, field=field)
+    if not isinstance(entry, Mapping):
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="mapping")
+    expected = {"dimension", "unit", "aggregation", "entry_condition",
+                "exit_condition", "hysteresis", "freshness_policy_seconds"}
+    present = set(entry)
+    missing = expected - present
+    if missing:
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="missing-" + "-".join(sorted(missing)))
+    if present - expected:
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="undeclared-member")
+    declared = _member(kind, field, entry.get("dimension"), DIMENSIONS,
+                       code=E.DIMENSION_NOT_DECLARED)
+    if declared != name:
+        raise E.refuse(E.DIMENSION_ENTRY_MALFORMED, kind=kind, field=field,
+                       detail="dimension-key-disagrees-with-member")
+    if entry.get("unit") != DIMENSION_UNITS[declared]:
+        raise E.refuse(E.UNIT_MISMATCH, kind=kind, field=field, detail=declared)
+    _aggregation(kind, field, entry.get("aggregation"))
+    _condition(kind, field, entry.get("entry_condition"))
+    _condition(kind, field, entry.get("exit_condition"))
+    _hysteresis(kind, field, entry.get("hysteresis"))
+    policy = entry.get("freshness_policy_seconds")
+    # Null is permitted and produces freshness: unknown, per the Null Policy
+    # Rule. It must never be defaulted to a number.
+    if policy is not None:
+        _whole(kind, field, policy, minimum=1)
+    return entry
+
+
+def _dimensions(kind: str, field: str, value: Any) -> Mapping[str, Any]:
+    mapped = _mapping(kind, field, value)
+    for name, entry in mapped.items():
+        _dimension_entry(kind, name, entry)
+    return mapped
+
+
+# --- the record ----------------------------------------------------------
+class HealthRecord:
+    """One frozen Health record.
+
+    Attributes are read through normal access; assignment is refused. The
+    payload is validated in full before any attribute exists, so a refused
+    payload produces no object at all rather than a partly-built one.
+    """
+
+    __slots__ = ("_kind", "_fields")
+
+    def __init__(self, kind: str, fields: Mapping[str, Any]) -> None:
+        object.__setattr__(self, "_kind", kind)
+        object.__setattr__(self, "_fields", _frozen(dict(fields)))
+
+    # --- immutability ---
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise E.refuse(E.RECORD_IMMUTABLE, kind=self._kind, field=name)
+
+    def __delattr__(self, name: str) -> None:
+        raise E.refuse(E.RECORD_IMMUTABLE, kind=self._kind, field=name)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return object.__getattribute__(self, "_fields")[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    @property
+    def kind(self) -> str:
+        return object.__getattribute__(self, "_kind")
+
+    def to_dict(self) -> dict[str, Any]:
+        """A fresh, fully mutable copy. Mutating it cannot reach the record."""
+        return _thawed(dict(object.__getattribute__(self, "_fields")))
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, HealthRecord):
+            return NotImplemented
+        return self.kind == other.kind and self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.kind, tuple(sorted(self.to_dict()))))
+
+    def __repr__(self) -> str:
+        # The identifier only. A repr that printed the fields would put every
+        # supplied value into whatever is logging.
+        identity = object.__getattribute__(self, "_fields").get(
+            IDENTITY_FIELD[self.kind], "")
+        return f"<HealthRecord {self.kind} {identity}>"
+
+
+# --- per-family specification -------------------------------------------
+# kind -> (identity field, required fields, conditionally required, optional,
+#          forbidden)
+IDENTITY_FIELD: Mapping[str, str] = {
+    "capability-health-envelope": "envelope_id",
+    "capability-health-observation": "observation_id",
+    "capability-health-state": "state_id",
+    "capability-degradation-event": "event_id",
+    "capability-health-recommendation": "recommendation_id",
+    "capability-heartbeat": "heartbeat_id",
+}
+
+REQUIRED: Mapping[str, tuple[str, ...]] = {
+    "capability-health-envelope": (
+        "envelope_id", "envelope_version", "subject_type", "subject_id",
+        "dimensions", "evaluation", "provenance"),
+    "capability-health-observation": (
+        "observation_id", "subject_type", "subject_id", "dimension",
+        "measured_value", "unit", "observed_at", "collector_id",
+        "source_fingerprint", "collection_status", "provenance"),
+    "capability-health-state": (
+        "state_id", "subject_type", "subject_id", "state", "envelope_id",
+        "envelope_version", "derived_from_observation_ids", "freshness",
+        "reason", "evaluated_at", "provenance"),
+    "capability-degradation-event": (
+        "event_id", "subject_type", "subject_id", "from_state", "to_state",
+        "dimension", "entry_condition", "observed_at",
+        "derived_from_observation_ids", "provenance", "hysteresis",
+        "hysteresis_satisfied_over_seconds", "hysteresis_first_observation_id",
+        "hysteresis_last_observation_id", "hysteresis_sample_count",
+        "hysteresis_observed_max_gap_seconds"),
+    "capability-health-recommendation": (
+        "recommendation_id", "subject_type", "subject_id", "recommendation",
+        "reason", "derived_from_state_id", "created_at", "review_required",
+        "advisory_only", "provenance"),
+    "capability-heartbeat": (
+        "heartbeat_id", "subject_type", "subject_id", "observed_at",
+        "received_at", "epoch", "sequence", "provenance"),
+}
+
+CONDITIONAL: Mapping[str, tuple[str, ...]] = {
+    "capability-health-state": ("review_required",),
+}
+
+OPTIONAL: Mapping[str, tuple[str, ...]] = {
+    "capability-health-envelope": (
+        "description", "review_due_at", "supersedes", "superseded_by", "notes"),
+    "capability-health-observation": (
+        "collection_error", "freshness", "sample_window_seconds", "notes"),
+    "capability-health-state": (
+        "dimension_results", "supersedes", "superseded_by", "notes"),
+    "capability-degradation-event": ("exit_condition", "envelope_id", "notes"),
+    "capability-health-recommendation": (
+        "derived_from_event_id", "acknowledged_at", "acknowledged_by", "notes"),
+    "capability-heartbeat": ("reported_uptime_seconds", "notes"),
+}
+
+FORBIDDEN: Mapping[str, tuple[str, ...]] = {
+    "capability-health-envelope": (
+        "learned_threshold", "auto_threshold", "baseline_threshold",
+        "derived_threshold", "anomaly_model", "anomaly_score", "forecast",
+        "predicted_limit", "health_score", "trust_state", "command"),
+    "capability-health-observation": (
+        "source", "health_state", "verdict", "conclusion", "assessment",
+        "trust_state", "eligibility", "predicted_value", "forecast",
+        "anomaly_score", "health_score", "recommendation", "command", "argv"),
+    "capability-health-state": (
+        "health_score", "trust_state", "trust_score", "predicted_state",
+        "forecast", "anomaly_score", "auto_drain", "auto_quarantine",
+        "auto_reroute", "auto_remediate", "command"),
+    "capability-degradation-event": (
+        "predicted_failure", "forecast", "time_to_failure", "probability",
+        "anomaly_score", "health_score", "trust_state", "auto_drain",
+        "auto_quarantine", "auto_reroute", "auto_remediate", "command"),
+    "capability-health-recommendation": (
+        "quarantine", "revoke", "trust", "approve", "broaden_scope", "reroute",
+        "restart", "stop", "kill", "repair", "remediate", "remediation",
+        "execution_target", "action_payload", "command", "argv", "script",
+        "shell", "auto_execute", "auto_apply", "auto_drain", "auto_quarantine",
+        "execute_at", "route_id", "selection_id", "trust_state",
+        "trust_decision_id", "mutates_route", "mutates_trust_state",
+        "health_score"),
+    "capability-heartbeat": (
+        "health_state", "trust_state", "trusted", "eligibility", "admitted",
+        "route_id", "priority", "health_score", "token", "secret",
+        "credential", "command"),
+}
+
+KINDS = tuple(REQUIRED)
+
+
+# --- per-family field validation ----------------------------------------
+def _validate_envelope(kind: str, p: Mapping[str, Any]) -> None:
+    _identifier(kind, "envelope_id", p["envelope_id"], kind)
+    _whole(kind, "envelope_version", p["envelope_version"], minimum=1)
+    _member(kind, "subject_type", p["subject_type"], SUBJECT_TYPES,
+            code=E.SUBJECT_TYPE_NOT_PERMITTED)
+    _text(kind, "subject_id", p["subject_id"])
+    _dimensions(kind, "dimensions", p["dimensions"])
+    _member(kind, "evaluation", p["evaluation"], EVALUATIONS)
+    _mapping(kind, "provenance", p["provenance"])
+    for field in ("description", "notes", "supersedes", "superseded_by"):
+        if p.get(field) is not None:
+            _text(kind, field, p[field])
+    if p.get("review_due_at") is not None:
+        _instant(kind, "review_due_at", p["review_due_at"])
+
+
+def _validate_observation(kind: str, p: Mapping[str, Any]) -> None:
+    _identifier(kind, "observation_id", p["observation_id"], kind)
+    subject_type = _member(kind, "subject_type", p["subject_type"], SUBJECT_TYPES,
+                           code=E.SUBJECT_TYPE_NOT_PERMITTED)
+    _text(kind, "subject_id", p["subject_id"])
+    dimension = _member(kind, "dimension", p["dimension"], DIMENSIONS,
+                        code=E.DIMENSION_NOT_DECLARED)
+    if subject_type not in DIMENSION_SUBJECTS[dimension]:
+        raise E.refuse(E.DIMENSION_SUBJECT_INCOMPATIBLE, kind=kind,
+                       field="dimension", detail=dimension)
+    if p["unit"] != DIMENSION_UNITS[dimension]:
+        raise E.refuse(E.UNIT_MISMATCH, kind=kind, field="unit", detail=dimension)
+    _instant(kind, "observed_at", p["observed_at"])
+    _text(kind, "collector_id", p["collector_id"])
+    _text(kind, "source_fingerprint", p["source_fingerprint"])
+    status = _member(kind, "collection_status", p["collection_status"],
+                     COLLECTION_STATUSES)
+    # A failed collection has NO measurement. Recording a zero would be
+    # inventing one, and a monitor that invented a value would manufacture
+    # findings out of its own outages.
+    measured = p["measured_value"]
+    if status == "collected":
+        if measured is None:
+            raise E.refuse(E.MEASURED_VALUE_INCONSISTENT, kind=kind,
+                           field="measured_value", detail="collected")
+    elif measured is not None:
+        raise E.refuse(E.MEASURED_VALUE_INCONSISTENT, kind=kind,
+                       field="measured_value", detail=status)
+    _mapping(kind, "provenance", p["provenance"])
+    if p.get("freshness") is not None:
+        _member(kind, "freshness", p["freshness"], FRESHNESS)
+    if p.get("sample_window_seconds") is not None:
+        _whole(kind, "sample_window_seconds", p["sample_window_seconds"], minimum=1)
+    for field in ("collection_error", "notes"):
+        if p.get(field) is not None:
+            _text(kind, field, p[field])
+
+
+def _validate_state(kind: str, p: Mapping[str, Any]) -> None:
+    _identifier(kind, "state_id", p["state_id"], kind)
+    _member(kind, "subject_type", p["subject_type"], SUBJECT_TYPES,
+            code=E.SUBJECT_TYPE_NOT_PERMITTED)
+    _text(kind, "subject_id", p["subject_id"])
+    state = _member(kind, "state", p["state"], HEALTH_STATES)
+    _identifier(kind, "envelope_id", p["envelope_id"],
+                "capability-health-envelope", code=E.REFERENCE_MALFORMED)
+    _whole(kind, "envelope_version", p["envelope_version"], minimum=1)
+    _id_sequence(kind, "derived_from_observation_ids",
+                 p["derived_from_observation_ids"], "capability-health-observation")
+    _member(kind, "freshness", p["freshness"], FRESHNESS)
+    _text(kind, "reason", p["reason"])
+    _instant(kind, "evaluated_at", p["evaluated_at"])
+    _mapping(kind, "provenance", p["provenance"])
+    # The Null Policy Rule's flag. Only ONE leg of its declared condition is
+    # decidable from this record alone -- `insufficient-policy` -- and that leg
+    # is enforced. The other two legs ("arising from a null freshness policy"
+    # and "from contradicting sources") are properties of the envelope and the
+    # observations, which this layer does not hold, so they are left to the
+    # deriving increment rather than guessed at here.
+    flag = p.get("review_required")
+    if flag is not None:
+        _boolean(kind, "review_required", flag)
+    if state == "insufficient-policy" and flag is not True:
+        raise E.refuse(E.CONDITIONAL_REQUIREMENT_UNMET, kind=kind,
+                       field="review_required", detail="insufficient-policy")
+    if p.get("dimension_results") is not None:
+        _mapping(kind, "dimension_results", p["dimension_results"])
+    for field in ("supersedes", "superseded_by", "notes"):
+        if p.get(field) is not None:
+            _text(kind, field, p[field])
+
+
+def _validate_event(kind: str, p: Mapping[str, Any]) -> None:
+    _identifier(kind, "event_id", p["event_id"], kind)
+    _member(kind, "subject_type", p["subject_type"], SUBJECT_TYPES,
+            code=E.SUBJECT_TYPE_NOT_PERMITTED)
+    _text(kind, "subject_id", p["subject_id"])
+    _member(kind, "from_state", p["from_state"], HEALTH_STATES)
+    _member(kind, "to_state", p["to_state"], HEALTH_STATES)
+    _member(kind, "dimension", p["dimension"], DIMENSIONS,
+            code=E.DIMENSION_NOT_DECLARED)
+    _condition(kind, "entry_condition", p["entry_condition"])
+    _instant(kind, "observed_at", p["observed_at"])
+    _id_sequence(kind, "derived_from_observation_ids",
+                 p["derived_from_observation_ids"], "capability-health-observation")
+    _mapping(kind, "provenance", p["provenance"])
+    # The hysteresis proof. Every declared parameter has a matching OBSERVED
+    # value beside it, so an operator can recompute the verdict from this record
+    # and the cited observations without the evaluator. A transition that cannot
+    # show its hysteresis was satisfied is not recordable.
+    _hysteresis(kind, "hysteresis", p["hysteresis"])
+    _whole(kind, "hysteresis_satisfied_over_seconds",
+           p["hysteresis_satisfied_over_seconds"], minimum=1)
+    _identifier(kind, "hysteresis_first_observation_id",
+                p["hysteresis_first_observation_id"],
+                "capability-health-observation", code=E.REFERENCE_MALFORMED)
+    _identifier(kind, "hysteresis_last_observation_id",
+                p["hysteresis_last_observation_id"],
+                "capability-health-observation", code=E.REFERENCE_MALFORMED)
+    _whole(kind, "hysteresis_sample_count", p["hysteresis_sample_count"], minimum=1)
+    _whole(kind, "hysteresis_observed_max_gap_seconds",
+           p["hysteresis_observed_max_gap_seconds"], minimum=0)
+    if p.get("exit_condition") is not None:
+        _condition(kind, "exit_condition", p["exit_condition"])
+    if p.get("envelope_id") is not None:
+        _identifier(kind, "envelope_id", p["envelope_id"],
+                    "capability-health-envelope", code=E.REFERENCE_MALFORMED)
+    if p.get("notes") is not None:
+        _text(kind, "notes", p["notes"])
+
+
+def _validate_recommendation(kind: str, p: Mapping[str, Any]) -> None:
+    _identifier(kind, "recommendation_id", p["recommendation_id"], kind)
+    _member(kind, "subject_type", p["subject_type"], SUBJECT_TYPES,
+            code=E.SUBJECT_TYPE_NOT_PERMITTED)
+    _text(kind, "subject_id", p["subject_id"])
+    # Closed, not merely enumerated. An open list is one change away from
+    # containing `restart`, and the argument for adding it will be made during
+    # an incident.
+    _member(kind, "recommendation", p["recommendation"], RECOMMENDATIONS)
+    _text(kind, "reason", p["reason"])
+    _identifier(kind, "derived_from_state_id", p["derived_from_state_id"],
+                "capability-health-state", code=E.REFERENCE_MALFORMED)
+    _instant(kind, "created_at", p["created_at"])
+    # Carried on the record rather than assumed from the record type, so a
+    # consumer reading one recommendation in isolation still knows it is advice.
+    if _boolean(kind, "review_required", p["review_required"]) is not True:
+        raise E.refuse(E.CONDITIONAL_REQUIREMENT_UNMET, kind=kind,
+                       field="review_required", detail="advisory-record")
+    if _boolean(kind, "advisory_only", p["advisory_only"]) is not True:
+        raise E.refuse(E.CONDITIONAL_REQUIREMENT_UNMET, kind=kind,
+                       field="advisory_only", detail="advisory-record")
+    _mapping(kind, "provenance", p["provenance"])
+    if p.get("derived_from_event_id") is not None:
+        _identifier(kind, "derived_from_event_id", p["derived_from_event_id"],
+                    "capability-degradation-event", code=E.REFERENCE_MALFORMED)
+    if p.get("acknowledged_at") is not None:
+        _instant(kind, "acknowledged_at", p["acknowledged_at"])
+    for field in ("acknowledged_by", "notes"):
+        if p.get(field) is not None:
+            _text(kind, field, p[field])
+
+
+def _validate_heartbeat(kind: str, p: Mapping[str, Any]) -> None:
+    _identifier(kind, "heartbeat_id", p["heartbeat_id"], kind)
+    _member(kind, "subject_type", p["subject_type"], SUBJECT_TYPES,
+            code=E.SUBJECT_TYPE_NOT_PERMITTED)
+    _text(kind, "subject_id", p["subject_id"])
+    # `observed_at` is the subject's claim. `received_at` is authored by this
+    # plane. Only the second may ever drive a freshness judgement -- a subject
+    # that chose the number deciding its own liveness would be certifying
+    # itself -- and no such judgement happens in this layer at all.
+    _instant(kind, "observed_at", p["observed_at"])
+    _instant(kind, "received_at", p["received_at"])
+    _whole(kind, "epoch", p["epoch"], minimum=0)
+    _whole(kind, "sequence", p["sequence"], minimum=0)
+    _mapping(kind, "provenance", p["provenance"])
+    if p.get("reported_uptime_seconds") is not None:
+        _whole(kind, "reported_uptime_seconds", p["reported_uptime_seconds"],
+               minimum=0)
+    if p.get("notes") is not None:
+        _text(kind, "notes", p["notes"])
+
+
+VALIDATORS = {
+    "capability-health-envelope": _validate_envelope,
+    "capability-health-observation": _validate_observation,
+    "capability-health-state": _validate_state,
+    "capability-degradation-event": _validate_event,
+    "capability-health-recommendation": _validate_recommendation,
+    "capability-heartbeat": _validate_heartbeat,
+}
+
+
+# --- the entry point -----------------------------------------------------
+def parse(kind: Any, payload: Any) -> HealthRecord:
+    """Validate a payload in full, then return a frozen record.
+
+    Nothing is constructed until every check has passed, so a refused payload
+    leaves no object behind. A partly-valid record would be the most dangerous
+    thing this module could produce: it would carry some assertions that were
+    checked and some that were not, and nothing downstream could tell which.
+    """
+    if not isinstance(kind, str) or kind not in REQUIRED:
+        raise E.refuse(E.UNKNOWN_RECORD_KIND)
+    if not isinstance(payload, Mapping):
+        raise E.refuse(E.PAYLOAD_NOT_A_MAPPING, kind=kind)
+
+    present = set(payload)
+    declared = (set(REQUIRED[kind]) | set(CONDITIONAL.get(kind, ()))
+                | set(OPTIONAL.get(kind, ())))
+
+    # Forbidden before unknown: a forbidden field is a named architectural
+    # prohibition and deserves its own refusal, not "unrecognised".
+    for field in FORBIDDEN[kind]:
+        if field in present:
+            raise E.refuse(E.FORBIDDEN_FIELD, kind=kind, field=field)
+    for field in sorted(present - declared):
+        raise E.refuse(E.UNKNOWN_FIELD, kind=kind, field=field)
+    for field in REQUIRED[kind]:
+        if field not in present:
+            raise E.refuse(E.MISSING_REQUIRED_FIELD, kind=kind, field=field)
+
+    VALIDATORS[kind](kind, payload)
+
+    # An absent optional serialises as absent rather than as a null, so a
+    # record that never carried one reads back exactly as it was written.
+    fields = {field: payload[field] for field in REQUIRED[kind]}
+    for field in (*CONDITIONAL.get(kind, ()), *OPTIONAL.get(kind, ())):
+        if payload.get(field) is not None:
+            fields[field] = payload[field]
+    return HealthRecord(kind, fields)

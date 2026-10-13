@@ -149,10 +149,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # host-only but still a STEP -- it skips inside itself rather than being skipped
 # here. Both totals are re-measured by a run below rather than incremented.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=143
+  TOTAL_STEPS=144
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=168
+  TOTAL_STEPS=169
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -1100,6 +1100,10 @@ run "Governed artifact authority" bash tests/test-artifact-authority.sh
 # store, spawns no subprocess, contacts nothing — it runs in quick mode too.
 run "Capability health" bash tests/test-capability-health.sh
 run "Capability health cross-artefact agreement" bash tests/test-capability-health-agreement.sh
+# ENG-0006-H1. Pure record models: no store, no evaluation, no network,
+# no subprocess. Runs in quick mode for the same reason the two suites
+# above do.
+run "Health record models" bash tests/test-health-records.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 
