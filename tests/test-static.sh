@@ -1436,7 +1436,7 @@ assert_contains "${CI_WF}" 'bash -n tests/\*\.sh' "ci syntax-checks every test f
 # is a different way the same line gets crossed, so each is checked rather than
 # inferred from one.
 for fabric_pkg in tools/scheduler tools/placement \
-                  tools/clustering tools/routing tools/health tools/discovery \
+                  tools/clustering tools/routing tools/discovery \
                   tools/lease tools/admission tools/capability_fabric; do
   if [[ -d "${ROOT}/${fabric_pkg}" ]]; then
     fail "only the ENG-0004 fabric package may exist; ${fabric_pkg} must not"
@@ -1444,6 +1444,30 @@ for fabric_pkg in tools/scheduler tools/placement \
     pass "no fabric runtime package: ${fabric_pkg}"
   fi
 done
+
+# `tools/health` was on that list as a reserved name while the Health Plane was
+# architecture only. ENG-0006-H1 authorises a record model there -- no engine,
+# no store, no adapter -- so the name is now governed by a closed allowlist
+# rather than forbidden outright. Nothing else about this rule changes: the
+# eight names above stay forbidden, and a health package holding anything but
+# the three approved modules fails here exactly as it would have before.
+if [[ ! -d "${ROOT}/tools/health" ]]; then
+  pass "no fabric runtime package: tools/health"
+else
+  static_health_unapproved=""
+  while IFS= read -r static_health_file; do
+    static_health_rel="tools/health/${static_health_file#"${ROOT}/tools/health/"}"
+    case "${static_health_rel}" in
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py) ;;
+      *) static_health_unapproved+="${static_health_rel} " ;;
+    esac
+  done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)
+  if [[ -z "${static_health_unapproved}" ]]; then
+    pass "tools/health holds only the approved ENG-0006-H1 record modules"
+  else
+    fail "only the ENG-0006-H1 record modules may exist in tools/health; found: ${static_health_unapproved}"
+  fi
+fi
 
 # --- v0.9.6 Capability Health Plane: no aggregate score, no execution --------
 # Scanned across the whole repository rather than one schema, because the point

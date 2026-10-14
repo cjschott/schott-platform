@@ -1150,9 +1150,16 @@ for example in "Fabric-eligible.*[Hh]ealth unknown" \
     "worked examples cover: ${example}"
 done
 
-# ADR-0013 architecture defines nothing that runs. `tools/fabric` is released
-# by ENG-0004; the health-runtime names stay forbidden.
-for premature in tools/health tools/monitor \
+# ADR-0013 architecture defines nothing that RUNS. `tools/fabric` is released
+# by ENG-0004; the health-runtime names below stay forbidden outright.
+#
+# `tools/health` left that list at ENG-0006-H1, which is an authorised record
+# model and nothing operational. The replacement is a closed allowlist: absence
+# is still permitted, and a present package must be exactly the three approved
+# modules. `tests/test-capability-health.sh` owns the full non-operational
+# checks and the adversarial fixture; this suite asserts the membership, which
+# is the part a documentation gate is responsible for.
+for premature in tools/monitor \
                  tools/heartbeat tools/probe tools/telemetry; do
   if [[ -e "${ROOT}/${premature}" ]]; then
     fail "v0.9.6 is architecture only; ${premature} must not exist"
@@ -1160,6 +1167,24 @@ for premature in tools/health tools/monitor \
     pass "no premature implementation: ${premature}"
   fi
 done
+
+if [[ ! -e "${ROOT}/tools/health" ]]; then
+  pass "no premature implementation: tools/health"
+else
+  docs_health_unapproved=""
+  while IFS= read -r health_file; do
+    health_rel="tools/health/${health_file#"${ROOT}/tools/health/"}"
+    case "${health_rel}" in
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py) ;;
+      *) docs_health_unapproved+="${health_rel} " ;;
+    esac
+  done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)
+  if [[ -z "${docs_health_unapproved}" ]]; then
+    pass "tools/health holds only the approved ENG-0006-H1 record modules"
+  else
+    fail "v0.9.6 permits only the ENG-0006-H1 record modules; found: ${docs_health_unapproved}"
+  fi
+fi
 
 # --- Operator Root Authority deployment gate ---------------------------------
 DEPLOY_PLAN="docs/superpowers/plans/2026-08-03-operator-root-authority-deployment.md"

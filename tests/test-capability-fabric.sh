@@ -856,7 +856,7 @@ assert_contains "${ADR}" '[Rr]outing outcomes|routing outcome' \
 # crossed, and a single directory check would miss most of them. `tools/fabric`
 # is released by ENG-0004; the rest stay forbidden.
 for forbidden_dir in tools/scheduler tools/placement \
-                     tools/clustering tools/routing tools/health tools/discovery \
+                     tools/clustering tools/routing tools/discovery \
                      tools/lease tools/admission; do
   if [[ -d "${ROOT}/${forbidden_dir}" ]]; then
     fail "only the ENG-0004 fabric package may exist; ${forbidden_dir} must not"
@@ -864,6 +864,29 @@ for forbidden_dir in tools/scheduler tools/placement \
     pass "no implementation directory: ${forbidden_dir}"
   fi
 done
+
+# `tools/health` was a reserved name on that list. ENG-0006-H1 authorises a
+# record model there and nothing that runs, so the name is governed by a closed
+# allowlist. What this suite cares about is unchanged: no fabric-adjacent
+# runtime package may appear, and a health package that grew a store, an adapter
+# or a scheduler would fail here.
+if [[ ! -d "${ROOT}/tools/health" ]]; then
+  pass "no implementation directory: tools/health"
+else
+  fabric_health_unapproved=""
+  while IFS= read -r fabric_health_file; do
+    fabric_health_rel="tools/health/${fabric_health_file#"${ROOT}/tools/health/"}"
+    case "${fabric_health_rel}" in
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py) ;;
+      *) fabric_health_unapproved+="${fabric_health_rel} " ;;
+    esac
+  done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)
+  if [[ -z "${fabric_health_unapproved}" ]]; then
+    pass "tools/health holds only the approved ENG-0006-H1 record modules"
+  else
+    fail "only the ENG-0006-H1 record modules may exist in tools/health; found: ${fabric_health_unapproved}"
+  fi
+fi
 
 # No fabric runtime records may be committed. These are machine-generated and
 # belong in a store outside the repository, exactly like trust runtime records.

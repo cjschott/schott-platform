@@ -12079,9 +12079,205 @@ with TemporaryDirectory() as tmp:
 
     check(sorted(reached) == sorted(ALL_COMMANDS),
           f"every §8 operation was reached through the interface ({sorted(set(ALL_COMMANDS) - set(reached))})")
-    # AC 25: none of that required a Health Runtime.
-    check(not (root / "tools" / "health").exists(),
-          "every operation ran with no Health Runtime present")
+
+    # --- AC 25: none of that required a Health Runtime --------------------
+    #
+    # THE CRITERION IS UNCHANGED. The Fabric completes every §8 operation with
+    # no Health Runtime involved, and the operations above have just done so.
+    #
+    # THE PROOF IS REPLACED. It used to assert that `tools/health` did not
+    # exist, which was a sound proxy while the Health Plane was architecture
+    # only and stopped being a proof the moment ENG-0006-H1 authorised an
+    # isolated record model: the assertion would then fail for a reason that
+    # says nothing about whether the Fabric depends on Health. Absence of the
+    # directory was never the criterion; independence was.
+    #
+    # What replaces it tests the dependency rather than the directory, and is
+    # strictly stronger because it would also have caught a Fabric that
+    # imported Health while the directory was absent -- which the old check
+    # could not.
+    import ast as _ast
+    import importlib as _importlib
+    import importlib.abc as _importlib_abc
+    from tools.fabric.cli import build_parser as _build_parser
+    from tools.fabric.selection import select_candidate as _select_candidate
+
+    # (A) STATIC INDEPENDENCE, by parsing rather than by grepping. A substring
+    # search over source would be fooled by a comment, and missed by an
+    # `importlib` call; the AST reports what the module actually imports.
+    _fabric_root = root / "tools" / "fabric"
+    _fabric_modules = sorted(_fabric_root.rglob("*.py"))
+    check(len(_fabric_modules) >= 10,
+          f"AC 25: the fabric package was located for inspection ({len(_fabric_modules)} modules)")
+
+    def _imported_names(path):
+        names = []
+        for node in _ast.walk(_ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, _ast.Import):
+                names += [alias.name for alias in node.names]
+            elif isinstance(node, _ast.ImportFrom):
+                names.append(("." * (node.level or 0)) + (node.module or ""))
+        return names
+
+    _health_importers = []
+    for _module in _fabric_modules:
+        for _name in _imported_names(_module):
+            if _name == "tools.health" or _name.startswith("tools.health."):
+                _health_importers.append(_module.name)
+    check(not _health_importers,
+          f"AC 25: no fabric module imports the health package ({_health_importers})")
+
+    # Relative imports cannot reach a sibling package from inside the fabric
+    # one, but a `from .. import health` would. Checked explicitly.
+    _relative_health = []
+    for _module in _fabric_modules:
+        for _name in _imported_names(_module):
+            if _name.startswith(".") and "health" in _name:
+                _relative_health.append(_module.name)
+    check(not _relative_health,
+          f"AC 25: no fabric module reaches health by relative import ({_relative_health})")
+
+    # (B) NO DYNAMIC IMPORT PATH, and no executable invocation. The fabric
+    # imports no subprocess module at all -- asserted separately in this suite
+    # -- so it cannot invoke a health executable or service; what remains to
+    # exclude is a dynamic import naming health.
+    _dynamic = []
+    for _module in _fabric_modules:
+        _src = _module.read_text(encoding="utf-8")
+        for _needle in ("import_module", "__import__", "importlib"):
+            if _needle in _src and "health" in _src:
+                _dynamic.append(f"{_module.name}:{_needle}")
+    check(not _dynamic,
+          f"AC 25: no fabric module pairs a dynamic import with a health name ({_dynamic})")
+
+    # No health configuration or store dependency.
+    _config = []
+    for _module in _fabric_modules:
+        _src = _module.read_text(encoding="utf-8")
+        for _needle in ("health_store", "health-store", "HEALTH_ROOT",
+                        "health_root", "capability-health-state",
+                        "capability-health-observation"):
+            if _needle in _src:
+                _config.append(f"{_module.name}:{_needle}")
+    check(not _config,
+          f"AC 25: the fabric requires no health configuration or store ({_config})")
+
+    # (C) BEHAVIOURAL INDEPENDENCE. The decisive proof, and the one the old
+    # check could not make: nothing imported the health package while every
+    # operation above ran. `run()` drives the CLI in this process, so this is
+    # a statement about the real execution path rather than about source text.
+    check("tools.health" not in sys.modules,
+          "AC 25: the health package was never imported while the operations ran")
+
+    # And with health made UNIMPORTABLE, a representative operation still
+    # succeeds -- the missing-Health execution scenario, tested rather than
+    # assumed.
+    class _HealthBlocked(_importlib_abc.MetaPathFinder):
+        """Refuses any attempt to import the health package."""
+
+        blocked = []
+
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "tools.health" or fullname.startswith("tools.health."):
+                type(self).blocked.append(fullname)
+                raise ImportError(f"health is unavailable in this scenario: {fullname}")
+            return None
+
+    _blocker = _HealthBlocked()
+    sys.meta_path.insert(0, _blocker)
+    try:
+        # The blocker must genuinely block, or the scenario proves nothing.
+        _blocked_ok = False
+        try:
+            _importlib.import_module("tools.health")
+        except ImportError:
+            _blocked_ok = True
+        check(_blocked_ok,
+              "AC 25: the missing-health scenario really does make health unimportable")
+        # That self-test was itself an import attempt, so it is cleared before
+        # the counter is used to judge the OPERATIONS. Leaving it in would make
+        # the probe indistinguishable from a fabric module reaching for health,
+        # and the assertion below would report a dependency that does not exist.
+        _HealthBlocked.blocked.clear()
+
+        _code, _out, _err, _error = run(["validate", *store_flags(tmp)])
+        check(_error is None,
+              f"AC 25: validate raises nothing with health unimportable ({_error})")
+        _findings = payload_of(_out)
+        check(_code == EXIT_SUCCESS and _findings.get("findings") == [],
+              "AC 25: validate succeeds with health unimportable")
+        check(_findings.get("counts", {}).get("capability-selection") == 1,
+              "AC 25: validate reports the same counts with health unimportable")
+
+        # A second read-only operation, and one that must REFUSE. Both paths
+        # matter: a plane that needed health only on its error path would still
+        # be a plane that needed health.
+        _code, _out, _err, _error = run(["inspect", *store_flags(tmp)])
+        check(_error is None and _code == EXIT_SUCCESS,
+              f"AC 25: inspect succeeds with health unimportable ({_error})")
+        _looked = payload_of(_out)
+        check(isinstance(_looked, dict) and _looked,
+              "AC 25: inspect reports a populated store with health unimportable")
+
+        _code, _out, _err, _error = run(["select", *store_flags(tmp)])
+        check(_error is None,
+              f"AC 25: a refused invocation raises nothing with health "
+              f"unimportable ({_error})")
+        check(_code != EXIT_SUCCESS,
+              "AC 25: an unusable invocation is still refused, not accepted")
+
+        check(not _HealthBlocked.blocked,
+              f"AC 25: no operation attempted to import health ({_HealthBlocked.blocked})")
+    finally:
+        sys.meta_path.remove(_blocker)
+    check(_blocker not in sys.meta_path,
+          "AC 25: the missing-health scenario is torn down")
+
+    # (D) THE NEGATIVE CASE. An unauthorised fabric-to-health dependency must
+    # be DETECTED. Proven against a temporary fixture, never by editing a real
+    # fabric module: a barrier only ever run against a compliant tree has not
+    # been shown to reject anything.
+    with TemporaryDirectory() as _fixture:
+        _offender = Path(_fixture) / "selection_with_health.py"
+        _offender.write_text(
+            "from tools.health import records\n"
+            "def choose():\n    return records\n", encoding="utf-8")
+        _caught = [name for name in _imported_names(_offender)
+                   if name == "tools.health" or name.startswith("tools.health.")]
+        check(_caught == ["tools.health"],
+              f"AC 25: the import barrier detects a forbidden static import ({_caught})")
+        _offender.write_text(
+            "import importlib\n"
+            "def choose():\n"
+            "    return importlib.import_module('tools.health.records')\n",
+            encoding="utf-8")
+        _src = _offender.read_text(encoding="utf-8")
+        check("importlib" in _src and "health" in _src,
+              "AC 25: the dynamic-import barrier detects a forbidden dynamic import")
+
+    # The default health input is inert, and no health-origin subtraction is
+    # reachable: the CLI exposes no option that could supply one.
+    check(inspect.signature(
+        _select_candidate).parameters["health_removals"].default == (),
+        "AC 25: the default health input is empty, and therefore inert")
+
+    # No health-origin subtraction is reachable through the released CLI. Read
+    # off the parser rather than the source, so an option added later is seen.
+    def _parser_tokens(parser, seen=None):
+        seen = [] if seen is None else seen
+        for action in parser._actions:  # noqa: SLF001
+            seen.append(str(action.dest))
+            seen.extend(str(option) for option in action.option_strings)
+            if getattr(action, "choices", None):
+                for choice in action.choices:
+                    seen.append(str(choice))
+                    if isinstance(action.choices, dict):
+                        _parser_tokens(action.choices[choice], seen)
+        return seen
+
+    _tokens = " ".join(_parser_tokens(_build_parser())).lower()
+    check("health" not in _tokens,
+          "AC 25: no CLI option or subcommand can supply a health input")
 
 # --- E/F. Replay, and a conflicting reuse ---------------------------------
 with TemporaryDirectory() as tmp:
