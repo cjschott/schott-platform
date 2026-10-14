@@ -191,20 +191,61 @@ def _instant(kind: str, field: str, value: Any) -> str:
     return value
 
 
+# A bare decimal numeral, and nothing else. Optional sign, digits with an
+# optional fractional part (or a leading point), and an optional exponent.
+#
+# `Decimal()` alone is NOT this grammar. It also accepts the IEEE specials
+# `NaN`, `sNaN` and `Infinity` in several spellings, surrounding whitespace, and
+# Python's underscore digit separators -- none of which is a decimal string, and
+# the specials are not decimal VALUES at all.
+# Matched with `fullmatch`, and deliberately NOT with `^...$`: in Python `$`
+# also matches just before a trailing newline, so `"1\n"` would have passed an
+# anchored `match()` and reached the store as a threshold with a newline in it.
+_DECIMAL_TEXT = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
 def _decimal_text(kind: str, field: str, value: Any) -> str:
-    """A decimal written as a string, compared exactly.
+    """A FINITE decimal written as a bare decimal string, compared exactly.
 
     Not a binary float: `0.1` must not depend on representation, and a threshold
     that compares differently on two hosts is not deterministic.
+
+    **And not a non-finite special.** A threshold of `NaN` or `Infinity` passes
+    `Decimal()` and then destroys the thing a threshold is for. Under the default
+    decimal context every comparison against `NaN` *raises* rather than returning
+    a verdict, so the evaluator would fail instead of deciding; and a threshold of
+    `Infinity` is violated either always or never, whatever was measured. In both
+    cases the dimension looks governed and can produce no honest finding -- which
+    is the favourable default ADR-0013 forbids ("the absence of a policy produces
+    an explicit 'not defined', never a favourable default";
+    `absent_threshold_never_means: healthy`), wearing a declared policy's clothes.
+
+    No precision, magnitude or range restriction is imposed: none is declared
+    anywhere, and inventing one would narrow what an operator may write down. A
+    four-hundred-digit limit is accepted, and so is `1e999999` -- a `Decimal`
+    carries its exponent rather than converting, so that value is finite. An
+    exponent large enough that `Decimal` itself will not construct the value
+    raises at construction and is refused as malformed syntax.
     """
     if not isinstance(value, str):
         raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
                        detail="decimal-string")
+    if not _DECIMAL_TEXT.fullmatch(value):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail="decimal-string")
     try:
-        Decimal(value)
+        parsed = Decimal(value)
     except InvalidOperation:
         raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
                        detail="decimal-string") from None
+    # Defence in depth, and currently unreachable: the grammar above already
+    # excludes every spelling of a special, and a grammar-conforming string
+    # either constructs finite or raises above. This gate is kept so the
+    # finiteness guarantee is stated where it is relied on, rather than left
+    # as a property inferred from a regular expression.
+    if not parsed.is_finite():
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail="finite-decimal")
     return value
 
 

@@ -476,6 +476,94 @@ except Exception as error:  # noqa: BLE001
     print(f"FAIL: a null freshness policy was refused: {error}", file=sys.stderr)
     failures += 1
 
+print("--- a threshold is a FINITE decimal string (ENG-0006-H1C) ---")
+# NORMATIVE BASIS, quoted rather than inferred:
+#   CHENV schema: `condition_value_representation: decimal-string`
+#   ADR-0019:     "A decimal string, compared as an exact decimal... a threshold
+#                  that compares differently on two hosts is not deterministic."
+#   ADR-0013:     the absence of a policy produces an explicit "not defined",
+#                  "never a favourable default", and
+#                  `absent_threshold_never_means: healthy`.
+#
+# A non-finite threshold breaks all three. Under Python's default decimal
+# context every comparison against NaN RAISES rather than returning a verdict,
+# and a threshold of Infinity is violated either always or never regardless of
+# what was measured. Either way the dimension LOOKS governed and cannot produce
+# an honest finding -- which is the favourable default the architecture forbids,
+# wearing a declared policy's clothes.
+#
+# Expected results below are written out here, not imported from the module.
+ENV_KIND = "capability-health-envelope"
+
+
+def envelope_with_threshold(value):
+    """A minimum valid envelope whose entry threshold is `value`."""
+    payload = copy.deepcopy(VALID[ENV_KIND])
+    payload["dimensions"]["latency"]["entry_condition"]["value"] = value
+    return payload
+
+
+# Non-finite specials. Every one is refused.
+for special in ("NaN", "-NaN", "+NaN", "nan", "NAN", "sNaN", "-sNaN",
+                "Infinity", "-Infinity", "+Infinity", "infinity", "inf",
+                "-inf", "Inf"):
+    refuses(ENV_KIND, envelope_with_threshold(special),
+            f"a threshold of {special!r} is refused as non-finite",
+            forbidden_value=special)
+
+# A very large exponent is NOT non-finite. `Decimal("1e999999")` is
+# `Decimal("1E+999999")`, which `is_finite()` reports as finite -- it does not
+# overflow, because a Decimal carries its exponent rather than converting. This
+# assertion originally expected a refusal on the assumption that it overflowed;
+# the assumption was wrong, and refusing it would be a magnitude restriction no
+# normative source declares. It belongs with the accepted values below.
+
+# Not decimal-string syntax. Each denotes nothing, or denotes a value only
+# through a non-decimal convention.
+for malformed in (" 1", "1 ", " 1 ", "1\n", "\t1", "1_000", "1,000", "0x10",
+                  "1/2", "one", "", "   ", "--1", "1.2.3", "1e", "e3", "+",
+                  "-", ".", "1e1.5"):
+    refuses(ENV_KIND, envelope_with_threshold(malformed),
+            f"a threshold of {malformed!r} is refused as non-decimal syntax")
+
+# Finite decimals that MUST remain acceptable. Rejecting any of these would be
+# inventing a precision, magnitude or formatting restriction that no normative
+# source declares -- which this increment is explicitly forbidden from doing.
+for ok in ("0", "-0", "+0", "0.1", "-0.1", "+1", "1.25", "2000", "32",
+           "1e3", "1E3", "1.5e-3", "1.5E+3", ".5", "5.", "0.000001",
+           "1e999999", "1e-999999",
+           "1" + "0" * 400, "123456789012345678901234567890.123456789"):
+    payload = envelope_with_threshold(ok)
+    try:
+        parse(ENV_KIND, payload)
+        print(f"PASS: a finite decimal threshold {ok if len(ok) < 30 else ok[:22] + '...'!r} is accepted")
+    except Exception as error:  # noqa: BLE001
+        print(f"FAIL: a finite decimal threshold {ok!r} was refused: {error}",
+              file=sys.stderr)
+        failures += 1
+
+# An exponent large enough that Decimal will not construct the value raises at
+# construction and is refused as malformed syntax -- not silently accepted and
+# not reported as non-finite. Pinned because it is the boundary between the two
+# refusal paths.
+refuses(ENV_KIND, envelope_with_threshold("1e" + "9" * 30),
+        "a threshold whose exponent Decimal cannot construct is refused")
+
+# Both conditions are governed, not just the entry one.
+payload = copy.deepcopy(VALID[ENV_KIND])
+payload["dimensions"]["latency"]["exit_condition"]["value"] = "NaN"
+refuses(ENV_KIND, payload, "a non-finite EXIT threshold is refused")
+
+# And the same rule governs a transition record's quoted condition.
+payload = copy.deepcopy(VALID["capability-degradation-event"])
+payload["entry_condition"]["value"] = "Infinity"
+refuses("capability-degradation-event", payload,
+        "a non-finite quoted condition on a transition is refused")
+payload = copy.deepcopy(VALID["capability-degradation-event"])
+payload["entry_condition"]["value"] = " 2000 "
+refuses("capability-degradation-event", payload,
+        "a whitespace-padded quoted condition on a transition is refused")
+
 print("--- the dimension/subject matrix is enforced ---")
 matrix = SCHEMA["capability-health-observation"]["dimension_subjects"]
 host_only = [d for d, subjects in matrix.items()
