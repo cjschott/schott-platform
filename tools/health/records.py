@@ -173,12 +173,23 @@ def _identifier(kind: str, field: str, value: Any, family: str,
 
 
 def _instant(kind: str, field: str, value: Any) -> str:
-    """An RFC3339 instant that carries an offset.
+    """An offset-aware timestamp string denoting a valid instant.
+
+    **No canonical string grammar is imposed**, because none is declared. The
+    standards that require RFC 3339 scope themselves to directories this plane's
+    records do not live in, and the entity-lifecycle standard — the widest of
+    them — says explicitly that it does not define runtime health. So the
+    contract is offset awareness and the spelling is not constrained: the basic
+    ISO form and a week date are accepted alongside the extended form, and each
+    denotes a real moment with a real offset.
 
     An instant with no offset is not a moment: the same string means different
     moments on two hosts, and a record that cannot be ordered against another
     cannot support an audit. The Fabric refuses a naive evaluation instant for
     the same reason.
+
+    The value is returned unchanged. Nothing here normalises, reformats or
+    canonicalises a timestamp, so a record reads back exactly as it was written.
     """
     if not isinstance(value, str):
         raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="instant")

@@ -243,7 +243,7 @@ results from the quoted clauses in §4, not from the module.
 |---|---|---|---|
 | **RED** — against the unchanged `870ad1f` implementation | **1** | 406 | **24** |
 | GREEN interim — after the first correction | 1 | 428 | 2 |
-| **GREEN** — final | **0** | **431** | **0** |
+| **GREEN** — final | **0** | **432** | **0** |
 
 The 24 RED failures: **14** non-finite specials accepted, **6** non-decimal
 syntax forms accepted, **4** overflow and propagation sites.
@@ -303,7 +303,7 @@ _DECIMAL_TEXT = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0
 
 | Suite | Exit | PASS | FAIL | Before H1C |
 |---|---|---|---|---|
-| `test-health-records.sh` | **0** | **431** | 0 | 374 — +57 |
+| `test-health-records.sh` | **0** | **432** | 0 | 374 — +58 |
 | `test-capability-health.sh` | **0** | 487 | 0 | 487 — unchanged |
 | `test-capability-health-agreement.sh` | **0** | 88 | 0 | 88 — unchanged |
 | `test-platform-model.sh` | **0** | 1003 | 0 | 1003 — unchanged |
