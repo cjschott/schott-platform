@@ -334,6 +334,12 @@ for family in FAMILIES:
                 payload["unit"] = DIMENSION_UNITS[member]
             if field == "state" and member == "insufficient-policy":
                 payload["review_required"] = True
+            # ENG-0006-H2A: `unmonitored` means no envelope was declared, so
+            # the envelope citation must be null for that member. Without this
+            # the loop would stop testing "is this member accepted" and start
+            # re-testing the state/envelope matrix asserted separately below.
+            if field == "state" and member == "unmonitored":
+                payload["envelope_id"] = None
             rejected = None
             try:
                 parse(family, payload)
@@ -413,6 +419,115 @@ payload = copy.deepcopy(VALID["capability-health-state"])
 payload["review_required"] = "yes"
 refuses("capability-health-state", payload,
         "a non-boolean review_required is refused")
+
+print("--- the state/envelope matrix (ENG-0006-H2A) ---")
+# NORMATIVE BASIS, quoted:
+#   CHSTATE schema, above `envelope_id`: "Null only when state is
+#     `unmonitored`, which is precisely the case of having no envelope to
+#     evaluate against."
+#   CHSTATE `state` enum, on unmonitored: "No envelope declared at all, so
+#     health is not assessable."
+#   ADR-0013 line 290 and health-states.md line 11: "No envelope declared;
+#     health is not assessable."
+#   ADR-0013 line 278 and operational-envelope.md line 102: "A subject with no
+#     envelope is `unmonitored`, not healthy."
+#   CHENV schema: `absent_envelope_means: unmonitored`.
+#
+# So the clause cuts both ways, and the matrix below is read off it rather than
+# chosen: null is permitted ONLY for `unmonitored`, and `unmonitored` means no
+# envelope was declared at all -- so an `unmonitored` state that cites one is
+# asserting the existence of the thing its own state says does not exist.
+#
+# The expected results are written here, not imported from the module.
+STATE_KIND = "capability-health-state"
+
+
+def state_with(state_value, envelope_id, **extra):
+    payload = copy.deepcopy(VALID[STATE_KIND])
+    payload["state"] = state_value
+    payload["envelope_id"] = envelope_id
+    payload.update(extra)
+    return payload
+
+
+# Every state the schema declares, and what the clause requires of each.
+ENVELOPE_REQUIRED = {
+    "unknown": "non-null",
+    "unmonitored": "null",
+    "insufficient-policy": "non-null",
+    "healthy": "non-null",
+    "degraded": "non-null",
+    "unavailable": "non-null",
+    "withheld": "non-null",
+}
+check(set(ENVELOPE_REQUIRED) == set(enums(STATE_KIND)["state"]),
+      "the matrix covers exactly the declared health states")
+
+for state_value, requirement in sorted(ENVELOPE_REQUIRED.items()):
+    extra = {"review_required": True} if state_value == "insufficient-policy" else {}
+    # The form the clause permits.
+    permitted = state_with(state_value, None if requirement == "null"
+                           else "CHENV-0001", **extra)
+    try:
+        parse(STATE_KIND, permitted)
+        print(f"PASS: state {state_value!r} accepts its permitted envelope form "
+              f"({requirement})")
+    except Exception as error:  # noqa: BLE001
+        print(f"FAIL: state {state_value!r} refused its permitted envelope form "
+              f"({requirement}): {error}", file=sys.stderr)
+        failures += 1
+    # The form the clause forbids.
+    forbidden = state_with(state_value, "CHENV-0001" if requirement == "null"
+                           else None, **extra)
+    refuses(STATE_KIND, forbidden,
+            f"state {state_value!r} refuses the forbidden envelope form")
+
+# Rule A, stated on its own because it is the correction's whole point.
+accepted = state_with("unmonitored", None)
+try:
+    record = parse(STATE_KIND, accepted)
+    print("PASS: an unmonitored state with a null envelope parses")
+    check(record.envelope_id is None,
+          "the explicit null survives parsing rather than becoming absent")
+    serialised = record.to_dict()
+    check("envelope_id" in serialised,
+          "the required field is still PRESENT after serialisation")
+    check(serialised["envelope_id"] is None,
+          "and serialises as an explicit null, not as a missing field")
+    again = parse(STATE_KIND, copy.deepcopy(serialised))
+    check(again.to_dict() == serialised,
+          "a null-envelope state round-trips losslessly")
+    check(again.envelope_id is None,
+          "and the null is still null after the round trip")
+except Exception as error:  # noqa: BLE001
+    print(f"FAIL: an unmonitored state with a null envelope was refused: {error}",
+          file=sys.stderr)
+    failures += 1
+
+# Rule A: the field must still be PRESENT. Omitting it is not the same as
+# supplying null, and the schema requires presence.
+omitted = state_with("unmonitored", None)
+del omitted["envelope_id"]
+refuses(STATE_KIND, omitted,
+        "an unmonitored state that OMITS the required field is refused")
+
+# A null citation is never read as a reference to a real envelope.
+refuses(STATE_KIND, state_with("unmonitored", ""),
+        "an unmonitored state with an empty-string envelope is refused")
+for malformed in ("CHENV-1", "CHENV-00001", "chenv-0001", "CHOBS-000001",
+                  "null", "None", 0, False, []):
+    refuses(STATE_KIND, state_with("healthy", malformed),
+            f"a malformed non-null envelope {malformed!r} is refused")
+    refuses(STATE_KIND, state_with("unmonitored", malformed),
+            f"an unmonitored state with a malformed envelope {malformed!r} is refused")
+
+# envelope_version is a separate required field with NO null permission
+# declared, so it stays required even when there is no envelope. Recorded as an
+# open question in the H2A report rather than relaxed here.
+no_version = state_with("unmonitored", None)
+no_version["envelope_version"] = None
+refuses(STATE_KIND, no_version,
+        "an unmonitored state with a null envelope_version is refused")
 
 print("--- cross-family reference shapes are enforced ---")
 REFS = [
