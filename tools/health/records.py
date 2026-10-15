@@ -742,3 +742,142 @@ def parse(kind: Any, payload: Any) -> HealthRecord:
         if payload.get(field) is not None:
             fields[field] = payload[field]
     return HealthRecord(kind, fields)
+
+
+# ===========================================================================
+# ENG-0006-H2 — subject identity and reference validation
+# ===========================================================================
+#
+# ONE RULE, from ADR-0013's referential-integrity section: a record's subject
+# must equal the subject of every record it cites.
+#
+# "Identifier format is **not** sufficient to validate a citation. A state
+# citing another subject's observations is well-formed, correctly typed, and
+# false -- and it is the cheapest route to a forged positive claim, because
+# every individual record passes inspection while the relationship between them
+# lies."
+#
+# WHAT THIS LAYER IS GIVEN, AND WHAT IT THEREFORE KNOWS.
+#
+# The input is a record plus **the records it cites, supplied by the caller**.
+# There is no store, no network, no resolution from persistence, and no identity
+# authority anywhere in this module. So:
+#
+#   * A citation whose record was not supplied is REFUSED, not skipped -- a
+#     validator that quietly passed an unresolvable citation would validate
+#     nothing. The class is `cited-record-not-supplied`, because "not supplied"
+#     is what was observed; claiming the record does not exist would be an
+#     assertion this layer has no basis for.
+#   * A well-formed identifier is never treated as proof that the named entity
+#     exists, was authenticated, is trusted, is available, is eligible, or is
+#     healthy. This compares subjects. That is all it does.
+#   * Nothing is fabricated, aliased, normalised or substituted. A supplied
+#     record standing in for another is refused rather than used.
+#
+# Subject TYPE and subject IDENTIFIER are separate assertions and are compared
+# separately, so `CINST-000007` as an instance and `CINST-000007` as a host are
+# different subjects and citing one from the other is refused.
+
+# kind -> field -> (cited kind, the field holds a sequence)
+#
+# Read against the schemas: these are exactly the fields on which one Health
+# record names another. The three families that cite nothing are present with
+# empty maps rather than absent, so a caller asking about them gets an answer
+# instead of a lookup failure.
+CITATIONS: Mapping[str, Mapping[str, tuple[str, bool]]] = {
+    "capability-health-envelope": {},
+    "capability-heartbeat": {},
+    "capability-health-observation": {},
+    "capability-health-state": {
+        "derived_from_observation_ids": ("capability-health-observation", True),
+        "envelope_id": ("capability-health-envelope", False),
+    },
+    "capability-degradation-event": {
+        "derived_from_observation_ids": ("capability-health-observation", True),
+        "hysteresis_first_observation_id": ("capability-health-observation", False),
+        "hysteresis_last_observation_id": ("capability-health-observation", False),
+        "envelope_id": ("capability-health-envelope", False),
+    },
+    "capability-health-recommendation": {
+        "derived_from_state_id": ("capability-health-state", False),
+        "derived_from_event_id": ("capability-degradation-event", False),
+    },
+}
+
+
+def citations_of(kind: Any) -> Mapping[str, str]:
+    """Which fields of `kind` name another Health record, and of which family.
+
+    Returned read-only, so a caller cannot edit the declaration it just asked
+    about.
+    """
+    if not isinstance(kind, str) or kind not in CITATIONS:
+        raise E.refuse(E.UNKNOWN_RECORD_KIND)
+    return MappingProxyType(
+        {field: cited for field, (cited, _) in CITATIONS[kind].items()})
+
+
+def _subject_of(record: "HealthRecord") -> tuple[str, str]:
+    return (record.subject_type, record.subject_id)
+
+
+def validate_citations(record: Any, cited: Any) -> None:
+    """Refuse unless every record `record` cites was supplied and shares its subject.
+
+    `cited` maps an identifier to the parsed record supplied under it. Records
+    in it that `record` does not cite are permitted and ignored: a caller
+    passing a whole working set is doing nothing wrong, and refusing extra
+    context would make the function harder to use without making it safer.
+
+    Faults are checked in a fixed order -- not supplied, wrong family, wrong
+    identity, foreign subject -- so the same inputs always produce the same
+    refusal. Nothing here chooses the most favourable reading of an ambiguous
+    input; there is no ambiguity to resolve, because the citation set is keyed
+    by the identifier the record names.
+
+    Returns None on success and mutates nothing. Raises `HealthRecordError`
+    naming the mismatch class, never the value that caused it.
+    """
+    if not isinstance(record, HealthRecord):
+        raise E.refuse(E.FIELD_TYPE_INVALID, detail="parsed-health-record")
+    kind = record.kind
+    if kind not in CITATIONS:
+        raise E.refuse(E.UNKNOWN_RECORD_KIND, kind=kind)
+    if not isinstance(cited, Mapping):
+        raise E.refuse(E.CITATION_SET_MALFORMED, kind=kind, detail="mapping")
+    for key, supplied in cited.items():
+        if not isinstance(key, str) or not isinstance(supplied, HealthRecord):
+            raise E.refuse(E.CITATION_SET_MALFORMED, kind=kind,
+                           detail="identifier-to-parsed-record")
+
+    subject = _subject_of(record)
+    for field, (cited_kind, is_sequence) in CITATIONS[kind].items():
+        value = getattr(record, field, None)
+        if value is None:
+            # The record cites nothing in this slot. An optional citation that
+            # is absent requires nothing to be supplied for it; only a citation
+            # the record actually makes has to resolve.
+            continue
+        identifiers = tuple(value) if is_sequence else (value,)
+        for identifier in identifiers:
+            supplied = cited.get(identifier)
+            if supplied is None:
+                raise E.refuse(E.CITED_RECORD_NOT_SUPPLIED, kind=kind,
+                               field=field, detail=cited_kind)
+            # Family before identity: a record of the wrong family is a more
+            # fundamental fault than one standing in for another, and an
+            # operator reading the refusal needs the more fundamental one named.
+            if supplied.kind != cited_kind:
+                raise E.refuse(E.CITED_RECORD_KIND_MISMATCH, kind=kind,
+                               field=field, detail=cited_kind)
+            if getattr(supplied, IDENTITY_FIELD[supplied.kind]) != identifier:
+                raise E.refuse(E.CITED_RECORD_IDENTITY_MISMATCH, kind=kind,
+                               field=field, detail=cited_kind)
+            if _subject_of(supplied) != subject:
+                # Which of the two assertions differs is a class, not a value,
+                # so naming it leaks nothing and saves an operator a comparison.
+                which = ("subject-type"
+                         if supplied.subject_type != record.subject_type
+                         else "subject-id")
+                raise E.refuse(E.CROSS_SUBJECT_CITATION, kind=kind,
+                               field=field, detail=which)

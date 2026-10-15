@@ -46,6 +46,24 @@ HYSTERESIS_KIND_NOT_PERMITTED = "hysteresis-kind-not-permitted"
 TIMESTAMP_NOT_OFFSET_AWARE = "timestamp-not-offset-aware"
 RECORD_IMMUTABLE = "record-immutable"
 
+# --- ENG-0006-H2: subject identity and reference validation --------------
+#
+# ADR-0013: "A refusal names the mismatch from a controlled vocabulary and
+# echoes no value." These are those classes. Each names a DIFFERENT way a
+# citation can be false, because an operator reading one needs to know which
+# correction to make: a foreign subject, a record nobody supplied, a record of
+# the wrong family, and a record standing in for another are four distinct
+# faults and collapsing them would make the refusal unactionable.
+CROSS_SUBJECT_CITATION = "cross-subject-citation"
+# Deliberately NOT "nonexistent-reference". This layer is given a record and
+# the records it cites; it can know that a citation was not supplied, and it
+# cannot know that the cited record does not exist anywhere. Naming it after
+# what was actually observed keeps the refusal honest.
+CITED_RECORD_NOT_SUPPLIED = "cited-record-not-supplied"
+CITED_RECORD_KIND_MISMATCH = "cited-record-kind-mismatch"
+CITED_RECORD_IDENTITY_MISMATCH = "cited-record-identity-mismatch"
+CITATION_SET_MALFORMED = "citation-set-malformed"
+
 CODES = frozenset({
     UNKNOWN_RECORD_KIND, PAYLOAD_NOT_A_MAPPING, MISSING_REQUIRED_FIELD,
     UNKNOWN_FIELD, FORBIDDEN_FIELD, IDENTIFIER_MALFORMED, REFERENCE_MALFORMED,
@@ -55,6 +73,9 @@ CODES = frozenset({
     DIMENSION_SUBJECT_INCOMPATIBLE, UNIT_MISMATCH, OPERATOR_NOT_PERMITTED,
     AGGREGATION_NOT_PERMITTED, HYSTERESIS_KIND_NOT_PERMITTED,
     TIMESTAMP_NOT_OFFSET_AWARE, RECORD_IMMUTABLE,
+    CROSS_SUBJECT_CITATION, CITED_RECORD_NOT_SUPPLIED,
+    CITED_RECORD_KIND_MISMATCH, CITED_RECORD_IDENTITY_MISMATCH,
+    CITATION_SET_MALFORMED,
 })
 
 

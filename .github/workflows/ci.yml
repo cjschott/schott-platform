@@ -328,6 +328,9 @@ jobs:
       - name: Health record models
         run: bash tests/test-health-records.sh
 
+      - name: Health subject binding
+        run: bash tests/test-health-binding.sh
+
       # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
       # carrying the purity or authority backstop for the modules that increment
       # added. Pure or descriptor-scoped: no host state, no Podman, no network.

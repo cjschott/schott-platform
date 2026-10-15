@@ -12,6 +12,8 @@ the platform gains any Health evaluation, persistence or operational authority.
 """
 
 from .errors import HealthRecordError
-from .records import HealthRecord, KINDS, parse
+from .records import (HealthRecord, KINDS, citations_of, parse,
+                      validate_citations)
 
-__all__ = ["HealthRecord", "HealthRecordError", "KINDS", "parse"]
+__all__ = ["HealthRecord", "HealthRecordError", "KINDS", "citations_of",
+           "parse", "validate_citations"]
