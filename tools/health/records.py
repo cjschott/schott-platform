@@ -593,8 +593,15 @@ def _validate_state(kind: str, p: Mapping[str, Any]) -> None:
     # with one half missing, so there is no path on which a null version is
     # reported as a bad integer rather than as the broken pairing it is.
     if (p["envelope_id"] is None) != (p["envelope_version"] is None):
+        # One class of fault, two repairs. "You named a version with no
+        # envelope" and "you named an envelope with no version" are fixed by
+        # different edits, so the detail says which half is orphaned rather
+        # than leaving an operator to work it out. Both details are literal
+        # constants: nothing supplied is interpolated into a refusal.
+        detail = ("version-without-envelope" if p["envelope_id"] is None
+                  else "envelope-without-version")
         raise E.refuse(E.CONDITIONAL_REQUIREMENT_UNMET, kind=kind,
-                       field="envelope_version", detail="envelope-citation-pairing")
+                       field="envelope_version", detail=detail)
     if state == "unmonitored":
         if p["envelope_id"] is not None:
             raise E.refuse(E.CONDITIONAL_REQUIREMENT_UNMET, kind=kind,

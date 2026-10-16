@@ -719,6 +719,111 @@ except Exception as error:  # noqa: BLE001
     print(f"FAIL: the fully null citation was refused: {error}", file=sys.stderr)
     failures += 1
 
+print("--- the two half-citation directions are distinguishable ---")
+# A refusal an operator cannot act on is a refusal that wasted their time. Both
+# half citations are the same class of fault and keep the same controlled code
+# and field, but "you named a version with no envelope" and "you named an
+# envelope with no version" need different repairs, so they carry different
+# fixed details.
+#
+# The expected details are written out here. They are NOT imported from the
+# module, so a renamed detail fails this suite rather than silently redefining
+# the contract.
+HALF_CITATION = {
+    # (envelope_id, envelope_version) -> expected detail
+    (None, 1): "version-without-envelope",
+    ("CHENV-0001", None): "envelope-without-version",
+}
+PAIRING_FIELD = "envelope_version"
+
+
+def refusal_of(payload):
+    """Return the HealthRecordError a payload raises, or None if accepted."""
+    try:
+        parse(STATE_KIND, payload)
+    except E.HealthRecordError as error:
+        return error
+    return None
+
+
+for (eid, ver), expected_detail in HALF_CITATION.items():
+    direction = ("a null envelope with a version" if eid is None
+                 else "an envelope with a null version")
+    for state_value in sorted(ENVELOPE_REQUIRED):
+        error = refusal_of(cited(state_value, eid, ver, **extra_for(state_value)))
+        check(error is not None,
+              f"{state_value}: {direction} is refused")
+        if error is None:
+            continue
+        check(error.code == E.CONDITIONAL_REQUIREMENT_UNMET,
+              f"{state_value}: {direction} uses the controlled refusal code")
+        check(error.code in E.CODES,
+              f"{state_value}: {direction} uses a code from the closed set")
+        check(error.field == PAIRING_FIELD,
+              f"{state_value}: {direction} names {PAIRING_FIELD}")
+        check(error.detail == expected_detail,
+              f"{state_value}: {direction} reports {expected_detail!r}")
+
+# The whole point: the two directions must NOT read the same.
+left = refusal_of(cited("healthy", None, 1))
+right = refusal_of(cited("healthy", "CHENV-0001", None))
+check(left is not None and right is not None,
+      "both half citations are refused")
+check(left.detail != right.detail,
+      "the two half-citation directions report DIFFERENT details")
+check((left.code, left.field) == (right.code, right.field),
+      "and they still share the same controlled code and field")
+check({left.detail, right.detail}
+      == {"version-without-envelope", "envelope-without-version"},
+      "the two details are exactly the declared pair")
+
+# `unmonitored` citing a real envelope is a different fault from a half
+# citation, and keeps its own detail. Both halves are present there, so the
+# pairing rule is satisfied and the state rule is what refuses it.
+unmonitored_citing = refusal_of(cited("unmonitored", "CHENV-0001", 1))
+check(unmonitored_citing is not None,
+      "unmonitored citing a real envelope is still refused")
+check(unmonitored_citing.detail == "unmonitored",
+      "unmonitored citing a real envelope keeps its own distinct detail")
+check(unmonitored_citing.detail not in
+      {"version-without-envelope", "envelope-without-version"},
+      "and is not confused with either half-citation direction")
+check(unmonitored_citing.field == "envelope_id",
+      "unmonitored citing a real envelope names envelope_id, not the version")
+
+# Details are CONSTANTS. No supplied identifier or value may appear in either
+# refusal, whatever was handed in.
+for secret in ("CHENV-SUPER-SECRET-IDENTIFIER", "CHOBS-987654", "not-an-id"):
+    error = refusal_of(cited("healthy", secret, None))
+    check(error is not None and secret not in str(error),
+          f"the envelope-without-version refusal does not echo {secret!r}")
+for secret in (-987654321, 987654321, "SUPER-SECRET-ENVELOPE-VERSION"):
+    error = refusal_of(cited("healthy", None, secret))
+    check(error is not None and str(secret) not in str(error),
+          f"the version-without-envelope refusal does not echo {secret!r}")
+
+# The accepted combinations are untouched by the detail change.
+accepted_null = refusal_of(cited("unmonitored", None, None))
+check(accepted_null is None,
+      "unmonitored with a fully null citation is still accepted")
+for state_value in sorted(OTHER_STATES):
+    check(refusal_of(cited(state_value, "CHENV-0001", 1,
+                           **extra_for(state_value))) is None,
+          f"{state_value} with a valid envelope and version is still accepted")
+
+# And every state still keeps the pairing requirement the matrix established.
+for state_value in sorted(ENVELOPE_REQUIRED):
+    extra = extra_for(state_value)
+    wants_null = ENVELOPE_REQUIRED[state_value] == "null"
+    check((refusal_of(cited(state_value, None, None, **extra)) is None)
+          is wants_null,
+          f"{state_value}: the null/null combination is "
+          f"{'accepted' if wants_null else 'refused'} as before")
+    check((refusal_of(cited(state_value, "CHENV-0001", 1, **extra)) is None)
+          is not wants_null,
+          f"{state_value}: the valid/valid combination is "
+          f"{'refused' if wants_null else 'accepted'} as before")
+
 print("--- cross-family reference shapes are enforced ---")
 REFS = [
     ("capability-health-state", "envelope_id", "CHOBS-000001"),
