@@ -234,15 +234,73 @@ with a comprehension that does not test for `None`, and both fields are in
 
 ## 8. RED before GREEN
 
-| run | passing | failing | exit |
-|---|---|---|---|
-| H2A baseline (HEAD `5e34b9d`) | 474 | 0 | 0 |
-| **RED** — schema amended, tests added, **parser untouched** | 579 | **4** | 1 |
-| **GREEN** — parser corrected | **589** | **0** | 0 |
+**There are two distinct RED measurements, and they are not the same number.**
+The first draft of this report gave only the development-time figure in a row
+labelled as though it described the committed tests, which it did not. Both are
+recorded below, each with the exact state it was measured against.
 
-The four RED failures covered both directions of the defect: `unmonitored` with
-a fully null citation was refused (`field-type-invalid … detail=integer`), and
-`unmonitored` with a null id beside version `1` was accepted.
+| run | test state | parser | passing | failing | exit |
+|---|---|---|---|---|---|
+| H2A baseline (HEAD `5e34b9d`) | H2A | H2A | 474 | 0 | 0 |
+| **Historical development-time RED** | intermediate (see below) | H2A | 579 | **4** | 1 |
+| **Reproducible committed-test RED** | **committed H2B** | H2A | 570 | **8** | 1 |
+| **GREEN** — the increment's result | committed H2B | **H2B** | **589** | **0** | 0 |
+
+### Historical development-time RED — 579 / 4
+
+A genuine measurement, taken at the moment the H2B tests were written and
+before the parser was touched. Its test state was the amended schema plus the
+new H2B section, with the **H2A fixtures not yet reconciled** to the paired
+contract.
+
+**That exact test state is not represented by any commit.** It existed only
+between writing the tests and reconciling the fixtures, so a reviewer cannot
+reproduce 579/4 from this branch. It is recorded because it happened and
+because it is the figure the RED-before-GREEN discipline was actually judged
+on, not because it can be re-derived. It *was* re-derived once, during the
+verification gate, by reconstructing the intermediate state in a scratch
+sandbox — amended schema, H2A parser, `5e34b9d` tests plus only the H2B
+section — which returned 579/4 with the same four failure names.
+
+Its four failures:
+
+```
+unmonitored with id=None version=None was refused: field-type-invalid … detail=integer
+unmonitored with id=None version=1 is refused: accepted
+unmonitored with a null id and version 1 is refused: accepted
+the fully null citation was refused: field-type-invalid … detail=integer
+```
+
+### Reproducible committed-test RED — 570 / 8
+
+**This is the figure a reviewer can reproduce**, and the one to check this
+increment against: the committed H2B tests with H2A's parser substituted for
+the corrected one. It yields 570 passing and **8** failing.
+
+The four extra failures are not new defects. They are the **H2A fixtures that
+now depend on the corrected H2B behaviour**:
+
+```
+capability-health-state refused the permitted state member 'unmonitored'
+capability-health-state accepts every permitted state member (7)
+state 'unmonitored' refused its permitted envelope form (null)
+an unmonitored state with a null envelope was refused
+```
+
+Each is an H2A assertion whose fixture now nulls `envelope_version` alongside
+`envelope_id`, because under the paired contract a record with a null
+identifier and a leftover version is not one anyone could legitimately write
+(§8, "One assertion was removed"). Run against H2A's parser — which validated
+the version unconditionally — those paired fixtures are refused with
+`field-type-invalid … detail=integer`. So the committed suite is strictly
+*more* sensitive to the pre-correction parser than the intermediate suite was:
+8 failures rather than 4, in both directions of the defect.
+
+**The 4 common failures** are the pairing defect proper, present in both
+measurements: `unmonitored` with a fully null citation refused, and
+`unmonitored` with a null identifier beside version `1` accepted.
+
+**GREEN is 589 / 0 in both accountings** and is unaffected by any of this.
 
 **32 assertion call sites added (65 → 97); 115 more passing assertions
 (474 → 589).**
@@ -291,6 +349,11 @@ and the suite catches it.
 ## 10. Regression verification
 
 ### Named suites, by exit code
+
+*All totals in this section are as measured at commit `fa1b28b`, the H2B
+implementation commit this report documents. A later commit on this branch may
+legitimately change the record-suite total by adding assertions; such a change
+does not invalidate the figures below, which describe this tree.*
 
 | suite | exit | passing | failing |
 |---|---|---|---|
@@ -402,10 +465,12 @@ errors in the H2A report.
 (+201/−11); the H2A report (correction commit `cca3d31`); this report (new).
 `tests/test-health-binding.sh` was **not** needed and was not touched.
 
-**Tests Executed:** RED 579/4 then GREEN 589/0; five pairing mutations each
-detected; eleven named suites all exit 0; full inventory 155/127/28 with
-identical failing membership; AC 25 battery verified inside
-`test-fabric-runtime.sh`.
+**Tests Executed:** RED in both accountings — historical development-time
+579/4 (intermediate test state, not represented by a commit) and reproducible
+committed-test 570/8 — then GREEN 589/0; five pairing mutations each detected;
+eleven named suites all exit 0; full inventory 155/127/28 with identical failing
+membership; AC 25 battery verified inside `test-fabric-runtime.sh`. See §8 for
+why the two RED figures differ and which one to reproduce.
 
 **Commands Run:** `bash -n` and `shellcheck` on the changed suite; `yaml.safe_load`
 on the amended schema; the eleven named suites; direct `parse()` probes building
@@ -417,10 +482,24 @@ restore verification; the full inventory script; `find`/`pgrep` isolation checks
 1. The amendment adds a declarative block the parser must be kept in step with
    by hand. The suite asserts the block's contents and the behaviour separately,
    so a drift between them fails, but nothing *derives* one from the other.
-2. `envelope_citation` is a new top-level key. No meta-schema or key-set guard
-   exists today to reject it, which is why the amendment was safe — and equally
-   why nothing would have caught a misspelled key. The suite reads the block by
-   its exact key names, which is the only thing standing in for that check.
+2. **The schema has no general unknown-key rejection mechanism**, and this
+   increment did not add one. Measured, not assumed, by mutating a scratch copy
+   of the schema and re-running the guard and schema suites:
+   - An **additional unknown top-level key** is **silently ignored** by every
+     suite. Nothing anywhere would reject `this_key_is_completely_invented:
+     banana` in a schema file.
+   - A **missing or misspelled key inside `envelope_citation`** **is detected**,
+     by the targeted H2B tests rather than by any general mechanism: they read
+     the block by exact key name, so a misspelling raises `KeyError` and the
+     suite exits non-zero. Deleting the whole block and inverting a declared
+     value are detected the same way.
+
+   So the risk is narrower than a missing guard would suggest, but real: the
+   keys this increment declares are protected, and any key a future increment
+   adds without a corresponding assertion would not be. An earlier draft of
+   this report said "nothing would have caught a misspelled key", which was
+   wrong and is corrected here. **No general schema guard exists, and none is
+   claimed.**
 3. The pairing refusal names `envelope_version` as the offending field in both
    directions. That is a judgement: when the version is present and the
    identifier is null, a reviewer might prefer the identifier be named.
