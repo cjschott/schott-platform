@@ -201,9 +201,20 @@ copy.
 
 | # | sabotage | result |
 |---|---|---|
-| 1 | Drop the non-null refusal, so `unmonitored` may cite an envelope | **DETECTED** — 10 failing, exit 1 |
-| 2 | Revert to H1: the citation is required non-null for every state | **DETECTED** — 3 failing, exit 1 |
-| 3 | Control: let *any* state carry a null citation | **DETECTED** — 6 failing, exit 1 |
+| 1 | Drop the non-null refusal, so `unmonitored` may cite an envelope | **DETECTED** — 11 failing, exit 1 |
+| 2 | Revert to H1: the citation is required non-null for every state | **DETECTED** — 5 failing, exit 1 |
+| 3 | Control: let *any* state carry a null citation | **DETECTED** — 7 failing, exit 1 |
+
+> **CORRECTION, ENG-0006-H2B.** This table first reported 10 / 3 / 6. Those
+> counts were **understated**. The sabotage runs redirected the suite with
+> `> out 2>&1`, and because stdout is block-buffered when redirected while
+> stderr is not, some `FAIL` lines were flushed into the middle of a stdout
+> line and so did not match the `^FAIL` anchor the count used. Re-measured with
+> the two streams kept separate, the true counts are **11 / 5 / 7**, shown
+> above. **Every detection verdict is unaffected** — all three sabotages
+> exited 1 with failing assertions both before and after the re-measurement,
+> and the originally quoted failing assertion names were all real. Only the
+> totals were wrong.
 
 1 is the "accepts a contradictory non-null envelope" direction and 2 the
 "rejects a legitimate null envelope" direction, both required by the brief. 3
@@ -220,14 +231,39 @@ merely tolerating nulls anywhere.
 
 | | passing | failing | exit |
 |---|---|---|---|
-| at HEAD `79832b9`, before this increment | 431 | 0 | 0 |
+| at HEAD `79832b9`, before this increment | 432 | 0 | 0 |
 | **RED** — tests added, implementation untouched | 465 | **5** | 1 |
 | **GREEN** — correction applied | **474** | **0** | 0 |
 
-**43 assertions added.** The RED run executed 470 of them: the four nested
+**42 assertions added.** The RED run executed 470 of them: the four nested
 round-trip assertions sit inside the `try` block whose `parse()` call was the
 one being refused, so they could not run until the correction landed.
-431 + 43 = 474.
+432 + 42 = 474.
+
+> **CORRECTION, ENG-0006-H2B.** This section first reported a pre-increment
+> baseline of **431** and therefore **43** assertions added. Both were wrong,
+> from one measurement error: that run reverted only the *test file* and left
+> the *corrected* `records.py` in place, so it measured the **pre-H2A suite
+> against the post-H2A implementation** — a mixed pairing that is neither
+> state. It also failed 2 assertions, which the reported figure omitted
+> entirely. The three distinct pairings, each re-measured with the streams
+> separated:
+>
+> | suite | implementation | passing | failing |
+> |---|---|---|---|
+> | pre-H2A | pre-H2A | **432** | 0 |
+> | pre-H2A | **post-H2A** (the mixed run that produced the wrong 431) | 431 | **2** |
+> | post-H2A | post-H2A | **474** | 0 |
+>
+> The true baseline is **432** and the true delta is **42**, as corrected
+> above. The historical **RED 465/5** and **GREEN 474/0** measurements are
+> unchanged and were independently reproduced: they used separated streams and
+> were correct as first reported.
+>
+> The mixed run is itself useful evidence, so it is kept rather than discarded:
+> its 2 failures show the pre-H2A suite *does* detect the corrected
+> implementation, which is independent confirmation that the fixture
+> adjustment described in §5 was necessary rather than cosmetic.
 
 ### Targeted regressions — all by exit code, not by reading output tails
 
