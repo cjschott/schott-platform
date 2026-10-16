@@ -149,10 +149,10 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # host-only but still a STEP -- it skips inside itself rather than being skipped
 # here. Both totals are re-measured by a run below rather than incremented.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=145
+  TOTAL_STEPS=146
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=170
+  TOTAL_STEPS=171
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -1108,6 +1108,7 @@ run "Health record models" bash tests/test-health-records.sh
 # the records it cites, both caller-supplied. No store, no resolution,
 # no identity authority.
 run "Health subject binding" bash tests/test-health-binding.sh
+run "Health condition grammar" bash tests/test-health-conditions.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 
