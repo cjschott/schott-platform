@@ -29,6 +29,7 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 python3 - "${ROOT}" <<'PY'
 import copy
+import json
 import re
 import sys
 from pathlib import Path
@@ -334,12 +335,14 @@ for family in FAMILIES:
                 payload["unit"] = DIMENSION_UNITS[member]
             if field == "state" and member == "insufficient-policy":
                 payload["review_required"] = True
-            # ENG-0006-H2A: `unmonitored` means no envelope was declared, so
-            # the envelope citation must be null for that member. Without this
-            # the loop would stop testing "is this member accepted" and start
-            # re-testing the state/envelope matrix asserted separately below.
+            # ENG-0006-H2A/H2B: `unmonitored` means no envelope was declared,
+            # so BOTH halves of the envelope citation must be null for that
+            # member -- the identifier and the version are one fact. Without
+            # this the loop would stop testing "is this member accepted" and
+            # start re-testing the citation rules asserted separately below.
             if field == "state" and member == "unmonitored":
                 payload["envelope_id"] = None
+                payload["envelope_version"] = None
             rejected = None
             try:
                 parse(family, payload)
@@ -446,6 +449,14 @@ def state_with(state_value, envelope_id, **extra):
     payload = copy.deepcopy(VALID[STATE_KIND])
     payload["state"] = state_value
     payload["envelope_id"] = envelope_id
+    # ENG-0006-H2B. The citation is one fact in two fields, so a fixture that
+    # nulls the identifier and leaves a version behind is not a record anyone
+    # could legitimately write. Pairing them here keeps these fixtures
+    # OTHERWISE-VALID, which is what the assertions below are about. The
+    # pairing rule itself is never exercised through this default: every
+    # assertion that tests it sets `envelope_version` explicitly afterwards.
+    if envelope_id is None:
+        payload["envelope_version"] = None
     payload.update(extra)
     return payload
 
@@ -521,13 +532,192 @@ for malformed in ("CHENV-1", "CHENV-00001", "chenv-0001", "CHOBS-000001",
     refuses(STATE_KIND, state_with("unmonitored", malformed),
             f"an unmonitored state with a malformed envelope {malformed!r} is refused")
 
-# envelope_version is a separate required field with NO null permission
-# declared, so it stays required even when there is no envelope. Recorded as an
-# open question in the H2A report rather than relaxed here.
-no_version = state_with("unmonitored", None)
-no_version["envelope_version"] = None
-refuses(STATE_KIND, no_version,
-        "an unmonitored state with a null envelope_version is refused")
+# SUPERSEDED BY THE ENG-0006-H2B RULING. H2A asserted here that a null
+# `envelope_version` was refused even on an unmonitored state, because the
+# schema then declared a null permission for `envelope_id` alone. H2A recorded
+# the resulting oddity -- a state carrying a version of an envelope that by
+# definition does not exist -- as an open question rather than deciding it. The
+# ruling decided it: both halves are null together. The inverted expectation is
+# asserted in the H2B section below, along with the pairing rule in both
+# directions, so nothing is merely deleted here.
+
+print("--- the envelope citation pairs id with version (ENG-0006-H2B) ---")
+# The ruling: an unmonitored CHSTATE carries an explicitly null envelope
+# reference AND an explicitly null envelope version; both fields stay required;
+# every other state must identify a valid envelope and version. A half-citation
+# is forbidden in both directions and no sentinel version exists.
+#
+# Two independent oracles are used, and they are checked against each other.
+# First the schema's own `envelope_citation` declaration, which is authored in
+# platform-model and not by this suite or the module under test. Second the
+# pairing table below, written out by hand from the ruling, so a wrong schema
+# and a wrong implementation cannot agree their way to a pass.
+CITATION = SCHEMA[STATE_KIND]["envelope_citation"]
+
+check(CITATION["fields"] == ["envelope_id", "envelope_version"],
+      "the schema declares the citation as exactly these two fields")
+check(CITATION["both_fields_always_required"] is True,
+      "the schema keeps both citation fields always required")
+check(CITATION["omission_permitted"] is False,
+      "the schema forbids omitting either citation field")
+check(CITATION["null_permitted_for_states"] == ["unmonitored"],
+      "the schema permits a null citation only for unmonitored")
+check(CITATION["null_required_for_states"] == ["unmonitored"],
+      "the schema requires a null citation for unmonitored")
+check(CITATION["must_be_null_together"] is True
+      and CITATION["must_be_non_null_together"] is True,
+      "the schema declares the two fields null together or valid together")
+check(CITATION["null_id_with_non_null_version"] == "forbidden",
+      "the schema forbids a null identifier with a non-null version")
+check(CITATION["non_null_id_with_null_version"] == "forbidden",
+      "the schema forbids a non-null identifier with a null version")
+check(CITATION["half_citation_permitted"] is False,
+      "the schema forbids a half citation")
+check(CITATION["version_without_envelope"] == "forbidden",
+      "the schema forbids a version without its envelope")
+check(CITATION["sentinel_version_permitted"] is False,
+      "the schema permits no sentinel version")
+check(CITATION["introduces_new_version_concept"] is False
+      and CITATION["redefines_supersession"] is False,
+      "the declaration introduces no new version concept and no supersession change")
+# Both fields must still be REQUIRED, not quietly demoted to make nulls legal.
+for field in ("envelope_id", "envelope_version"):
+    check(field in required(STATE_KIND),
+          f"{field} is still a required field")
+    check(field not in conditional(STATE_KIND)
+          and field not in optional(STATE_KIND),
+          f"{field} was not demoted to conditional or optional")
+
+
+def cited(state_value, envelope_id, envelope_version, **extra):
+    payload = state_with(state_value, envelope_id, **extra)
+    payload["envelope_version"] = envelope_version
+    return payload
+
+
+def extra_for(state_value):
+    return {"review_required": True} if state_value == "insufficient-policy" else {}
+
+
+OTHER_STATES = tuple(s for s in ENVELOPE_REQUIRED if s != "unmonitored")
+
+# The pairing table, written from the ruling rather than read from anything.
+#   (state group, envelope_id, envelope_version) -> accept?
+PAIRING = (
+    ("unmonitored", None,         None, True),
+    ("unmonitored", None,         1,    False),
+    ("unmonitored", "CHENV-0001", None, False),
+    ("unmonitored", "CHENV-0001", 1,    False),
+)
+for state_value, eid, ver, accept in PAIRING:
+    payload = cited(state_value, eid, ver, **extra_for(state_value))
+    label = (f"{state_value} with id={eid!r} version={ver!r}")
+    if accept:
+        try:
+            record = parse(STATE_KIND, payload)
+            print(f"PASS: {label} is accepted")
+            check(record.envelope_id is None and record.envelope_version is None,
+                  f"{label} keeps both halves null")
+        except Exception as error:  # noqa: BLE001
+            print(f"FAIL: {label} was refused: {error}", file=sys.stderr)
+            failures += 1
+    else:
+        refuses(STATE_KIND, payload, f"{label} is refused")
+
+for state_value in sorted(OTHER_STATES):
+    extra = extra_for(state_value)
+    # valid + positive integer -> accept
+    try:
+        parse(STATE_KIND, cited(state_value, "CHENV-0001", 1, **extra))
+        print(f"PASS: {state_value} with a valid id and version 1 is accepted")
+    except Exception as error:  # noqa: BLE001
+        print(f"FAIL: {state_value} with a valid id and version 1 was refused: "
+              f"{error}", file=sys.stderr)
+        failures += 1
+    # the three broken pairings
+    refuses(STATE_KIND, cited(state_value, "CHENV-0001", None, **extra),
+            f"{state_value} with a valid id and a null version is refused")
+    refuses(STATE_KIND, cited(state_value, None, 1, **extra),
+            f"{state_value} with a null id and version 1 is refused")
+    refuses(STATE_KIND, cited(state_value, None, None, **extra),
+            f"{state_value} with both halves null is refused")
+
+# Omission is a different fault from an explicit null, for EITHER field, and in
+# both the state that permits nulls and one that does not.
+for state_value in ("unmonitored", "healthy"):
+    for field in ("envelope_id", "envelope_version"):
+        payload = cited(state_value, None if state_value == "unmonitored" else "CHENV-0001",
+                        None if state_value == "unmonitored" else 1)
+        del payload[field]
+        refuses(STATE_KIND, payload,
+                f"{state_value} with {field} OMITTED is refused")
+
+# No sentinel. A null envelope plus any version-shaped value stays refused, and
+# a declared envelope keeps the existing positive-integer rule.
+for sentinel in (0, 1, -1, True, False, 1.0, "1", "", [], {}):
+    refuses(STATE_KIND, cited("unmonitored", None, sentinel),
+            f"unmonitored with a null id and version {sentinel!r} is refused")
+
+# No leakage: a refusal names the field and the rule, never the value it
+# rejected. Checked with values distinctive enough that a substring match means
+# a real echo -- `-1` would match the "integer-at-least-1" detail and an empty
+# string matches everything, so neither proves anything. The values here are
+# also invalid on EVERY state, so these assertions test leakage alone and do
+# not quietly re-test the pairing rule: a large positive integer such as
+# 987654321 is a perfectly valid version beside a declared envelope.
+for leaky in (-987654321, "SUPER-SECRET-ENVELOPE-VERSION"):
+    refuses(STATE_KIND, cited("unmonitored", None, leaky),
+            f"a refused version {leaky!r} is not echoed on an unmonitored state",
+            forbidden_value=leaky)
+    refuses(STATE_KIND, cited("healthy", "CHENV-0001", leaky),
+            f"a refused version {leaky!r} is not echoed on a healthy state",
+            forbidden_value=leaky)
+for leaky in ("CHENV-SUPER-SECRET-IDENTIFIER", "CHOBS-987654"):
+    refuses(STATE_KIND, cited("healthy", leaky, 1),
+            f"a refused identifier {leaky!r} is not echoed",
+            forbidden_value=leaky)
+    refuses(STATE_KIND, cited("unmonitored", leaky, None),
+            f"a refused identifier {leaky!r} is not echoed on unmonitored",
+            forbidden_value=leaky)
+for bad in (0, -1, -99, True, False, 1.0, "1", [], {}):
+    refuses(STATE_KIND, cited("healthy", "CHENV-0001", bad),
+            f"healthy with a valid id and version {bad!r} is refused")
+try:
+    parse(STATE_KIND, cited("healthy", "CHENV-0001", 2))
+    print("PASS: a positive integer version other than 1 is still accepted")
+except Exception as error:  # noqa: BLE001
+    print(f"FAIL: version 2 was refused: {error}", file=sys.stderr)
+    failures += 1
+
+# A malformed identifier stays malformed whatever the version beside it.
+for malformed in ("CHENV-1", "chenv-0001", "CHOBS-000001", "", "null", 0, False, []):
+    for ver in (1, None):
+        refuses(STATE_KIND, cited("healthy", malformed, ver),
+                f"healthy with malformed id {malformed!r} and version {ver!r} "
+                f"is refused")
+        refuses(STATE_KIND, cited("unmonitored", malformed, ver),
+                f"unmonitored with malformed id {malformed!r} and version "
+                f"{ver!r} is refused")
+
+# The explicit nulls survive, for BOTH halves, through serialisation and back.
+try:
+    record = parse(STATE_KIND, cited("unmonitored", None, None))
+    serialised = record.to_dict()
+    for field in ("envelope_id", "envelope_version"):
+        check(field in serialised,
+              f"{field} is PRESENT in the serialised unmonitored state")
+        check(serialised[field] is None,
+              f"{field} serialises as an explicit null, not as a missing field")
+    again = parse(STATE_KIND, copy.deepcopy(serialised))
+    check(again.to_dict() == serialised,
+          "a fully null citation round-trips losslessly")
+    check(again.envelope_id is None and again.envelope_version is None,
+          "both halves are still null after the round trip")
+    check(json.loads(json.dumps(serialised))["envelope_version"] is None,
+          "the null version survives JSON encoding")
+except Exception as error:  # noqa: BLE001
+    print(f"FAIL: the fully null citation was refused: {error}", file=sys.stderr)
+    failures += 1
 
 print("--- cross-family reference shapes are enforced ---")
 REFS = [

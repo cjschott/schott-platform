@@ -135,6 +135,51 @@ cross_subject_citation: refuse
 # at the time, which is the only thing that makes an incident review possible.
 supersession_rewrites_prior_evaluations: false
 
+# ENG-0006-H2B. THE ENVELOPE CITATION IS ONE FACT IN TWO FIELDS.
+#
+# `envelope_id` names the envelope an assessment was made against and
+# `envelope_version` names which version of it produced the verdict. Neither
+# is independently meaningful: a version with no envelope is the version of
+# nothing, and an envelope with no version cannot say which limits were in
+# force once that envelope has moved on. So the two are declared here as a
+# single citation that is either wholly present or wholly absent, rather than
+# as two fields that happen to sit next to each other.
+#
+# `unmonitored` means no envelope was declared at all, so there is nothing to
+# name and no version to name it at: both are null, and that is the only state
+# for which they may be. Every other state was assessed against a declared
+# envelope, so both are present and valid.
+#
+# No sentinel version exists. Writing a 0 or a 1 beside a null envelope would
+# invent a version for an envelope nobody wrote -- the same error the
+# Observation plane already refuses by declaring that a failed collection has
+# no measured value, because "recording a zero would be inventing one".
+envelope_citation:
+  fields:
+    - envelope_id
+    - envelope_version
+  # Both stay in `required_fields`. A null value is a supplied value; omitting
+  # the key is a missing required field, and the two are not the same fault.
+  both_fields_always_required: true
+  omission_permitted: false
+  null_permitted_for_states:
+    - unmonitored
+  null_required_for_states:
+    - unmonitored
+  # The pairing rule, stated in both directions so neither half-citation can be
+  # read as permitted by omission.
+  must_be_null_together: true
+  must_be_non_null_together: true
+  null_id_with_non_null_version: forbidden
+  non_null_id_with_null_version: forbidden
+  half_citation_permitted: false
+  version_without_envelope: forbidden
+  sentinel_version_permitted: false
+  # Unchanged by this declaration: what a version MEANS, and how history works.
+  version_is_of_the_cited_envelope: true
+  introduces_new_version_concept: false
+  redefines_supersession: false
+
 # Health subtracts from what other layers allowed. It never overrides any of
 # these, however good the reading is.
 cannot_override:
@@ -177,10 +222,15 @@ required_fields:
   - subject_id
   - state
   # Null only when state is `unmonitored`, which is precisely the case of
-  # having no envelope to evaluate against.
+  # having no envelope to evaluate against, and then necessarily. See
+  # `envelope_citation` for the pairing with `envelope_version`.
   - envelope_id
   # The version evaluated against, recorded so a later supersession cannot
-  # change what a past assessment meant.
+  # change what a past assessment meant. Null only when state is
+  # `unmonitored`, and then necessarily, because a version cannot exist
+  # independently of the envelope it versions. See `envelope_citation`: this
+  # field and `envelope_id` are null together or valid together, never one of
+  # each.
   - envelope_version
   # The evidence. A state that cited nothing could not be re-checked, which
   # would make it an opinion.

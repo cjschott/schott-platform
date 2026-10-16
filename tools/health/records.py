@@ -574,15 +574,27 @@ def _validate_state(kind: str, p: Mapping[str, Any]) -> None:
             code=E.SUBJECT_TYPE_NOT_PERMITTED)
     _text(kind, "subject_id", p["subject_id"])
     state = _member(kind, "state", p["state"], HEALTH_STATES)
-    # ENG-0006-H2A. The schema permits a null envelope citation for exactly one
-    # state: "Null only when state is `unmonitored`, which is precisely the
-    # case of having no envelope to evaluate against." `unmonitored` is defined
-    # as "No envelope declared at all" (ADR-0013, health-states.md, and CHENV's
-    # `absent_envelope_means`), so the permission is also an obligation -- an
-    # `unmonitored` state citing an envelope asserts the existence of the thing
-    # its own state says does not exist. The field itself stays required for
-    # every state; only its value is conditional, so an explicit null is a
-    # supplied value and not an omission.
+    # ENG-0006-H2A/H2B. The envelope citation is one fact in two fields, and
+    # the schema's `envelope_citation` block declares it as such. The schema
+    # permits a null citation for exactly one state: "Null only when state is
+    # `unmonitored`, which is precisely the case of having no envelope to
+    # evaluate against." `unmonitored` is defined as "No envelope declared at
+    # all" (ADR-0013, health-states.md, and CHENV's `absent_envelope_means`),
+    # so the permission is also an obligation -- an `unmonitored` state citing
+    # an envelope asserts the existence of the thing its own state says does
+    # not exist. Both fields stay required for every state; only their values
+    # are conditional, so an explicit null is a supplied value and not an
+    # omission.
+    #
+    # The pairing is checked first, because a half citation is wrong whatever
+    # the state: a version with no envelope is the version of nothing, and an
+    # envelope with no version cannot say which limits produced the verdict.
+    # Checking it here also means no state can reach the per-field validators
+    # with one half missing, so there is no path on which a null version is
+    # reported as a bad integer rather than as the broken pairing it is.
+    if (p["envelope_id"] is None) != (p["envelope_version"] is None):
+        raise E.refuse(E.CONDITIONAL_REQUIREMENT_UNMET, kind=kind,
+                       field="envelope_version", detail="envelope-citation-pairing")
     if state == "unmonitored":
         if p["envelope_id"] is not None:
             raise E.refuse(E.CONDITIONAL_REQUIREMENT_UNMET, kind=kind,
@@ -590,7 +602,7 @@ def _validate_state(kind: str, p: Mapping[str, Any]) -> None:
     else:
         _identifier(kind, "envelope_id", p["envelope_id"],
                     "capability-health-envelope", code=E.REFERENCE_MALFORMED)
-    _whole(kind, "envelope_version", p["envelope_version"], minimum=1)
+        _whole(kind, "envelope_version", p["envelope_version"], minimum=1)
     _id_sequence(kind, "derived_from_observation_ids",
                  p["derived_from_observation_ids"], "capability-health-observation")
     _member(kind, "freshness", p["freshness"], FRESHNESS)
