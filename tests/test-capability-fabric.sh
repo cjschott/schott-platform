@@ -877,14 +877,14 @@ else
   while IFS= read -r fabric_health_file; do
     fabric_health_rel="tools/health/${fabric_health_file#"${ROOT}/tools/health/"}"
     case "${fabric_health_rel}" in
-      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py) ;;
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py) ;;
       *) fabric_health_unapproved+="${fabric_health_rel} " ;;
     esac
   done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)
   if [[ -z "${fabric_health_unapproved}" ]]; then
-    pass "tools/health holds only the approved ENG-0006-H1 record modules"
+    pass "tools/health holds only the approved Health modules"
   else
-    fail "only the ENG-0006-H1 record modules may exist in tools/health; found: ${fabric_health_unapproved}"
+    fail "only the approved Health modules may exist in tools/health; found: ${fabric_health_unapproved}"
   fi
 fi
 

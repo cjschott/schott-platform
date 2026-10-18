@@ -234,13 +234,21 @@ for forbidden_dir in tools/monitor tools/heartbeat tools/probe \
   fi
 done
 
-# The closed ENG-0006-H1 allowlist. Exact relative paths, compared by equality:
-# a prefix or substring rule would admit `records_v2.py` or `health_store.py`
-# on the strength of looking similar to something approved.
-HEALTH_H1_ALLOWLIST=(
+# The closed Health module allowlist. Exact relative paths, compared by
+# equality: a prefix or substring rule would admit `records_v2.py` or
+# `health_store.py` on the strength of looking similar to something approved.
+#
+# ENG-0006-H3A added `conditions.py`, the ADR-0019 condition grammar evaluator,
+# which ENG-0006-H3 had to carry inside `records.py` because this list named
+# three modules. The list is still CLOSED and still compared by equality: one
+# name was added, no rule was relaxed, and the fixture battery below proves an
+# unapproved module -- including one named to look like an approved one -- is
+# still rejected.
+HEALTH_MODULE_ALLOWLIST=(
   "tools/health/__init__.py"
   "tools/health/records.py"
   "tools/health/errors.py"
+  "tools/health/conditions.py"
 )
 
 # Echoes every file under $1 that the allowlist does not name exactly.
@@ -252,7 +260,7 @@ health_unapproved_files() {
     rel="${found#"${base}/"}"
     rel="tools/health/${rel}"
     approved=0
-    for candidate in "${HEALTH_H1_ALLOWLIST[@]}"; do
+    for candidate in "${HEALTH_MODULE_ALLOWLIST[@]}"; do
       if [[ "${rel}" == "${candidate}" ]]; then approved=1; break; fi
     done
     if (( approved == 0 )); then printf '%s ' "${rel}"; fi
@@ -268,15 +276,15 @@ else
   fi
   unapproved="$(health_unapproved_files "${ROOT}/tools/health")"
   if [[ -z "${unapproved}" ]]; then
-    pass "tools/health holds only the approved ENG-0006-H1 modules"
+    pass "tools/health holds only the approved Health modules"
   else
     fail "unapproved health implementation file(s): ${unapproved}"
   fi
-  for required_module in "${HEALTH_H1_ALLOWLIST[@]}"; do
+  for required_module in "${HEALTH_MODULE_ALLOWLIST[@]}"; do
     if [[ -f "${ROOT}/${required_module}" ]]; then
-      pass "approved H1 module present: ${required_module}"
+      pass "approved Health module present: ${required_module}"
     else
-      fail "approved H1 module missing: ${required_module}"
+      fail "approved Health module missing: ${required_module}"
     fi
   done
 
@@ -290,6 +298,7 @@ else
   cp "${ROOT}/tools/health/__init__.py" "${allowlist_fixture}/__init__.py"
   cp "${ROOT}/tools/health/records.py" "${allowlist_fixture}/records.py"
   cp "${ROOT}/tools/health/errors.py" "${allowlist_fixture}/errors.py"
+  cp "${ROOT}/tools/health/conditions.py" "${allowlist_fixture}/conditions.py"
   if [[ -z "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
     pass "the allowlist accepts a tree holding exactly the approved modules"
   else
@@ -297,7 +306,9 @@ else
   fi
   for intruder in store.py adapter.py collector.py evaluator.py scheduler.py \
                   daemon.py receiver.py service.py __main__.py records_v2.py \
-                  health_store.py; do
+                  health_store.py conditions_v2.py conditions.pyc \
+                  conditions_evaluator.py conditions_store.py xconditions.py \
+                  conditions; do
     : > "${allowlist_fixture}/${intruder}"
     if [[ -n "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
       pass "the allowlist rejects an unapproved module: ${intruder}"

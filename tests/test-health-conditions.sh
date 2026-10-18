@@ -21,6 +21,7 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 python3 - "${ROOT}" <<'PY'
 import copy
+import inspect
 import sys
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -73,25 +74,48 @@ check("min_samples" in WINDOWED_REQUIRED and "window_seconds" in WINDOWED_REQUIR
 
 try:
     from tools.health import records as H
+    from tools.health import conditions as C
     from tools.health import errors as E
-    print("PASS: tools.health.records and tools.health.errors import")
+    import tools.health as PKG
+    print("PASS: tools.health.records, .conditions and .errors import")
 except Exception as error:  # noqa: BLE001
     print(f"FAIL: import failed: {type(error).__name__}", file=sys.stderr)
     raise SystemExit(1)
 
 for name in ("evaluate_condition", "CONDITION_OUTCOMES"):
-    if hasattr(H, name):
-        print(f"PASS: the evaluator exposes {name}")
+    if hasattr(C, name):
+        print(f"PASS: the evaluator module exposes {name}")
     else:
-        print(f"FAIL: the evaluator does not expose {name}", file=sys.stderr)
+        print(f"FAIL: the evaluator module does not expose {name}", file=sys.stderr)
         failures += 1
-if not hasattr(H, "evaluate_condition"):
+if not hasattr(C, "evaluate_condition"):
     print(f"\nCondition grammar validation FAILED with {failures + 1} error(s).",
           file=sys.stderr)
     raise SystemExit(1)
 
-evaluate = H.evaluate_condition
-OUTCOMES = tuple(H.CONDITION_OUTCOMES)
+# ENG-0006-H3A. The evaluator moved out of `records` into `conditions`. The
+# package must still re-export it, and must re-export THE SAME OBJECT: an alias
+# that wrapped or copied the evaluator would be a second implementation to keep
+# in step with the first.
+for name in ("evaluate_condition", "CONDITION_OUTCOMES", "UNKNOWN_REASONS",
+             "ConditionResult"):
+    check(hasattr(PKG, name) and getattr(PKG, name) is getattr(C, name),
+          f"tools.health re-exports the SAME {name} as tools.health.conditions")
+for name in ("parse", "HealthRecord", "KINDS", "citations_of",
+             "validate_citations"):
+    check(hasattr(PKG, name) and getattr(PKG, name) is getattr(H, name),
+          f"tools.health re-exports the SAME {name} as tools.health.records")
+# And no copy may survive in the record model.
+for name in ("evaluate_condition", "ConditionResult", "CONDITION_OUTCOMES",
+             "UNKNOWN_REASONS"):
+    check(not hasattr(H, name), f"the record model no longer carries {name}")
+# The dependency runs one way: an evaluator depends on the record model, never
+# the reverse.
+check("conditions" not in inspect.getsource(H),
+      "the record model never references the evaluator module")
+
+evaluate = C.evaluate_condition
+OUTCOMES = tuple(C.CONDITION_OUTCOMES)
 check(set(OUTCOMES) == {"satisfied", "not-satisfied", "unknown"},
       "the outcome vocabulary is exactly satisfied / not-satisfied / unknown")
 
@@ -461,8 +485,6 @@ check(run(dimension="failure-count", operator="gt", value="0",
 
 # --- the evaluation instant is always supplied by the caller ----------------
 print("--- the evaluator never reads a clock ---")
-import inspect  # noqa: E402
-
 signature = inspect.signature(evaluate)
 check("evaluated_at" in signature.parameters,
       "evaluate_condition takes an explicit evaluated_at")
@@ -471,7 +493,9 @@ check(signature.parameters["evaluated_at"].default is inspect.Parameter.empty,
 check(all(p.kind is inspect.Parameter.KEYWORD_ONLY
           for p in signature.parameters.values()),
       "every parameter is keyword-only, so no call can transpose them")
-source = inspect.getsource(H)
+# ENG-0006-H3A: BOTH modules, so moving code between them cannot move it out
+# of the scope of these checks.
+source = inspect.getsource(C) + "\n" + inspect.getsource(H)
 for banned in ("datetime.now", "datetime.utcnow", "time.time", "time.monotonic",
                "date.today", "utcfromtimestamp"):
     check(banned not in source,
@@ -545,8 +569,9 @@ print("--- the evaluator concludes nothing beyond the condition ---")
 for banned_attr in ("derive_state", "derive_health_state", "evaluate_eligibility",
                     "select", "write_record", "store", "collect",
                     "receive_heartbeat", "recommend", "set_trust_state"):
-    check(not hasattr(H, banned_attr),
-          f"the module exposes no {banned_attr}()")
+    check(not hasattr(C, banned_attr) and not hasattr(H, banned_attr)
+          and not hasattr(PKG, banned_attr),
+          f"neither module nor the package exposes {banned_attr}()")
 check(result.outcome in OUTCOMES,
       "a result's outcome is always one of the three declared outcomes")
 check(not any(s in str(result.outcome) for s in ("healthy", "degraded",

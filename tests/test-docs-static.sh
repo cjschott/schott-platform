@@ -1175,14 +1175,14 @@ else
   while IFS= read -r health_file; do
     health_rel="tools/health/${health_file#"${ROOT}/tools/health/"}"
     case "${health_rel}" in
-      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py) ;;
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py) ;;
       *) docs_health_unapproved+="${health_rel} " ;;
     esac
   done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)
   if [[ -z "${docs_health_unapproved}" ]]; then
-    pass "tools/health holds only the approved ENG-0006-H1 record modules"
+    pass "tools/health holds only the approved Health modules"
   else
-    fail "v0.9.6 permits only the ENG-0006-H1 record modules; found: ${docs_health_unapproved}"
+    fail "v0.9.6 permits only the approved Health modules; found: ${docs_health_unapproved}"
   fi
 fi
 
