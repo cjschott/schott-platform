@@ -399,8 +399,66 @@ else
   # Health-local imports (`from .`, `from . import`) and the standard library
   # stay permitted: the rule is about leaving the package, not about importing.
   HEALTH_PERMITTED_PLANE_IMPORTS=()
+  # ENG-0006-H4B. The H4A guard matched import STATEMENTS plus two callee
+  # spellings, and that was not enough: it tracked no name binding, so
+  #
+  #     _ALIAS = __import__
+  #     _TRUST = _ALIAS("tools.trust.models")
+  #
+  # loaded another plane from inside a Health module with every suite green.
+  # A bare `__import__` on the right of an assignment is a Name LOAD, not a
+  # Call, and the later call's callee is `_ALIAS`. Fourteen of sixteen
+  # dangerous fixtures were admitted. So the rule now reads the IDENTIFIER
+  # wherever it appears -- assignment, call, attribute root or any other
+  # expression -- rather than trying to recognise a call shape.
+  HEALTH_FORBIDDEN_NAMES=(__import__ import_module eval exec compile
+                          builtins __builtins__ globals locals vars)
+  # Attributes are a SHORTER list on purpose. `compile` is deliberately absent:
+  # `re.compile` is in legitimate use seven times in the record model, and the
+  # BUILTIN `compile` cannot be reached as an attribute without a root named
+  # `builtins` or `__builtins__`, both of which the Name list above forbids.
+  # `getattr` is permitted for the mirror-image reason -- it is in legitimate
+  # use twice in the citation validator, and `getattr(builtins, "eval")` is
+  # already caught by its root.
+  HEALTH_FORBIDDEN_ATTRS=(__import__ import_module eval exec)
+  # THE POLICY ITSELF IS PINNED. Without this, deleting a name from the sets
+  # above would silently retire a prohibition and every suite would still pass
+  # -- which is how the H4A gap survived its own review. Each required name is
+  # asserted present, and the permitted set is asserted EMPTY so a cross-plane
+  # permission cannot arrive without an increment that changes this line.
+  for required_name in __import__ import_module eval exec compile builtins \
+                       __builtins__ globals locals vars; do
+    if [[ " ${HEALTH_FORBIDDEN_NAMES[*]} " == *" ${required_name} "* ]]; then
+      pass "the import policy forbids the identifier ${required_name}"
+    else
+      fail "the import policy no longer forbids ${required_name}"
+    fi
+  done
+  for required_attr in __import__ import_module eval exec; do
+    if [[ " ${HEALTH_FORBIDDEN_ATTRS[*]} " == *" ${required_attr} "* ]]; then
+      pass "the import policy forbids the attribute .${required_attr}"
+    else
+      fail "the import policy no longer forbids the attribute .${required_attr}"
+    fi
+  done
+  # `compile` must stay OUT of the attribute list: `re.compile` is legitimate
+  # and in use, and the builtin is unreachable as an attribute without a root
+  # the Name list already forbids.
+  if [[ " ${HEALTH_FORBIDDEN_ATTRS[*]} " != *" compile "* ]]; then
+    pass "the policy permits .compile as an attribute, so re.compile still works"
+  else
+    fail "the policy forbids .compile as an attribute, which breaks re.compile"
+  fi
+  if (( ${#HEALTH_PERMITTED_PLANE_IMPORTS[@]} == 0 )); then
+    pass "no cross-plane import is permitted to the health package"
+  else
+    fail "a cross-plane import was permitted: ${HEALTH_PERMITTED_PLANE_IMPORTS[*]}"
+  fi
+
   health_import_report="$(
     HEALTH_PERMITTED="${HEALTH_PERMITTED_PLANE_IMPORTS[*]-}" \
+    HEALTH_FORBIDDEN_NAMES="${HEALTH_FORBIDDEN_NAMES[*]}" \
+    HEALTH_FORBIDDEN_ATTRS="${HEALTH_FORBIDDEN_ATTRS[*]}" \
     python3 - "${ROOT}" <<'HEALTHIMPORTS'
 import ast
 import os
@@ -410,6 +468,8 @@ import sys
 root = pathlib.Path(sys.argv[1])
 permitted = {name for name in (os.environ.get("HEALTH_PERMITTED", "") or "").split()
              if name}
+forbidden_names = set((os.environ.get("HEALTH_FORBIDDEN_NAMES", "") or "").split())
+forbidden_attrs = set((os.environ.get("HEALTH_FORBIDDEN_ATTRS", "") or "").split())
 violations = []
 for path in sorted((root / "tools/health").rglob("*.py")):
     if "__pycache__" in path.parts:
@@ -456,14 +516,43 @@ for path in sorted((root / "tools/health").rglob("*.py")):
                 name = target.attr
             if name in ("import_module", "__import__"):
                 violations.append(f"{rel}: {name}() (dynamic import)")
+        # ENG-0006-H4B. `ast.walk` visits every node, so a Name serving as a
+        # call's callee is seen here as well -- the Call clause above is kept
+        # as defence in depth rather than replaced.
+        elif isinstance(node, ast.Name):
+            if node.id in forbidden_names:
+                violations.append(f"{rel}:{node.lineno}: reference to {node.id}")
+        elif isinstance(node, ast.Attribute):
+            if node.attr in forbidden_attrs:
+                violations.append(f"{rel}:{node.lineno}: attribute .{node.attr}")
 print(" | ".join(violations))
 HEALTHIMPORTS
   )"
   if [[ -z "${health_import_report}" ]]; then
-    pass "no health module imports any sibling plane, by absolute, relative or dynamic form"
+    pass "no health module reaches another plane or a dynamic-import facility"
   else
     fail "a health module leaves its package: ${health_import_report}"
   fi
+  # The scan must cover EVERY approved module, not only the evaluators: the
+  # H4A gap included `errors.py` and `__init__.py`, which no suite inspected.
+  health_scanned="$(
+    python3 - "${ROOT}" <<'HEALTHSCANNED'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+print(",".join(p.relative_to(root).as_posix()
+               for p in sorted((root / "tools/health").rglob("*.py"))
+               if "__pycache__" not in p.parts))
+HEALTHSCANNED
+  )"
+  for approved_module in "${HEALTH_MODULE_ALLOWLIST[@]}"; do
+    if [[ ",${health_scanned}," == *",${approved_module},"* ]]; then
+      pass "the import boundary scans ${approved_module}"
+    else
+      fail "the import boundary never scanned ${approved_module}"
+    fi
+  done
   if ! grep -rqE 'ImmutableStore|allocate_id|/var/lib/kyri' \
        "${ROOT}/tools/health" --include='*.py'; then
     pass "no health module names a store, an allocator or a production root"
