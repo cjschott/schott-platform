@@ -23,9 +23,15 @@ authority.
 from .conditions import (CONDITION_OUTCOMES, UNKNOWN_REASONS, ConditionResult,
                          evaluate_condition)
 from .errors import HealthRecordError
+from .freshness import (FRESHNESS_STATES, FRESHNESS_UNKNOWN_REASONS,
+                        FreshnessResult, evaluate_envelope_freshness,
+                        evaluate_freshness)
 from .records import (HealthRecord, KINDS, citations_of, parse,
-                      validate_citations)
+                      select_observations, validate_citations)
 
-__all__ = ["CONDITION_OUTCOMES", "ConditionResult", "HealthRecord",
+__all__ = ["CONDITION_OUTCOMES", "ConditionResult", "FRESHNESS_STATES",
+           "FRESHNESS_UNKNOWN_REASONS", "FreshnessResult", "HealthRecord",
            "HealthRecordError", "KINDS", "UNKNOWN_REASONS", "citations_of",
-           "evaluate_condition", "parse", "validate_citations"]
+           "evaluate_condition", "evaluate_envelope_freshness",
+           "evaluate_freshness", "parse", "select_observations",
+           "validate_citations"]

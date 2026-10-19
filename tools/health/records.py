@@ -737,6 +737,65 @@ VALIDATORS = {
 }
 
 
+def select_observations(observations: Any, dimension: str, *,
+                        kind: str) -> tuple:
+    """Validated observation records for one dimension and one subject.
+
+    Takes parsed records rather than payloads, so every observation has already
+    been through the record model: a failed collection cannot carry a value, a
+    package cannot be a subject, and the unit already matches the dimension.
+
+    Shared by the condition evaluator (ENG-0006-H3) and the freshness evaluator
+    (ENG-0006-H4), and it lives here because selecting records by dimension and
+    refusing a cross-subject set are properties of the RECORDS, not of either
+    evaluation. Two copies of a subject-binding guard would be two things to
+    keep in step, and the copy that drifted would be the one nobody re-read.
+    `kind` is the operation to name in a refusal, so each caller reports its own
+    context rather than borrowing the other's.
+
+    **Why no per-observation unit comparison here.** ADR-0019 requires that
+    "the envelope's `unit` must equal the observation's `unit`; a mismatch is
+    refused, never converted", and that holds transitively rather than by a
+    second check: `evaluate_condition` refuses an envelope `unit` that is not
+    the dimension's declared unit, and the record model already refuses an
+    observation whose `unit` is not that same declared unit. Both sides are
+    therefore pinned to one value and cannot differ. A comparison here would be
+    unreachable -- which was proven, not assumed: a mutation deleting it was
+    undetectable by the suite, because no fixture can construct the case.
+    """
+    if isinstance(observations, (str, bytes, Mapping)) or \
+            not isinstance(observations, Sequence):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field="observations",
+                       detail="sequence")
+    selected = []
+    subject = None
+    for item in observations:
+        if not isinstance(item, HealthRecord):
+            raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind,
+                           field="observations", detail="health-record")
+        if item.kind != "capability-health-observation":
+            raise E.refuse(E.CITED_RECORD_KIND_MISMATCH, kind=kind,
+                           field="observations",
+                           detail="capability-health-observation")
+        # A verdict assembled from two subjects' measurements is well-formed,
+        # correctly typed and false -- the cheapest route to a forged claim,
+        # because every individual record passes inspection while the set lies.
+        # ADR-0013 requires every cited observation to share the subject.
+        identity = (item.subject_type, item.subject_id)
+        if subject is None:
+            subject = identity
+        elif identity != subject:
+            raise E.refuse(E.CROSS_SUBJECT_CITATION, kind=kind,
+                           field="observations")
+        if item.dimension != dimension:
+            continue
+        selected.append(item)
+    # Total and recorded, so "newest" and "consecutive" are never ambiguous.
+    selected.sort(key=lambda o: (datetime.fromisoformat(o.observed_at),
+                                 o.observation_id))
+    return tuple(selected)
+
+
 # --- the entry point -----------------------------------------------------
 def parse(kind: Any, payload: Any) -> HealthRecord:
     """Validate a payload in full, then return a frozen record.

@@ -28,7 +28,8 @@ from typing import Any, Mapping, Sequence
 
 from . import errors as E
 from .records import (AGGREGATIONS, CONDITION_OPERATORS, DIMENSION_UNITS,
-                      HealthRecord, _decimal_text, _instant, _whole)
+                      HealthRecord, _decimal_text, _instant, _whole,
+                      select_observations)
 
 # --- the condition grammar evaluator — ENG-0006-H3 ----------------------
 # ADR-0019 defines a POLICY LANGUAGE. This is its evaluator, and nothing more:
@@ -197,56 +198,6 @@ def _aggregation_of(aggregation: Any) -> tuple[str, Any, Any]:
     return kind, window, samples
 
 
-def _observations_of(observations: Any, dimension: str) -> tuple:
-    """Validated observation records for one dimension and one subject.
-
-    Takes parsed records rather than payloads, so every observation has already
-    been through the record model: a failed collection cannot carry a value, a
-    package cannot be a subject, and the unit already matches the dimension.
-
-    **Why no per-observation unit comparison here.** ADR-0019 requires that
-    "the envelope's `unit` must equal the observation's `unit`; a mismatch is
-    refused, never converted", and that holds transitively rather than by a
-    second check: `evaluate_condition` refuses an envelope `unit` that is not
-    the dimension's declared unit, and the record model already refuses an
-    observation whose `unit` is not that same declared unit. Both sides are
-    therefore pinned to one value and cannot differ. A comparison here would be
-    unreachable -- which was proven, not assumed: a mutation deleting it was
-    undetectable by the suite, because no fixture can construct the case.
-    """
-    if isinstance(observations, (str, bytes, Mapping)) or \
-            not isinstance(observations, Sequence):
-        raise E.refuse(E.FIELD_TYPE_INVALID, kind=_EVAL, field="observations",
-                       detail="sequence")
-    selected = []
-    subject = None
-    for item in observations:
-        if not isinstance(item, HealthRecord):
-            raise E.refuse(E.FIELD_TYPE_INVALID, kind=_EVAL,
-                           field="observations", detail="health-record")
-        if item.kind != "capability-health-observation":
-            raise E.refuse(E.CITED_RECORD_KIND_MISMATCH, kind=_EVAL,
-                           field="observations",
-                           detail="capability-health-observation")
-        # A verdict assembled from two subjects' measurements is well-formed,
-        # correctly typed and false -- the cheapest route to a forged claim,
-        # because every individual record passes inspection while the set lies.
-        # ADR-0013 requires every cited observation to share the subject.
-        identity = (item.subject_type, item.subject_id)
-        if subject is None:
-            subject = identity
-        elif identity != subject:
-            raise E.refuse(E.CROSS_SUBJECT_CITATION, kind=_EVAL,
-                           field="observations")
-        if item.dimension != dimension:
-            continue
-        selected.append(item)
-    # Total and recorded, so "newest" and "consecutive" are never ambiguous.
-    selected.sort(key=lambda o: (datetime.fromisoformat(o.observed_at),
-                                 o.observation_id))
-    return tuple(selected)
-
-
 def _usable(observation: "HealthRecord", *, evaluated_at: datetime,
             policy_seconds: int) -> bool:
     """ADR-0019's usable observation, and the age bound that makes it honest.
@@ -288,7 +239,7 @@ def evaluate_condition(*, dimension: Any, unit: Any, condition: Any,
     operator, threshold = _condition_of(condition)
     kind, window_seconds, min_samples = _aggregation_of(aggregation)
     instant = datetime.fromisoformat(_instant(_EVAL, "evaluated_at", evaluated_at))
-    selected = _observations_of(observations, dimension)
+    selected = select_observations(observations, dimension, kind=_EVAL)
 
     # The Null Policy Rule. A null freshness policy is an unanswered
     # configuration question, and the absence of a declared limit must produce

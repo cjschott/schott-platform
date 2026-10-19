@@ -334,6 +334,9 @@ jobs:
       - name: Health condition grammar tests
         run: bash tests/test-health-conditions.sh
 
+      - name: Health freshness tests
+        run: bash tests/test-health-freshness.sh
+
       # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
       # carrying the purity or authority backstop for the modules that increment
       # added. Pure or descriptor-scoped: no host state, no Podman, no network.
