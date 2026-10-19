@@ -137,9 +137,28 @@ The platform has made this choice once before, in another plane:
 rejected for two reasons. It would be **defaulting a second freshness
 parameter**, which is precisely what the Null Policy Rule exists to forbid — an
 operator writing `freshness_policy_seconds: 60` would start receiving `aging`
-at 31 seconds without having asked for it. And it cannot be imported in any
-case: a Health module importing `tools.observation` is a cross-plane import
-that `test-capability-health.sh` refuses by name.
+at 31 seconds without having asked for it.
+
+> **CORRECTION, ENG-0006-H4A.** This paragraph originally carried a second
+> argument: "And it cannot be imported in any case: a Health module importing
+> `tools.observation` is a cross-plane import that
+> `test-capability-health.sh` refuses by name." **That was false and is
+> withdrawn.** The guard as it stood at H4 enumerated
+> `tools.(fabric|capability|trust|collectors)` only, so `tools.observation`
+> was not refused — and because it matched the *absolute* form by `grep`, the
+> relative form `from ..trust import models` walked past even the four
+> packages it did name. Measured, not supposed: eleven of the sixteen import
+> forms probed were admitted, including `..fabric` and `..trust`.
+>
+> **The decision this paragraph reaches is unaffected**, because the first
+> argument stands on its own: copying the constant would default a second
+> freshness parameter, which is what the Null Policy Rule forbids. Only the
+> supporting claim was wrong.
+>
+> ENG-0006-H4A closed the gap with an AST-based allowlist covering absolute,
+> aliased, submodule, relative and dynamic import forms across all eleven
+> sibling packages. H4's own code was never affected: the Health package
+> imports no `tools.*` package at all.
 
 **So the threshold is an explicit caller input with no default, and while none
 is supplied `aging` is never reported.** Verified: sweeping ages 0–120 against
@@ -268,11 +287,11 @@ from exit codes.**
 | 3 | invent a default aging threshold at half the policy | **yes** — 9 failing |
 | 4 | a null policy stops setting `review_required` | **yes** — 2 failing |
 | 5 | a null policy becomes a default maximum age | **yes** — uncaught refusal |
-| 6 | absent evidence is reported as `stale` | **yes** — 14 failing |
+| 6 | absent evidence is reported as `stale` | **yes** — 15 failing |
 | 7 | a failed collection carries an age | **yes** — 11 failing |
-| 8 | a future observation carries an age | **yes** — 7 failing |
+| 8 | a future observation carries an age | **yes** — 11 failing |
 | 9 | the **oldest** collected observation is used | **yes** — 5 failing |
-| 10 | read the clock instead of the supplied instant | **yes** — 52 failing |
+| 10 | read the clock instead of the supplied instant | **yes** — 48 failing |
 | 11 | read the **stored** freshness label instead of computing | **yes** — 6 failing |
 | 12 | the envelope entry point collapses to a worst-dimension scalar | **yes** — 2 failing |
 | 13 | a dimension with no evidence is omitted from the envelope result | **yes** — 2 failing |
@@ -297,6 +316,21 @@ were real gaps rather than equivalent mutants:
 
 Both mutations are detected after the additions. This is recorded because the
 first measurement was wrong and the suite, not the implementation, was at fault.
+
+> **CORRECTION, ENG-0006-H4A.** Three counts in the table above were
+> **measured against the pre-addition suite** and were stale: mutation 6 read
+> 14, mutation 8 read 7, and mutation 10 read 52. Against the committed suite
+> they are **15, 11 and 48**, as now shown. The cause is that thirteen of the
+> fifteen rows were measured on the first pass and only mutations 9 and 13
+> were re-measured after the nine assertions were added, so the table mixed
+> two suite states.
+>
+> **The measurement history is deliberately preserved rather than erased**:
+> mutations 9 and 13 genuinely survived the first pass, which is why those
+> assertions exist, and the initial figures for 6, 8 and 10 were genuine
+> measurements of a suite that no longer exists. **Every verdict was and
+> remains DETECTED**, and all fifteen reproduce from the committed tree —
+> twelve counts matched exactly on reproduction and these three did not.
 
 ---
 
@@ -358,7 +392,8 @@ was repaired and none was introduced.
 
 ## 10. Scope and production isolation
 
-**Eleven files — eight modified, three new:**
+**Twelve files — eight modified, four new** (the original count of eleven
+omitted this report itself; corrected in ENG-0006-H4A)**:**
 
 | file | change |
 |---|---|

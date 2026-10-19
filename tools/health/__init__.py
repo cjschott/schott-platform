@@ -1,18 +1,31 @@
-"""The Capability Health Plane — ENG-0006-H1 through H3.
+"""The Capability Health Plane — ENG-0006-H1 through H4.
 
-**Records and one pure evaluator, in separate modules.** `records` holds
-immutable, schema-conformant models for the six Health record families and the
-subject-binding rules over them; `errors` holds the controlled refusal
-vocabulary that guards both; `conditions` holds the ADR-0019 condition grammar
-evaluator. The dependency runs one way — `conditions` imports `records`, never
-the reverse — so a record model never depends on an evaluator.
+**Records and two pure evaluators, in separate modules.**
 
-It still concludes nothing. No freshness is judged, no hysteresis is decided,
-no state is derived, nothing is stored, no clock is read, and nothing is read
-from or written to any other plane. `evaluate_condition` returns `satisfied`,
-`not-satisfied` or `unknown`; turning any of those into a health state needs
-hysteresis and the worst-dimension-wins combination, which are later
-increments' authority.
+- `records` — immutable, schema-conformant models for the six Health record
+  families, the subject-binding rules over them, and `select_observations`,
+  which selects records for one dimension of one subject and refuses a
+  cross-subject set.
+- `errors` — the controlled refusal vocabulary that guards all of them.
+- `conditions` — the ADR-0019 condition grammar evaluator. `evaluate_condition`
+  returns `satisfied`, `not-satisfied` or `unknown`.
+- `freshness` — the per-dimension freshness evaluator. `evaluate_freshness`
+  returns `current`, `aging`, `stale` or `unknown`, and
+  `evaluate_envelope_freshness` returns one of those per declared dimension,
+  never a collapsed score.
+
+The dependency runs one way: both evaluators import `records`, `records`
+imports neither, and the evaluators do not import each other. A record model
+never depends on an evaluation.
+
+It still concludes nothing. No hysteresis is decided, no state is derived,
+nothing is stored, no clock is read, and nothing is imported from any other
+plane. A condition outcome and a freshness label are both advisory: turning
+either into a health state needs hysteresis and the worst-dimension-wins
+combination, which are later increments' authority. `aging` is reported only
+when a caller supplies a threshold, because no warning threshold is declared
+anywhere in Health authority and defaulting one would be the mistake the Null
+Policy Rule exists to prevent.
 
 That restraint is the point. The Health Plane's entire specification is about
 what it must not be able to do, so each layer is built and reviewed before the

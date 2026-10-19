@@ -369,6 +369,101 @@ else
   else
     fail "a health module imports another plane"
   fi
+
+  # --- the Health import boundary, decided by AST -------------------------
+  # ENG-0006-H4A. The grep above is kept, and is not enough on its own: it
+  # names four sibling packages out of eleven, and it reads only the ABSOLUTE
+  # form, so `from ..trust import models` walked straight past the very rule
+  # that forbids `tools.trust`. That was measured, not supposed.
+  #
+  # The other two sides of this barrier already do it properly and are the
+  # precedent followed here: `tests/test-capability-runtime.sh` forbids
+  # "tools.health" AND "..health" by name, and AC 25 in
+  # `tests/test-fabric-runtime.sh` walks the AST for absolute, relative and
+  # dynamic imports. The Health-outbound direction was the weakest of the
+  # three.
+  #
+  # ALLOWLIST, NOT DENYLIST. The permitted set below is explicitly EMPTY and
+  # is compared by exact equality, because a denylist of planes silently
+  # permits the next package somebody adds under tools/. Two Health
+  # dependencies are already foreseen by the committed ENG-0006-D plan and are
+  # deliberately NOT pre-authorised here -- each must arrive with its own
+  # increment, justification and negative tests, exactly as the module
+  # allowlist does:
+  #
+  #   * `tools.common` -- `ImmutableStore`, the declared base for H6's
+  #     HealthStore (ENG-0006-D lines 100, 187, 504).
+  #   * `tools.capability.records` -- `OUTCOME_CLASSES`, read-only, for
+  #     H13/E1's execution-outcome collector (ENG-0006-D line 261).
+  #
+  # Health-local imports (`from .`, `from . import`) and the standard library
+  # stay permitted: the rule is about leaving the package, not about importing.
+  HEALTH_PERMITTED_PLANE_IMPORTS=()
+  health_import_report="$(
+    HEALTH_PERMITTED="${HEALTH_PERMITTED_PLANE_IMPORTS[*]-}" \
+    python3 - "${ROOT}" <<'HEALTHIMPORTS'
+import ast
+import os
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+permitted = {name for name in (os.environ.get("HEALTH_PERMITTED", "") or "").split()
+             if name}
+violations = []
+for path in sorted((root / "tools/health").rglob("*.py")):
+    if "__pycache__" in path.parts:
+        continue
+    rel = path.relative_to(root).as_posix()
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        # `import tools.X`, `import tools.X.Y`, `import tools.X as Z`
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "tools" or alias.name.startswith("tools."):
+                    if not any(alias.name == p or alias.name.startswith(p + ".")
+                               for p in permitted):
+                        violations.append(f"{rel}: import {alias.name}")
+                if alias.name == "importlib" or alias.name.startswith("importlib"):
+                    violations.append(f"{rel}: import {alias.name} (dynamic import)")
+        elif isinstance(node, ast.ImportFrom):
+            # level 0 is absolute; level 1 is inside tools.health; level >= 2
+            # escapes the package and names a sibling plane.
+            if node.level == 0:
+                module = node.module or ""
+                if module == "tools" or module.startswith("tools."):
+                    if not any(module == p or module.startswith(p + ".")
+                               for p in permitted):
+                        violations.append(f"{rel}: from {module} import ...")
+                if module == "importlib" or module.startswith("importlib."):
+                    violations.append(f"{rel}: from {module} import ... (dynamic)")
+            elif node.level >= 2:
+                sibling = ("tools." + node.module.split(".")[0]) if node.module else "tools"
+                resolved = "tools." + node.module if node.module else "tools"
+                if not any(resolved == p or resolved.startswith(p + ".")
+                           for p in permitted):
+                    dots = "." * node.level
+                    violations.append(
+                        f"{rel}: from {dots}{node.module or ''} import ... "
+                        f"(relative, resolves to {sibling})")
+        # `importlib.import_module(...)` and `__import__(...)`
+        elif isinstance(node, ast.Call):
+            target = node.func
+            name = None
+            if isinstance(target, ast.Name):
+                name = target.id
+            elif isinstance(target, ast.Attribute):
+                name = target.attr
+            if name in ("import_module", "__import__"):
+                violations.append(f"{rel}: {name}() (dynamic import)")
+print(" | ".join(violations))
+HEALTHIMPORTS
+  )"
+  if [[ -z "${health_import_report}" ]]; then
+    pass "no health module imports any sibling plane, by absolute, relative or dynamic form"
+  else
+    fail "a health module leaves its package: ${health_import_report}"
+  fi
   if ! grep -rqE 'ImmutableStore|allocate_id|/var/lib/kyri' \
        "${ROOT}/tools/health" --include='*.py'; then
     pass "no health module names a store, an allocator or a production root"
