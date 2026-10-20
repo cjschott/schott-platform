@@ -1458,7 +1458,7 @@ else
   while IFS= read -r static_health_file; do
     static_health_rel="tools/health/${static_health_file#"${ROOT}/tools/health/"}"
     case "${static_health_rel}" in
-      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py) ;;
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py) ;;
       *) static_health_unapproved+="${static_health_rel} " ;;
     esac
   done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)

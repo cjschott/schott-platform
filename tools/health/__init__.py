@@ -39,12 +39,18 @@ from .errors import HealthRecordError
 from .freshness import (FRESHNESS_STATES, FRESHNESS_UNKNOWN_REASONS,
                         FreshnessResult, evaluate_envelope_freshness,
                         evaluate_freshness)
+from .hysteresis import (HYSTERESIS_OUTCOMES, UNPROVABLE_REASONS,
+                         UNSATISFIED_REASONS, HysteresisProof,
+                         HysteresisResult, evaluate_hysteresis)
 from .records import (HealthRecord, KINDS, citations_of, parse,
                       select_observations, validate_citations)
 
 __all__ = ["CONDITION_OUTCOMES", "ConditionResult", "FRESHNESS_STATES",
-           "FRESHNESS_UNKNOWN_REASONS", "FreshnessResult", "HealthRecord",
-           "HealthRecordError", "KINDS", "UNKNOWN_REASONS", "citations_of",
-           "evaluate_condition", "evaluate_envelope_freshness",
-           "evaluate_freshness", "parse", "select_observations",
+           "FRESHNESS_UNKNOWN_REASONS", "FreshnessResult",
+           "HYSTERESIS_OUTCOMES", "HealthRecord", "HealthRecordError",
+           "HysteresisProof", "HysteresisResult", "KINDS",
+           "UNKNOWN_REASONS", "UNPROVABLE_REASONS", "UNSATISFIED_REASONS",
+           "citations_of", "evaluate_condition",
+           "evaluate_envelope_freshness", "evaluate_freshness",
+           "evaluate_hysteresis", "parse", "select_observations",
            "validate_citations"]

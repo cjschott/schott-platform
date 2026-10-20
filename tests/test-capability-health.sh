@@ -252,6 +252,7 @@ HEALTH_MODULE_ALLOWLIST=(
   "tools/health/errors.py"
   "tools/health/conditions.py"
   "tools/health/freshness.py"
+  "tools/health/hysteresis.py"
 )
 
 # Echoes every file under $1 that the allowlist does not name exactly.
@@ -303,6 +304,7 @@ else
   cp "${ROOT}/tools/health/errors.py" "${allowlist_fixture}/errors.py"
   cp "${ROOT}/tools/health/conditions.py" "${allowlist_fixture}/conditions.py"
   cp "${ROOT}/tools/health/freshness.py" "${allowlist_fixture}/freshness.py"
+  cp "${ROOT}/tools/health/hysteresis.py" "${allowlist_fixture}/hysteresis.py"
   if [[ -z "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
     pass "the allowlist accepts a tree holding exactly the approved modules"
   else
@@ -313,7 +315,9 @@ else
                   health_store.py conditions_v2.py conditions.pyc \
                   conditions_evaluator.py conditions_store.py xconditions.py \
                   conditions freshness_v2.py freshness.pyc xfreshness.py \
-                  freshness_store.py freshness_collector.py freshness; do
+                  freshness_store.py freshness_collector.py freshness \
+                  hysteresis_v2.py hysteresis.pyc xhysteresis.py \
+                  hysteresis_store.py hysteresis; do
     : > "${allowlist_fixture}/${intruder}"
     if [[ -n "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
       pass "the allowlist rejects an unapproved module: ${intruder}"
