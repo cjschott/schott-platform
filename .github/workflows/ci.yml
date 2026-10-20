@@ -340,6 +340,9 @@ jobs:
       - name: Health hysteresis tests
         run: bash tests/test-health-hysteresis.sh
 
+      - name: Health store tests
+        run: bash tests/test-health-store.sh
+
       # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
       # carrying the purity or authority backstop for the modules that increment
       # added. Pure or descriptor-scoped: no host state, no Podman, no network.

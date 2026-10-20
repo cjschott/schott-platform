@@ -567,11 +567,28 @@ for banned_name in ("eval", "exec", "compile", "__import__"):
 
 print("--- the evaluator concludes nothing beyond the condition ---")
 for banned_attr in ("derive_state", "derive_health_state", "evaluate_eligibility",
-                    "select", "write_record", "store", "collect",
+                    "select", "write_record", "collect",
                     "receive_heartbeat", "recommend", "set_trust_state"):
     check(not hasattr(C, banned_attr) and not hasattr(H, banned_attr)
           and not hasattr(PKG, banned_attr),
           f"neither module nor the package exposes {banned_attr}()")
+# ENG-0006-H6. `store` moved out of the list above, and is asserted here
+# instead -- more precisely, not more loosely. The package now has a `store`
+# SUBMODULE, which is not the condition evaluator acquiring the ability to
+# store anything. What the prohibition stood for still holds and is still
+# checked: the evaluator and the record model expose no `store` whatsoever,
+# and whatever the package exposes under that name is a module, never a verb.
+import types as _types  # noqa: E402
+
+check(not hasattr(C, "store") and not hasattr(H, "store"),
+      "neither the evaluator nor the record model exposes store()")
+check(not callable(getattr(PKG, "store", None)),
+      "the package exposes no store() verb")
+check(isinstance(getattr(PKG, "store"), _types.ModuleType)
+      if hasattr(PKG, "store") else True,
+      "any `store` the package exposes is a module, not a function")
+check(not hasattr(C, "HealthStore") and not hasattr(H, "HealthStore"),
+      "neither the evaluator nor the record model carries the store class")
 check(result.outcome in OUTCOMES,
       "a result's outcome is always one of the three declared outcomes")
 check(not any(s in str(result.outcome) for s in ("healthy", "degraded",

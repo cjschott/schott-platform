@@ -238,6 +238,14 @@ done
 # equality: a prefix or substring rule would admit `records_v2.py` or
 # `health_store.py` on the strength of looking similar to something approved.
 #
+# ENG-0006-H6 added `store.py`, component B1/B2: the append-only Health store
+# and its identifier allocation. It is the first Health module that is not a
+# pure function -- and the only one authorised to name a store, an allocator,
+# a production root or a serialiser. Those authorisations are pinned
+# separately below, each to this one file, so none of them can drift into an
+# evaluator. `store.py` therefore left the intruder battery and `store`,
+# `stores.py`, `store_v2.py`, `record_store.py` and friends joined it.
+#
 # ENG-0006-H3A added `conditions.py`, the ADR-0019 condition grammar evaluator,
 # which ENG-0006-H3 had to carry inside `records.py` because this list named
 # three modules. ENG-0006-H4 added `freshness.py`, component A4, for the same
@@ -253,6 +261,7 @@ HEALTH_MODULE_ALLOWLIST=(
   "tools/health/conditions.py"
   "tools/health/freshness.py"
   "tools/health/hysteresis.py"
+  "tools/health/store.py"
 )
 
 # Echoes every file under $1 that the allowlist does not name exactly.
@@ -305,14 +314,17 @@ else
   cp "${ROOT}/tools/health/conditions.py" "${allowlist_fixture}/conditions.py"
   cp "${ROOT}/tools/health/freshness.py" "${allowlist_fixture}/freshness.py"
   cp "${ROOT}/tools/health/hysteresis.py" "${allowlist_fixture}/hysteresis.py"
+  cp "${ROOT}/tools/health/store.py" "${allowlist_fixture}/store.py"
   if [[ -z "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
     pass "the allowlist accepts a tree holding exactly the approved modules"
   else
     fail "the allowlist rejected a compliant tree"
   fi
-  for intruder in store.py adapter.py collector.py evaluator.py scheduler.py \
+  for intruder in adapter.py collector.py evaluator.py scheduler.py \
                   daemon.py receiver.py service.py __main__.py records_v2.py \
-                  health_store.py conditions_v2.py conditions.pyc \
+                  health_store.py store_v2.py stores.py store.pyc xstore.py \
+                  store_adapter.py store_collector.py record_store.py store \
+                  conditions_v2.py conditions.pyc \
                   conditions_evaluator.py conditions_store.py xconditions.py \
                   conditions freshness_v2.py freshness.pyc xfreshness.py \
                   freshness_store.py freshness_collector.py freshness \
@@ -361,11 +373,39 @@ else
   # A record model imports nothing that could reach a host, a store, a socket,
   # or another plane. Checked as import statements rather than as substrings,
   # so prose describing the absence of a thing is not mistaken for the thing.
-  if ! grep -rqE '^[[:space:]]*(import|from)[[:space:]]+(socket|subprocess|requests|urllib|http|asyncio|threading|multiprocessing|sqlite3|yaml)\b' \
-       "${ROOT}/tools/health" --include='*.py'; then
+  # ENG-0006-H6. The forbidden list is unchanged and still applies to every
+  # Health module. One PAIR is excepted: `yaml` in `tools/health/store.py`.
+  # H6 is the plane's serialisation boundary -- `validate()` has to parse the
+  # records it reports on -- and pairing the exception to a single file is
+  # what stops it drifting into the evaluators. Every other module still
+  # imports no serialiser, and the store still imports no socket, no
+  # subprocess and no concurrency facility.
+  HEALTH_STORAGE_IMPORT_EXCEPTION="tools/health/store.py:yaml"
+  health_host_imports="$(
+    grep -rnE '^[[:space:]]*(import|from)[[:space:]]+(socket|subprocess|requests|urllib|http|asyncio|threading|multiprocessing|sqlite3|yaml)\b' \
+      "${ROOT}/tools/health" --include='*.py' 2>/dev/null \
+    | while IFS= read -r health_host_hit; do
+        health_host_rel="tools/health/${health_host_hit#"${ROOT}/tools/health/"}"
+        health_host_rel="${health_host_rel%%:*}"
+        health_host_mod="$(sed -E 's/^[^:]*:[0-9]+:[[:space:]]*(import|from)[[:space:]]+([A-Za-z0-9_]+).*/\2/' \
+          <<<"${health_host_hit}")"
+        if [[ "${health_host_rel}:${health_host_mod}" \
+              != "${HEALTH_STORAGE_IMPORT_EXCEPTION}" ]]; then
+          printf '%s ' "${health_host_rel}:${health_host_mod}"
+        fi
+      done
+  )"
+  if [[ -z "${health_host_imports}" ]]; then
     pass "no health module imports a network, concurrency or storage module"
   else
-    fail "a health module imports a network, concurrency or storage module"
+    fail "a health module imports a network, concurrency or storage module: ${health_host_imports}"
+  fi
+  # THE EXCEPTION ITSELF IS PINNED, for the same reason the forbidden sets are:
+  # widening it must require changing this line.
+  if [[ "${HEALTH_STORAGE_IMPORT_EXCEPTION}" == "tools/health/store.py:yaml" ]]; then
+    pass "the serialiser exception names the store module and yaml alone"
+  else
+    fail "the serialiser import exception changed: ${HEALTH_STORAGE_IMPORT_EXCEPTION}"
   fi
   if ! grep -rqE '^[[:space:]]*(import|from)[[:space:]]+tools\.(fabric|capability|trust|collectors)\b' \
        "${ROOT}/tools/health" --include='*.py'; then
@@ -387,22 +427,25 @@ else
   # dynamic imports. The Health-outbound direction was the weakest of the
   # three.
   #
-  # ALLOWLIST, NOT DENYLIST. The permitted set below is explicitly EMPTY and
-  # is compared by exact equality, because a denylist of planes silently
-  # permits the next package somebody adds under tools/. Two Health
-  # dependencies are already foreseen by the committed ENG-0006-D plan and are
-  # deliberately NOT pre-authorised here -- each must arrive with its own
-  # increment, justification and negative tests, exactly as the module
-  # allowlist does:
+  # ALLOWLIST, NOT DENYLIST. The permitted set below is compared by exact
+  # equality, because a denylist of planes silently permits the next package
+  # somebody adds under tools/. ENG-0006-D foresees two Health dependencies,
+  # and each must arrive with its own increment, justification and negative
+  # tests, exactly as the module allowlist does:
   #
   #   * `tools.common` -- `ImmutableStore`, the declared base for H6's
-  #     HealthStore (ENG-0006-D lines 100, 187, 504).
+  #     HealthStore (ENG-0006-D lines 100, 187, 504). AUTHORISED BY H6, and
+  #     authorised as `tools.common.immutable_store`, NOT as `tools.common`:
+  #     the guard matches on exact name or dotted prefix, so naming the module
+  #     admits the one module H6 needs while every other future member of
+  #     tools.common still has to come back here.
   #   * `tools.capability.records` -- `OUTCOME_CLASSES`, read-only, for
-  #     H13/E1's execution-outcome collector (ENG-0006-D line 261).
+  #     H13/E1's execution-outcome collector (ENG-0006-D line 261). STILL NOT
+  #     AUTHORISED.
   #
   # Health-local imports (`from .`, `from . import`) and the standard library
   # stay permitted: the rule is about leaving the package, not about importing.
-  HEALTH_PERMITTED_PLANE_IMPORTS=()
+  HEALTH_PERMITTED_PLANE_IMPORTS=("tools.common.immutable_store")
   # ENG-0006-H4B. The H4A guard matched import STATEMENTS plus two callee
   # spellings, and that was not enough: it tracked no name binding, so
   #
@@ -453,11 +496,25 @@ else
   else
     fail "the policy forbids .compile as an attribute, which breaks re.compile"
   fi
-  if (( ${#HEALTH_PERMITTED_PLANE_IMPORTS[@]} == 0 )); then
-    pass "no cross-plane import is permitted to the health package"
+  # Pinned by EXACT CONTENT, not by emptiness. H4B could assert the set was
+  # empty; now that one import is authorised, emptiness is no longer the
+  # property to hold, and "non-empty" would be no property at all -- it would
+  # accept `tools.trust`. The exact expected contents are therefore spelled
+  # out, so permitting anything further, or widening this entry to
+  # `tools.common`, must change this line.
+  if [[ "${HEALTH_PERMITTED_PLANE_IMPORTS[*]}" == "tools.common.immutable_store" ]]; then
+    pass "exactly one cross-plane import is permitted: tools.common.immutable_store"
   else
-    fail "a cross-plane import was permitted: ${HEALTH_PERMITTED_PLANE_IMPORTS[*]}"
+    fail "the permitted cross-plane set changed: ${HEALTH_PERMITTED_PLANE_IMPORTS[*]}"
   fi
+  for health_denied_plane in tools.trust tools.fabric tools.capability \
+                             tools.observation tools.common; do
+    if [[ " ${HEALTH_PERMITTED_PLANE_IMPORTS[*]} " == *" ${health_denied_plane} "* ]]; then
+      fail "${health_denied_plane} must not be permitted to the health package"
+    else
+      pass "${health_denied_plane} is not permitted to the health package"
+    fi
+  done
 
   health_import_report="$(
     HEALTH_PERMITTED="${HEALTH_PERMITTED_PLANE_IMPORTS[*]-}" \
@@ -557,11 +614,55 @@ HEALTHSCANNED
       fail "the import boundary never scanned ${approved_module}"
     fi
   done
-  if ! grep -rqE 'ImmutableStore|allocate_id|/var/lib/kyri' \
-       "${ROOT}/tools/health" --include='*.py'; then
-    pass "no health module names a store, an allocator or a production root"
+  # ENG-0006-H6. This assertion was written when the plane had no store, and
+  # it is kept rather than deleted: the EVALUATORS must still not reach
+  # storage, and deleting the rule because one module now legitimately breaks
+  # it would retire the guard for the other six. The scan therefore skips
+  # `store.py` alone -- which necessarily names its base class, its allocator
+  # and the production roots it refuses -- and still holds everywhere else.
+  HEALTH_STORAGE_NAME_EXCEPTIONS=("tools/health/store.py")
+  health_storage_names="$(
+    grep -rlE 'ImmutableStore|allocate_id|/var/lib/kyri' \
+      "${ROOT}/tools/health" --include='*.py' 2>/dev/null \
+    | while IFS= read -r health_storage_hit; do
+        health_storage_rel="tools/health/${health_storage_hit#"${ROOT}/tools/health/"}"
+        if [[ " ${HEALTH_STORAGE_NAME_EXCEPTIONS[*]} " != *" ${health_storage_rel} "* ]]; then
+          printf '%s ' "${health_storage_rel}"
+        fi
+      done
+  )"
+  if [[ -z "${health_storage_names}" ]]; then
+    pass "no health module outside the store names a store, an allocator or a production root"
   else
-    fail "a health module names a store, an allocator or a production root"
+    fail "a health module names a store, an allocator or a production root: ${health_storage_names}"
+  fi
+  # The exemption is pinned by exact content, so widening it must change this
+  # line -- the same reason the forbidden sets and the permitted import set
+  # are pinned.
+  if [[ "${HEALTH_STORAGE_NAME_EXCEPTIONS[*]}" == "tools/health/store.py" ]]; then
+    pass "the storage-name exemption names the store module alone"
+  else
+    fail "the storage-name exemption changed: ${HEALTH_STORAGE_NAME_EXCEPTIONS[*]}"
+  fi
+  # And each pure module is checked BY NAME as well as by the scan above. A
+  # scan with an exemption list can be widened; an enumeration cannot be,
+  # without deleting a line that says which module stopped being checked.
+  for health_pure_module in __init__ records errors conditions freshness hysteresis; do
+    if ! grep -qE 'ImmutableStore|allocate_id|/var/lib/kyri' \
+         "${ROOT}/tools/health/${health_pure_module}.py" 2>/dev/null; then
+      pass "tools/health/${health_pure_module}.py names no store, allocator or production root"
+    else
+      fail "tools/health/${health_pure_module}.py names a store, an allocator or a production root"
+    fi
+  done
+  # And the store names them only to REFUSE the production roots. H6 must not
+  # create /var/lib/kyri/health; the suite proves the refusal behaviourally,
+  # and this proves the module contains no provisioning verb beside the path.
+  if ! grep -nE '(mkdir|makedirs|touch|chown|chmod|rmtree|unlink)[^|]*/var/lib/kyri' \
+       "${ROOT}/tools/health/store.py" >/dev/null 2>&1; then
+    pass "the store never provisions a production path"
+  else
+    fail "the store provisions a production path"
   fi
 fi
 

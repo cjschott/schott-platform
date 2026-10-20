@@ -1175,7 +1175,7 @@ else
   while IFS= read -r health_file; do
     health_rel="tools/health/${health_file#"${ROOT}/tools/health/"}"
     case "${health_rel}" in
-      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py) ;;
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py|tools/health/store.py) ;;
       *) docs_health_unapproved+="${health_rel} " ;;
     esac
   done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)
@@ -1573,7 +1573,7 @@ fi
 #    suites drive Python, which roots its own temporary trees.
 for store_suite in test-trust-runtime test-knowledge-orchestrator \
                    test-operational-integrity test-experience-engine \
-                   test-occurrence-timeline; do
+                   test-occurrence-timeline test-health-store; do
   if [[ -f "${ROOT}/tests/${store_suite}.sh" ]] \
      && grep -qE 'mktemp|tempfile\.TemporaryDirectory|mkdtemp' "${ROOT}/tests/${store_suite}.sh"; then
     pass "${store_suite} roots its stores in a temporary directory"

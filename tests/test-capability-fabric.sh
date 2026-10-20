@@ -877,7 +877,7 @@ else
   while IFS= read -r fabric_health_file; do
     fabric_health_rel="tools/health/${fabric_health_file#"${ROOT}/tools/health/"}"
     case "${fabric_health_rel}" in
-      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py) ;;
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py|tools/health/store.py) ;;
       *) fabric_health_unapproved+="${fabric_health_rel} " ;;
     esac
   done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)
