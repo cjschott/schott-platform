@@ -154,7 +154,16 @@ the permitted cross-plane set to be **empty**.
 
 ## 4. Negative tests
 
-**31 fixtures: 25 rejected, 6 permitted, all as intended.**
+**32 fixtures: 26 rejected, 6 permitted, all as intended.**
+
+> **CORRECTION, ENG-0006-H5C.** This section first read "31 fixtures: 25
+> rejected, 6 permitted". The harness runs **32 — 26 rejected and 6
+> permitted**; the total and the rejected count were each understated by one.
+> Censused by group: 1 alias bypass + 4 direct builtins + 5 bare aliases + 3
+> getattr/subscript/attribute + 3 globals/vars/locals + 5 per-module + 5
+> retained import coverage = 26 rejected, plus 6 permitted. Every fixture
+> behaved as intended both before and after the recount, so no verdict
+> changes.
 
 | group | result |
 |---|---|
@@ -215,7 +224,16 @@ tripwire against drift, enforced at review time, not at runtime.
 | `import sys; sys.modules["tools.trust"]` | **not rejected** | It **cannot initiate a load** — verified: with nothing else importing it, `sys.modules["tools.trust"]` raises `KeyError`. It can only piggyback on an import made elsewhere in the same process, so it does not defeat an *import* boundary. Forbidding `sys` outright would be over-broad for a package that may legitimately need it later. |
 | `().__class__.__bases__[0].__subclasses__()` | **not rejected** | Deep introspection reaches arbitrary classes without naming any forbidden identifier. Closing it would mean forbidding `__class__`, `__bases__` and `__subclasses__`, and effecting an import from there takes substantial further work. Unmistakably evasive rather than low-complexity. |
 | `getattr(object, "__" + "subclasses__")` | **not rejected** | Same class: a name built from string fragments is invisible to an identifier check. Requires a different control — code review, or a runtime import hook. |
+| `__loader__.load_module("tools.trust.models")` | **not rejected** | **ENG-0006-H5C, tested.** A module's own loader is bound to its own name: the call raises `ImportError: loader for tools.health.freshness cannot handle tools.trust.models`, and `tools.trust.models` does not appear in `sys.modules` afterwards. Observed behaviour only — this is not a claim of Python runtime isolation, and a differently-obtained loader is a different question. |
+| `__spec__.loader.load_module("tools.trust.models")` | **not rejected** | **ENG-0006-H5C, tested.** Identical observed behaviour and identical `ImportError`, for the same reason: `__spec__.loader` is the same object bound to the same name. Observed behaviour only. |
 | `open()` and filesystem reads of another plane's store | **out of scope** | Not an import. Governed separately by store roots, filesystem ownership and the `governance-boundaries.md` direction matrix. |
+
+> **ADDED IN ENG-0006-H5C.** The two loader rows were found during H5's
+> semantic audit and were absent from this report as published. They are
+> recorded as **not rejected by the guard**, with the observed runtime
+> behaviour stated as observation rather than as a guarantee: the guard is a
+> static source boundary, and nothing here claims it sandboxes a Python
+> process.
 
 **No low-complexity bypass of the claimed boundary remains.** The one remnant
 that looks innocuous — `sys.modules[...]` — provably cannot bring another plane

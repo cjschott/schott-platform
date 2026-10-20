@@ -264,6 +264,45 @@ an interval exists and fails a declared requirement. *This distinction is an
 interpretation and is flagged for the reviewer rather than presented as
 settled.*
 
+> **EXPANDED IN ENG-0006-H5C — the conflation this reading produces.**
+> `unprovable` / `no-candidate-interval` is returned for **two materially
+> different situations**, with the same outcome *and* the same reason, so a
+> caller cannot tell them apart:
+>
+> | situation | evidence | H5 result |
+> |---|---|---|
+> | no observations at all, or only failed/unavailable ones, or only another dimension's, or only observations past the freshness policy | **absent** | `unprovable` / `no-candidate-interval` |
+> | observations exist, are usable, and **none violates** the condition | **present and conclusive** | `unprovable` / `no-candidate-interval` |
+>
+> The second row is a *proven non-violation*; the first is an absence of
+> evidence. ADR-0013 and the Confidence and Freshness Standard treat these as
+> different facts — "Stale means 'we looked and it was long ago'; unknown means
+> 'we have not looked'" — and H5 discards that distinction, which the caller
+> supplied.
+>
+> A second, milder conflation runs the other way: insufficient evidence can
+> reach **`unsatisfied`**. One violating observation under a 120-second
+> requirement returns `unsatisfied` / `duration-not-met`, which is
+> indistinguishable **by outcome** from an evidenced short span; only `reason`
+> narrows it, and for the coverage case `reason` is
+> `coverage-below-minimum-samples`, which does distinguish it.
+>
+> **No path asserts a non-violation.** The vocabulary is only `satisfied`,
+> `unsatisfied` and `unprovable`; no outcome or reason names the subject clear,
+> healthy or stable. So insufficient evidence is never misrepresented *as* a
+> proven non-violation. The defect is the reverse: a proven non-violation is
+> reported as though nothing were known.
+>
+> **Q-H5-1 MUST BE RESOLVED BEFORE H10 STATE DERIVATION.** H10 is the first
+> component permitted to conclude, and it is the consumer that needs "we looked
+> and it was clear" separated from "we have not looked" — the former is a
+> candidate for `healthy`, the latter is `unknown`, and ADR-0013 makes
+> `unknown` inert and never a positive claim. As H5 stands, H10 cannot take
+> that distinction from a `HysteresisResult` and must recompute it from the
+> observations. Resolving it may mean a fourth reason, a split outcome, or an
+> explicit statement that the distinction is H10's to make; **this report does
+> not choose.**
+
 **Q-H5-2 — one leg of clause 4 is vacuous as implemented.** Clause 4 requires
 "the first is within `max_gap_seconds` of `t0`". Because the reset rule sets
 `t0` to a violating usable observation, `t0` **is** the first observation of
@@ -271,6 +310,41 @@ the interval, so that distance is always zero and the leg can never fail. The
 other leg (last to `t1`) is load-bearing and is enforced. Either `t0` is meant
 to be something other than an observation instant — in which case ADR-0019 does
 not say what — or the leg is genuinely redundant. Recorded, not resolved.
+
+> **PRESERVED AS UNRESOLVED, ENG-0006-H5C.** **The independent anchoring of
+> `t0` is not specified.** The only definitional statement in committed
+> authority is the reset rule at `ADR-0019:194` — "`t0` moves to the next
+> violating usable observation" — and nothing gives `t0` an initial value.
+>
+> H5's semantic audit established the structural consequence: under the
+> anchoring the ADR does state (`t0` = the first violating usable observation),
+> clause 1 is meaningful and boundary leg 4a is vacuous; under a trailing-window
+> reading (`t0` = `t1 − seconds`), clause 1 becomes vacuous and leg 4a
+> meaningful. **Exactly one of the two is dead under either reading**, which is
+> itself evidence the ADR intends neither cleanly. Under a third reading, with
+> `t0` free, an interval exists iff `t1 − first ≥ seconds − max_gap_seconds`,
+> which is **more permissive than H5 by `max_gap_seconds`** — measured at
+> `t1 − first` of 90 to 119 seconds with `seconds = 120`, `max_gap = 30`, that
+> reading satisfies and H5 refuses.
+>
+> So H5 is **fail-closed** against the loosest reading and never permits a
+> transition any reading would refuse. **This remains unresolved and requires
+> an architecture ruling, not an implementation change.**
+
+**Q-H5-3 — a continuity reset caused by an excessive gap may surface as
+`duration-not-met`.** When a gap exceeding `max_gap_seconds` resets the
+interval, the surviving run is shorter, and the duration check is evaluated
+before the final gap check — so the reported `reason` names the *consequence*
+rather than the *cause*. Observed directly: with observations at t=0, a failed
+collection at t=10 and t=20, and `max_gap_seconds` tightened to 19, the result
+is `unsatisfied` / `duration-not-met`, although what actually broke continuity
+was the 20-second gap exceeding the 19-second maximum. The same pattern appears
+in the collection-outage cases.
+
+The verdict is correct in every case; only its explanation is less diagnostic
+than it could be. A reviewer may prefer a distinct reason — a
+`gap-reset-interval` or similar — so that an operator reading the reason learns
+what to fix. **Recorded, not resolved; no reason vocabulary was changed.**
 
 ### Carried forward, untouched
 
@@ -355,7 +429,8 @@ suite in `tests/` is wired into local validation and still passes.
 
 ## 10. Scope and production isolation
 
-**Nine files — seven modified, two new:**
+**Ten files — seven modified, three new** (the original count of nine omitted
+this report itself; corrected in ENG-0006-H5C)**:**
 
 | file | change |
 |---|---|
