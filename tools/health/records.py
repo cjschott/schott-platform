@@ -167,7 +167,13 @@ def _member(kind: str, field: str, value: Any, permitted: Sequence[str],
 
 def _identifier(kind: str, field: str, value: Any, family: str,
                 *, code: str = E.IDENTIFIER_MALFORMED) -> str:
-    if not isinstance(value, str) or not PATTERNS[family].match(value):
+    # ENG-0006-H6A / Q-H6-4. fullmatch, NOT match. `re.match` on a `^...$`
+    # pattern is not full-string matching: `$` also matches immediately before
+    # a trailing newline, so 'CHOBS-000001\n' satisfied every identifier check
+    # and was returned verbatim. An identifier becomes a filename in the store,
+    # and a name is not a line. This is the same correction `_decimal_text`
+    # already carries, applied to the one path every identifier passes through.
+    if not isinstance(value, str) or not PATTERNS[family].fullmatch(value):
         raise E.refuse(code, kind=kind, field=field, detail=family)
     return value
 

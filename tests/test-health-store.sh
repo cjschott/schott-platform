@@ -140,11 +140,11 @@ def observation(identifier="CHOBS-000001"):
         "provenance": {"tool": "test"}})
 
 
-def refuses(label, thunk, *, forbidden=None):
+def refuses(label, thunk, *, forbidden=None, kind=None):
     global failures
     try:
         thunk()
-    except StoreError as error:
+    except (kind or StoreError) as error:
         if forbidden is not None and str(forbidden) in str(error):
             print(f"FAIL: {label}: the refusal echoed {forbidden!r}", file=sys.stderr)
             failures += 1
@@ -564,19 +564,43 @@ nl_root = fresh_root("newline")
 nl = HealthStore(nl_root)
 refuses("an identifier with a trailing newline is refused by path_for",
         lambda: nl.path_for("capability-health-observation", "CHOBS-000001\n"))
-# The store's refusal above does not depend on what the record layer accepts.
-# Today H1 accepts the newline (Q-H6-4); if that is fixed, H1 refuses first and
-# the store is never asked. Both outcomes are correct, so both are accepted
-# here -- what must NOT happen is the record reaching a filename.
-try:
-    newline_record = observation("CHOBS-000002\n")
-except Exception:  # noqa: BLE001
-    print("PASS: the record layer now refuses the newline itself (Q-H6-4 fixed)")
-else:
-    check(newline_record.observation_id == "CHOBS-000002\n",
-          "the record layer still accepts the newline (Q-H6-4 open)")
-    refuses("and the store refuses to write that record",
-            lambda: nl.write_record("capability-health-observation", newline_record))
+# ENG-0006-H6A / Q-H6-4. The record layer now refuses the newline itself, so
+# no such record can be built to hand to the store. The store's own refusal
+# above is retained as the second of two independent barriers: the store is
+# what turns an identifier into a filename, so it must not depend on the
+# parser having been correct.
+refuses("the record layer refuses to build the record at all",
+        lambda: observation("CHOBS-000002\n"), kind=Exception)
+
+print("--- the parser and the store agree on identifier validity ---")
+# Q-H6-4 was a DISAGREEMENT: the parser accepted an identifier the store had
+# to refuse. Agreement is asserted directly, over one shared candidate set,
+# rather than inferred from the two layers having similar code.
+agree = HealthStore(fresh_root("agreement"))
+CANDIDATES = ("CHOBS-000001", "CHOBS-000001\n", "CHOBS-000001\r\n",
+              "CHOBS-000001\r", "CHOBS-000001\t", "CHOBS-000001 ",
+              " CHOBS-000001", "\nCHOBS-000001", "CHOBS-000001\nx",
+              "CHOBS-000001\nCHOBS-000002", "CHOBS-000001x", "CHOBS-000001.yaml",
+              "CHOBS-00001", "CHOBS-0000001", "chobs-000001", "CHOBS-000001/..",
+              "../CHOBS-000001", "CHOBS-000001\x00", "")
+accepted_by_both = 0
+for candidate in CANDIDATES:
+    try:
+        observation(candidate)
+        parser_accepts = True
+    except Exception:  # noqa: BLE001
+        parser_accepts = False
+    try:
+        agree.path_for("capability-health-observation", candidate)
+        store_accepts = True
+    except StoreError:
+        store_accepts = False
+    check(parser_accepts == store_accepts,
+          f"parser and store agree on {candidate!r}: "
+          f"{'both accept' if parser_accepts else 'both refuse'}")
+    accepted_by_both += 1 if (parser_accepts and store_accepts) else 0
+check(accepted_by_both == 1,
+      "exactly one of the candidates is valid, and both layers say so")
 check(sorted(p.name for p in (nl_root / "capability-health-observations").iterdir()) == [],
       "no file with a newline in its name was created")
 

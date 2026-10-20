@@ -291,6 +291,19 @@ BAD_IDS = {
     "capability-health-recommendation": ("recommendation_id", ["CHREC-1", "CHOBS-000001", ""]),
     "capability-heartbeat": ("heartbeat_id", ["CHBEAT-1", "CHREC-000001", ""]),
 }
+# ENG-0006-H6A. The module's COMPILED pattern is pinned to the committed
+# schema's, per family, byte for byte. Nothing checked this: the suite used the
+# schema pattern as its oracle and the module's own copy was never compared to
+# it, so the two could drift -- and once `_identifier` fullmatches, the `^...$`
+# anchors become redundant, which means dropping them changes no behaviour and
+# would have gone unnoticed. `tests/test-fabric-evidence-authority.sh:404` pins
+# the Fabric's identifier the same way; this is that precedent applied here.
+for family in FAMILIES:
+    check(H.PATTERNS[family].pattern == SCHEMA[family]["id_pattern"],
+          f"{family}: the module pattern is exactly the committed schema pattern")
+check(set(H.PATTERNS) == set(FAMILIES),
+      "the module compiles a pattern for exactly the six families")
+
 for family, (field, bad_values) in BAD_IDS.items():
     pattern = SCHEMA[family]["id_pattern"]
     check(re.match(pattern, VALID[family][field]) is not None,
@@ -300,6 +313,61 @@ for family, (field, bad_values) in BAD_IDS.items():
         payload[field] = bad
         refuses(family, payload,
                 f"{family} refuses the identifier shape {bad!r}")
+
+# ENG-0006-H6A / Q-H6-4. `re.match` on a `^...$` pattern is NOT full-string
+# matching: `$` also matches immediately before a trailing newline, so
+# 'CHOBS-000001\n' passed every identifier check and was returned verbatim.
+# H6's store then had to refuse it a second time to avoid building a filename
+# containing a newline. The parser is the right place for this, and every
+# family must refuse the same shapes.
+print("--- identifiers are matched in full, not to a trailing newline ---")
+EXTRANEOUS = ("{0}\n", "{0}\r\n", "{0}\r", "{0}\t", "{0} ", " {0}", "\n{0}",
+              "{0}\n ", "{0}\nx", "{0}\n{0}", "{0}x", "{0}-", "{0}0",
+              "{0}.yaml", "{0}/..", "{0}\x00")
+for family, (field, _bad) in BAD_IDS.items():
+    good = VALID[family][field]
+    # The oracle stays the COMMITTED SCHEMA pattern, not the module's copy.
+    check(re.fullmatch(SCHEMA[family]["id_pattern"], good) is not None,
+          f"{family}: the valid fixture identifier still fullmatches the schema")
+    for shape in EXTRANEOUS:
+        bad = shape.format(good)
+        payload = copy.deepcopy(VALID[family])
+        payload[field] = bad
+        refuses(family, payload,
+                f"{family} refuses {bad!r} as {field}")
+# The same rule on every REFERENCE field, not only on each record's own
+# identity field. A reference is an identifier too.
+for family, field, reference_family in (
+        ("capability-health-state", "envelope_id", "capability-health-envelope"),
+        ("capability-degradation-event", "derived_from_state_id",
+         "capability-health-state"),
+        ("capability-health-recommendation", "derived_from_state_id",
+         "capability-health-state")):
+    base = VALID[family].get(field)
+    if not isinstance(base, str) or not base:
+        continue
+    for shape in ("{0}\n", "{0} ", "{0}.yaml"):
+        payload = copy.deepcopy(VALID[family])
+        payload[field] = shape.format(base)
+        refuses(family, payload,
+                f"{family} refuses {shape.format(base)!r} as {field}")
+
+# And inside an identifier SEQUENCE. `_id_sequence` validates each member
+# through the same `_identifier`, so one newline-bearing member must refuse the
+# whole record -- including when it sits beside valid members.
+for family in ("capability-health-state", "capability-degradation-event"):
+    members = VALID[family].get("derived_from_observation_ids")
+    if not isinstance(members, list) or not members:
+        continue
+    for bad_members in (["CHOBS-000001\n"],
+                        ["CHOBS-000001", "CHOBS-000002\n"],
+                        ["CHOBS-000001\n", "CHOBS-000002"],
+                        ["CHOBS-000001 "],
+                        ["CHOBS-000001.yaml"]):
+        payload = copy.deepcopy(VALID[family])
+        payload["derived_from_observation_ids"] = bad_members
+        refuses(family, payload,
+                f"{family} refuses {bad_members!r} in derived_from_observation_ids")
 
 print("--- subject types: capability-package is refused everywhere ---")
 for family in FAMILIES:

@@ -381,11 +381,16 @@ else
   # imports no serialiser, and the store still imports no socket, no
   # subprocess and no concurrency facility.
   HEALTH_STORAGE_IMPORT_EXCEPTION="tools/health/store.py:yaml"
-  health_host_imports="$(
+  # ENG-0006-H6A / Q-H6-5. The scan takes the tree to scan as an argument, so
+  # the same rule that judges the repository can be pointed at a FIXTURE tree.
+  # That is what lets the battery below demonstrate an approved import being
+  # refused once it is moved into another module -- a claim no assertion over
+  # the real tree can make, because the real tree is compliant.
+  health_host_import_scan() {
     grep -rnE '^[[:space:]]*(import|from)[[:space:]]+(socket|subprocess|requests|urllib|http|asyncio|threading|multiprocessing|sqlite3|yaml)\b' \
-      "${ROOT}/tools/health" --include='*.py' 2>/dev/null \
+      "$1/tools/health" --include='*.py' 2>/dev/null \
     | while IFS= read -r health_host_hit; do
-        health_host_rel="tools/health/${health_host_hit#"${ROOT}/tools/health/"}"
+        health_host_rel="tools/health/${health_host_hit#"$1/tools/health/"}"
         health_host_rel="${health_host_rel%%:*}"
         health_host_mod="$(sed -E 's/^[^:]*:[0-9]+:[[:space:]]*(import|from)[[:space:]]+([A-Za-z0-9_]+).*/\2/' \
           <<<"${health_host_hit}")"
@@ -394,7 +399,8 @@ else
           printf '%s ' "${health_host_rel}:${health_host_mod}"
         fi
       done
-  )"
+  }
+  health_host_imports="$(health_host_import_scan "${ROOT}")"
   if [[ -z "${health_host_imports}" ]]; then
     pass "no health module imports a network, concurrency or storage module"
   else
@@ -439,13 +445,22 @@ else
   #     the guard matches on exact name or dotted prefix, so naming the module
   #     admits the one module H6 needs while every other future member of
   #     tools.common still has to come back here.
+  #
+  # ENG-0006-H6A / Q-H6-5. Each entry is now a `file:module` PAIR, not a bare
+  # module name. H6 authorised the import for the PACKAGE, which meant the AST
+  # guard would have let any Health module import `ImmutableStore` -- the
+  # authorisation was wider than the justification. The pair form matches the
+  # serialiser exception above, so both cross-package dependencies are now
+  # expressed the same way and both are scoped to `tools/health/store.py`
+  # alone. A bare module name is refused outright by the shape pin below, so
+  # a package-wide permission cannot return by accident.
   #   * `tools.capability.records` -- `OUTCOME_CLASSES`, read-only, for
   #     H13/E1's execution-outcome collector (ENG-0006-D line 261). STILL NOT
   #     AUTHORISED.
   #
   # Health-local imports (`from .`, `from . import`) and the standard library
   # stay permitted: the rule is about leaving the package, not about importing.
-  HEALTH_PERMITTED_PLANE_IMPORTS=("tools.common.immutable_store")
+  HEALTH_PERMITTED_PLANE_IMPORTS=("tools/health/store.py:tools.common.immutable_store")
   # ENG-0006-H4B. The H4A guard matched import STATEMENTS plus two callee
   # spellings, and that was not enough: it tracked no name binding, so
   #
@@ -500,35 +515,79 @@ else
   # empty; now that one import is authorised, emptiness is no longer the
   # property to hold, and "non-empty" would be no property at all -- it would
   # accept `tools.trust`. The exact expected contents are therefore spelled
-  # out, so permitting anything further, or widening this entry to
-  # `tools.common`, must change this line.
-  if [[ "${HEALTH_PERMITTED_PLANE_IMPORTS[*]}" == "tools.common.immutable_store" ]]; then
-    pass "exactly one cross-plane import is permitted: tools.common.immutable_store"
+  # out, so permitting anything further, widening the entry to `tools.common`,
+  # or widening its SCOPE from one module to the package, must change this line.
+  if [[ "${HEALTH_PERMITTED_PLANE_IMPORTS[*]}" \
+        == "tools/health/store.py:tools.common.immutable_store" ]]; then
+    pass "exactly one cross-plane import is permitted, and only to the store module"
   else
     fail "the permitted cross-plane set changed: ${HEALTH_PERMITTED_PLANE_IMPORTS[*]}"
   fi
-  for health_denied_plane in tools.trust tools.fabric tools.capability \
-                             tools.observation tools.common; do
-    if [[ " ${HEALTH_PERMITTED_PLANE_IMPORTS[*]} " == *" ${health_denied_plane} "* ]]; then
-      fail "${health_denied_plane} must not be permitted to the health package"
+  # SHAPE PIN. Every entry must carry a file scope. A bare module name would be
+  # read by the scan as applying to no file at all -- but relying on that would
+  # make a silent mistake into a silent pass, so the shape is asserted outright.
+  for health_permitted_entry in "${HEALTH_PERMITTED_PLANE_IMPORTS[@]}"; do
+    if [[ "${health_permitted_entry}" == tools/health/*.py:*.* ]]; then
+      pass "the permitted entry is scoped to a file: ${health_permitted_entry}"
     else
-      pass "${health_denied_plane} is not permitted to the health package"
+      fail "a permitted cross-plane import is not scoped to a file: ${health_permitted_entry}"
+    fi
+  done
+  # The denied planes are compared against the MODULE half of each pair, so
+  # that `tools/health/store.py:tools.common.immutable_store` is not mistaken
+  # for a permission on `tools.common` by a substring match.
+  health_permitted_modules=""
+  for health_permitted_entry in "${HEALTH_PERMITTED_PLANE_IMPORTS[@]}"; do
+    health_permitted_modules+="${health_permitted_entry##*:} "
+  done
+  for health_denied_plane in tools.trust tools.fabric tools.capability \
+                             tools.observation tools.common tools; do
+    if [[ " ${health_permitted_modules} " == *" ${health_denied_plane} "* ]]; then
+      fail "${health_denied_plane} must not be permitted to any health module"
+    else
+      pass "${health_denied_plane} is not permitted to any health module"
+    fi
+  done
+  # And only the store module may appear on the left of any pair.
+  for health_permitted_entry in "${HEALTH_PERMITTED_PLANE_IMPORTS[@]}"; do
+    if [[ "${health_permitted_entry%%:*}" == "tools/health/store.py" ]]; then
+      pass "the permitted entry is scoped to the store module"
+    else
+      fail "a cross-plane import is permitted to ${health_permitted_entry%%:*}, not the store"
     fi
   done
 
-  health_import_report="$(
+  # ENG-0006-H6A / Q-H6-5. Root-parameterised for the same reason the
+  # serialiser scan is: the module-scoped rule can only be DEMONSTRATED
+  # against a tree where an approved import has been moved, and the real
+  # tree is compliant by construction.
+  health_ast_scan() {
     HEALTH_PERMITTED="${HEALTH_PERMITTED_PLANE_IMPORTS[*]-}" \
     HEALTH_FORBIDDEN_NAMES="${HEALTH_FORBIDDEN_NAMES[*]}" \
     HEALTH_FORBIDDEN_ATTRS="${HEALTH_FORBIDDEN_ATTRS[*]}" \
-    python3 - "${ROOT}" <<'HEALTHIMPORTS'
+    python3 - "$1" <<'HEALTHIMPORTS'
 import ast
 import os
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-permitted = {name for name in (os.environ.get("HEALTH_PERMITTED", "") or "").split()
-             if name}
+# ENG-0006-H6A / Q-H6-5. Entries are `path:module` PAIRS, so a cross-package
+# permission belongs to ONE file rather than to the package. An entry with no
+# file scope permits nothing at all -- deliberately fail-closed -- and the
+# suite's shape pin asserts that such an entry can never arrive unnoticed.
+permitted_pairs = set()
+for entry in (os.environ.get("HEALTH_PERMITTED", "") or "").split():
+    if ":" in entry:
+        scope, permitted_module = entry.rsplit(":", 1)
+        permitted_pairs.add((scope, permitted_module))
+
+
+def permits(relative_path, imported):
+    """Whether THIS file is permitted THIS import, by exact name or dotted prefix."""
+    return any(scope == relative_path
+               and (imported == module or imported.startswith(module + "."))
+               for scope, module in permitted_pairs)
 forbidden_names = set((os.environ.get("HEALTH_FORBIDDEN_NAMES", "") or "").split())
 forbidden_attrs = set((os.environ.get("HEALTH_FORBIDDEN_ATTRS", "") or "").split())
 violations = []
@@ -542,8 +601,7 @@ for path in sorted((root / "tools/health").rglob("*.py")):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "tools" or alias.name.startswith("tools."):
-                    if not any(alias.name == p or alias.name.startswith(p + ".")
-                               for p in permitted):
+                    if not permits(rel, alias.name):
                         violations.append(f"{rel}: import {alias.name}")
                 if alias.name == "importlib" or alias.name.startswith("importlib"):
                     violations.append(f"{rel}: import {alias.name} (dynamic import)")
@@ -553,16 +611,14 @@ for path in sorted((root / "tools/health").rglob("*.py")):
             if node.level == 0:
                 module = node.module or ""
                 if module == "tools" or module.startswith("tools."):
-                    if not any(module == p or module.startswith(p + ".")
-                               for p in permitted):
+                    if not permits(rel, module):
                         violations.append(f"{rel}: from {module} import ...")
                 if module == "importlib" or module.startswith("importlib."):
                     violations.append(f"{rel}: from {module} import ... (dynamic)")
             elif node.level >= 2:
                 sibling = ("tools." + node.module.split(".")[0]) if node.module else "tools"
                 resolved = "tools." + node.module if node.module else "tools"
-                if not any(resolved == p or resolved.startswith(p + ".")
-                           for p in permitted):
+                if not permits(rel, resolved):
                     dots = "." * node.level
                     violations.append(
                         f"{rel}: from {dots}{node.module or ''} import ... "
@@ -588,11 +644,129 @@ for path in sorted((root / "tools/health").rglob("*.py")):
                 violations.append(f"{rel}:{node.lineno}: attribute .{node.attr}")
 print(" | ".join(violations))
 HEALTHIMPORTS
-  )"
+  }
+  health_import_report="$(health_ast_scan "${ROOT}")"
   if [[ -z "${health_import_report}" ]]; then
     pass "no health module reaches another plane or a dynamic-import facility"
   else
     fail "a health module leaves its package: ${health_import_report}"
+  fi
+
+  # ENG-0006-H6A / Q-H6-5. THE MODULE-SCOPED RULE, DEMONSTRATED.
+  #
+  # Asserting that the compliant tree passes proves nothing about scope: it
+  # would pass under a package-wide permission too. The only way to show the
+  # permission is bound to one file is to MOVE it and watch the scan refuse
+  # it. That needs a tree the suite may edit, so the approved modules are
+  # copied into a fixture and the same two scans are pointed at the copy.
+  boundary_fixture="$(mktemp -d)"
+  mkdir -p "${boundary_fixture}/tools/health"
+  cp "${ROOT}"/tools/health/*.py "${boundary_fixture}/tools/health/"
+  if [[ -z "$(health_ast_scan "${boundary_fixture}")" ]] \
+     && [[ -z "$(health_host_import_scan "${boundary_fixture}")" ]]; then
+    pass "the fixture copy of the approved tree is clean, so the battery starts from zero"
+  else
+    fail "the fixture copy of the approved tree is not clean"
+  fi
+  # Positive control, and NOT a repeat of the clean check above: that the
+  # fixture is clean is only meaningful if the fixture actually exercises the
+  # permission. A copy that silently failed would also scan clean. So the
+  # fixture's store module is asserted to really carry the approved import.
+  if grep -qE '^[[:space:]]*from[[:space:]]+\.\.common\.immutable_store[[:space:]]+import' \
+       "${boundary_fixture}/tools/health/store.py" \
+     && grep -qE '^[[:space:]]*import[[:space:]]+yaml\b' \
+       "${boundary_fixture}/tools/health/store.py"; then
+    pass "the fixture's store module really carries both authorised imports"
+  else
+    fail "the fixture's store module does not carry the authorised imports, so the battery is vacuous"
+  fi
+  # Every spelling of the approved cross-package import, moved into every
+  # other approved module. Each must be refused.
+  for health_moved_form in \
+      'from ..common.immutable_store import ImmutableStore' \
+      'from ..common.immutable_store import ImmutableStore as _S' \
+      'from ..common import immutable_store' \
+      'from tools.common.immutable_store import ImmutableStore' \
+      'import tools.common.immutable_store' \
+      'import tools.common.immutable_store as _S' \
+      'from ...tools.common.immutable_store import ImmutableStore'; do
+    for health_victim in __init__ records errors conditions freshness hysteresis; do
+      printf '%s\n' "${health_moved_form}" \
+        > "${boundary_fixture}/tools/health/${health_victim}.py"
+      cat "${ROOT}/tools/health/${health_victim}.py" \
+        >> "${boundary_fixture}/tools/health/${health_victim}.py"
+      if [[ -n "$(health_ast_scan "${boundary_fixture}")" ]]; then
+        pass "refused in ${health_victim}.py: ${health_moved_form}"
+      else
+        fail "PERMITTED in ${health_victim}.py: ${health_moved_form}"
+      fi
+      cp "${ROOT}/tools/health/${health_victim}.py" \
+        "${boundary_fixture}/tools/health/${health_victim}.py"
+    done
+  done
+  # The same for the serialiser. `yaml` is the store's alone.
+  for health_moved_yaml in 'import yaml' 'import yaml as _y' 'from yaml import safe_load'; do
+    for health_victim in __init__ records errors conditions freshness hysteresis; do
+      printf '%s\n' "${health_moved_yaml}" \
+        > "${boundary_fixture}/tools/health/${health_victim}.py"
+      cat "${ROOT}/tools/health/${health_victim}.py" \
+        >> "${boundary_fixture}/tools/health/${health_victim}.py"
+      if [[ -n "$(health_host_import_scan "${boundary_fixture}")" ]]; then
+        pass "refused in ${health_victim}.py: ${health_moved_yaml}"
+      else
+        fail "PERMITTED in ${health_victim}.py: ${health_moved_yaml}"
+      fi
+      cp "${ROOT}/tools/health/${health_victim}.py" \
+        "${boundary_fixture}/tools/health/${health_victim}.py"
+    done
+  done
+  # And a NEW module may not carry either, however it is named -- including a
+  # name chosen to look like the authorised one.
+  for health_impostor in store2.py health_store.py stores.py store_base.py; do
+    printf 'from ..common.immutable_store import ImmutableStore\nimport yaml\n' \
+      > "${boundary_fixture}/tools/health/${health_impostor}"
+    if [[ -n "$(health_ast_scan "${boundary_fixture}")" ]] \
+       && [[ -n "$(health_host_import_scan "${boundary_fixture}")" ]]; then
+      pass "refused in a new module named ${health_impostor}"
+    else
+      fail "a new module named ${health_impostor} was permitted the store imports"
+    fi
+    rm -f "${boundary_fixture}/tools/health/${health_impostor}"
+  done
+  # H4B's protections are unchanged by the rescoping: still refused ANYWHERE,
+  # including in the store module, which now has one authorisation and no more.
+  for health_still_forbidden in \
+      'from ..trust import models' \
+      'from ..fabric import records' \
+      'from ..capability import records' \
+      'from ..collectors import probe' \
+      'import tools.trust.models' \
+      'import importlib' \
+      'from importlib import import_module' \
+      '_A = __import__' \
+      'eval("1")' \
+      'exec("x=1")' \
+      'import tools.common.secrets' \
+      'from ..common import anything_else'; do
+    for health_victim in records store; do
+      printf '%s\n' "${health_still_forbidden}" \
+        > "${boundary_fixture}/tools/health/${health_victim}.py"
+      cat "${ROOT}/tools/health/${health_victim}.py" \
+        >> "${boundary_fixture}/tools/health/${health_victim}.py"
+      if [[ -n "$(health_ast_scan "${boundary_fixture}")" ]]; then
+        pass "still refused in ${health_victim}.py: ${health_still_forbidden}"
+      else
+        fail "H4B protection lost in ${health_victim}.py: ${health_still_forbidden}"
+      fi
+      cp "${ROOT}/tools/health/${health_victim}.py" \
+        "${boundary_fixture}/tools/health/${health_victim}.py"
+    done
+  done
+  rm -rf "${boundary_fixture}"
+  if [[ ! -e "${boundary_fixture}" ]]; then
+    pass "the import-boundary fixture is removed"
+  else
+    fail "the import-boundary fixture was left behind"
   fi
   # The scan must cover EVERY approved module, not only the evaluators: the
   # H4A gap included `errors.py` and `__init__.py`, which no suite inspected.
