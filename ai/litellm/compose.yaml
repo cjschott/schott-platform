@@ -8,7 +8,7 @@
 
 services:
   litellm:
-    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-v1.74.3-stable}
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-v1.83.14-stable}
     restart: unless-stopped
     environment:
       TZ: ${TZ:-America/Chicago}
