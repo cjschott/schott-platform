@@ -619,6 +619,220 @@ check(accepted_by_both == 1,
 check(sorted(p.name for p in (nl_root / "capability-health-observations").iterdir()) == [],
       "no file with a newline in its name was created")
 
+print("--- ENG-0006-H7a: render and readback preview write nothing ---")
+rr_root = fresh_root()
+rr = HealthStore(rr_root, allow_repository_root=True)
+rr_before = sorted(str(q.relative_to(rr_root)) for q in rr_root.rglob("*"))
+rendered = HealthStore.render_record(envelope("CHENV-0001"))
+preview = HealthStore.preview_readback(envelope("CHENV-0001"))
+check(sorted(str(q.relative_to(rr_root)) for q in rr_root.rglob("*")) == rr_before,
+      "rendering and previewing a record write nothing")
+rr_path = rr.write_record("capability-health-envelope", envelope("CHENV-0001"))
+check(rr_path.read_text(encoding="utf-8") == rendered,
+      "render_record is byte-for-byte the text write_record commits")
+check(preview == rr.read_record("capability-health-envelope", "CHENV-0001"),
+      "preview_readback equals what read_record returns")
+
+print("--- ENG-0006-H7a: scan_records reports what it cannot read ---")
+(rr_root / "capability-health-envelopes" / "CHENV-0002.yaml").write_text(
+    "- a list, not a record\n")
+(rr_root / "capability-health-envelopes" / "CHENV-0003.yaml").write_text(
+    "key: [unclosed\n")
+(rr_root / "capability-health-envelopes" / "CHENV-0004.yaml").symlink_to(rr_path)
+scanned = dict(rr.scan_records("capability-health-envelope"))
+check(isinstance(scanned.get("CHENV-0001"), dict)
+      and scanned["CHENV-0001"]["envelope_id"] == "CHENV-0001",
+      "scan_records returns a readable record")
+check(all(stem in scanned and scanned[stem] is None
+          for stem in ("CHENV-0002", "CHENV-0003", "CHENV-0004")),
+      "a non-mapping, an unparseable file and a symlink each scan as None, "
+      "never as absent")
+
+print("--- ENG-0006-H7a: the store-wide request lock ---")
+import fcntl  # noqa: E402
+import multiprocessing  # noqa: E402
+import os  # noqa: E402
+import stat  # noqa: E402
+
+lk_root = fresh_root()
+lk = HealthStore(lk_root, allow_repository_root=True)
+lock_path = lk_root / "sequences" / "request_identity.lock"
+check(lock_path.is_file() and not lock_path.is_symlink(),
+      "the lock file is created with the store, not by the first operation")
+check(stat.S_IMODE(lock_path.stat().st_mode) == 0o600,
+      "the lock file is 0600")
+lk_before = sorted(str(q.relative_to(lk_root)) for q in lk_root.rglob("*"))
+with lk.request_critical_section("REQ-A"):
+    pass
+check(sorted(str(q.relative_to(lk_root)) for q in lk_root.rglob("*")) == lk_before,
+      "entering and leaving the section changes nothing in the store")
+check(HealthStore(lk_root, allow_repository_root=True) is not None
+      and lock_path.is_file(), "re-opening a store keeps the same lock file")
+
+
+class Seamed(HealthStore):
+    """A store whose sync point records the phases it reaches."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.phases = []
+
+    def _test_sync_point(self, phase, request_id):
+        self.phases.append(phase)
+
+
+# L-12: the contention seam fires only when actually contended.
+quiet = Seamed(lk_root, allow_repository_root=True)
+with quiet.request_critical_section("REQ-Q"):
+    pass
+check(quiet.phases == [],
+      "L-12 an uncontended entry never fires the contention seam")
+
+# L-8: re-entry through the same store object is refused, never hung.
+reentrant_refused = False
+with lk.request_critical_section("REQ-A"):
+    try:
+        with lk.request_critical_section("REQ-B"):
+            pass
+    except StoreError:
+        reentrant_refused = True
+check(reentrant_refused, "L-8 re-entering the section is refused, not deadlocked")
+with lk.request_critical_section("REQ-C"):
+    pass
+check(True, "L-8 the section is usable again after a refused re-entry")
+
+# L-6: a holder that raises releases the lock.
+class Boom(Exception):
+    pass
+
+
+try:
+    with lk.request_critical_section("REQ-D"):
+        raise Boom()
+except Boom:
+    pass
+probe = os.open(lock_path, os.O_RDWR)
+try:
+    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fcntl.flock(probe, fcntl.LOCK_UN)
+    check(True, "L-6 a holder that raises leaves the lock free")
+except OSError:
+    check(False, "L-6 a holder that raised left the lock held")
+finally:
+    os.close(probe)
+
+# Cross-process exclusion, synchronised by events, never by sleeping. The
+# holder signals that it holds; the contender's seam signals that it is
+# blocked; only then is the holder released. Timeouts are failure bounds only.
+CTX = multiprocessing.get_context("fork")
+BOUND = 60
+
+
+def holder(root, held, release, entered_log):
+    store = HealthStore(root, allow_repository_root=True)
+    with store.request_critical_section("REQ-HOLD"):
+        entered_log.put("holder-in")
+        held.set()
+        release.wait(BOUND)
+        entered_log.put("holder-out")
+
+
+class Contender(HealthStore):
+    def __init__(self, root, contended, **kwargs):
+        super().__init__(root, **kwargs)
+        self._contended = contended
+
+    def _test_sync_point(self, phase, request_id):
+        if phase == "lock_contended":
+            self._contended.set()
+
+
+def contender(root, contended, entered_log):
+    store = Contender(root, contended, allow_repository_root=True)
+    with store.request_critical_section("REQ-WAIT"):
+        entered_log.put("contender-in")
+
+
+held, release, contended = CTX.Event(), CTX.Event(), CTX.Event()
+log = CTX.Queue()
+a = CTX.Process(target=holder, args=(lk_root, held, release, log))
+a.start()
+check(held.wait(BOUND), "a holder process signals that it holds the section")
+b = CTX.Process(target=contender, args=(lk_root, contended, log))
+b.start()
+check(contended.wait(BOUND),
+      "a second process is observed blocked on the lock (positive signal)")
+release.set()
+a.join(BOUND)
+b.join(BOUND)
+order = [log.get(timeout=BOUND) for _ in range(3)]
+check(order == ["holder-in", "holder-out", "contender-in"],
+      f"the contender entered only after the holder left: {order}")
+check(a.exitcode == 0 and b.exitcode == 0, "both processes exited cleanly")
+
+# L-7: a holder killed with SIGKILL releases the lock through the kernel.
+import signal  # noqa: E402
+
+
+def killed_holder(root, held):
+    store = HealthStore(root, allow_repository_root=True)
+    with store.request_critical_section("REQ-DIE"):
+        held.set()
+        signal.pause()
+
+
+held = CTX.Event()
+victim = CTX.Process(target=killed_holder, args=(lk_root, held))
+victim.start()
+check(held.wait(BOUND), "a holder process holds the section")
+os.kill(victim.pid, signal.SIGKILL)
+victim.join(BOUND)
+check(victim.exitcode == -signal.SIGKILL, "the holder was killed with SIGKILL")
+after_kill = Seamed(lk_root, allow_repository_root=True)
+with after_kill.request_critical_section("REQ-NEXT"):
+    pass
+check(after_kill.phases == [],
+      "L-7 after SIGKILL the next caller enters without contention")
+
+# L-9: a lock this store cannot vouch for is refused.
+for label, plant in (
+        ("a symbolic link", lambda path: path.symlink_to(lk_root / "elsewhere")),
+        ("a directory", lambda path: path.mkdir()),
+        ("a group-writable file", lambda path: (path.write_text(""),
+                                                path.chmod(0o660))),
+        ("a FIFO", lambda path: os.mkfifo(path))):
+    bad_root = fresh_root()
+    bad = HealthStore(bad_root, allow_repository_root=True)
+    bad_lock = bad_root / "sequences" / "request_identity.lock"
+    bad_lock.unlink()
+    plant(bad_lock)
+    try:
+        with bad.request_critical_section("REQ-L9"):
+            pass
+        check(False, f"L-9 a lock that is {label} is refused")
+    except StoreError:
+        check(True, f"L-9 a lock that is {label} is refused")
+    try:
+        HealthStore(bad_root, allow_repository_root=True)
+        check(False, f"L-9 opening a store whose lock is {label} is refused")
+    except StoreError:
+        check(True, f"L-9 opening a store whose lock is {label} is refused")
+check(not (lk_root / "elsewhere").exists(),
+      "L-9 a symlinked lock was never followed to create its target")
+
+# Another owner cannot be fabricated without privilege, so the descriptor's
+# owner is compared against a store user the test reports as different.
+real_geteuid = os.geteuid
+os.geteuid = lambda: real_geteuid() + 1
+try:
+    with lk.request_critical_section("REQ-OWNER"):
+        pass
+    check(False, "L-9 a lock owned by another user is refused")
+except StoreError:
+    check(True, "L-9 a lock owned by another user is refused")
+finally:
+    os.geteuid = real_geteuid
+
 print("--- the module boundary ---")
 check(hasattr(PKG, "HealthStore") and PKG.HealthStore is S.HealthStore,
       "tools.health re-exports the SAME HealthStore")

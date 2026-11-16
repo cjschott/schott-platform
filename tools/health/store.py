@@ -34,12 +34,16 @@ evaluators respectively.
 
 from __future__ import annotations
 
+import fcntl
+import os
+import stat
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import yaml
 
-from ..common.immutable_store import ImmutableStore, StoreError
+from ..common.immutable_store import FILE_MODE, ImmutableStore, StoreError
 from .records import IDENTITY_FIELD, KINDS, PATTERNS
 
 __all__ = ["HealthStore", "HealthStoreError", "ID_PREFIXES", "ID_WIDTHS",
@@ -108,9 +112,14 @@ class HealthStore(ImmutableStore):
         vetted = self._vetted_root(root, initialize=initialize)
         super().__init__(vetted, allow_repository_root=allow_repository_root,
                          initialize=initialize)
+        self._section_held = False
         if initialize:
             for name in (*self.record_dirs.values(), *self.extra_dirs):
                 self._vetted_directory(self.root / name, name)
+            # ENG-0006-H7a. The lock belongs to the store's layout, not to an
+            # operation: created lazily, the first refused ingestion on a fresh
+            # store would add a file, and a refusal must change nothing.
+            os.close(self._open_request_lock())
 
     # --- roots and directories ---------------------------------------------
 
@@ -178,6 +187,90 @@ class HealthStore(ImmutableStore):
                 f"record path for {identifier!r} is a symbolic link")
         return path
 
+    # --- the store-wide critical section (ENG-0006-H7a) ---------------------
+
+    def _open_request_lock(self) -> int:
+        """The one lock file, opened without following a link, then checked.
+
+        Never read, never written, never deleted. Checked through the
+        descriptor rather than the path, so the file checked is the file held.
+        """
+        sequences = self._vetted_directory(self.root / "sequences", "sequences")
+        try:
+            handle = os.open(sequences / "request_identity.lock",
+                             os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+                             | os.O_NONBLOCK, FILE_MODE)
+        except OSError as error:
+            # ELOOP for a symlink in the lock's place; anything else is equally
+            # a lock this store cannot vouch for.
+            raise StoreError("the request identity lock could not be opened "
+                             "as a regular file") from error
+        try:
+            entry = os.fstat(handle)
+            if not stat.S_ISREG(entry.st_mode):
+                raise StoreError("the request identity lock is not a regular file")
+            if entry.st_uid != os.geteuid():
+                raise StoreError(
+                    "the request identity lock is not owned by the store's user")
+            if entry.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise StoreError(
+                    "the request identity lock is writable beyond its owner")
+        except BaseException:
+            os.close(handle)
+            raise
+        return handle
+
+    def _test_sync_point(self, phase: str, request_id: str) -> None:
+        """Named point a coordinating test can observe. Production no-op.
+
+        The Fabric's seam, restated: a deterministic two-caller test needs a
+        positive signal that a caller reached a phase, not an inference from
+        elapsed time. This writes nothing, holds nothing and returns nothing.
+        """
+
+    @contextmanager
+    def request_critical_section(self, request_id: str) -> Iterator[None]:
+        """Serialise replay lookup, subject checks, allocation, write and readback.
+
+        The pattern of `tools/fabric/store.py`, restated here because Health may
+        not import the Fabric. **Store-global**: one `flock` on
+        `sequences/request_identity.lock` for every envelope write, whatever its
+        request identity; `request_id` never names the lock and is passed only
+        so contention is reported against the request that waited.
+
+        **Not reentrant, and refused rather than hung.** An `flock` on a fresh
+        descriptor blocks against the same process's own hold, so a second
+        entry through this store object while it holds the section is refused.
+        One store object serves one governed operation at a time; concurrent
+        callers use their own store objects, as separate processes do.
+
+        **Advisory.** `flock` serialises cooperating writers only. A process
+        that writes the store directly is not stopped by it; that is detection,
+        at ingestion of the same subject and by H7b's `verify`, not prevention.
+        """
+        if self._section_held:
+            raise StoreError("the request critical section is not reentrant")
+        handle = self._open_request_lock()
+        try:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                # Fires only when someone else actually holds the lock, so a
+                # test waits on a positive event rather than on elapsed time.
+                self._test_sync_point("lock_contended", request_id)
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            self._section_held = True
+            try:
+                yield
+            finally:
+                self._section_held = False
+                # Released however the section ends: a refusal and a traceback
+                # both leave the next caller able to proceed. A killed process
+                # releases it when the kernel closes the descriptor.
+                fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            os.close(handle)
+
     # --- writing -----------------------------------------------------------
 
     def identifier_of(self, kind: str, record: Any) -> str:
@@ -201,6 +294,49 @@ class HealthStore(ImmutableStore):
         """Persist a Health record under its own identity field."""
         destination = self.path_for(kind, self.identifier_of(kind, record))
         return self.write_atomic(destination, record.to_dict())
+
+    # --- serialisation without a write (ENG-0006-H7a) ----------------------
+
+    @staticmethod
+    def render_record(record) -> str:
+        """The exact text `write_record` would persist for `record`.
+
+        The options are `ImmutableStore.write_atomic`'s, restated because the
+        shared write path is not changed by this increment; the store suite
+        proves the rendered text equals the committed file byte for byte.
+        """
+        return yaml.safe_dump(record.to_dict(), sort_keys=True,
+                              default_flow_style=False, allow_unicode=True)
+
+    @classmethod
+    def preview_readback(cls, record) -> Any:
+        """What reading `record` back would return, computed without writing.
+
+        Lets ingestion prove a record survives the store's serialisation before
+        an identifier is allocated, so an unstable record is refused while the
+        refusal still costs nothing.
+        """
+        return yaml.safe_load(cls.render_record(record))
+
+    def scan_records(self, kind: str) -> list[tuple[str, Any]]:
+        """Every record file of `kind` as (stem, payload), sorted by name.
+
+        Unlike `list_records`, nothing is skipped: a file that is not readable
+        as a YAML mapping is returned with payload `None`, because a caller
+        deciding what a subject already has must not mistake an unreadable
+        record for an absent one. Symbolic links count as unreadable.
+        """
+        found: list[tuple[str, Any]] = []
+        for path in sorted(self._directory(kind).glob("*.yaml")):
+            if path.is_symlink():
+                found.append((path.stem, None))
+                continue
+            try:
+                payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, yaml.YAMLError):
+                payload = None
+            found.append((path.stem, payload if isinstance(payload, dict) else None))
+        return found
 
     # --- integrity ---------------------------------------------------------
 
