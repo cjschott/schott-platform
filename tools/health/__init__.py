@@ -1,4 +1,4 @@
-"""The Capability Health Plane — ENG-0006-H1 through H6.
+"""The Capability Health Plane — ENG-0006-H1 through H7a.
 
 **Records, three pure evaluators, and the store, in separate modules.**
 
@@ -18,16 +18,21 @@
   and carries the CHDEG proof fields for a transition it finds provable.
 - `store` — the append-only record store, built on the platform's shared
   write-once storage base, and the identifier allocation behind it. The only
-  module here that touches a filesystem, and the only one authorised to name a
-  store class, an allocator, a production path or a serialiser.
+  module authorised to name a store class, a production path or a serialiser.
+- `ingest` — initial-envelope ingestion (ENG-0006-H7a). `ingest_envelope`
+  admits one first envelope from an operator-published approval statement, or
+  refuses; it reads that statement and calls the store's allocator, and does
+  nothing else outside the record model.
 
 The dependency runs one way: the evaluators and the store import `records`,
-`records` imports none of them, and they do not import each other. A record
-model never depends on an evaluation.
+`records` imports none of them, and they do not import each other. `ingest`
+imports `records` and `store`, and only this package re-exports it. A record model
+never depends on an evaluation.
 
 It still concludes nothing. No state is derived, no clock is read, and the
-only thing imported from outside this package is the shared storage base that
-`store` subclasses. A condition outcome, a freshness label and a hysteresis
+only things imported from outside this package are the shared storage base
+that `store` subclasses and, for `ingest` alone, the shared canonical JSON
+encoder and trusted-source reader. A condition outcome, a freshness label and a hysteresis
 proof are all advisory: turning them into a health state needs the
 worst-dimension-wins combination, which is a later increment's authority.
 `aging` is reported only when a caller supplies a threshold, because no
@@ -56,14 +61,16 @@ from .hysteresis import (HYSTERESIS_OUTCOMES, UNPROVABLE_REASONS,
 from .records import (HealthRecord, KINDS, citations_of, parse,
                       select_observations, validate_citations)
 from .store import HealthStore, HealthStoreError
+from .ingest import IngestResult, ingest_envelope
 
 __all__ = ["CONDITION_OUTCOMES", "ConditionResult", "FRESHNESS_STATES",
            "FRESHNESS_UNKNOWN_REASONS", "FreshnessResult",
            "HYSTERESIS_OUTCOMES", "HealthRecord", "HealthRecordError",
            "HealthStore", "HealthStoreError",
-           "HysteresisProof", "HysteresisResult", "KINDS",
+           "HysteresisProof", "HysteresisResult", "IngestResult", "KINDS",
            "UNKNOWN_REASONS", "UNPROVABLE_REASONS", "UNSATISFIED_REASONS",
            "citations_of", "evaluate_condition",
            "evaluate_envelope_freshness", "evaluate_freshness",
-           "evaluate_hysteresis", "parse", "select_observations",
+           "evaluate_hysteresis", "ingest_envelope", "parse",
+           "select_observations",
            "validate_citations"]

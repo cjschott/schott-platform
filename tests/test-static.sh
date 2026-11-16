@@ -1451,6 +1451,7 @@ done
 # rather than forbidden outright. Nothing else about this rule changes: the
 # eight names above stay forbidden, and a health package holding anything but
 # the three approved modules fails here exactly as it would have before.
+# ENG-0006-H7a added `ingest.py`, matching tests/test-capability-health.sh.
 if [[ ! -d "${ROOT}/tools/health" ]]; then
   pass "no fabric runtime package: tools/health"
 else
@@ -1458,7 +1459,7 @@ else
   while IFS= read -r static_health_file; do
     static_health_rel="tools/health/${static_health_file#"${ROOT}/tools/health/"}"
     case "${static_health_rel}" in
-      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py|tools/health/store.py) ;;
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py|tools/health/store.py|tools/health/ingest.py) ;;
       *) static_health_unapproved+="${static_health_rel} " ;;
     esac
   done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)

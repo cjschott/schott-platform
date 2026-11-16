@@ -254,6 +254,12 @@ done
 # CLOSED and still compared by equality: one name was added per increment, no
 # rule was relaxed, and the fixture battery below proves an unapproved module --
 # including one named to look like an approved one -- is still rejected.
+#
+# ENG-0006-H7a added `ingest.py`, component C1: initial-envelope ingestion. It
+# is the second module that may name the allocator, and the only one that may
+# read an approval statement. Its two cross-package imports are pinned to it
+# below, exactly as the store's are. There is still no CLI, no `__main__`, no
+# `verify` (H7b) and no approval helper, and the intruder battery says so.
 HEALTH_MODULE_ALLOWLIST=(
   "tools/health/__init__.py"
   "tools/health/records.py"
@@ -262,6 +268,7 @@ HEALTH_MODULE_ALLOWLIST=(
   "tools/health/freshness.py"
   "tools/health/hysteresis.py"
   "tools/health/store.py"
+  "tools/health/ingest.py"
 )
 
 # Echoes every file under $1 that the allowlist does not name exactly.
@@ -315,6 +322,7 @@ else
   cp "${ROOT}/tools/health/freshness.py" "${allowlist_fixture}/freshness.py"
   cp "${ROOT}/tools/health/hysteresis.py" "${allowlist_fixture}/hysteresis.py"
   cp "${ROOT}/tools/health/store.py" "${allowlist_fixture}/store.py"
+  cp "${ROOT}/tools/health/ingest.py" "${allowlist_fixture}/ingest.py"
   if [[ -z "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
     pass "the allowlist accepts a tree holding exactly the approved modules"
   else
@@ -329,7 +337,10 @@ else
                   conditions freshness_v2.py freshness.pyc xfreshness.py \
                   freshness_store.py freshness_collector.py freshness \
                   hysteresis_v2.py hysteresis.pyc xhysteresis.py \
-                  hysteresis_store.py hysteresis; do
+                  hysteresis_store.py hysteresis \
+                  ingest_v2.py ingest.pyc xingest.py ingestion.py \
+                  ingest_store.py ingest cli.py verify.py approve.py \
+                  publish.py helper.py; do
     : > "${allowlist_fixture}/${intruder}"
     if [[ -n "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
       pass "the allowlist rejects an unapproved module: ${intruder}"
@@ -460,7 +471,16 @@ else
   #
   # Health-local imports (`from .`, `from . import`) and the standard library
   # stay permitted: the rule is about leaving the package, not about importing.
-  HEALTH_PERMITTED_PLANE_IMPORTS=("tools/health/store.py:tools.common.immutable_store")
+  #
+  # ENG-0006-H7a (ruling D-2). Two more pairs, both scoped to `ingest.py` and
+  # both naming one MODULE of tools.common, never the package:
+  #   * `tools.common.canonical_json` -- the shared byte-identical copy of the
+  #     Capability encoder (ruling O-3), which defines the approval digest.
+  #   * `tools.common.trusted_source` -- descriptor-checked reading of the
+  #     approval statement from a directory this process cannot write.
+  HEALTH_PERMITTED_PLANE_IMPORTS=("tools/health/store.py:tools.common.immutable_store"
+                                  "tools/health/ingest.py:tools.common.canonical_json"
+                                  "tools/health/ingest.py:tools.common.trusted_source")
   # ENG-0006-H4B. The H4A guard matched import STATEMENTS plus two callee
   # spellings, and that was not enough: it tracked no name binding, so
   #
@@ -518,8 +538,8 @@ else
   # out, so permitting anything further, widening the entry to `tools.common`,
   # or widening its SCOPE from one module to the package, must change this line.
   if [[ "${HEALTH_PERMITTED_PLANE_IMPORTS[*]}" \
-        == "tools/health/store.py:tools.common.immutable_store" ]]; then
-    pass "exactly one cross-plane import is permitted, and only to the store module"
+        == "tools/health/store.py:tools.common.immutable_store tools/health/ingest.py:tools.common.canonical_json tools/health/ingest.py:tools.common.trusted_source" ]]; then
+    pass "exactly three cross-plane imports are permitted: one to the store, two to ingestion"
   else
     fail "the permitted cross-plane set changed: ${HEALTH_PERMITTED_PLANE_IMPORTS[*]}"
   fi
@@ -548,13 +568,17 @@ else
       pass "${health_denied_plane} is not permitted to any health module"
     fi
   done
-  # And only the store module may appear on the left of any pair.
+  # And only the store and ingestion modules may appear on the left of any
+  # pair, each with its own modules and no other's.
   for health_permitted_entry in "${HEALTH_PERMITTED_PLANE_IMPORTS[@]}"; do
-    if [[ "${health_permitted_entry%%:*}" == "tools/health/store.py" ]]; then
-      pass "the permitted entry is scoped to the store module"
-    else
-      fail "a cross-plane import is permitted to ${health_permitted_entry%%:*}, not the store"
-    fi
+    case "${health_permitted_entry}" in
+      tools/health/store.py:tools.common.immutable_store \
+      | tools/health/ingest.py:tools.common.canonical_json \
+      | tools/health/ingest.py:tools.common.trusted_source)
+        pass "the permitted entry is scoped to its one module: ${health_permitted_entry}" ;;
+      *)
+        fail "a cross-plane import is permitted outside the store/ingest pairs: ${health_permitted_entry}" ;;
+    esac
   done
 
   # ENG-0006-H6A / Q-H6-5. Root-parameterised for the same reason the
@@ -680,6 +704,14 @@ HEALTHIMPORTS
   else
     fail "the fixture's store module does not carry the authorised imports, so the battery is vacuous"
   fi
+  if grep -qE '^[[:space:]]*from[[:space:]]+\.\.common\.canonical_json[[:space:]]+import' \
+       "${boundary_fixture}/tools/health/ingest.py" \
+     && grep -qE '^[[:space:]]*from[[:space:]]+\.\.common\.trusted_source[[:space:]]+import' \
+       "${boundary_fixture}/tools/health/ingest.py"; then
+    pass "the fixture's ingestion module really carries both authorised imports"
+  else
+    fail "the fixture's ingestion module does not carry its imports, so the battery is vacuous"
+  fi
   # Every spelling of the approved cross-package import, moved into every
   # other approved module. Each must be refused.
   for health_moved_form in \
@@ -690,7 +722,7 @@ HEALTHIMPORTS
       'import tools.common.immutable_store' \
       'import tools.common.immutable_store as _S' \
       'from ...tools.common.immutable_store import ImmutableStore'; do
-    for health_victim in __init__ records errors conditions freshness hysteresis; do
+    for health_victim in __init__ records errors conditions freshness hysteresis ingest; do
       printf '%s\n' "${health_moved_form}" \
         > "${boundary_fixture}/tools/health/${health_victim}.py"
       cat "${ROOT}/tools/health/${health_victim}.py" \
@@ -706,7 +738,7 @@ HEALTHIMPORTS
   done
   # The same for the serialiser. `yaml` is the store's alone.
   for health_moved_yaml in 'import yaml' 'import yaml as _y' 'from yaml import safe_load'; do
-    for health_victim in __init__ records errors conditions freshness hysteresis; do
+    for health_victim in __init__ records errors conditions freshness hysteresis ingest; do
       printf '%s\n' "${health_moved_yaml}" \
         > "${boundary_fixture}/tools/health/${health_victim}.py"
       cat "${ROOT}/tools/health/${health_victim}.py" \
@@ -719,6 +751,56 @@ HEALTHIMPORTS
       cp "${ROOT}/tools/health/${health_victim}.py" \
         "${boundary_fixture}/tools/health/${health_victim}.py"
     done
+  done
+  # ENG-0006-H7a. Ingestion's two imports, moved into every other module --
+  # the store included -- are refused in every spelling.
+  for health_moved_form in \
+      'from ..common.canonical_json import serialise' \
+      'from ..common.canonical_json import parse as _p' \
+      'from tools.common.canonical_json import serialise' \
+      'import tools.common.canonical_json' \
+      'from ..common.trusted_source import open_trusted_regular_file' \
+      'from tools.common.trusted_source import TrustedSourceError' \
+      'import tools.common.trusted_source as _t'; do
+    for health_victim in __init__ records errors conditions freshness hysteresis store; do
+      printf '%s\n' "${health_moved_form}" \
+        > "${boundary_fixture}/tools/health/${health_victim}.py"
+      cat "${ROOT}/tools/health/${health_victim}.py" \
+        >> "${boundary_fixture}/tools/health/${health_victim}.py"
+      if [[ -n "$(health_ast_scan "${boundary_fixture}")" ]]; then
+        pass "refused in ${health_victim}.py: ${health_moved_form}"
+      else
+        fail "PERMITTED in ${health_victim}.py: ${health_moved_form}"
+      fi
+      cp "${ROOT}/tools/health/${health_victim}.py" \
+        "${boundary_fixture}/tools/health/${health_victim}.py"
+    done
+  done
+  # The pairs name MODULES. The package form resolves to `tools.common` and is
+  # refused even in ingest.py, as is any other member of tools.common.
+  for health_package_form in 'from ..common import canonical_json' \
+                             'from ..common import trusted_source' \
+                             'import tools.common' \
+                             'from ..common.containment import contained_path' \
+                             'from ..common.yaml_strict import loads_strict'; do
+    printf '%s\n' "${health_package_form}" > "${boundary_fixture}/tools/health/ingest.py"
+    cat "${ROOT}/tools/health/ingest.py" >> "${boundary_fixture}/tools/health/ingest.py"
+    if [[ -n "$(health_ast_scan "${boundary_fixture}")" ]]; then
+      pass "refused in ingest.py: ${health_package_form}"
+    else
+      fail "PERMITTED in ingest.py: ${health_package_form}"
+    fi
+    cp "${ROOT}/tools/health/ingest.py" "${boundary_fixture}/tools/health/ingest.py"
+  done
+  for health_impostor in ingest2.py ingestion.py approve.py verify.py; do
+    printf 'from ..common.canonical_json import serialise\nfrom ..common.trusted_source import open_trusted_regular_file\n' \
+      > "${boundary_fixture}/tools/health/${health_impostor}"
+    if [[ -n "$(health_ast_scan "${boundary_fixture}")" ]]; then
+      pass "refused in a new module named ${health_impostor}"
+    else
+      fail "a new module named ${health_impostor} was permitted the ingestion imports"
+    fi
+    rm -f "${boundary_fixture}/tools/health/${health_impostor}"
   done
   # And a NEW module may not carry either, however it is named -- including a
   # name chosen to look like the authorised one.
@@ -748,7 +830,7 @@ HEALTHIMPORTS
       'exec("x=1")' \
       'import tools.common.secrets' \
       'from ..common import anything_else'; do
-    for health_victim in records store; do
+    for health_victim in records store ingest; do
       printf '%s\n' "${health_still_forbidden}" \
         > "${boundary_fixture}/tools/health/${health_victim}.py"
       cat "${ROOT}/tools/health/${health_victim}.py" \
@@ -794,7 +876,13 @@ HEALTHSCANNED
   # it would retire the guard for the other six. The scan therefore skips
   # `store.py` alone -- which necessarily names its base class, its allocator
   # and the production roots it refuses -- and still holds everywhere else.
-  HEALTH_STORAGE_NAME_EXCEPTIONS=("tools/health/store.py")
+  #
+  # ENG-0006-H7a (ruling D-2). `ingest.py` allocates the envelope identifier,
+  # so it names `allocate_id`. It is excepted from this scan and then held to
+  # a NARROWER rule of its own just below: it may name the allocator and
+  # nothing else on this list -- not the store base class, not a production
+  # root.
+  HEALTH_STORAGE_NAME_EXCEPTIONS=("tools/health/store.py" "tools/health/ingest.py")
   health_storage_names="$(
     grep -rlE 'ImmutableStore|allocate_id|/var/lib/kyri' \
       "${ROOT}/tools/health" --include='*.py' 2>/dev/null \
@@ -813,10 +901,16 @@ HEALTHSCANNED
   # The exemption is pinned by exact content, so widening it must change this
   # line -- the same reason the forbidden sets and the permitted import set
   # are pinned.
-  if [[ "${HEALTH_STORAGE_NAME_EXCEPTIONS[*]}" == "tools/health/store.py" ]]; then
-    pass "the storage-name exemption names the store module alone"
+  if [[ "${HEALTH_STORAGE_NAME_EXCEPTIONS[*]}" \
+        == "tools/health/store.py tools/health/ingest.py" ]]; then
+    pass "the storage-name exemption names the store and ingestion modules alone"
   else
     fail "the storage-name exemption changed: ${HEALTH_STORAGE_NAME_EXCEPTIONS[*]}"
+  fi
+  if ! grep -qE 'ImmutableStore|/var/lib/kyri' "${ROOT}/tools/health/ingest.py"; then
+    pass "tools/health/ingest.py names no store base class and no production root"
+  else
+    fail "tools/health/ingest.py names a store base class or a production root"
   fi
   # And each pure module is checked BY NAME as well as by the scan above. A
   # scan with an exemption list can be widened; an enumeration cannot be,

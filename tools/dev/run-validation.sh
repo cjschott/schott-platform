@@ -149,12 +149,13 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # host-only but still a STEP -- it skips inside itself rather than being skipped
 # here. Both totals are re-measured by a run below rather than incremented.
 #
-# ENG-0006-H7a added the shared canonical JSON suite, pure and run in both modes.
+# ENG-0006-H7a added two, both run in both modes: the shared canonical JSON
+# suite (pure) and the Health envelope ingestion suite (fixture-only).
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=150
+  TOTAL_STEPS=151
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=175
+  TOTAL_STEPS=176
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -1118,6 +1119,11 @@ run "Health store" bash tests/test-health-store.sh
 # Capability encoder (ruling O-3). Pure: no file, no process, no network, so it
 # runs in quick mode too.
 run "Shared canonical JSON" bash tests/test-common-canonical-json.sh
+# ENG-0006-H7a. Initial-envelope ingestion against disposable fixture stores
+# and approval directories; no production path, no network. It forks child
+# processes for the lock tests and still runs in about a second, so it runs in
+# quick mode too.
+run "Health envelope ingestion" bash tests/test-health-ingest.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 
