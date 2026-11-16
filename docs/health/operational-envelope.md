@@ -96,6 +96,15 @@ available without the dangerous half.
   finding.
 - **Envelope changes require immutable approval.** A new envelope version is a
   new record with an approving identity, not an edit.
+- **Every envelope carries its approval, including the first** (ENG-0006-H7a).
+  The record's required `approval` block restates the approval statement it
+  was ingested from, and `approval.approval_digest` is the SHA-256 of that
+  statement's canonical bytes. The "approving identity" is
+  `approval.approving_authority`. It is **attribution, not authentication**:
+  a name in a statement, not proof that a particular person acted. A subject
+  may be neither its own `actor` nor its own `approving_authority`. A successor
+  is derived from a later envelope's `supersedes`; `superseded_by` is never
+  stored.
 
 ## No envelope means unmonitored; no threshold means insufficient-policy
 

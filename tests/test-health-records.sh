@@ -108,6 +108,24 @@ if not IMPORTED:
 PROV = {"class": "declared", "source": "docs/decisions/ADR-0013-capability-health-plane.md",
         "recorded_at": "2026-10-13"}
 
+# ENG-0006-H7a. The approval block every envelope now carries (ruling O-2).
+# The record model checks its SHAPE and its consistency with the envelope; it
+# does not recompute the digest -- that needs the statement's canonical bytes,
+# and is ingestion's job (tests/test-health-ingest.sh).
+APPROVAL = {
+    "approval_statement_version": 1,
+    "approval_domain": "capability-health-envelope",
+    "operation": "initial",
+    "request_id": "REQ-0001",
+    "actor": "operator",
+    "approving_authority": "operator-review",
+    "approved_at": "2026-10-13T08:00:00-05:00",
+    "canonicalisation": "kyri-strict-canonical-json/v1",
+    "digest_algorithm": "sha256",
+    "approval_digest": "sha256:" + "0" * 64,
+    "approval_source": {"authority": "health-approvals", "name": "REQ-0001.json"},
+}
+
 VALID = {
     "capability-health-envelope": {
         "envelope_id": "CHENV-0001",
@@ -128,6 +146,7 @@ VALID = {
         },
         "evaluation": "worst-dimension-wins",
         "provenance": dict(PROV),
+        "approval": copy.deepcopy(APPROVAL),
     },
     "capability-health-observation": {
         "observation_id": "CHOBS-000001",
@@ -1004,12 +1023,16 @@ for malformed in (" 1", "1 ", " 1 ", "1\n", "\t1", "1_000", "1,000", "0x10",
     refuses(ENV_KIND, envelope_with_threshold(malformed),
             f"a threshold of {malformed!r} is refused as non-decimal syntax")
 
-# Finite decimals that MUST remain acceptable. Rejecting any of these would be
-# inventing a precision, magnitude or formatting restriction that no normative
-# source declares -- which this increment is explicitly forbidden from doing.
-for ok in ("0", "-0", "+0", "0.1", "-0.1", "+1", "1.25", "2000", "32",
-           "1e3", "1E3", "1.5e-3", "1.5E+3", ".5", "5.", "0.000001",
-           "1e999999", "1e-999999",
+# Finite decimals that MUST remain acceptable in an ENVELOPE. No precision or
+# magnitude restriction is imposed -- none is declared.
+#
+# ENG-0006-H7a (ruling O-12) narrowed this list deliberately. H1C accepted every
+# spelling of a finite decimal; an envelope threshold now has exactly ONE
+# spelling, declared by the CHENV schema's `condition_value_grammar`, so `-0`,
+# `+0`, `+1`, `1e3`, `.5`, `5.` and the exponent forms moved to the refusal list
+# in the H7a section below. They remain acceptable where the grammar does not
+# apply -- see the transition-record assertions there.
+for ok in ("0", "0.1", "-0.1", "1.25", "2000", "32", "0.000001",
            "1" + "0" * 400, "123456789012345678901234567890.123456789"):
     payload = envelope_with_threshold(ok)
     try:
@@ -1041,6 +1064,233 @@ payload = copy.deepcopy(VALID["capability-degradation-event"])
 payload["entry_condition"]["value"] = " 2000 "
 refuses("capability-degradation-event", payload,
         "a whitespace-padded quoted condition on a transition is refused")
+
+print("--- ENG-0006-H7a: canonical threshold spelling (ruling O-12) ---")
+# Oracle: the committed schema's grammar, compiled HERE from the schema text.
+# Each sample is checked against BOTH the schema grammar and the module, and
+# both must agree with the expectation written beside the sample.
+GRAMMAR = re.compile(SCHEMA[ENV_KIND]["condition_value_grammar"])
+CANONICAL_SAMPLES = {
+    # value: is it the one canonical spelling?
+    "0": True, "1": True, "-1": True, "2000": True, "2000.5": True,
+    "0.5": True, "-0.5": True, "0.05": True, "10.25": True, "-10.25": True,
+    "1" + "0" * 400: True,
+    # negative zero
+    "-0": False, "-0.0": False, "-0.00": False,
+    # trailing zeros
+    "2000.0": False, "2000.50": False, "0.0": False, "0.10": False, "1.": False,
+    "5.": False,
+    # leading zeros
+    "02000": False, "00": False, "00.5": False, "-01": False,
+    # exponent notation
+    "2e3": False, "2E3": False, "1e-3": False, "1.5e+3": False, "0e0": False,
+    "1e999999": False,
+    # explicit plus, and a bare leading point
+    "+2000": False, "+0": False, ".5": False, "-.5": False,
+}
+for value, expected in CANONICAL_SAMPLES.items():
+    label = value if len(value) < 20 else value[:12] + "..."
+    check(bool(GRAMMAR.fullmatch(value)) is expected,
+          f"schema grammar: {label!r} canonical={expected}")
+    try:
+        parse(ENV_KIND, envelope_with_threshold(value))
+        accepted = True
+    except E.HealthRecordError as error:
+        accepted = False
+        if not expected:
+            check(error.code == E.DECIMAL_NOT_CANONICAL and value not in str(error),
+                  f"model: {label!r} is refused as decimal-not-canonical, unechoed")
+    check(accepted is expected, f"model agrees with the schema on {label!r}")
+# The same grammar governs the exit threshold.
+payload = copy.deepcopy(VALID[ENV_KIND])
+payload["dimensions"]["latency"]["exit_condition"]["value"] = "1500.0"
+refuses(ENV_KIND, payload, "a non-canonical EXIT threshold is refused")
+# Scope: envelopes only. A transition record quotes a condition and an
+# observation records a measurement; neither is approved, so neither is held
+# to the approval grammar, and the H1C acceptance still holds for them.
+for spelling in ("+1", "1e3", ".5", "5.", "-0"):
+    payload = copy.deepcopy(VALID["capability-degradation-event"])
+    payload["entry_condition"]["value"] = spelling
+    try:
+        parse("capability-degradation-event", payload)
+        print(f"PASS: a transition's quoted condition still accepts {spelling!r}")
+    except Exception as error:  # noqa: BLE001
+        print(f"FAIL: a transition's quoted condition refused {spelling!r}: "
+              f"{error}", file=sys.stderr)
+        failures += 1
+
+print("--- ENG-0006-H7a: the approval block agrees with the schema ---")
+ENV_SCHEMA = SCHEMA[ENV_KIND]
+# Read from the schema directly: the name `forbidden` is reused as a payload
+# earlier in this script, which shadows the helper of the same name.
+ENV_FORBIDDEN = list(ENV_SCHEMA.get("forbidden_fields") or [])
+check("approval" in required(ENV_KIND), "the schema requires approval")
+check("superseded_by" in ENV_FORBIDDEN
+      and "superseded_by" not in optional(ENV_KIND),
+      "the schema forbids superseded_by rather than permitting it")
+check("publication" in ENV_FORBIDDEN,
+      "the schema forbids a publication block by name (D1)")
+check(list(H.APPROVAL_FIELDS) == list(ENV_SCHEMA["approval_fields"]["required"]),
+      "the model's approval members are exactly the schema's, in order")
+check(list(H.APPROVAL_SOURCE_FIELDS)
+      == list(ENV_SCHEMA["approval_source_fields"]["required"]),
+      "the model's approval_source members are exactly the schema's")
+check(H.APPROVAL_STATEMENT_VERSION == ENV_SCHEMA["approval_statement_version"]
+      and H.APPROVAL_DOMAIN == ENV_SCHEMA["approval_domain"]
+      and list(H.APPROVAL_OPERATIONS) == list(ENV_SCHEMA["approval_operations"])
+      and H.APPROVAL_CANONICALISATION == ENV_SCHEMA["approval_canonicalisation"]
+      and H.APPROVAL_DIGEST_ALGORITHM == ENV_SCHEMA["approval_digest_algorithm"]
+      and H.APPROVAL_SOURCE_AUTHORITY == ENV_SCHEMA["approval_source_authority"],
+      "the model's approval constants are the schema's")
+check("^" + H.REQUEST_ID_PATTERN.pattern + "$"
+      == ENV_SCHEMA["approval_request_id_pattern"],
+      "the model's request_id pattern is exactly the schema's")
+check("^" + H.APPROVAL_DIGEST_PATTERN.pattern + "$"
+      == ENV_SCHEMA["approval_digest_pattern"],
+      "the model's digest pattern is exactly the schema's")
+check(ENV_SCHEMA["approval_signature_fields"] == "forbidden"
+      and ENV_SCHEMA["approval_trust_record"] == "forbidden",
+      "the schema declares no signature and no Trust record (T0)")
+
+
+def with_approval(**changes):
+    payload = copy.deepcopy(VALID[ENV_KIND])
+    for member, value in changes.items():
+        if value is KeyError:
+            payload["approval"].pop(member)
+        else:
+            payload["approval"][member] = value
+    return payload
+
+
+print("--- ENG-0006-H7a: every approval member is required, none defaulted ---")
+for member in ENV_SCHEMA["approval_fields"]["required"]:
+    refuses(ENV_KIND, with_approval(**{member: KeyError}),
+            f"an approval missing {member} is refused")
+for member in ("trust_record_id", "signature", "approval_signature", "sha256"):
+    refuses(ENV_KIND, with_approval(**{member: "sentinel-extra"}),
+            f"an approval carrying {member} is refused",
+            forbidden_value="sentinel-extra")
+for value in (None, [], "approval", {}):
+    payload = copy.deepcopy(VALID[ENV_KIND])
+    payload["approval"] = value
+    refuses(ENV_KIND, payload, f"an approval of {type(value).__name__} "
+                               f"{value!r} is refused")
+
+print("--- ENG-0006-H7a: approval member values ---")
+BAD_MEMBERS = [
+    ("approval_statement_version", 2), ("approval_statement_version", True),
+    ("approval_statement_version", "1"),
+    ("approval_domain", "capability-health-state"),
+    ("operation", "amend"), ("operation", "Initial"), ("operation", None),
+    ("canonicalisation", "json"), ("digest_algorithm", "sha512"),
+    ("request_id", ""), ("request_id", "REQ 1"), ("request_id", "REQ/1"),
+    ("request_id", "x" * 201), ("request_id", "REQ-1\n"),
+    ("request_id", "REQ-é"), ("request_id", 7),
+    ("actor", ""), ("actor", "   "), ("actor", 7),
+    ("approving_authority", ""), ("approving_authority", None),
+    ("approved_at", "2026-10-13T08:00:00"), ("approved_at", "yesterday"),
+    ("approval_digest", "sha256:" + "0" * 63),
+    ("approval_digest", "sha256:" + "A" * 64),
+    ("approval_digest", "0" * 64), ("approval_digest", "sha512:" + "0" * 64),
+    ("approval_digest", "sha256:" + "0" * 64 + "\n"),
+    ("approval_source", {"authority": "health-approvals"}),
+    ("approval_source", {"authority": "trust", "name": "REQ-0001.json"}),
+    ("approval_source", {"authority": "health-approvals",
+                         "name": "REQ-0002.json"}),
+    ("approval_source", {"authority": "health-approvals", "name": "REQ-0001"}),
+    ("approval_source", {"authority": "health-approvals",
+                         "name": "REQ-0001.json", "sha256": "0" * 64}),
+    ("approval_source", "REQ-0001.json"),
+]
+for member, value in BAD_MEMBERS:
+    refuses(ENV_KIND, with_approval(**{member: value}),
+            f"approval {member}={value!r:.40} is refused")
+check(H.REQUEST_ID_PATTERN.fullmatch("x" * 200) is not None,
+      "a 200-character request_id is within bounds")
+payload = with_approval(request_id="REQ-~!#.9",
+                        approval_source={"authority": "health-approvals",
+                                         "name": "REQ-~!#.9.json"})
+try:
+    parse(ENV_KIND, payload)
+    print("PASS: a request_id of printable ASCII punctuation is accepted")
+except Exception as error:  # noqa: BLE001
+    print(f"FAIL: a printable-ASCII request_id was refused: {error}",
+          file=sys.stderr)
+    failures += 1
+
+print("--- ENG-0006-H7a: the request_id rule is a subset of the Fabric's ---")
+# Health may not import the Fabric, so its rule is restated; this TEST may, and
+# proves the restatement is a strict subset: every Health request_id is a valid
+# Fabric request_id, and the only Fabric-valid spellings Health refuses are
+# those containing '/', which cannot be a file stem.
+from tools.fabric.request_identity import validate_request_id  # noqa: E402
+REQUEST_SAMPLES = ["REQ-0001", "a", "x" * 200, "x" * 201, "", "a b", "a/b",
+                   "/", "~", "!", "..", "a.b-c_d:e", "a\tb", "a\nb", "café",
+                   "\x7f", "{}", "REQ-0001.json"]
+for sample in REQUEST_SAMPLES:
+    try:
+        validate_request_id(sample)
+        fabric_ok = True
+    except Exception:  # noqa: BLE001
+        fabric_ok = False
+    health_ok = H.REQUEST_ID_PATTERN.fullmatch(sample) is not None
+    expected = fabric_ok and "/" not in sample
+    check(health_ok is expected,
+          f"request_id {sample[:10]!r}: Health={health_ok}, Fabric={fabric_ok}")
+
+print("--- ENG-0006-H7a: operation, version and predecessor agree ---")
+payload = with_approval(operation="replacement")
+refuses(ENV_KIND, payload, "a version-1 envelope approved as a replacement is refused")
+payload = copy.deepcopy(VALID[ENV_KIND])
+payload["envelope_version"] = 2
+payload["supersedes"] = "CHENV-0001"
+refuses(ENV_KIND, payload, "a version-2 envelope approved as initial is refused")
+payload["approval"]["operation"] = "replacement"
+try:
+    record = parse(ENV_KIND, payload)
+    check(record.supersedes == "CHENV-0001",
+          "a version-2 replacement naming its predecessor is accepted")
+except Exception as error:  # noqa: BLE001
+    check(False, f"a well-formed replacement was refused: {error}")
+payload = copy.deepcopy(VALID[ENV_KIND])
+payload["supersedes"] = "CHENV-0001"
+refuses(ENV_KIND, payload, "a version-1 envelope naming a predecessor is refused")
+payload = copy.deepcopy(VALID[ENV_KIND])
+payload["envelope_version"] = 2
+payload["approval"]["operation"] = "replacement"
+refuses(ENV_KIND, payload, "a version-2 envelope naming no predecessor is refused")
+for bad in ("CHENV-1", "CHOBS-000001", "CHENV-0001\n", "chenv-0001", 1):
+    payload = copy.deepcopy(VALID[ENV_KIND])
+    payload["envelope_version"] = 2
+    payload["approval"]["operation"] = "replacement"
+    payload["supersedes"] = bad
+    refuses(ENV_KIND, payload, f"supersedes={bad!r} is refused as malformed")
+
+
+def refusal_code(payload):
+    try:
+        parse(ENV_KIND, payload)
+    except E.HealthRecordError as error:
+        return error.code
+    return None
+
+
+payload = copy.deepcopy(VALID[ENV_KIND])
+payload["supersedes"] = "CHENV-0001"
+check(refusal_code(payload) == E.SUPERSESSION_INCONSISTENT,
+      "a version/predecessor disagreement is named supersession-inconsistent")
+check(refusal_code(with_approval(operation="replacement"))
+      == E.APPROVAL_OPERATION_MISMATCH,
+      "an operation/version disagreement is named approval-operation-mismatch")
+
+print("--- ENG-0006-H7a: a subject may not approve itself ---")
+for member in ("actor", "approving_authority"):
+    payload = with_approval(**{member: VALID[ENV_KIND]["subject_id"]})
+    check(refusal_code(payload) == E.SELF_APPROVAL,
+          f"a subject named as its own {member} is refused as self-approval")
+    refuses(ENV_KIND, payload, f"self-approval via {member} does not echo the "
+                               "subject", forbidden_value="CINST-000007")
 
 print("--- the dimension/subject matrix is enforced ---")
 matrix = SCHEMA["capability-health-observation"]["dimension_subjects"]

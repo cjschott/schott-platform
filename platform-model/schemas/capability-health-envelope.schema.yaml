@@ -89,13 +89,77 @@ required_fields:
   # to an implementation to choose.
   - evaluation
   - provenance
+  # ENG-0006-H7a (ruling O-2). The immutable approval, carried on the record
+  # whose existence it justifies. Required, not optional: an envelope in the
+  # store without it is an envelope nobody approved, and an optional field would
+  # leave the record model and every evaluator accepting one. See
+  # approval_fields.
+  - approval
 
 optional_fields:
   - description
   - review_due_at
+  # Required when envelope_version is greater than 1 and forbidden at version 1;
+  # see supersedes_form.
   - supersedes
-  - superseded_by
   - notes
+
+# ENG-0006-H7a (ruling O-10). The successor of an envelope is DERIVED from the
+# successor's `supersedes`, never stored on the predecessor: it is known only
+# after the predecessor is immutable, so no consistent sequence of writes can
+# record it. `superseded_by` is therefore a forbidden field, refused by name.
+successor_representation: derived-from-supersedes
+supersedes_form: envelope-identifier
+supersedes_required_when: envelope_version-greater-than-1
+supersedes_forbidden_when: envelope_version-equals-1
+version_progression: predecessor-plus-one
+
+# ENG-0006-H7a. The approval block. Every member is required and no member has a
+# default. The block restates the approval statement the operator published, so
+# the statement's canonical bytes -- and therefore approval_digest -- can be
+# recomputed from the stored record alone, on readback and at any later time.
+approval_fields:
+  required:
+    - approval_statement_version
+    - approval_domain
+    - operation
+    - request_id
+    - actor
+    - approving_authority
+    - approved_at
+    - canonicalisation
+    - digest_algorithm
+    - approval_digest
+    - approval_source
+approval_statement_version: 1
+approval_domain: capability-health-envelope
+approval_operations:
+  - initial
+  - replacement
+# `initial` if and only if envelope_version is 1 and supersedes is absent.
+approval_operation_rule: initial-iff-version-1-and-no-supersedes
+# The Fabric's request_id rule (printable ASCII without space, 1 to 200
+# characters) without '/', because the request_id is also the approval
+# statement's file stem. Every Health request_id is therefore a valid Fabric one.
+approval_request_id_pattern: '^[!-.0-~]{1,200}$'
+# Attribution, not authentication: these are claims carried in a root-owned
+# statement. A subject may be neither its own actor nor its own approver.
+approval_self_approval: forbidden
+approval_canonicalisation: kyri-strict-canonical-json/v1
+approval_digest_algorithm: sha256
+# sha256 of the approval statement's canonical bytes -- the exact bytes of the
+# published statement file, which an operator can check with `sha256sum`.
+approval_digest_pattern: '^sha256:[0-9a-f]{64}$'
+approval_source_fields:
+  required:
+    - authority
+    - name
+approval_source_authority: health-approvals
+approval_source_name: request_id-dot-json
+# No signing exists on this platform, and Trust is not consulted (ruling O-4,
+# T0). Neither may be represented on the record.
+approval_signature_fields: forbidden
+approval_trust_record: forbidden
 
 enums:
   subject_type:
@@ -153,6 +217,13 @@ condition_operators:
 # A decimal string compared as an exact decimal, never a binary float. A
 # threshold that compares differently on two hosts is not deterministic.
 condition_value_representation: decimal-string
+
+# ENG-0006-H7a (ruling O-12). One spelling per value. `2000`, `2000.0`, `+2000`,
+# `02000` and `2e3` denote one threshold, and an approval digest computed over
+# one spelling must not be satisfiable by another. No sign on a positive value,
+# no negative zero, no leading zero, no trailing fractional zero, no bare point,
+# no exponent. Every canonical value is also a decimal-string.
+condition_value_grammar: '^(0|-?[1-9][0-9]*(\.[0-9]*[1-9])?|-?0\.[0-9]*[1-9])$'
 
 # Closed, two. No percentile in v1: it is not expressible against an
 # observation model whose record is one measurement at one moment, "p95" is not
@@ -239,3 +310,9 @@ forbidden_fields:
   - health_score
   - trust_state
   - command
+  # ENG-0006-H7a (ruling O-10): derived, never stored. See
+  # successor_representation.
+  - superseded_by
+  # ENG-0006-D D1: no publication-control block may be added to an envelope.
+  # Named here so the refusal is a named prohibition, not "unknown".
+  - publication

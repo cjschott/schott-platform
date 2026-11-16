@@ -266,6 +266,24 @@ def _decimal_text(kind: str, field: str, value: Any) -> str:
     return value
 
 
+# ENG-0006-H7a (ruling O-12). ONE spelling per envelope threshold, mirroring the
+# CHENV schema's `condition_value_grammar`. `2000`, `2000.0`, `+2000`, `02000`
+# and `2e3` are one value under `_decimal_text`, and an approval digest computed
+# over one spelling must not be satisfiable by another. Applied to envelope
+# thresholds only: a transition record quotes its envelope's condition, and an
+# observation's measured value is collected, not approved.
+_CANONICAL_DECIMAL = re.compile(
+    r"0|-?[1-9][0-9]*(?:\.[0-9]*[1-9])?|-?0\.[0-9]*[1-9]")
+
+
+def _canonical_decimal(kind: str, field: str, value: Any) -> str:
+    """A decimal string in its one canonical spelling, or a refusal."""
+    _decimal_text(kind, field, value)
+    if not _CANONICAL_DECIMAL.fullmatch(value):
+        raise E.refuse(E.DECIMAL_NOT_CANONICAL, kind=kind, field=field)
+    return value
+
+
 def _id_sequence(kind: str, field: str, value: Any, family: str) -> tuple[str, ...]:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
         raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field, detail="sequence")
@@ -360,6 +378,8 @@ def _dimension_entry(kind: str, name: Any, entry: Any) -> Mapping[str, Any]:
     _aggregation(kind, field, entry.get("aggregation"))
     _condition(kind, field, entry.get("entry_condition"))
     _condition(kind, field, entry.get("exit_condition"))
+    _canonical_decimal(kind, field, entry["entry_condition"]["value"])
+    _canonical_decimal(kind, field, entry["exit_condition"]["value"])
     _hysteresis(kind, field, entry.get("hysteresis"))
     policy = entry.get("freshness_policy_seconds")
     # Null is permitted and produces freshness: unknown, per the Null Policy
@@ -443,7 +463,7 @@ IDENTITY_FIELD: Mapping[str, str] = {
 REQUIRED: Mapping[str, tuple[str, ...]] = {
     "capability-health-envelope": (
         "envelope_id", "envelope_version", "subject_type", "subject_id",
-        "dimensions", "evaluation", "provenance"),
+        "dimensions", "evaluation", "provenance", "approval"),
     "capability-health-observation": (
         "observation_id", "subject_type", "subject_id", "dimension",
         "measured_value", "unit", "observed_at", "collector_id",
@@ -474,7 +494,7 @@ CONDITIONAL: Mapping[str, tuple[str, ...]] = {
 
 OPTIONAL: Mapping[str, tuple[str, ...]] = {
     "capability-health-envelope": (
-        "description", "review_due_at", "supersedes", "superseded_by", "notes"),
+        "description", "review_due_at", "supersedes", "notes"),
     "capability-health-observation": (
         "collection_error", "freshness", "sample_window_seconds", "notes"),
     "capability-health-state": (
@@ -489,7 +509,8 @@ FORBIDDEN: Mapping[str, tuple[str, ...]] = {
     "capability-health-envelope": (
         "learned_threshold", "auto_threshold", "baseline_threshold",
         "derived_threshold", "anomaly_model", "anomaly_score", "forecast",
-        "predicted_limit", "health_score", "trust_state", "command"),
+        "predicted_limit", "health_score", "trust_state", "command",
+        "superseded_by", "publication"),
     "capability-health-observation": (
         "source", "health_state", "verdict", "conclusion", "assessment",
         "trust_state", "eligibility", "predicted_value", "forecast",
@@ -529,11 +550,117 @@ def _validate_envelope(kind: str, p: Mapping[str, Any]) -> None:
     _dimensions(kind, "dimensions", p["dimensions"])
     _member(kind, "evaluation", p["evaluation"], EVALUATIONS)
     _mapping(kind, "provenance", p["provenance"])
-    for field in ("description", "notes", "supersedes", "superseded_by"):
+    for field in ("description", "notes"):
         if p.get(field) is not None:
             _text(kind, field, p[field])
     if p.get("review_due_at") is not None:
         _instant(kind, "review_due_at", p["review_due_at"])
+    # ENG-0006-H7a. A predecessor link is an envelope identifier, present
+    # exactly when there is a predecessor. Whether the named envelope exists and
+    # is the subject's head is a store question, answered at ingestion.
+    supersedes = p.get("supersedes")
+    if supersedes is not None:
+        _identifier(kind, "supersedes", supersedes, kind,
+                    code=E.REFERENCE_MALFORMED)
+    if (p["envelope_version"] == 1) != (supersedes is None):
+        raise E.refuse(E.SUPERSESSION_INCONSISTENT, kind=kind,
+                       field="supersedes",
+                       detail=("version-1-names-a-predecessor"
+                               if supersedes is not None
+                               else "later-version-names-no-predecessor"))
+    _approval(kind, p)
+
+
+# --- ENG-0006-H7a: the approval block ------------------------------------
+# Mirrors the CHENV schema's `approval_*` declarations. The block restates the
+# approval statement the operator published, so every member is required and
+# none is defaulted: a member missing here is a statement that cannot be
+# reconstructed, and an unreconstructable statement is an unverifiable approval.
+APPROVAL_FIELDS = (
+    "approval_statement_version", "approval_domain", "operation", "request_id",
+    "actor", "approving_authority", "approved_at", "canonicalisation",
+    "digest_algorithm", "approval_digest", "approval_source")
+APPROVAL_STATEMENT_VERSION = 1
+APPROVAL_DOMAIN = "capability-health-envelope"
+APPROVAL_OPERATIONS = ("initial", "replacement")
+APPROVAL_CANONICALISATION = "kyri-strict-canonical-json/v1"
+APPROVAL_DIGEST_ALGORITHM = "sha256"
+APPROVAL_SOURCE_FIELDS = ("authority", "name")
+APPROVAL_SOURCE_AUTHORITY = "health-approvals"
+# The Fabric's request_id rule -- printable ASCII without space, 1 to 200
+# characters -- without '/', because the request_id is also a file stem. A
+# strict subset, so every Health request_id is also a valid Fabric one.
+REQUEST_ID_PATTERN = re.compile(r"[!-.0-~]{1,200}")
+APPROVAL_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _closed_members(kind: str, field: str, value: Any,
+                    members: Sequence[str]) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail="mapping")
+    for member in sorted(set(value) - set(members), key=str):
+        raise E.refuse(E.UNKNOWN_FIELD, kind=kind, field=field,
+                       detail="undeclared-member")
+    for member in members:
+        if member not in value:
+            raise E.refuse(E.MISSING_REQUIRED_FIELD, kind=kind, field=field,
+                           detail=member)
+    return value
+
+
+def _constant(kind: str, field: str, value: Any, expected: Any,
+              member: str) -> None:
+    # `type(...) is` rather than equality, so `True` is not the version `1`.
+    if type(value) is not type(expected) or value != expected:
+        raise E.refuse(E.ENUM_VALUE_NOT_PERMITTED, kind=kind, field=field,
+                       detail=member)
+
+
+def _approval(kind: str, p: Mapping[str, Any]) -> None:
+    field = "approval"
+    approval = _closed_members(kind, field, p["approval"], APPROVAL_FIELDS)
+    _constant(kind, field, approval["approval_statement_version"],
+              APPROVAL_STATEMENT_VERSION, "approval_statement_version")
+    _constant(kind, field, approval["approval_domain"], APPROVAL_DOMAIN,
+              "approval_domain")
+    _constant(kind, field, approval["canonicalisation"],
+              APPROVAL_CANONICALISATION, "canonicalisation")
+    _constant(kind, field, approval["digest_algorithm"],
+              APPROVAL_DIGEST_ALGORITHM, "digest_algorithm")
+    operation = approval["operation"]
+    if not isinstance(operation, str) or operation not in APPROVAL_OPERATIONS:
+        raise E.refuse(E.ENUM_VALUE_NOT_PERMITTED, kind=kind, field=field,
+                       detail="operation")
+    request_id = approval["request_id"]
+    if not isinstance(request_id, str) or \
+            not REQUEST_ID_PATTERN.fullmatch(request_id):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail="request_id")
+    actor = _text(kind, field, approval["actor"])
+    approver = _text(kind, field, approval["approving_authority"])
+    _instant(kind, field, approval["approved_at"])
+    digest = approval["approval_digest"]
+    if not isinstance(digest, str) or \
+            not APPROVAL_DIGEST_PATTERN.fullmatch(digest):
+        raise E.refuse(E.FIELD_TYPE_INVALID, kind=kind, field=field,
+                       detail="approval_digest")
+    source = _closed_members(kind, field, approval["approval_source"],
+                             APPROVAL_SOURCE_FIELDS)
+    _constant(kind, field, source["authority"], APPROVAL_SOURCE_AUTHORITY,
+              "approval_source")
+    # The statement is located by its request_id and nothing else, so a source
+    # naming another file names a statement this record did not come from.
+    _constant(kind, field, source["name"], f"{request_id}.json",
+              "approval_source")
+    # `initial` exactly when the envelope is a first version.
+    if (operation == "initial") != (p["envelope_version"] == 1):
+        raise E.refuse(E.APPROVAL_OPERATION_MISMATCH, kind=kind, field=field,
+                       detail="operation")
+    # Declared-string inequality. It refuses honest self-approval; it cannot
+    # refuse a forged name, and is not claimed to.
+    if p["subject_id"] in (actor, approver):
+        raise E.refuse(E.SELF_APPROVAL, kind=kind, field=field)
 
 
 def _validate_observation(kind: str, p: Mapping[str, Any]) -> None:

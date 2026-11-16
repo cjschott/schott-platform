@@ -127,7 +127,22 @@ def envelope(identifier="CHENV-0001"):
                            "max_gap_seconds": 30, "min_samples": 3},
             "freshness_policy_seconds": 60,
             "aggregation": {"kind": "instant"}}},
-        "evaluation": "worst-dimension-wins", "provenance": {"tool": "test"}})
+        "evaluation": "worst-dimension-wins", "provenance": {"tool": "test"},
+        # ENG-0006-H7a: every envelope carries its approval (ruling O-2). The
+        # store does not verify it; ingestion does.
+        "approval": APPROVAL})
+
+
+APPROVAL = {"approval_statement_version": 1,
+            "approval_domain": "capability-health-envelope",
+            "operation": "initial", "request_id": "REQ-0001",
+            "actor": "operator", "approving_authority": "operator-review",
+            "approved_at": "2026-10-13T08:00:00-05:00",
+            "canonicalisation": "kyri-strict-canonical-json/v1",
+            "digest_algorithm": "sha256",
+            "approval_digest": "sha256:" + "0" * 64,
+            "approval_source": {"authority": "health-approvals",
+                                "name": "REQ-0001.json"}}
 
 
 def observation(identifier="CHOBS-000001"):

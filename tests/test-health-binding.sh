@@ -134,7 +134,21 @@ def envelope(identifier, subject):
                 "hysteresis": {"kind": "duration", "seconds": 120,
                                "max_gap_seconds": 30, "min_samples": 3},
                 "freshness_policy_seconds": 60}},
-            "evaluation": "worst-dimension-wins", "provenance": dict(PROV)}
+            "evaluation": "worst-dimension-wins", "provenance": dict(PROV),
+            # ENG-0006-H7a: every envelope carries its approval (ruling O-2).
+            "approval": copy.deepcopy(APPROVAL)}
+
+
+APPROVAL = {"approval_statement_version": 1,
+            "approval_domain": "capability-health-envelope",
+            "operation": "initial", "request_id": "REQ-0001",
+            "actor": "operator", "approving_authority": "operator-review",
+            "approved_at": "2026-10-13T08:00:00-05:00",
+            "canonicalisation": "kyri-strict-canonical-json/v1",
+            "digest_algorithm": "sha256",
+            "approval_digest": "sha256:" + "0" * 64,
+            "approval_source": {"authority": "health-approvals",
+                                "name": "REQ-0001.json"}}
 
 
 def state(identifier, subject, observation_ids=("CHOBS-000001",),

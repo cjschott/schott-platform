@@ -64,6 +64,16 @@ CITED_RECORD_KIND_MISMATCH = "cited-record-kind-mismatch"
 CITED_RECORD_IDENTITY_MISMATCH = "cited-record-identity-mismatch"
 CITATION_SET_MALFORMED = "citation-set-malformed"
 
+# --- ENG-0006-H7a: envelope approval and supersession --------------------
+#
+# Distinct, because each calls for a different correction: a threshold spelled
+# two ways, a version that disagrees with its predecessor link, an operation
+# that disagrees with the envelope it approves, and a subject approving itself.
+DECIMAL_NOT_CANONICAL = "decimal-not-canonical"
+SUPERSESSION_INCONSISTENT = "supersession-inconsistent"
+APPROVAL_OPERATION_MISMATCH = "approval-operation-mismatch"
+SELF_APPROVAL = "self-approval"
+
 CODES = frozenset({
     UNKNOWN_RECORD_KIND, PAYLOAD_NOT_A_MAPPING, MISSING_REQUIRED_FIELD,
     UNKNOWN_FIELD, FORBIDDEN_FIELD, IDENTIFIER_MALFORMED, REFERENCE_MALFORMED,
@@ -76,6 +86,8 @@ CODES = frozenset({
     CROSS_SUBJECT_CITATION, CITED_RECORD_NOT_SUPPLIED,
     CITED_RECORD_KIND_MISMATCH, CITED_RECORD_IDENTITY_MISMATCH,
     CITATION_SET_MALFORMED,
+    DECIMAL_NOT_CANONICAL, SUPERSESSION_INCONSISTENT,
+    APPROVAL_OPERATION_MISMATCH, SELF_APPROVAL,
 })
 
 
