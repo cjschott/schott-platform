@@ -148,11 +148,13 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 # installer suite are portable and unconditional, and the Stage-3 gate matrix is
 # host-only but still a STEP -- it skips inside itself rather than being skipped
 # here. Both totals are re-measured by a run below rather than incremented.
+#
+# ENG-0006-H7a added the shared canonical JSON suite, pure and run in both modes.
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=149
+  TOTAL_STEPS=150
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=174
+  TOTAL_STEPS=175
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
@@ -1112,6 +1114,10 @@ run "Health condition grammar" bash tests/test-health-conditions.sh
 run "Health freshness" bash tests/test-health-freshness.sh
 run "Health hysteresis" bash tests/test-health-hysteresis.sh
 run "Health store" bash tests/test-health-store.sh
+# ENG-0006-H7a. The shared canonical JSON encoder, a byte-identical copy of the
+# Capability encoder (ruling O-3). Pure: no file, no process, no network, so it
+# runs in quick mode too.
+run "Shared canonical JSON" bash tests/test-common-canonical-json.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 
