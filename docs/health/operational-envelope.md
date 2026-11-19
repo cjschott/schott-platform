@@ -128,6 +128,16 @@ envelope, rather than passing quietly as though the subject had been checked.
 
 An envelope is **superseded, never edited**, and each version is numbered.
 
+A replacement (ENG-0006-H7b) names the subject's current **head** in
+`supersedes` and carries the head's version plus one. A subject's envelopes
+must form one unbroken path from a single version 1, with no fork, every
+record verifying. The head is the one record nothing supersedes. If that
+does not hold, the subject has **no head**: no rule picks one, neither the
+highest identifier nor the highest version, and every further write for the
+subject is refused until an operator rules. `verify` reports which rule broke,
+re-checks each record against its retained approval statement, and changes
+nothing.
+
 Every health state records the **envelope version** it was evaluated against.
 That is what makes the following safe:
 

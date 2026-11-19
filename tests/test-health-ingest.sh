@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Behavioural validation for ENG-0006-H7a: initial-envelope ingestion (C1).
+# Behavioural validation for ENG-0006-H7a and H7b: envelope ingestion (C1, C2)
+# and `verify`.
 #
-# `tools.health.ingest.ingest_envelope` admits ONE first envelope from an
-# operator-published approval statement, or refuses. Every refusal before
+# `tools.health.ingest.ingest_envelope` admits ONE envelope -- a subject's
+# first, or the successor of its chain's head -- from an operator-published
+# approval statement, or refuses. `verify` re-checks the stored chains against
+# the retained statements and must change nothing. Every refusal before
 # allocation (V1-V13) must leave the store byte-for-byte unchanged and consume
 # no identifier; that is asserted for every refusal below, not sampled.
 #
@@ -42,6 +45,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 root = Path(sys.argv[1])
@@ -364,7 +368,7 @@ for label, member, value in (("an empty actor", "actor", ""),
     publish(approvals, "REQ-V5", statement("REQ-V5", **{member: value}))
     refuses(store, approvals, "V5", "envelope-invalid", label, request_id="REQ-V5")
 
-print("--- V6: the operation, and replacement deferred to H7b ---")
+print("--- V6: the operation agrees with the envelope ---")
 publish(approvals, "REQ-V6", statement("REQ-V6", operation="replacement"))
 refuses(store, approvals, "V6", "approval-operation-mismatch",
         "a version-1 envelope approved as a replacement", request_id="REQ-V6")
@@ -378,8 +382,10 @@ replacement = envelope_with(lambda e: e.update(envelope_version=2,
                                                 supersedes="CHENV-0001"))
 publish(approvals, "REQ-V6", statement("REQ-V6", operation="replacement",
                                        envelope=replacement))
-refuses(store, approvals, "V6", "envelope-replacement-unsupported",
-        "a well-formed replacement (H7b)", request_id="REQ-V6")
+# The H7a guard is gone; the head rule is what refuses this now.
+refuses(store, approvals, "V12", "envelope-subject-absent",
+        "a well-formed replacement for a subject with no envelope",
+        request_id="REQ-V6")
 
 print("--- V7: one canonical spelling of the statement ---")
 canonical = canonical_json.serialise(statement("REQ-V7"))
@@ -609,10 +615,12 @@ def run_child(root, approvals_dir, request_id, events, results):
     results.put((request_id, outcome.status, outcome.reason, outcome.envelope_id))
 
 
-def race(first_request, second_request, between=None):
+def race(first_request, second_request, between=None, prepare=None):
     """A holds the section after its subject check; B is observed blocked."""
     race_root = fresh("store")
     HealthStore(race_root)
+    if prepare is not None:
+        prepare(race_root)
     holder = {"subject_checked:reached": CTX.Event(),
               "subject_checked:release": CTX.Event()}
     waiter = {"lock_contended:reached": CTX.Event(),
@@ -708,6 +716,558 @@ check((bypass.root / "capability-health-envelopes" / "CHENV-0001.yaml").is_file(
       "L-11 a direct write succeeded while the lock was held: no prevention")
 refuses(bypass, approvals, "V12", "envelope-subject-frozen",
         "L-11 the unapproved record is detected and freezes its subject")
+
+print("=== ENG-0006-H7b: replacement chains and verify ===")
+SUBJECT = ("capability-instance", "CINST-000007")
+OBSERVED_FINDINGS = set()
+
+
+def replacement(request_id, supersedes, version, subject="CINST-000007",
+                exit_value=None, **members):
+    """A replacement statement; the exit threshold varies with the version."""
+    value = exit_value or str(1500 - version)
+
+    def change(e):
+        e.update(envelope_version=version, supersedes=supersedes)
+        e["dimensions"]["latency"]["exit_condition"]["value"] = value
+
+    members = {"operation": "replacement", **members}
+    return statement(request_id, subject=subject, envelope=envelope_with(change),
+                     **members)
+
+
+def verifies(store, approvals, **kwargs):
+    kwargs.setdefault("trusted_uid", UID)
+    kwargs.setdefault("allow_own_uid_fixture", True)
+    report = I.verify(store, approval_root=approvals, **kwargs)
+    OBSERVED_FINDINGS.update(f.code for f in report.findings)
+    return report
+
+
+def codes(report):
+    return sorted(f.code for f in report.findings)
+
+
+def record_for(body, envelope_id):
+    """The record ingestion writes for `body`, built by hand."""
+    data = canonical_json.serialise(body)
+    approval = {k: v for k, v in body.items() if k != "envelope"}
+    approval["approval_digest"] = "sha256:" + hashlib.sha256(data).hexdigest()
+    approval["approval_source"] = {"authority": "health-approvals",
+                                   "name": f"{body['request_id']}.json"}
+    return H.parse(ENV, {**body["envelope"], "envelope_id": envelope_id,
+                         "approval": approval})
+
+
+def plant(store, body, envelope_id, approvals=None):
+    """A direct write, bypassing ingestion and the lock: what a same-UID
+    writer can do. The record is self-consistent. With `approvals`, its
+    statement is retained as an honest one would be."""
+    HealthStore(store.root).write_record(ENV, record_for(body, envelope_id))
+    sequence = store.root / "sequences" / f"{ENV}.seq"
+    number = int(envelope_id.split("-")[1])
+    current = int(sequence.read_text()) if sequence.exists() else 0
+    sequence.write_text(f"{max(current, number)}\n")
+    if approvals is not None:
+        publish(approvals, body["request_id"], body)
+
+
+def chain_of(length, subject="CINST-000007"):
+    """A fresh store holding an ingested chain CHENV-0001 .. CHENV-<length>."""
+    store, approvals = fresh_store(), fresh("approvals")
+    publish(approvals, "REQ-0001", statement("REQ-0001", subject=subject))
+    outcomes = [ingest(store, approvals, "REQ-0001")]
+    for version in range(2, length + 1):
+        request = f"REQ-{version:04d}"
+        publish(approvals, request,
+                replacement(request, f"CHENV-{version - 1:04d}", version,
+                            subject=subject))
+        outcomes.append(ingest(store, approvals, request))
+    return store, approvals, outcomes
+
+
+print("--- C2: a valid replacement chain ---")
+store, approvals, outcomes = chain_of(3)
+check([(o.status, o.envelope_id) for o in outcomes]
+      == [("accepted", "CHENV-0001"), ("accepted", "CHENV-0002"),
+          ("accepted", "CHENV-0003")],
+      "an initial envelope and two successive replacements are accepted in order")
+stored = store.read_record(ENV, "CHENV-0002")
+check(stored["supersedes"] == "CHENV-0001" and stored["envelope_version"] == 2
+      and stored["approval"]["operation"] == "replacement",
+      "the replacement names its predecessor, carries version 2 and the "
+      "replacement operation")
+retained = (approvals / "REQ-0002.json").read_bytes()
+check(stored["approval"]["approval_digest"]
+      == "sha256:" + hashlib.sha256(retained).hexdigest()
+      and record_for(canonical_json.parse(retained, maximum_bytes=65536),
+                     "CHENV-0002").to_dict() == stored,
+      "the replacement's record is exactly the one its statement determines")
+check("superseded_by" not in store.read_record(ENV, "CHENV-0001"),
+      "the predecessor names no successor: succession is derived")
+report = verifies(store, approvals)
+check(report.clean and report.heads == ((SUBJECT, "CHENV-0003"),)
+      and report.frozen == () and not report.blocked,
+      f"verify: clean, and the head is CHENV-0003 ({report})")
+
+before = snapshot(store)
+again = ingest(store, approvals, "REQ-0002")
+check(again.status == "replayed" and again.envelope_id == "CHENV-0002",
+      "replaying an accepted replacement after the head moved returns its own "
+      "record: replay answers for the request, not the head")
+first_again = ingest(store, approvals, "REQ-0001")
+check(first_again.status == "replayed" and first_again.envelope_id == "CHENV-0001",
+      "replaying the initial request still returns CHENV-0001")
+check(snapshot(store) == before, "replays change nothing")
+
+publish(approvals, "REQ-0100", statement("REQ-0100", subject="CINST-000012"))
+publish(approvals, "REQ-0101", replacement("REQ-0101", "CHENV-0004", 2,
+                                           subject="CINST-000012"))
+other = [ingest(store, approvals, r) for r in ("REQ-0100", "REQ-0101")]
+check([(o.status, o.envelope_id) for o in other]
+      == [("accepted", "CHENV-0004"), ("accepted", "CHENV-0005")],
+      "a second subject's chain shares the series and not the head")
+report = verifies(store, approvals)
+check(report.clean and dict(report.heads)
+      == {SUBJECT: "CHENV-0003",
+          ("capability-instance", "CINST-000012"): "CHENV-0005"},
+      "verify names each subject's head")
+
+print("--- C2: invalid supersession is refused, and writes nothing ---")
+store, approvals, _ = chain_of(3)
+for label, request, body, stage, reason in (
+        ("a replacement of a superseded envelope", "REQ-N1",
+         replacement("REQ-N1", "CHENV-0001", 2), "V12", "envelope-not-head"),
+        ("a replacement of a superseded envelope with the head's next version",
+         "REQ-N2", replacement("REQ-N2", "CHENV-0002", 4), "V12",
+         "envelope-not-head"),
+        ("a replacement of an envelope that does not exist", "REQ-N3",
+         replacement("REQ-N3", "CHENV-0042", 4), "V12", "envelope-not-head"),
+        ("the head, with the head's own version", "REQ-N4",
+         replacement("REQ-N4", "CHENV-0003", 3), "V12",
+         "envelope-version-not-successor"),
+        ("the head, skipping a version", "REQ-N5",
+         replacement("REQ-N5", "CHENV-0003", 5), "V12",
+         "envelope-version-not-successor"),
+        ("an initial envelope for a subject with a chain", "REQ-N6",
+         statement("REQ-N6"), "V12", "envelope-subject-exists"),
+        ("a version-2 replacement naming no predecessor", "REQ-N7",
+         statement("REQ-N7", operation="replacement",
+                   envelope=envelope_with(lambda e: e.update(envelope_version=2))),
+         "V5", "envelope-invalid"),
+        ("a malformed predecessor reference", "REQ-N8",
+         replacement("REQ-N8", "CHENV-3", 4), "V5", "envelope-invalid"),
+        ("a replacement approved as initial", "REQ-N9",
+         replacement("REQ-N9", "CHENV-0003", 4, operation="initial"), "V6",
+         "approval-operation-mismatch")):
+    publish(approvals, request, body)
+    refuses(store, approvals, stage, reason, label, request_id=request)
+publish(approvals, "REQ-N10", replacement("REQ-N10", "CHENV-0003", 4,
+                                          subject="CINST-000012"))
+refuses(store, approvals, "V12", "envelope-subject-absent",
+        "a replacement naming another subject's head, for a subject with none",
+        request_id="REQ-N10")
+publish(approvals, "REQ-0100", statement("REQ-0100", subject="CINST-000012"))
+check(ingest(store, approvals, "REQ-0100").envelope_id == "CHENV-0004",
+      "the second subject's chain starts at CHENV-0004")
+publish(approvals, "REQ-N11", replacement("REQ-N11", "CHENV-0003", 2,
+                                          subject="CINST-000012"))
+refuses(store, approvals, "V12", "envelope-not-head",
+        "a replacement naming another subject's head", request_id="REQ-N11")
+# The cross-plane table: an identical replacement under a new request, once
+# the first is accepted, is a competing successor.
+publish(approvals, "REQ-N12", replacement("REQ-N12", "CHENV-0002", 3))
+refuses(store, approvals, "V12", "envelope-not-head",
+        "a resubmission of an accepted replacement under a new request",
+        request_id="REQ-N12")
+check(verifies(store, approvals).clean, "after every refusal, verify is clean")
+
+print("--- C2: replay and conflicting approval evidence ---")
+store, approvals, _ = chain_of(2)
+publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2,
+                                           exit_value="1400"))
+refuses(store, approvals, "V11", "request-identity-conflict",
+        "an accepted replacement's request with different content",
+        request_id="REQ-0002")
+publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2,
+                                           approving_authority="another-review"))
+refuses(store, approvals, "V11", "request-identity-conflict",
+        "an accepted replacement's request with a different approver",
+        request_id="REQ-0002")
+publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2))
+check(ingest(store, approvals, "REQ-0002").status == "replayed",
+      "restoring the original statement replays again")
+
+print("--- frozen subjects: missing or ambiguous heads ---")
+
+
+def frozen_case(label, build, findings):
+    """`build(store, approvals)` breaks the chain of a 1-record subject. Every
+    write for that subject then refuses, and verify names the broken rule."""
+    store, approvals, _ = chain_of(1)
+    build(store, approvals)
+    publish(approvals, "REQ-F1", replacement("REQ-F1", "CHENV-0001", 2,
+                                             exit_value="1300"))
+    refuses(store, approvals, "V12", "envelope-subject-frozen",
+            f"{label}: a replacement", request_id="REQ-F1")
+    publish(approvals, "REQ-F2", statement("REQ-F2"))
+    refuses(store, approvals, "V12", "envelope-subject-frozen",
+            f"{label}: an initial envelope", request_id="REQ-F2")
+    report = verifies(store, approvals)
+    check(set(findings) <= set(codes(report)) and SUBJECT in report.frozen
+          and SUBJECT not in dict(report.heads),
+          f"{label}: verify reports {findings}, freezes the subject and names "
+          f"no head ({codes(report)})")
+    publish(approvals, "REQ-F3", statement("REQ-F3", subject="CINST-000099"))
+    check(ingest(store, approvals, "REQ-F3").accepted,
+          f"{label}: other subjects are unaffected")
+    return store, approvals
+
+
+frozen_case("a fork (W4)", lambda s, a: (
+    plant(s, replacement("REQ-P2", "CHENV-0001", 2), "CHENV-0002", a),
+    plant(s, replacement("REQ-P3", "CHENV-0001", 2, exit_value="1450"),
+          "CHENV-0003", a)), ["chain-fork"])
+frozen_case("two roots (W1)", lambda s, a: plant(
+    s, statement("REQ-P2", approved_at="2026-11-17T09:00:00-06:00"),
+    "CHENV-0002", a), ["chain-root-not-unique"])
+frozen_case("a missing predecessor (W2)", lambda s, a: plant(
+    s, replacement("REQ-P2", "CHENV-0009", 2), "CHENV-0002", a),
+    ["chain-predecessor-missing"])
+frozen_case("a skipped version (W3)", lambda s, a: plant(
+    s, replacement("REQ-P2", "CHENV-0001", 3), "CHENV-0002", a),
+    ["chain-version-not-successor"])
+frozen_case("an unverifiable member (W5)", lambda s, a: (
+    s.root / "capability-health-envelopes" / "CHENV-0001.yaml").write_text(
+    (s.root / "capability-health-envelopes" / "CHENV-0001.yaml").read_text()
+    .replace("'1500'", "'1499'")), ["record-unverified"])
+frozen_case("a member whose filename is not its identifier (W5)", lambda s, a: (
+    s.root / "capability-health-envelopes" / "CHENV-0001.yaml").rename(
+    s.root / "capability-health-envelopes" / "CHENV-0008.yaml"),
+    ["record-unverified"])
+
+# A subject with no root but one record superseding a missing one.
+store, approvals = fresh_store(), fresh("approvals")
+plant(store, replacement("REQ-P2", "CHENV-0001", 2), "CHENV-0002", approvals)
+report = verifies(store, approvals)
+check(codes(report) == ["chain-predecessor-missing", "chain-root-not-unique"]
+      and report.frozen == (SUBJECT,),
+      f"a chain with no root breaks W1 and W2 ({codes(report)})")
+publish(approvals, "REQ-F1", replacement("REQ-F1", "CHENV-0002", 3))
+refuses(store, approvals, "V12", "envelope-subject-frozen",
+        "a replacement of a rootless chain's only member", request_id="REQ-F1")
+
+# A record naming another subject's envelope breaks ITS subject's chain only.
+store, approvals, _ = chain_of(1)
+plant(store, replacement("REQ-P2", "CHENV-0001", 2, subject="CINST-000012"),
+      "CHENV-0002", approvals)
+report = verifies(store, approvals)
+check(dict(report.heads) == {SUBJECT: "CHENV-0001"}
+      and report.frozen == (("capability-instance", "CINST-000012"),),
+      "a record superseding another subject's envelope freezes its own subject "
+      "and leaves the other's head alone")
+publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2))
+check(ingest(store, approvals, "REQ-0002").envelope_id == "CHENV-0003",
+      "the untouched subject is still replaced normally")
+
+print("--- committed-unverified and unreadable records ---")
+store, approvals, _ = chain_of(1)
+publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2,
+                                           exit_value="1500"))
+result = ingest(Corrupting(store.root), approvals, "REQ-0002")
+check(result.status == "committed-unverified" and result.envelope_id == "CHENV-0002",
+      "a replacement that does not read back is committed-unverified")
+report = verifies(store, approvals)
+check(codes(report) == ["record-unverified"]
+      and report.findings[0].envelope_id == "CHENV-0002"
+      and report.frozen == (SUBJECT,) and not report.heads,
+      "verify reports the committed-unverified record and the subject has no head")
+publish(approvals, "REQ-0003", replacement("REQ-0003", "CHENV-0002", 3))
+refuses(store, approvals, "V12", "envelope-subject-frozen",
+        "a replacement of the committed-unverified head", request_id="REQ-0003")
+publish(approvals, "REQ-0004", replacement("REQ-0004", "CHENV-0001", 2,
+                                           exit_value="1300"))
+refuses(store, approvals, "V12", "envelope-subject-frozen",
+        "a replacement routing around it: no recovery in H7b (O-5)",
+        request_id="REQ-0004")
+refuses(store, approvals, "V11", "envelope-subject-frozen",
+        "retrying the committed-unverified request", request_id="REQ-0002")
+
+for label, content in (("a record that is not YAML", "{unclosed: ["),
+                       ("a record that is not a mapping", "- a list\n"),
+                       ("a record naming no subject", "envelope_id: CHENV-0007\n")):
+    store, approvals, _ = chain_of(1)
+    (store.root / "capability-health-envelopes" / "CHENV-0007.yaml").write_text(content)
+    publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2))
+    refuses(store, approvals, "V12", "envelope-store-unreadable",
+            f"{label}: a replacement of an unrelated subject's head is refused "
+            f"(O-5: unattributable blocks all)", request_id="REQ-0002")
+    report = verifies(store, approvals)
+    check(report.blocked and "record-unattributable" in codes(report)
+          and dict(report.heads) == {SUBJECT: "CHENV-0001"},
+          f"{label}: verify reports ingestion blocked and still names the "
+          f"intact head")
+store, approvals, _ = chain_of(1)
+link = store.root / "capability-health-envelopes" / "CHENV-0007.yaml"
+link.symlink_to(store.root / "capability-health-envelopes" / "CHENV-0001.yaml")
+report = verifies(store, approvals)
+check(report.blocked and "record-unattributable" in codes(report)
+      and "store-structural" in codes(report),
+      "a symbolic link in the record directory is unattributable and structural")
+
+print("--- verify: retained statements, request identity, parameters ---")
+store, approvals, _ = chain_of(2)
+(approvals / "REQ-0001.json").unlink()
+report = verifies(store, approvals)
+check(codes(report) == ["approval-statement-unavailable"]
+      and report.findings[0].envelope_id == "CHENV-0001"
+      and report.frozen == (SUBJECT,),
+      "a missing retained statement is reported against its record")
+publish(approvals, "REQ-0001", statement("REQ-0001", approving_authority="else"))
+report = verifies(store, approvals)
+check(codes(report) == ["approval-statement-mismatch"],
+      "a retained statement that differs from the one recorded is reported")
+publish(approvals, "REQ-0001", raw=canonical_json.serialise(
+    statement("REQ-0001")) + b"\n")
+check(codes(verifies(store, approvals)) == ["approval-statement-mismatch"],
+      "a retained statement differing by one byte is reported")
+publish(approvals, "REQ-0001", statement("REQ-0001"))
+check(verifies(store, approvals).clean, "the restored statement verifies")
+publish(approvals, "REQ-0001", statement("REQ-0001"), mode=0o666)
+check(codes(verifies(store, approvals)) == ["approval-statement-unavailable"],
+      "a world-writable retained statement is unavailable, as at V2")
+publish(approvals, "REQ-0001", statement("REQ-0001"))
+report = verifies(store, approvals, trusted_uid=0)
+check(codes(report) == ["approval-statement-unavailable"] * 2,
+      "with root as the trusted owner, statements this user owns verify nothing")
+# Documented limit: ingestion's W5 is the record's own consistency, so a
+# missing retained statement for a chain member is found by verify only.
+(approvals / "REQ-0002.json").unlink()
+publish(approvals, "REQ-0003", replacement("REQ-0003", "CHENV-0002", 3))
+check(ingest(store, approvals, "REQ-0003").accepted,
+      "ingestion does not re-open its predecessors' statements (verify does)")
+
+store, approvals, _ = chain_of(1)
+plant(store, statement("REQ-0001", subject="CINST-000012"), "CHENV-0002",
+      None)
+report = verifies(store, approvals)
+check(sorted((f.code, f.envelope_id) for f in report.findings)
+      == [("approval-statement-mismatch", "CHENV-0002"),
+          ("request-identity-ambiguous", "CHENV-0001"),
+          ("request-identity-ambiguous", "CHENV-0002")],
+      f"two records claiming one request are both reported ({report.findings})")
+
+store, approvals, _ = chain_of(1)
+for label, kwargs, reason in (
+        ("own UID without the fixture opt-in", {"allow_own_uid_fixture": False},
+         "trusted-uid-is-own-uid"),
+        ("a text trusted_uid", {"trusted_uid": "0"}, "parameters-invalid")):
+    report = verifies(store, approvals, **kwargs)
+    check(report.status == "refused" and report.reason == reason
+          and not report.findings, f"verify refuses {label}")
+check(I.verify(object(), approval_root=approvals, trusted_uid=0).reason
+      == "parameters-invalid", "verify refuses something that is not a store")
+
+print("--- verify changes nothing ---")
+store, approvals, _ = chain_of(2)
+plant(store, replacement("REQ-P3", "CHENV-0001", 2, exit_value="1450"),
+      "CHENV-0003")
+(store.root / "capability-health-envelopes" / ".CHENV-0004.tmp").write_text("x")
+
+
+def metadata(tree):
+    return {str(p.relative_to(tree)): (p.stat().st_mode, p.stat().st_mtime_ns,
+                                       p.stat().st_size)
+            for p in [tree, *sorted(tree.rglob("*"))]}
+
+
+bytes_before, meta_before = snapshot(store), metadata(store.root)
+approvals_before = metadata(approvals)
+report = verifies(HealthStore(store.root), approvals)
+check(snapshot(store) == bytes_before and metadata(store.root) == meta_before
+      and metadata(approvals) == approvals_before,
+      "verify of a broken store leaves every byte, mode and mtime unchanged, "
+      "in the store and in the approvals")
+check({"chain-fork", "approval-statement-unavailable", "store-structural"}
+      <= set(codes(report)),
+      f"and it reports what it found ({codes(report)})")
+with store.request_critical_section("REQ-HOLDER"):
+    held_report = verifies(HealthStore(store.root), approvals)
+check(held_report == report, "verify takes no lock: it runs while the section "
+                             "is held and finds the same")
+
+print("--- permanent identifier gaps after allocation ---")
+
+
+class FailingWrite(HealthStore):
+    def write_record(self, kind, record):
+        raise HealthStoreError("injected write failure")
+
+
+store, approvals, _ = chain_of(1)
+publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2))
+result = ingest(FailingWrite(store.root), approvals, "REQ-0002")
+check(result.stage == "V15" and result.reason == "write-refused",
+      "a replacement whose write fails after allocation is refused at V15")
+check((store.root / "sequences" / f"{ENV}.seq").read_text().strip() == "2",
+      "CHENV-0002 was consumed")
+retry = ingest(store, approvals, "REQ-0002")
+check(retry.accepted and retry.envelope_id == "CHENV-0003",
+      "the retried replacement is CHENV-0003, still superseding the head "
+      "CHENV-0001: the gap is permanent")
+report = verifies(store, approvals)
+check(report.clean and dict(report.heads) == {SUBJECT: "CHENV-0003"},
+      "a gap in the series is not a finding: chains follow supersedes, not "
+      "numbers")
+(store.root / "capability-health-envelopes" / ".CHENV-0004.tmp").write_text("x")
+publish(approvals, "REQ-0003", replacement("REQ-0003", "CHENV-0003", 3))
+result = ingest(store, approvals, "REQ-0003")
+check(result.reason == "write-refused", "debris refuses its name at V15")
+report = verifies(store, approvals)
+check(codes(report) == ["store-structural"] and dict(report.heads)
+      == {SUBJECT: "CHENV-0003"},
+      "verify reports the debris and the head is unchanged")
+check(ingest(store, approvals, "REQ-0003").envelope_id == "CHENV-0005",
+      "the next attempt takes CHENV-0005")
+
+print("--- interrupted replacements: crashes before and after the link ---")
+
+
+class CrashBeforeLink(HealthStore):
+    def _pre_link_sync_point(self, destination, temporary):
+        os._exit(19)
+
+
+for crash_class, code, label in ((CrashBeforeLink, 19, "before"),
+                                 (CrashAfterLink, 17, "after")):
+    store, approvals, _ = chain_of(1)
+    publish(approvals, "REQ-0002", replacement("REQ-0002", "CHENV-0001", 2))
+
+    def crashing(store_root=store.root, cls=crash_class, approvals=approvals):
+        ingest(cls(store_root), approvals, "REQ-0002")
+
+    child = CTX.Process(target=crashing)
+    child.start()
+    child.join(BOUND)
+    check(child.exitcode == code,
+          f"a replacing process died {label} its record was linked")
+    publish(approvals, "REQ-X", replacement("REQ-X", "CHENV-0001", 2,
+                                            exit_value="1300"))
+    competitor = ingest(HealthStore(store.root), approvals, "REQ-X")
+    retry = ingest(HealthStore(store.root), approvals, "REQ-0002")
+    if label == "after":
+        check(competitor.reason == "envelope-not-head",
+              "after the link: a competing replacement is not the head's successor")
+        check(retry.status == "replayed" and retry.envelope_id == "CHENV-0002",
+              "after the link: the crashed request resolves as a replay")
+        check(verifies(store, approvals).clean, "after the link: verify is clean")
+    else:
+        check(competitor.accepted and competitor.envelope_id == "CHENV-0003",
+              "before the link: nothing of the crashed write is a successor, so "
+              "a competitor may succeed")
+        check(retry.reason == "envelope-not-head",
+              "before the link: the crashed request is now refused, not replayed")
+        report = verifies(store, approvals)
+        check(codes(report) == ["store-structural"]
+              and dict(report.heads) == {SUBJECT: "CHENV-0003"},
+              "before the link: verify reports the crashed write's debris only")
+
+print("--- L-1 and L-2: competing replacements of one head ---")
+
+
+def prepare_root(race_root):
+    ingest(HealthStore(race_root), race_approvals, "REQ-ROOT")
+
+
+publish(race_approvals, "REQ-ROOT", statement("REQ-ROOT"))
+publish(race_approvals, "REQ-R1", replacement("REQ-R1", "CHENV-0001", 2))
+publish(race_approvals, "REQ-R2", replacement("REQ-R2", "CHENV-0001", 2,
+                                              exit_value="1300"))
+held, blocked, outcomes, race_root = race("REQ-R1", "REQ-R2", prepare=prepare_root)
+check(held and blocked, "L-2 the first process holds the section after head "
+                        "selection and the second is observed blocked")
+check(sorted(outcomes) == [("REQ-R1", "accepted", None, "CHENV-0002"),
+                           ("REQ-R2", "refused", "envelope-not-head", None)],
+      f"L-2 two processes replace one head: one accepted, one not-head ({outcomes})")
+check(sorted(p.name for p in (race_root / "capability-health-envelopes")
+             .glob("*.yaml")) == ["CHENV-0001.yaml", "CHENV-0002.yaml"],
+      "L-2 exactly one new record")
+check(verifies(HealthStore(race_root), race_approvals).clean,
+      "L-2 the chain verifies")
+
+held, blocked, outcomes, race_root = race("REQ-R1", "REQ-R1", prepare=prepare_root)
+check(held and blocked and sorted(outcomes)
+      == [("REQ-R1", "accepted", None, "CHENV-0002"),
+          ("REQ-R1", "replayed", None, "CHENV-0002")],
+      f"L-4 for a replacement: accepted once, replayed once ({outcomes})")
+publish(race_approvals, "REQ-R3", replacement("REQ-R3", "CHENV-0001", 2))
+held, blocked, outcomes, race_root = race(
+    "REQ-R3", "REQ-R3", prepare=prepare_root,
+    between=lambda: publish(race_approvals, "REQ-R3", replacement(
+        "REQ-R3", "CHENV-0001", 2, exit_value="1300")))
+check(held and blocked and sorted(outcomes)
+      == [("REQ-R3", "accepted", None, "CHENV-0002"),
+          ("REQ-R3", "refused", "request-identity-conflict", None)],
+      f"L-5 for a replacement: one accepted, one conflict ({outcomes})")
+
+# L-1: the same race between two threads of one process, each with its own
+# store object. flock belongs to the open file description, so this proves
+# the section excludes within a process as well as across processes.
+thread_root = fresh("store")
+HealthStore(thread_root)
+prepare_root(thread_root)
+holder = {"subject_checked:reached": threading.Event(),
+          "subject_checked:release": threading.Event()}
+waiter = {"lock_contended:reached": threading.Event(),
+          "lock_contended:release": threading.Event()}
+waiter["lock_contended:release"].set()
+thread_results = []
+
+
+def thread_child(request_id, events):
+    outcome = ingest(Gate(thread_root, events), race_approvals, request_id)
+    thread_results.append((request_id, outcome.status, outcome.reason,
+                           outcome.envelope_id))
+
+
+first = threading.Thread(target=thread_child, args=("REQ-R1", holder))
+first.start()
+held = holder["subject_checked:reached"].wait(BOUND)
+second = threading.Thread(target=thread_child, args=("REQ-R2", waiter))
+second.start()
+blocked = waiter["lock_contended:reached"].wait(BOUND)
+holder["subject_checked:release"].set()
+first.join(BOUND)
+second.join(BOUND)
+check(held and blocked, "L-1 the first thread holds the section after head "
+                        "selection and the second is observed blocked")
+check(sorted(thread_results) == [("REQ-R1", "accepted", None, "CHENV-0002"),
+                                 ("REQ-R2", "refused", "envelope-not-head", None)],
+      f"L-1 two threads replace one head: one accepted, one not-head "
+      f"({thread_results})")
+check(len(list((thread_root / "capability-health-envelopes").glob("*.yaml"))) == 2,
+      "L-1 exactly one new record")
+
+print("--- L-11 for C2: a bypassing fork is detected, not prevented ---")
+store, approvals, _ = chain_of(2)
+with store.request_critical_section("REQ-HOLDER"):
+    plant(store, replacement("REQ-FORK", "CHENV-0001", 2, exit_value="1300"),
+          "CHENV-0003")
+check((store.root / "capability-health-envelopes" / "CHENV-0003.yaml").is_file(),
+      "L-11 a competing successor was written directly while the lock was held")
+report = verifies(store, approvals)
+check({"chain-fork", "approval-statement-unavailable"} <= set(codes(report))
+      and report.frozen == (SUBJECT,),
+      f"L-11 verify reports the fork and the unapproved record "
+      f"({codes(report)})")
+publish(approvals, "REQ-0003", replacement("REQ-0003", "CHENV-0002", 3))
+refuses(store, approvals, "V12", "envelope-subject-frozen",
+        "L-11 and ingestion refuses the forked subject", request_id="REQ-0003")
+
+check(OBSERVED_FINDINGS == I.FINDINGS,
+      f"every verify finding is exercised: missing "
+      f"{sorted(I.FINDINGS - OBSERVED_FINDINGS)}, unknown "
+      f"{sorted(OBSERVED_FINDINGS - I.FINDINGS)}")
 
 print("--- L-10: ingestion is the only envelope writer in the Health plane ---")
 writers = []

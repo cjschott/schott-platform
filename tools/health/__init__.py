@@ -1,4 +1,4 @@
-"""The Capability Health Plane — ENG-0006-H1 through H7a.
+"""The Capability Health Plane — ENG-0006-H1 through H7b.
 
 **Records, three pure evaluators, and the store, in separate modules.**
 
@@ -19,10 +19,12 @@
 - `store` — the append-only record store, built on the platform's shared
   write-once storage base, and the identifier allocation behind it. The only
   module authorised to name a store class, a production path or a serialiser.
-- `ingest` — initial-envelope ingestion (ENG-0006-H7a). `ingest_envelope`
-  admits one first envelope from an operator-published approval statement, or
+- `ingest` — envelope ingestion and verification (ENG-0006-H7a, H7b).
+  `ingest_envelope` admits one envelope -- a subject's first, or the successor
+  of its chain's head -- from an operator-published approval statement, or
   refuses; it reads that statement and calls the store's allocator, and does
-  nothing else outside the record model.
+  nothing else outside the record model. `verify` re-checks every stored
+  envelope against its retained statement and its chain, and writes nothing.
 
 The dependency runs one way: the evaluators and the store import `records`,
 `records` imports none of them, and they do not import each other. `ingest`
@@ -61,7 +63,7 @@ from .hysteresis import (HYSTERESIS_OUTCOMES, UNPROVABLE_REASONS,
 from .records import (HealthRecord, KINDS, citations_of, parse,
                       select_observations, validate_citations)
 from .store import HealthStore, HealthStoreError
-from .ingest import IngestResult, ingest_envelope
+from .ingest import IngestResult, VerifyReport, ingest_envelope, verify
 
 __all__ = ["CONDITION_OUTCOMES", "ConditionResult", "FRESHNESS_STATES",
            "FRESHNESS_UNKNOWN_REASONS", "FreshnessResult",
@@ -69,8 +71,9 @@ __all__ = ["CONDITION_OUTCOMES", "ConditionResult", "FRESHNESS_STATES",
            "HealthStore", "HealthStoreError",
            "HysteresisProof", "HysteresisResult", "IngestResult", "KINDS",
            "UNKNOWN_REASONS", "UNPROVABLE_REASONS", "UNSATISFIED_REASONS",
+           "VerifyReport",
            "citations_of", "evaluate_condition",
            "evaluate_envelope_freshness", "evaluate_freshness",
            "evaluate_hysteresis", "ingest_envelope", "parse",
            "select_observations",
-           "validate_citations"]
+           "validate_citations", "verify"]
