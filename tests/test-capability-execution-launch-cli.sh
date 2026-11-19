@@ -772,7 +772,11 @@ for grant in ('/etc/sudoers.d/kyri-exec', '/etc/sudoers.d/kyri-exec-verify'):
 # What remains worth asserting here is narrower and still true: nothing this
 # suite creates may appear in the production handoff, because the suite works
 # only in its own fixture root.
-live_handoff = os.listdir('/data/kyri/capability-handoff')
+# Absent is not a failure: a host with no production handoff (a CI runner,
+# a workstation) has nothing a fixture could have reached, and the snapshot
+# around the run would report the directory appearing.
+handoff = '/data/kyri/capability-handoff'
+live_handoff = os.listdir(handoff) if os.path.isdir(handoff) else []
 assert all(not name.startswith('CINV-00004') for name in live_handoff), \\
     f'a fixture invocation reached the production handoff: {live_handoff}'
 assert not os.path.exists('/data/kyri/trust'), 'a live trust store appeared'
