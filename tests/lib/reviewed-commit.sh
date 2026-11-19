@@ -52,7 +52,11 @@ _rc_manifest() {
 
 # ancestor_with_package <equal|differ> <digest>: sets ANCESTOR to the newest
 # matching ancestor of HEAD, or to the empty string if there is none.
+# ANCESTOR is this library's output, read by the suites that source it, which
+# ShellCheck analyses as separate files.
+# shellcheck disable=SC2034
 ANCESTOR=""
+# shellcheck disable=SC2034
 ancestor_with_package() {
   local _rc_relation="$1" _rc_digest="$2" _rc_candidate
   ANCESTOR=""
