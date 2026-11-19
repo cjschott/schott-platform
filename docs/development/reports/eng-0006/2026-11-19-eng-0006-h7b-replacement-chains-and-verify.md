@@ -12,7 +12,7 @@ evaluation that consumes a head.
 |---|---|
 | O-5 | An unattributable record blocks all ingestion (`envelope-store-unreadable`); a subject with an unverifiable record or a malformed chain is frozen (`envelope-subject-frozen`). No recovery path exists |
 | G5 | The 40-commit window is replaced by an unbounded, cached search with the same answer and the same invariant (§5) |
-| ShellCheck | Not run locally (§8). CI's ShellCheck workflow is unchanged and passed on H7a |
+| ShellCheck | Run locally with the pinned 0.9.0 from a scratch venv (§8). CI's ShellCheck workflow is unchanged |
 | Autonomy | Commits made without per-commit approval |
 
 ## 2. Commits
@@ -22,7 +22,9 @@ evaluation that consumes a head.
 | `2bcd3d0` | fix: H7a missed the Fabric suite's Health allowlist; CI run 44509124916 failed on it |
 | `fb53c68` | H7b: replacement head rules, `verify`, tests, envelope doc |
 | `089e821` | G5: deterministic reviewed-commit search (separate commit, tests only) |
-| this report | docs |
+| `f681c67` | this report |
+| `1782855` | fix: scoped SC2034 in `tests/lib/reviewed-commit.sh` (CI ShellCheck run 44511873574) |
+| `14f6147` | fix: launch-CLI isolation case tolerated no absent production handoff; GitHub runners now run that host-only suite (CI run 44511873587). Pre-existing, fails identically at `b5c964e` on schmain |
 
 ## 3. What was built
 
@@ -197,15 +199,19 @@ a path that satisfies W1–W4, the highest version *is* the head.
 | K-c | **Frozen subjects have no recovery** (O-5) |
 | K-d′ | **Ingestion does not re-open predecessors' statements** (§4.1). `verify` does. Nothing runs `verify` automatically; that is H18's ceremony and schedule (finalization M-10) |
 | K-e | **G5 end-to-end runs only on schai**; schmain proved the search in isolation (§5) |
-| K-f | **ShellCheck has not run locally** on the new and edited shell files. They pass `bash -n` |
+| K-f | **ShellCheck locally comes from a scratch venv** (`shellcheck-py` 0.9.0), not the pinned container image; CI's ShellCheck workflow is the authority and passed |
 | K-g | **`verify` reads every retained statement**, up to 64 KiB each. The cost is linear in the number of envelopes |
 
 ## 8. Environment
 
-The same as H7a §8. The pinned ShellCheck image is unavailable to `kyri-dev`,
-so `test-developer-experience` fails its toolchain assertion and
-`run-validation.sh` stops at step 1. No suite was added, so the step totals
-are unchanged (151 quick, 176 full).
+The pinned ShellCheck image is still unavailable to `kyri-dev`. With
+ShellCheck 0.9.0 placed on `PATH` from a scratch venv (nothing installed
+system-wide), `tools/dev/run-validation.sh` ran to completion on schmain:
+**176/176 steps, full mode, passed**. This clears the H7a condition. No suite
+was added, so the step totals are unchanged (151 quick, 176 full).
+
+GitHub Actions at `14f6147`: CI, ShellCheck, CodeQL, Gitleaks, Semgrep and
+Trivy all succeeded.
 
 ## 9. Reproducing the validation
 
@@ -231,6 +237,7 @@ test ! -e /var/lib/kyri/health && echo absent
 ```
 Task:                   ENG-0006-H7b (C2, W1-W5, L-1/L-2, verify) + G5 correction
 Files Changed:          tools/health/{ingest,__init__}.py; tests/test-health-ingest.sh;
+                        tests/test-capability-execution-launch-cli.sh (CI fix);
                         tests/lib/reviewed-commit.sh (new);
                         tests/test-capability-execution-g5-{authority,build-context,ceremony}.sh;
                         tests/test-capability-fabric.sh (H7a fix);
