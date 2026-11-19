@@ -53,10 +53,9 @@ MANIFEST_DIGEST="$(read_pin MANIFEST_DIGEST)"
 # library, and source may legitimately lead it (G6.1 adds two runtime modules
 # and installs neither).
 # The paths the packaged manifest is derived from, named once. The ancestor
-# walk below is bounded to commits that touched them: a bound counted over
-# every commit is spent by documentation that cannot change the manifest, and
-# the pinned ancestor drifts out of range for reasons that have nothing to do
-# with the package.
+# walk below visits only commits that touched them, and has no bound: any
+# bound counted in commits drifts the pinned ancestor out of range for reasons
+# that have nothing to do with the package.
 MANIFEST_PATHS=(tools/__init__.py tools/capability tools/common tools/provisioning)
 
 manifest_at() {
@@ -70,15 +69,14 @@ manifest_at() {
           "${file}"
       done | sha256sum | cut -d' ' -f1
 }
-COMMIT=""
-while IFS= read -r candidate; do
-  if [[ "$(manifest_at "${candidate}")" == "${MANIFEST_DIGEST}" ]]; then
-    COMMIT="${candidate}"; break
-  fi
-done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD \
-           -- "${MANIFEST_PATHS[@]}")
-[[ -n "${COMMIT}" ]] || {
-  printf 'no ancestor within 40 packaged-tree commits carries the pinned operator package\n' >&2
+# The search has no bound (tests/lib/reviewed-commit.sh); `manifest_at` stays
+# the authority on the commit it names.
+# shellcheck source=tests/lib/reviewed-commit.sh
+. "${SCRIPT_DIR}/lib/reviewed-commit.sh"
+ancestor_with_package equal "${MANIFEST_DIGEST}"
+COMMIT="${ANCESTOR}"
+[[ -n "${COMMIT}" && "$(manifest_at "${COMMIT}")" == "${MANIFEST_DIGEST}" ]] || {
+  printf 'no ancestor of HEAD carries the pinned operator package\n' >&2
   exit 1; }
 
 # The live facts this pass was given. Constants here, evidence on the host.

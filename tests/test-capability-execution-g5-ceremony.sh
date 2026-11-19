@@ -64,10 +64,9 @@ CONFIG_DIGEST_CANDIDATE="$(supply_pin CANDIDATE_CONFIG_DIGEST)"
 # statement of which package is reviewed, and a second copy of that fact is one
 # more thing to keep in step.
 # The paths the packaged manifest is derived from, named once. The ancestor
-# walks below are bounded to commits that touched them: a bound counted over
-# every commit is spent by documentation that cannot change the manifest, and
-# the pinned ancestor drifts out of range for reasons that have nothing to do
-# with the package.
+# walks below visit only commits that touched them, and have no bound: any
+# bound counted in commits drifts the pinned ancestor out of range for reasons
+# that have nothing to do with the package.
 MANIFEST_PATHS=(tools/__init__.py tools/capability tools/common tools/provisioning)
 
 manifest_at() {
@@ -82,15 +81,14 @@ manifest_at() {
       done | sha256sum | cut -d' ' -f1
 }
 
-COMMIT=""
-while IFS= read -r candidate; do
-  if [[ "$(manifest_at "${candidate}")" == "${MANIFEST_DIGEST}" ]]; then
-    COMMIT="${candidate}"; break
-  fi
-done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD \
-           -- "${MANIFEST_PATHS[@]}")
-[[ -n "${COMMIT}" ]] || {
-  printf 'no ancestor within 40 packaged-tree commits carries the pinned operator package\n' >&2
+# The search has no bound (tests/lib/reviewed-commit.sh); `manifest_at` stays
+# the authority on the commit it names.
+# shellcheck source=tests/lib/reviewed-commit.sh
+. "${SCRIPT_DIR}/lib/reviewed-commit.sh"
+ancestor_with_package equal "${MANIFEST_DIGEST}"
+COMMIT="${ANCESTOR}"
+[[ -n "${COMMIT}" && "$(manifest_at "${COMMIT}")" == "${MANIFEST_DIGEST}" ]] || {
+  printf 'no ancestor of HEAD carries the pinned operator package\n' >&2
   exit 1; }
 
 # ===========================================================================
@@ -238,17 +236,11 @@ fi
 # the case silently stopped testing anything the moment a commit landed that
 # touched only docs and tests: HEAD~1's manifest was then identical to the pin,
 # so the gate had nothing to refuse and passed for the wrong reason.
-OLD_COMMIT=""
-while IFS= read -r candidate; do
-  [[ "${candidate}" != "${COMMIT}" ]] || continue
-  if [[ "$(manifest_at "${candidate}")" != "${MANIFEST_DIGEST}" ]]; then
-    OLD_COMMIT="${candidate}"; break
-  fi
-done < <(git -C "${REPOSITORY}" rev-list --max-count=40 HEAD \
-           -- "${MANIFEST_PATHS[@]}")
+ancestor_with_package differ "${MANIFEST_DIGEST}"
+OLD_COMMIT="${ANCESTOR}"
 
-if [[ -z "${OLD_COMMIT}" ]]; then
-  fail "no ancestor within 40 packaged-tree commits carries a different operator package; the gate is untested"
+if [[ -z "${OLD_COMMIT}" || "$(manifest_at "${OLD_COMMIT}")" == "${MANIFEST_DIGEST}" ]]; then
+  fail "no ancestor of HEAD carries a different operator package; the gate is untested"
 else
   root="${WORK}/wrongcommit"; build_fixture "${root}"
   if run_ceremony "${root}" --verify-source --commit "${OLD_COMMIT}"; then
