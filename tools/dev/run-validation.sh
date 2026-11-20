@@ -151,11 +151,14 @@ MODEL_BEFORE="$(find platform-model -type f -exec sha256sum {} + 2>/dev/null \
 #
 # ENG-0006-H7a added two, both run in both modes: the shared canonical JSON
 # suite (pure) and the Health envelope ingestion suite (fixture-only).
+#
+# ENG-0006-H18 added two, both run in both modes: the Health operator
+# commands suite and the Health runtime installation suite (fixture-only).
 if (( QUICK == 1 )); then
-  TOTAL_STEPS=151
+  TOTAL_STEPS=153
   printf '── Validation (quick mode) — %s\n' "${STARTED_AT}"
 else
-  TOTAL_STEPS=176
+  TOTAL_STEPS=178
   printf '── Validation (full) — %s\n' "${STARTED_AT}"
 fi
 
