@@ -1124,6 +1124,11 @@ run "Shared canonical JSON" bash tests/test-common-canonical-json.sh
 # processes for the lock tests and still runs in about a second, so it runs in
 # quick mode too.
 run "Health envelope ingestion" bash tests/test-health-ingest.sh
+# ENG-0006-H18. The operator commands and the three installed helpers, driven
+# against fixture approval directories, stores and a fixture "installed"
+# library; the approval prompt runs on a real pseudo-terminal. No production
+# path, no network, a few seconds, so it runs in quick mode too.
+run "Health operator commands" bash tests/test-health-operator.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 

@@ -260,6 +260,14 @@ done
 # read an approval statement. Its two cross-package imports are pinned to it
 # below, exactly as the store's are. There is still no CLI, no `__main__`, no
 # `verify` (H7b) and no approval helper, and the intruder battery says so.
+#
+# ENG-0006-H18 added `operator.py`: what the installed helpers do (draft,
+# publish, and ingest/verify as the service identity), as library code so it
+# is installed and reviewed as such. The helpers themselves and the drafting
+# CLI live in provisioning/health/, never here, so there is still no CLI and
+# no `__main__` in this package, and `cli.py`, `approve.py`, `helper.py` and
+# `publish.py` are still intruders. Its one cross-package import is pinned to
+# it below.
 HEALTH_MODULE_ALLOWLIST=(
   "tools/health/__init__.py"
   "tools/health/records.py"
@@ -269,6 +277,7 @@ HEALTH_MODULE_ALLOWLIST=(
   "tools/health/hysteresis.py"
   "tools/health/store.py"
   "tools/health/ingest.py"
+  "tools/health/operator.py"
 )
 
 # Echoes every file under $1 that the allowlist does not name exactly.
@@ -323,6 +332,7 @@ else
   cp "${ROOT}/tools/health/hysteresis.py" "${allowlist_fixture}/hysteresis.py"
   cp "${ROOT}/tools/health/store.py" "${allowlist_fixture}/store.py"
   cp "${ROOT}/tools/health/ingest.py" "${allowlist_fixture}/ingest.py"
+  cp "${ROOT}/tools/health/operator.py" "${allowlist_fixture}/operator.py"
   if [[ -z "$(health_unapproved_files "${allowlist_fixture}")" ]]; then
     pass "the allowlist accepts a tree holding exactly the approved modules"
   else
@@ -478,9 +488,15 @@ else
   #     Capability encoder (ruling O-3), which defines the approval digest.
   #   * `tools.common.trusted_source` -- descriptor-checked reading of the
   #     approval statement from a directory this process cannot write.
+  #
+  # ENG-0006-H18. One more pair, scoped to `operator.py`:
+  #   * `tools.common.canonical_json` -- drafting a statement IS producing its
+  #     canonical bytes. Everything else operator.py reads (the statement, the
+  #     store) it reaches through `ingest` and `store`, never directly.
   HEALTH_PERMITTED_PLANE_IMPORTS=("tools/health/store.py:tools.common.immutable_store"
                                   "tools/health/ingest.py:tools.common.canonical_json"
-                                  "tools/health/ingest.py:tools.common.trusted_source")
+                                  "tools/health/ingest.py:tools.common.trusted_source"
+                                  "tools/health/operator.py:tools.common.canonical_json")
   # ENG-0006-H4B. The H4A guard matched import STATEMENTS plus two callee
   # spellings, and that was not enough: it tracked no name binding, so
   #
@@ -538,8 +554,8 @@ else
   # out, so permitting anything further, widening the entry to `tools.common`,
   # or widening its SCOPE from one module to the package, must change this line.
   if [[ "${HEALTH_PERMITTED_PLANE_IMPORTS[*]}" \
-        == "tools/health/store.py:tools.common.immutable_store tools/health/ingest.py:tools.common.canonical_json tools/health/ingest.py:tools.common.trusted_source" ]]; then
-    pass "exactly three cross-plane imports are permitted: one to the store, two to ingestion"
+        == "tools/health/store.py:tools.common.immutable_store tools/health/ingest.py:tools.common.canonical_json tools/health/ingest.py:tools.common.trusted_source tools/health/operator.py:tools.common.canonical_json" ]]; then
+    pass "exactly four cross-plane imports are permitted: one to the store, two to ingestion, one to the operator commands"
   else
     fail "the permitted cross-plane set changed: ${HEALTH_PERMITTED_PLANE_IMPORTS[*]}"
   fi
@@ -574,7 +590,8 @@ else
     case "${health_permitted_entry}" in
       tools/health/store.py:tools.common.immutable_store \
       | tools/health/ingest.py:tools.common.canonical_json \
-      | tools/health/ingest.py:tools.common.trusted_source)
+      | tools/health/ingest.py:tools.common.trusted_source \
+      | tools/health/operator.py:tools.common.canonical_json)
         pass "the permitted entry is scoped to its one module: ${health_permitted_entry}" ;;
       *)
         fail "a cross-plane import is permitted outside the store/ingest pairs: ${health_permitted_entry}" ;;
@@ -738,7 +755,7 @@ HEALTHIMPORTS
   done
   # The same for the serialiser. `yaml` is the store's alone.
   for health_moved_yaml in 'import yaml' 'import yaml as _y' 'from yaml import safe_load'; do
-    for health_victim in __init__ records errors conditions freshness hysteresis ingest; do
+    for health_victim in __init__ records errors conditions freshness hysteresis ingest operator; do
       printf '%s\n' "${health_moved_yaml}" \
         > "${boundary_fixture}/tools/health/${health_victim}.py"
       cat "${ROOT}/tools/health/${health_victim}.py" \
@@ -791,6 +808,23 @@ HEALTHIMPORTS
       fail "PERMITTED in ingest.py: ${health_package_form}"
     fi
     cp "${ROOT}/tools/health/ingest.py" "${boundary_fixture}/tools/health/ingest.py"
+  done
+  # ENG-0006-H18. The operator module's pair is canonical_json alone: the
+  # store base and descriptor reading, moved into it, are refused.
+  for health_moved_form in \
+      'from ..common.trusted_source import open_trusted_regular_file' \
+      'import tools.common.trusted_source as _t' \
+      'from ..common.immutable_store import ImmutableStore' \
+      'from ..common import canonical_json' \
+      'from ..common.yaml_strict import loads_strict'; do
+    printf '%s\n' "${health_moved_form}" > "${boundary_fixture}/tools/health/operator.py"
+    cat "${ROOT}/tools/health/operator.py" >> "${boundary_fixture}/tools/health/operator.py"
+    if [[ -n "$(health_ast_scan "${boundary_fixture}")" ]]; then
+      pass "refused in operator.py: ${health_moved_form}"
+    else
+      fail "PERMITTED in operator.py: ${health_moved_form}"
+    fi
+    cp "${ROOT}/tools/health/operator.py" "${boundary_fixture}/tools/health/operator.py"
   done
   for health_impostor in ingest2.py ingestion.py approve.py verify.py; do
     printf 'from ..common.canonical_json import serialise\nfrom ..common.trusted_source import open_trusted_regular_file\n' \

@@ -1159,7 +1159,8 @@ done
 # modules. `tests/test-capability-health.sh` owns the full non-operational
 # checks and the adversarial fixture; this suite asserts the membership, which
 # is the part a documentation gate is responsible for. ENG-0006-H7a added
-# `ingest.py`, matching tests/test-capability-health.sh.
+# `ingest.py` and ENG-0006-H18 `operator.py`, matching
+# tests/test-capability-health.sh.
 for premature in tools/monitor \
                  tools/heartbeat tools/probe tools/telemetry; do
   if [[ -e "${ROOT}/${premature}" ]]; then
@@ -1176,7 +1177,7 @@ else
   while IFS= read -r health_file; do
     health_rel="tools/health/${health_file#"${ROOT}/tools/health/"}"
     case "${health_rel}" in
-      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py|tools/health/store.py|tools/health/ingest.py) ;;
+      tools/health/__init__.py|tools/health/records.py|tools/health/errors.py|tools/health/conditions.py|tools/health/freshness.py|tools/health/hysteresis.py|tools/health/store.py|tools/health/ingest.py|tools/health/operator.py) ;;
       *) docs_health_unapproved+="${health_rel} " ;;
     esac
   done < <(find "${ROOT}/tools/health" -type f -not -path '*__pycache__*' | sort)

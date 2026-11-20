@@ -1,0 +1,44 @@
+# ENG-0006-H18. Read-only verification of the Kyri Health store.
+# Installed as /etc/systemd/system/kyri-health-verify.service, root:root 0644,
+# by provisioning/health/install-health-runtime.sh, and started by
+# kyri-health-verify.timer. A non-zero exit (findings 1, refused 2) fails the
+# unit; the report is in the journal: journalctl -u kyri-health-verify.
+
+[Unit]
+Description=Kyri Health read-only envelope verification
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=kyri-health
+Group=kyri-health
+ExecStart=/usr/libexec/kyri-health-verify
+WorkingDirectory=/
+UMask=0077
+
+# verify writes nothing; the whole file system is read-only around it, so a
+# write would fail rather than land.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+# Health never reads another plane's storage.
+InaccessiblePaths=-/var/lib/kyri/fabric -/var/lib/kyri/trust -/var/lib/kyri/implementation-authority
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+SystemCallArchitectures=native

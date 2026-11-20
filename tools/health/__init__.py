@@ -1,4 +1,4 @@
-"""The Capability Health Plane — ENG-0006-H1 through H7b.
+"""The Capability Health Plane — ENG-0006-H1 through H7b, and H18.
 
 **Records, three pure evaluators, and the store, in separate modules.**
 
@@ -25,6 +25,12 @@
   refuses; it reads that statement and calls the store's allocator, and does
   nothing else outside the record model. `verify` re-checks every stored
   envelope against its retained statement and its chain, and writes nothing.
+- `operator` — what the installed H18 helpers do (ENG-0006-H18): draft a
+  canonical approval statement, publish a reviewed one by link-into-place
+  after a typed confirmation, and run ingestion and `verify` for the service
+  identity. It names no production path; the helpers in
+  `provisioning/health/` compile those in, and nothing in this package
+  imports it.
 
 The dependency runs one way: the evaluators and the store import `records`,
 `records` imports none of them, and they do not import each other. `ingest`

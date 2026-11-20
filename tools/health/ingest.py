@@ -72,8 +72,8 @@ nothing.
 **The lock is advisory.** It orders cooperating writers; a process that writes
 the store directly is detected by V12 and `verify`, not prevented.
 
-**Not here:** CHSTATE, any CLI, daemon or helper, any provisioning, any Trust
-or Fabric import.
+**Not here:** CHSTATE, any CLI, daemon or helper (ENG-0006-H18 puts the operator
+commands in `operator`), any provisioning, any Trust or Fabric import.
 """
 
 from __future__ import annotations
@@ -99,8 +99,9 @@ from .records import (APPROVAL_CANONICALISATION, APPROVAL_DIGEST_ALGORITHM,
                       REQUEST_ID_PATTERN, parse)
 from .store import HealthStore, HealthStoreError
 
-__all__ = ["FINDINGS", "Finding", "IngestResult", "REFUSALS", "STATEMENT_FIELDS",
-           "VerifyReport", "ingest_envelope", "verify"]
+__all__ = ["Examination", "FINDINGS", "Finding", "IngestResult", "REFUSALS",
+           "STATEMENT_FIELDS", "VerifyReport", "examine_statement",
+           "ingest_envelope", "verify"]
 
 ENVELOPE = "capability-health-envelope"
 MAXIMUM_STATEMENT_BYTES = 65536
@@ -364,6 +365,80 @@ def _statement_schema(statement: dict[str, Any], request_id: str) -> str | None:
 
 # --- the operation ---------------------------------------------------------
 
+@dataclass(frozen=True)
+class Examination:
+    """V1 and V3-V9 over a statement's bytes, without a store or a file.
+
+    `refusal` is the `IngestResult` ingestion would return, or None. When it is
+    None, `statement` is the parsed statement, `probe` the would-be record under
+    the probe identity and `digest` the `approval_digest` of the bytes.
+    """
+
+    refusal: IngestResult | None
+    statement: dict[str, Any] | None = None
+    probe: Any = None
+    digest: str | None = None
+
+
+def examine_statement(raw: Any, request_id: Any) -> Examination:
+    """Every check ingestion makes on a statement before it enters the store.
+
+    One definition, so an operator tool that vets a statement before
+    publishing it (ENG-0006-H18) refuses exactly what ingestion would refuse
+    at the same stages, and accepts nothing ingestion would refuse there. The
+    store-dependent stages (V11 onwards) cannot be decided here.
+    """
+    def refused(stage: str, reason: str, **detail: Any) -> Examination:
+        return Examination(refusal=_refused(stage, reason, **detail))
+
+    # V1
+    if not isinstance(request_id, str) or not REQUEST_ID_PATTERN.fullmatch(request_id):
+        return refused("V1", "request-id-malformed")
+    if not isinstance(raw, bytes):
+        return refused("V3", "approval-unreadable")
+
+    # V3
+    try:
+        statement = canonical_parse(raw, maximum_bytes=MAXIMUM_STATEMENT_BYTES)
+    except CanonicalJSONError:
+        return refused("V3", "approval-unreadable")
+
+    # V4
+    schema_refusal = _statement_schema(statement, request_id)
+    if schema_refusal is not None:
+        return refused("V4", schema_refusal)
+
+    digest = _digest_of(raw)
+
+    # V5, which also decides V6's mismatch and V9: the record model enforces
+    # both, and its refusal is reported under the stage that names it.
+    try:
+        probe = parse(ENVELOPE, _record_payload(statement, digest, PROBE_ID))
+    except E.HealthRecordError as error:
+        if error.code == E.APPROVAL_OPERATION_MISMATCH:
+            return refused("V6", "approval-operation-mismatch")
+        if error.code == E.SELF_APPROVAL:
+            return refused("V9", "self-approval")
+        return refused("V5", "envelope-invalid", record_code=error.code)
+
+    # V7: JSON permits several spellings of one object; the approval has one.
+    if canonical_serialise(statement) != raw:
+        return refused("V7", "approval-not-canonical-bytes")
+
+    # V8: the record must restate the statement exactly. A member the record
+    # model would drop or reshape -- an explicit null, say -- is refused here,
+    # before it can become a record whose approval cannot be recomputed.
+    try:
+        rebuilt = canonical_serialise(_statement_of(probe.to_dict()))
+    except CanonicalJSONError:
+        rebuilt = None
+    if rebuilt != raw:
+        return refused("V8", "approval-not-reconstructable")
+
+    return Examination(refusal=None, statement=statement, probe=probe,
+                       digest=digest)
+
+
 def ingest_envelope(store: HealthStore, *, request_id: Any,
                     approval_root: Path | str, trusted_uid: Any,
                     allow_own_uid_fixture: bool = False) -> IngestResult:
@@ -391,43 +466,10 @@ def ingest_envelope(store: HealthStore, *, request_id: Any,
     if raw is None:
         return _refused("V2", "approval-unavailable")
 
-    # V3
-    try:
-        statement = canonical_parse(raw, maximum_bytes=MAXIMUM_STATEMENT_BYTES)
-    except CanonicalJSONError:
-        return _refused("V3", "approval-unreadable")
-
-    # V4
-    schema_refusal = _statement_schema(statement, request_id)
-    if schema_refusal is not None:
-        return _refused("V4", schema_refusal)
-
-    digest = _digest_of(raw)
-
-    # V5, which also decides V6's mismatch and V9: the record model enforces
-    # both, and its refusal is reported under the stage that names it.
-    try:
-        probe = parse(ENVELOPE, _record_payload(statement, digest, PROBE_ID))
-    except E.HealthRecordError as error:
-        if error.code == E.APPROVAL_OPERATION_MISMATCH:
-            return _refused("V6", "approval-operation-mismatch")
-        if error.code == E.SELF_APPROVAL:
-            return _refused("V9", "self-approval")
-        return _refused("V5", "envelope-invalid", record_code=error.code)
-
-    # V7: JSON permits several spellings of one object; the approval has one.
-    if canonical_serialise(statement) != raw:
-        return _refused("V7", "approval-not-canonical-bytes")
-
-    # V8: the record must restate the statement exactly. A member the record
-    # model would drop or reshape -- an explicit null, say -- is refused here,
-    # before it can become a record whose approval cannot be recomputed.
-    try:
-        rebuilt = canonical_serialise(_statement_of(probe.to_dict()))
-    except CanonicalJSONError:
-        rebuilt = None
-    if rebuilt != raw:
-        return _refused("V8", "approval-not-reconstructable")
+    examined = examine_statement(raw, request_id)
+    if examined.refusal is not None:
+        return examined.refusal
+    statement, probe, digest = examined.statement, examined.probe, examined.digest
 
     with store.request_critical_section(request_id):
         # Read fresh inside the section; nothing is cached across sections.

@@ -1,0 +1,16 @@
+# ENG-0006-H18. The schedule for kyri-health-verify.service. Installed as
+# /etc/systemd/system/kyri-health-verify.timer, root:root 0644. Daily is the
+# default the operator accepts or overrides with a root-owned drop-in
+# (systemctl edit kyri-health-verify.timer); a missed run is made up at boot.
+
+[Unit]
+Description=Daily Kyri Health envelope verification
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+AccuracySec=1min
+Unit=kyri-health-verify.service
+
+[Install]
+WantedBy=timers.target
