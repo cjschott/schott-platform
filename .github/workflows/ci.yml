@@ -39,6 +39,7 @@ jobs:
           bash -n provisioning/execution/*.sh
           bash -n provisioning/artifacts/*.sh
           bash -n provisioning/evidence/*.sh
+          bash -n provisioning/health/*.sh
 
       # What this job does NOT prove. Fifteen suites test the accepted production
       # host -- operator ceremonies pinned to /opt/schott-platform, and the
@@ -351,6 +352,9 @@ jobs:
 
       - name: Health operator commands and helpers tests
         run: bash tests/test-health-operator.sh
+
+      - name: Health runtime installation ceremony tests
+        run: bash tests/test-health-install.sh
 
       # ENG-0005 first adapter, increments T1-T5. One suite per increment, each
       # carrying the purity or authority backstop for the modules that increment

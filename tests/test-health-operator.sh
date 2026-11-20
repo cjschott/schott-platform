@@ -577,9 +577,14 @@ def library():
     return base, lib
 
 
+# The runner loads a helper file and calls its main() with production values
+# overridden. It runs under `-E`, not the helpers' `-I`, only so that PyYAML
+# installed in the user site (as on CI) stays importable; what is under test
+# is the helper's own refusal to import from anywhere but its library.
 RUNNER = SCRATCH / "runner.py"
 RUNNER.write_text('''
-import importlib.util, json, os, sys
+import importlib.machinery, importlib.util, json, os, sys
+sys.dont_write_bytecode = True
 path, overrides = sys.argv[1], json.loads(sys.argv[2])
 spec = importlib.util.spec_from_file_location("helper", path)
 helper = importlib.util.module_from_spec(spec)
@@ -602,7 +607,7 @@ def overrides(**extra):
 
 
 def run(name, values, *arguments, stdin=None, new_session=False):
-    ran = subprocess.run([sys.executable, "-I", str(RUNNER), str(HELPERS[name]),
+    ran = subprocess.run([sys.executable, "-E", str(RUNNER), str(HELPERS[name]),
                           json.dumps(values), *arguments], capture_output=True, text=True,
                          stdin=stdin, start_new_session=new_session, cwd=SCRATCH)
     lines = [line for line in ran.stdout.splitlines() if line.startswith("{")]
@@ -690,7 +695,7 @@ def approve(values, arguments, typed, *, redirect=True):
         try:
             if redirect:
                 os.dup2(os.open(candidate, os.O_RDONLY), 0)
-            os.execv(sys.executable, [sys.executable, "-I", str(RUNNER),
+            os.execv(sys.executable, [sys.executable, "-E", str(RUNNER),
                                       str(HELPERS["kyri-health-approve"]),
                                       json.dumps(values), *arguments])
         finally:

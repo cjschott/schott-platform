@@ -53,7 +53,8 @@ collect_targets() {
               "${ROOT}"/tools/dev/*.sh \
               "${ROOT}"/provisioning/execution/*.sh \
               "${ROOT}"/provisioning/artifacts/*.sh \
-              "${ROOT}"/provisioning/evidence/*.sh; do
+              "${ROOT}"/provisioning/evidence/*.sh \
+              "${ROOT}"/provisioning/health/*.sh; do
     [[ -f "${path}" ]] && found+=("${path}")
   done
   printf '%s\n' "${found[@]}"

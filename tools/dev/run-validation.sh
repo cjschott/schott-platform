@@ -1129,6 +1129,11 @@ run "Health envelope ingestion" bash tests/test-health-ingest.sh
 # library; the approval prompt runs on a real pseudo-terminal. No production
 # path, no network, a few seconds, so it runs in quick mode too.
 run "Health operator commands" bash tests/test-health-operator.sh
+# ENG-0006-H18. The runtime installation ceremony, run with --fixture against
+# throwaway trees: pinned bytes, idempotence, refusal without repair, the
+# kyri-health identity contract, rollback that keeps evidence, and the installed
+# helpers end to end. No privilege, no production path, no systemd.
+run "Health runtime installation" bash tests/test-health-install.sh
 
 run "Developer experience" bash tests/test-developer-experience.sh
 
