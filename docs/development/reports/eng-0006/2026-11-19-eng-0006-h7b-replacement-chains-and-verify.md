@@ -113,6 +113,15 @@ These are recorded so that a reviewer can reverse any of them.
    ("`tools/health/ingest.py` (V1–V16) and `verify`"). It needs no new guard
    exception and shares one definition of "verified" with ingestion.
 
+**Operator rulings, 2026-11-20** (H18 authorization). Decisions 1–3 are
+approved as built. Nothing in the behaviour changed.
+
+| # | Ruling |
+|---|---|
+| R-H7b-1 | Ingestion does not need to re-open historical approval statements. Full historical verification belongs to `verify()` |
+| R-H7b-2 | `envelope-subject-frozen` is the public refusal for broken or ambiguous chains; `verify()` supplies the specific diagnostics |
+| R-H7b-3 | `envelope-subject-absent` is approved for a replacement attempt without an existing envelope |
+
 ## 5. G5 correction
 
 **What the window was for.** `test-capability-execution-g5-{authority,build-context,ceremony}`
