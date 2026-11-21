@@ -6,6 +6,14 @@ contacted.
 **Host / account:** `schmain` / `kyri-dev`. **Branch:** `arch/eng-0006-health-runtime`.
 **Baseline:** `77042e8` (H7b, 176/176 validation, 6/6 workflows).
 
+> **Superseded review record (2026-11-21).** Installer `a1df520` failed
+> post-install verification on schai: `check_ancestry()` held the store's
+> children to a root-owned `/var/lib/kyri/health`. Use the corrected installer
+> `c79da5b` and its SHA-256 from
+> `2026-11-21-eng-0006-h18-ancestry-correction.md`, which also gives the
+> recovery of the partial installation. The values below are kept as the
+> record of what was first run.
+
 **Review record values for the ceremony** (§8). Keep these off the production
 host, and check them against this report as published, not against a checkout
 on schai:
