@@ -589,6 +589,180 @@ else
   fail "install after residue clean-up: ${output}"
 fi
 
+# --- root and the service identity as distinct owners ------------------------
+# Every case above owns all fixture objects with one uid, so root's objects and
+# the service identity's cannot be told apart, and a check that holds one to
+# the other's owner passes. That is how a1df520 shipped a check_ancestry that
+# required the store, as an ancestor of its own children, to be root's: on the
+# real host --install installed everything and then --verify-installed failed
+# seven times on /var/lib/kyri/health. These cases run the ceremony with an
+# exported `stat` that reports the store (and anything named in SPLIT_OWNERS)
+# with the production service ids; modes, links, types and symlinks are real.
+SPLIT_IDS="996:986"
+uid="$(id -u)"; gid="$(id -g)"
+split_ceremony() {
+  local script="$1" fixture="$2"; shift 2
+  (
+    # shellcheck disable=SC2317  # invoked by the ceremony, through export -f
+    stat() {
+      if [[ $# -eq 3 && "$1" == "-c" && ( "$2" == "%u" || "$2" == "%u:%g" ) && ( -e "$3" || -L "$3" ) ]]; then
+        local ids="" line
+        while IFS= read -r line; do
+          [[ -n "${line}" && "${line%%|*}" == "$3" ]] && ids="${line#*|}"
+        done <<<"${SPLIT_OWNERS:-}"
+        if [[ -z "${ids}" && ( "$3" == "${SPLIT_STORE}" || "$3" == "${SPLIT_STORE}/"* ) ]]; then
+          ids="${SPLIT_IDS}"
+        fi
+        if [[ -n "${ids}" ]]; then
+          if [[ "$2" == "%u" ]]; then printf '%s\n' "${ids%%:*}"; else printf '%s\n' "${ids}"; fi
+          return 0
+        fi
+      fi
+      /usr/bin/stat "$@"
+    }
+    export -f stat
+    export SPLIT_IDS SPLIT_OWNERS="${SPLIT_OWNERS:-}" SPLIT_STORE="${fixture}/var/lib/kyri/health"
+    bash "${script}" "$@" --fixture "${fixture}" --repository "${ROOT}" 2>&1
+  )
+}
+# The account exactly as the real host has it: uid 996, gid 986, locked, nologin.
+split_fixture() {
+  local fixture; fixture="$(new_fixture)"
+  printf 'kyri-health:x:996:986:Kyri Health runtime:/nonexistent:/usr/sbin/nologin\n' >> "${fixture}/etc/passwd"
+  printf 'kyri-health:x:986:\n' >> "${fixture}/etc/group"
+  printf 'kyri-health:!:20412::::::\n' >> "${fixture}/etc/shadow"
+  printf '%s' "${fixture}"
+}
+SHIPPED="${SCRATCH}/install-health-runtime.a1df520.sh"
+git -C "${ROOT}" cat-file blob a1df5200d4eefb9e5bde6e7e130144bc35c51312:provisioning/health/install-health-runtime.sh > "${SHIPPED}"
+if [[ "$(sha256sum "${SHIPPED}" | cut -d' ' -f1)" == "85a12d07ed63361a939dbf747e95318e2ae11e5a669beb22b5fd8ecaefb9a41b" ]]; then
+  pass "split: the shipped installer is the reviewed a1df520 bytes"
+else
+  fail "split: the shipped installer blob is not the reviewed bytes"
+fi
+store_failures() { grep -cE '^FAIL +.*/var/lib/kyri/health is not owned by uid [0-9]+$' <<<"$1" || true; }
+
+# The shipped installer reproduces the real host: everything installed, seven failures.
+P="$(split_fixture)"
+output="$(split_ceremony "${SHIPPED}" "${P}" --install)" && rc=0 || rc=$?
+if [[ "${rc}" == "1" && "$(store_failures "${output}")" == "7" ]] && grep -q '7 problem(s) after installation' <<<"${output}"; then
+  pass "split: a1df520 --install installs and then fails seven times on the store, as on the real host"
+else
+  fail "split: a1df520 --install: rc=${rc}, $(store_failures "${output}") store failures: $(tail -3 <<<"${output}" | tr '\n' ' ')"
+fi
+if [[ "$(grep -c '^FAIL' <<<"${output}")" == "7" && "$(grep '^FAIL' <<<"${output}" | sort -u | wc -l)" == "1" ]]; then
+  pass "split: the seven failures are identical and the only ones"
+else
+  fail "split: unexpected failures: $(grep '^FAIL' <<<"${output}" | sort | uniq -c | tr '\n' ' ')"
+fi
+output="$(split_ceremony "${SHIPPED}" "${P}" --verify-installed)" && rc=0 || rc=$?
+if [[ "${rc}" == "1" && "$(store_failures "${output}")" == "7" ]] && grep -q 'STOP: 7 problem(s)' <<<"${output}"; then
+  pass "split: a1df520 --verify-installed fails exactly as reported (seven identical ownership failures)"
+else
+  fail "split: a1df520 --verify-installed: rc=${rc}: $(tail -3 <<<"${output}" | tr '\n' ' ')"
+fi
+cp -a "${P}" "${SCRATCH}/partial-template"
+
+# The corrected installer accepts that partial installation as it stands.
+before="$(snapshot "${P}")"
+output="$(split_ceremony "${CEREMONY}" "${P}" --verify)" && rc=0 || rc=$?
+expect "split: the partial installation is READY to the corrected installer" '^READY$' "${output}"
+expect "split: and all runtime objects are recognised as present" '6/6 runtime objects present' "${output}"
+output="$(split_ceremony "${CEREMONY}" "${P}" --verify-installed)" && rc=0 || rc=$?
+expect "split: the partial installation is VERIFIED without reinstalling" '^VERIFIED$' "${output}"
+output="$(split_ceremony "${CEREMONY}" "${P}" --install)" && rc=0 || rc=$?
+expect "split: --install over the partial installation completes" '^DONE$' "${output}"
+if [[ "$(snapshot "${P}")" == "${before}" ]]; then
+  pass "split: verifying and reinstalling over the partial installation change nothing"
+else
+  fail "split: the partial installation changed"
+fi
+output="$(split_ceremony "${CEREMONY}" "${P}" --uninstall)" && rc=0 || rc=$?
+expect "split: rollback of the partial installation" '^ROLLED BACK$' "${output}"
+if [[ -d "${P}/var/lib/kyri/health/sequences" && -d "${P}/var/lib/kyri/health-approvals/.staging" \
+      && ! -e "${P}/usr/lib/kyri/health" ]] && grep -q '^kyri-health:x:996:986:' "${P}/etc/passwd"; then
+  pass "split: rollback keeps the account, the store and the approvals"
+else
+  fail "split: rollback did not keep identity and evidence"
+fi
+output="$(split_ceremony "${CEREMONY}" "${P}" --install)" && rc=0 || rc=$?
+expect "split: reinstall after rollback" '^DONE$' "${output}"
+output="$(split_ceremony "${CEREMONY}" "${P}" --verify-installed)" && rc=0 || rc=$?
+expect "split: and it verifies" '^VERIFIED$' "${output}"
+
+# The shipped installer's own rollback is unaffected (it checks only runtime
+# objects), so either installer can take the partial installation back.
+P="$(mktemp -d -p "${SCRATCH}")"; rmdir "${P}"; cp -a "${SCRATCH}/partial-template" "${P}"
+output="$(split_ceremony "${SHIPPED}" "${P}" --uninstall)" && rc=0 || rc=$?
+expect "split: a1df520 --uninstall rolls back its own partial installation" '^ROLLED BACK$' "${output}"
+output="$(split_ceremony "${CEREMONY}" "${P}" --install)" && rc=0 || rc=$?
+expect "split: and the corrected installer then installs" '^DONE$' "${output}"
+output="$(split_ceremony "${CEREMONY}" "${P}" --verify-installed)" && rc=0 || rc=$?
+expect "split: and verifies" '^VERIFIED$' "${output}"
+
+# A fresh host, as the corrected installer would see it.
+H="$(split_fixture)"
+output="$(split_ceremony "${CEREMONY}" "${H}" --verify)" && rc=0 || rc=$?
+expect "split: a fresh host is READY" '^READY$' "${output}"
+output="$(split_ceremony "${CEREMONY}" "${H}" --install)" && rc=0 || rc=$?
+expect "split: a fresh host installs" '^DONE$' "${output}"
+output="$(split_ceremony "${CEREMONY}" "${H}" --verify-installed)" && rc=0 || rc=$?
+expect "split: a fresh host verifies" '^VERIFIED$' "${output}"
+cp -a "${H}" "${SCRATCH}/split-template"
+
+# The store is held to the service identity, and everything else still to root.
+split_refused() {
+  local description="$1" mutate="$2" owners="$3" pattern="$4"
+  local fixture before output rc
+  fixture="$(mktemp -d -p "${SCRATCH}")"; rmdir "${fixture}"; cp -a "${SCRATCH}/split-template" "${fixture}"
+  ( cd "${fixture}" && eval "${mutate}" )
+  owners="${owners//@/${fixture}}"
+  output="$(SPLIT_OWNERS="${owners}" split_ceremony "${CEREMONY}" "${fixture}" --verify-installed)" && rc=0 || rc=$?
+  if [[ "${rc}" == "1" ]] && grep -qE -- "${pattern}" <<<"${output}"; then
+    pass "split: ${description}: --verify-installed fails"
+  else
+    fail "split: ${description}: --verify-installed rc=${rc}: $(grep '^FAIL' <<<"${output}" | head -2 | tr '\n' ' ')"
+  fi
+  before="$(snapshot "${fixture}")"
+  output="$(SPLIT_OWNERS="${owners}" split_ceremony "${CEREMONY}" "${fixture}" --verify)" && rc=0 || rc=$?
+  if [[ "${rc}" == "1" ]] && grep -qE -- "${pattern}" <<<"${output}" && [[ "$(snapshot "${fixture}")" == "${before}" ]]; then
+    pass "split: ${description}: --verify refuses and changes nothing"
+  else
+    fail "split: ${description}: --verify rc=${rc}"
+  fi
+}
+store="var/lib/kyri/health"
+split_refused "a root-owned store child" "" "@/${store}/sequences|${uid}:${gid}" \
+  "health/sequences is owned ${uid}:${gid}, expected ${SPLIT_IDS}"
+split_refused "a root-owned store root" "" "@/${store}|${uid}:${gid}" \
+  "kyri/health is owned ${uid}:${gid}, expected ${SPLIT_IDS}"
+split_refused "a store child owned by another account" "" "@/${store}/capability-health-envelopes|4242:4242" \
+  "is owned 4242:4242, expected ${SPLIT_IDS}"
+split_refused "a store root owned by another account" "" "@/${store}|4242:4242" \
+  "kyri/health is not owned by uid 996"
+split_refused "a group-readable store child" "chmod 0750 ${store}/sequences" "" 'health/sequences is mode 750, expected 700'
+split_refused "a group-writable store root" "chmod 0770 ${store}" "" 'kyri/health is writable beyond its owner'
+split_refused "a symlinked store child" "mv ${store}/sequences seq-real; ln -s ../../../../seq-real ${store}/sequences" "" \
+  'health/sequences is not a directory'
+split_refused "a symlinked store root" "mv ${store} store-real; ln -s ../../../store-real ${store}" "" \
+  'kyri/health is not a directory'
+split_refused "a root-owned request lock" "" "@/${store}/sequences/request_identity.lock|${uid}:${gid}" \
+  'request_identity.lock is owned'
+split_refused "a store whose account is gone" "sed -i '/^kyri-health:/d' etc/passwd etc/group etc/shadow" "" \
+  'exists but kyri-health does not'
+split_refused "a service-owned /var/lib/kyri" "" "@/var/lib/kyri|${SPLIT_IDS}" \
+  "var/lib/kyri is not owned by uid ${uid}"
+split_refused "a service-owned approval root" "" "@/var/lib/kyri/health-approvals|${SPLIT_IDS}" \
+  "health-approvals is owned ${SPLIT_IDS}, expected ${uid}:${gid}"
+split_refused "a service-owned approval staging directory" "" "@/var/lib/kyri/health-approvals/.staging|${SPLIT_IDS}" \
+  "staging is owned ${SPLIT_IDS}, expected ${uid}:${gid}"
+split_refused "a service-owned library parent" "" "@/usr/lib/kyri|${SPLIT_IDS}" \
+  "usr/lib/kyri is not owned by uid ${uid}"
+split_refused "a service-owned library" "" "@/usr/lib/kyri/health|${SPLIT_IDS}" \
+  "lib/kyri/health is owned ${SPLIT_IDS}, expected ${uid}:${gid}"
+split_refused "a service-owned helper" "" "@/usr/libexec/kyri-health-ingest|${SPLIT_IDS}" \
+  "kyri-health-ingest is owned ${SPLIT_IDS}"
+
 # --- the pin itself ------------------------------------------------------------------
 pinned_copy() {
   local copy="${SCRATCH}/pinned-$1.sh"

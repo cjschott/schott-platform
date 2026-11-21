@@ -301,16 +301,26 @@ check_file() {
 }
 
 # Every existing ancestor of a path we create or install into: a real
-# directory, root's, writable by no one else. Checked up to / (or the fixture).
+# directory, its ruled owner's, writable by no one else. Checked up to / (or
+# the fixture). The ruled owner is root, except for the store and anything
+# under it, which are the service identity's (and fail if it does not exist).
 check_ancestry() {
-  local path problems=0
+  local path store owner problems=0
   path="$(dirname "$1")"
+  store="$(at "${STORE_ROOT}")"
   while [[ -n "${path}" && "${path}" != "/" && "${path}" != "${FIXTURE}" ]]; do
+    if [[ "${path}" == "${store}" || "${path}" == "${store}/"* ]]; then
+      owner="${SERVICE_IDS%%:*}"
+    else
+      owner="${ROOT_IDS%%:*}"
+    fi
     if [[ -e "${path}" || -L "${path}" ]]; then
       if [[ -L "${path}" || ! -d "${path}" ]]; then
         bad "${path} is not a directory"; problems=$((problems + 1))
-      elif [[ "$(stat -c '%u' "${path}")" != "${ROOT_IDS%%:*}" ]]; then
-        bad "${path} is not owned by uid ${ROOT_IDS%%:*}"; problems=$((problems + 1))
+      elif [[ -z "${owner}" ]]; then
+        bad "${path} exists but ${SERVICE_USER} does not"; problems=$((problems + 1))
+      elif [[ "$(stat -c '%u' "${path}")" != "${owner}" ]]; then
+        bad "${path} is not owned by uid ${owner}"; problems=$((problems + 1))
       elif [[ -n "$(find "${path}" -maxdepth 0 -perm /022)" ]]; then
         bad "${path} is writable beyond its owner"; problems=$((problems + 1))
       fi
